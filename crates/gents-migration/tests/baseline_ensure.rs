@@ -45,7 +45,7 @@ fn default_baseline_matches_ordered_protocol_catalog() {
             if versioned_collections.contains(name) {
                 // Versioned collection: baseline must be the step's frozen
                 // source SDL, not the live SDL. Assert exactly that.
-                if name == gents_protocol::schemas::INFERENCE_PROFILE_NAME {
+                if *name == gents_protocol::schemas::INFERENCE_PROFILE_NAME {
                     if *actual_sdl != gents_migration::INFERENCE_PROFILE_RC0_SDL {
                         Some("InferenceProfile baseline SDL must be the frozen rc0 SDL")
                     } else {

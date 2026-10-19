@@ -1,12 +1,3 @@
-//! InferenceProfile rc0-root lineage migration tests.
-//!
-//! Design (approved): the baseline pins the rc0 root
-//! `bafyreiat2uhx…` as the lineage ROOT the store must descend from; the
-//! fresh-apply CID `bafyreidrxjg…` (SDL with service_tier) is pinned by the
-//! versioned step. rc0 stores migrate (patch adds service_tier at the exact
-//! field position), fresh stores start at the step pin, the lineage gate
-//! still refuses foreign/unknown roots, and no engine changes are involved.
-
 use std::collections::BTreeSet;
 
 use gents_migration::{
@@ -17,10 +8,10 @@ mod common;
 use common::fresh_node;
 
 const RC0_ROOT: &str = "bafyreiat2uhx24kbgbm54lz7nt56vtjjsfttkiwop2ntii7qn2xtceehxi";
-const NEW_ROOT: &str = "bafyreidrxjg2xkpyyoi7k4szrvxojjmjg2vhzqlfwb2av4m65yvywimj3m";
+const MIGRATED_VERSION: &str = "bafyreieksrjdkg546ymilx5qrpbtciuyr3cwqyq25u52o64lobpoek3qqi";
 
-fn collection_versions<'a>(
-    node: &'a defra_node::EmbeddedNode,
+async fn collection_versions(
+    node: &defra_node::EmbeddedNode,
     name: &str,
 ) -> Vec<defra_node::CollectionVersion> {
     node.get_all_collection_versions()
@@ -31,31 +22,20 @@ fn collection_versions<'a>(
         .collect()
 }
 
-/// The fixture SDL is the verbatim rc0 SDL: identical to the live SDL minus
-/// service_tier. Asserted against the registry constants so this test cannot
-/// drift from the real lineage.
 #[test]
 fn rc0_fixture_is_verbatim_rc0_sdl() {
     let live = gents_protocol::schemas::INFERENCE_PROFILE;
     let without_service_tier = live.replace("    service_tier: String\n", "");
     assert_eq!(INFERENCE_PROFILE_RC0_SDL, without_service_tier);
 
-    // The patch inserts service_tier back at the exact live position, so the
-    // patched SDL must be byte-identical to the canonical live SDL.
     let baseline = gents_migration::DEFAULT_BASELINE
         .iter()
         .find(|entry| entry.name == gents_protocol::schemas::INFERENCE_PROFILE_NAME)
         .expect("InferenceProfile baseline");
-    // Field index 7 in the rc0 SDL (0-based): profile_id(0), node_did(1),
-    // display_name(2), description(3), backend_id(4), model_name(5),
-    // reasoning_effort(6) → service_tier lands at index 7, matching the live
-    // SDL's position right after reasoning_effort.
     assert!(
         !baseline.sdl.contains("    service_tier: String\n"),
         "baseline must be the frozen rc0 SDL, without service_tier"
     );
-    // The patch re-inserts service_tier, and the patched result must be
-    // byte-identical to the live SDL (same CID as the step pin).
     let patched = INFERENCE_PROFILE_RC0_SDL.replace(
         "    reasoning_effort: String\n",
         "    reasoning_effort: String\n    service_tier: String\n",
@@ -82,7 +62,6 @@ async fn rc0_store_migrates_to_new_root_preserving_data() {
         "synthetic rc0 store must carry the exact rc0 root CID"
     );
 
-    // Seed a document on the OLD schema (no service_tier field exists yet).
     let create = r#"mutation {
         create_InferenceProfile(input: {
             profile_id: "profile-1"
@@ -111,8 +90,9 @@ async fn rc0_store_migrates_to_new_root_preserving_data() {
         .await
         .expect("migrate rc0 store");
     assert_eq!(
-        report.baseline_registered, 0,
-        "rc0 store already has the collection; baseline must not re-register: {report:?}"
+        report.baseline_registered,
+        gents_migration::DEFAULT_BASELINE.len() - 1,
+        "only the missing collections should be registered: {report:?}"
     );
     assert_eq!(
         report.steps_applied, 1,
@@ -124,26 +104,39 @@ async fn rc0_store_migrates_to_new_root_preserving_data() {
         .expect("get_collection")
         .expect("InferenceProfile present");
     assert_eq!(
-        active.version_id, NEW_ROOT,
+        active.version_id, MIGRATED_VERSION,
         "migrated store must land on the exact new-root CID"
     );
     assert!(active.is_active);
     assert!(!active.is_placeholder);
+    assert_eq!(
+        active.fields[..rc0_collection.fields.len()]
+            .iter()
+            .map(|f| (&f.id, &f.name))
+            .collect::<Vec<_>>(),
+        rc0_collection
+            .fields
+            .iter()
+            .map(|f| (&f.id, &f.name))
+            .collect::<Vec<_>>()
+    );
 
-    // Both roots remain in the DAG; the rc0 root is retained as lineage history.
-    let versions = collection_versions(&node, gents_protocol::schemas::INFERENCE_PROFILE_NAME);
+    let versions =
+        collection_versions(&node, gents_protocol::schemas::INFERENCE_PROFILE_NAME).await;
     let version_ids: BTreeSet<&str> = versions.iter().map(|v| v.version_id.as_str()).collect();
     assert!(
         version_ids.contains(RC0_ROOT),
         "rc0 root must remain in the DAG"
     );
-    assert!(version_ids.contains(NEW_ROOT), "new root must be present");
+    assert!(
+        version_ids.contains(MIGRATED_VERSION),
+        "new root must be present"
+    );
     assert!(
         versions.iter().all(|v| !v.is_placeholder),
         "both roots must be materialized (non-placeholder)"
     );
 
-    // Data preservation: every old field survives; service_tier is null.
     let response = node
         .execute(
             r#"{ InferenceProfile(filter: {profile_id: {_eq: "profile-1"}}) {
@@ -189,14 +182,12 @@ async fn rc0_store_migrates_to_new_root_preserving_data() {
 }
 
 #[tokio::test]
-async fn migrated_store_reopens_without_further_steps() {
+async fn migrated_store_ensure_is_idempotent() {
     let node = fresh_node().await;
     node.add_schema(INFERENCE_PROFILE_RC0_SDL)
         .await
         .expect("register rc0 root");
     ensure_migrations(node.as_ref()).await.expect("migrate");
-    // Simulate a re-open of the same store (the node is still alive; a second
-    // ensure over the migrated DAG must be a no-op).
     let report = ensure_migrations(node.as_ref())
         .await
         .expect("re-open ensure");
@@ -210,16 +201,14 @@ async fn migrated_store_reopens_without_further_steps() {
 
 #[tokio::test]
 async fn fresh_store_baseline_is_rc0_then_step_applies() {
-    // Corrected fresh-store flow (review B1): the baseline registers the
-    // frozen rc0 SDL (OLD CID), then the service_tier step patches to the
-    // canonical live SDL (NEW CID) — steps_applied == 1, NOT 0.
     let node = fresh_node().await;
     let report = ensure_migrations(node.as_ref())
         .await
         .expect("fresh ensure");
     assert_eq!(
-        report.baseline_registered, 1,
-        "fresh store registers the baseline InferenceProfile (rc0 SDL): {report:?}"
+        report.baseline_registered,
+        gents_migration::DEFAULT_BASELINE.len(),
+        "fresh store registers the entire baseline: {report:?}"
     );
     assert_eq!(
         report.steps_applied, 1,
@@ -231,29 +220,28 @@ async fn fresh_store_baseline_is_rc0_then_step_applies() {
         .expect("get_collection")
         .expect("InferenceProfile installed");
     assert_eq!(
-        active.version_id, NEW_ROOT,
+        active.version_id, MIGRATED_VERSION,
         "fresh store must land on the canonical new-root CID"
     );
     assert!(active.is_active);
     assert!(!active.is_placeholder);
 
-    // Both roots present: OLD (baseline source) retained as lineage history,
-    // NEW (patched) active.
-    let versions = collection_versions(&node, gents_protocol::schemas::INFERENCE_PROFILE_NAME);
+    let versions =
+        collection_versions(&node, gents_protocol::schemas::INFERENCE_PROFILE_NAME).await;
     let version_ids: BTreeSet<&str> = versions.iter().map(|v| v.version_id.as_str()).collect();
     assert!(
         version_ids.contains(RC0_ROOT),
         "rc0 root must be present in a fresh store too"
     );
-    assert!(version_ids.contains(NEW_ROOT), "new root must be present");
+    assert!(
+        version_ids.contains(MIGRATED_VERSION),
+        "new root must be present"
+    );
     assert!(
         versions.iter().all(|v| !v.is_placeholder),
         "both roots must be materialized (non-placeholder)"
     );
 
-    // expected_state (review B3): the step's field expectation must verify
-    // against the active NEW version — asserted explicitly, not just via
-    // ensure returning Ok.
     let step = gents_migration::DEFAULT_STEPS
         .iter()
         .find(|step| step.id() == "inference-profile-add-service-tier")
@@ -266,10 +254,6 @@ async fn fresh_store_baseline_is_rc0_then_step_applies() {
         .verify(&active)
         .expect("step expected_state must verify against the migrated active version");
 
-    // Critical fresh-store reopen path: verify_managed_lineages re-runs
-    // check_known_lineage with expected_version = OLD root — the fresh store
-    // now contains BOTH roots (OLD registered by baseline, NEW by the step),
-    // so the root gate is satisfied without any weakening.
     let reopen = ensure_migrations(node.as_ref())
         .await
         .expect("fresh store reopen must be accepted");
@@ -281,7 +265,7 @@ async fn fresh_store_baseline_is_rc0_then_step_applies() {
         .expect("get_collection")
         .expect("InferenceProfile still present");
     assert_eq!(
-        active.version_id, NEW_ROOT,
+        active.version_id, MIGRATED_VERSION,
         "reopen must not move the fresh store"
     );
     node.shutdown().await;
@@ -289,15 +273,6 @@ async fn fresh_store_baseline_is_rc0_then_step_applies() {
 
 #[tokio::test]
 async fn crash_between_patch_and_set_active_recovers() {
-    // Upstream evidence (defradb): version_id is content-addressed from the
-    // SDL ONLY; IsActive is a column on the version row, never part of the
-    // CID (apply.rs:69 tracks explicit IsActive; mod.rs:214-228 routes
-    // fields+IsActive patches through new-version creation with
-    // is_active=false preserved). Therefore this test also pins the CID
-    // logic exactly: NEW created inactive still carries the CANONICAL
-    // new-root CID, and the step must recognize it as its destination
-    // (no VersionPinMismatch, no duplicate version) and activate it
-    // (engine.rs 315-364).
     let node = fresh_node().await;
     node.add_schema(INFERENCE_PROFILE_RC0_SDL)
         .await
@@ -305,15 +280,13 @@ async fn crash_between_patch_and_set_active_recovers() {
     let patched = node
         .patch_collection(
             gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-            r#"[{"op":"add","path":"/InferenceProfile/Fields/7","value":{"Name":"service_tier","Kind":"String"}},{"op":"replace","path":"/InferenceProfile/IsActive","value":false}]"#,
+            r#"[{"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"service_tier","Kind":"String"}},{"op":"replace","path":"/InferenceProfile/IsActive","value":false}]"#,
         )
         .await
         .expect("crash-window manual patch (inactive NEW)");
-    // Exact pin check: the inactive NEW version has the SAME content CID as
-    // the step's pin — IsActive does not perturb the version_id.
-    assert_eq!(patched.version_id, NEW_ROOT);
+    assert_eq!(patched.version_id, MIGRATED_VERSION);
     let patched_version = node
-        .get_collection_by_version_id(NEW_ROOT)
+        .get_collection_by_version_id(MIGRATED_VERSION)
         .await
         .expect("lookup NEW")
         .expect("NEW present");
@@ -335,7 +308,7 @@ async fn crash_between_patch_and_set_active_recovers() {
         .expect("get_collection")
         .expect("present");
     assert_eq!(
-        active.version_id, NEW_ROOT,
+        active.version_id, MIGRATED_VERSION,
         "recovery must activate the already-patched NEW version"
     );
     node.shutdown().await;
@@ -343,28 +316,21 @@ async fn crash_between_patch_and_set_active_recovers() {
 
 #[tokio::test]
 async fn both_versions_present_with_old_active_recovers() {
-    // Review-required shape: BOTH versions in the DAG and OLD still active
-    // (the strongest crash-window form). Prove recovery activates NEW without
-    // re-patching (steps_applied counts the activation, no VersionPinMismatch,
-    // no backward roll).
     let node = fresh_node().await;
     node.add_schema(INFERENCE_PROFILE_RC0_SDL)
         .await
         .expect("register rc0 root");
-    // Create NEW as inactive so OLD remains active (explicit IsActive=false).
     node.patch_collection(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-        r#"[{"op":"add","path":"/InferenceProfile/Fields/7","value":{"Name":"service_tier","Kind":"String"}},{"op":"replace","path":"/InferenceProfile/IsActive","value":false}]"#,
+        r#"[{"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"service_tier","Kind":"String"}},{"op":"replace","path":"/InferenceProfile/IsActive","value":false}]"#,
     )
     .await
     .expect("create NEW inactive");
-    // Restore the name pointer to OLD (simulating a crash before set_active):
-    // re-registering the OLD SDL batch re-points the active version. We assert
-    // the pre-recovery state directly instead of relying on pointer gymnastics:
-    let versions = collection_versions(&node, gents_protocol::schemas::INFERENCE_PROFILE_NAME);
+    let versions =
+        collection_versions(&node, gents_protocol::schemas::INFERENCE_PROFILE_NAME).await;
     let ids: BTreeSet<&str> = versions.iter().map(|v| v.version_id.as_str()).collect();
     assert!(
-        ids.contains(RC0_ROOT) && ids.contains(NEW_ROOT),
+        ids.contains(RC0_ROOT) && ids.contains(MIGRATED_VERSION),
         "both versions present: {ids:?}"
     );
 
@@ -380,7 +346,7 @@ async fn both_versions_present_with_old_active_recovers() {
         .expect("get_collection")
         .expect("present");
     assert_eq!(
-        active.version_id, NEW_ROOT,
+        active.version_id, MIGRATED_VERSION,
         "both-versions recovery must end with NEW active"
     );
     node.shutdown().await;
@@ -429,9 +395,6 @@ async fn fresh_store_service_tier_roundtrip() {
 
 #[tokio::test]
 async fn foreign_lineage_is_still_rejected() {
-    // A store whose InferenceProfile root is neither the rc0 root nor the new
-    // root must fail closed — this proves the baseline pin change did NOT
-    // weaken the gate into "accept any CID".
     let node = fresh_node().await;
     let foreign_sdl = INFERENCE_PROFILE_RC0_SDL.replace(
         "    display_name: String\n",
@@ -453,15 +416,6 @@ async fn foreign_lineage_is_still_rejected() {
 
 #[tokio::test]
 async fn new_root_only_store_is_rejected() {
-    // NEW-only stores (OLD root absent) are rejected by the retained-root
-    // gate: reject_unknown_lineage runs FIRST (engine.rs:32) and
-    // check_known_lineage (844-865) requires the baseline pin (OLD root)
-    // among the store's non-placeholder versions. target_active_pins' step
-    // pin cannot help — it only feeds verify_managed_lineages, which runs
-    // after the root gate. This documents the boundary honestly: the gate is
-    // NOT weakened for arbitrary CIDs, and NEW-only is unreachable in
-    // practice (patch_collection creates NEW as a descendant of OLD and
-    // nothing prunes versions), but if encountered it must fail closed.
     let node2 = fresh_node().await;
     node2
         .add_schema(gents_protocol::schemas::INFERENCE_PROFILE)
@@ -479,10 +433,6 @@ async fn new_root_only_store_is_rejected() {
 
 #[tokio::test]
 async fn rc0_root_lineage_survives_extra_known_versions() {
-    // A rc0 store that already gained the new version via a plain manual patch
-    // (which upstream defaults to ACTIVE — defradb store_new_version) must
-    // verify and need no step: the DAG descends from the rc0 root and the
-    // active version is the step's pin.
     let node = fresh_node().await;
     node.add_schema(INFERENCE_PROFILE_RC0_SDL)
         .await
@@ -495,16 +445,15 @@ async fn rc0_root_lineage_survives_extra_known_versions() {
         .await
         .expect("manual patch to new root");
     assert_eq!(
-        patched.version_id, NEW_ROOT,
-        "manual patch must produce the canonical new-root CID"
+        patched.version_id, MIGRATED_VERSION,
+        "manual patch must produce the pinned migrated version"
     );
-    // Upstream default: the patched version is ACTIVE (no explicit IsActive).
     let active = node
         .get_collection(gents_protocol::schemas::INFERENCE_PROFILE_NAME)
         .expect("get_collection")
         .expect("present");
     assert_eq!(
-        active.version_id, NEW_ROOT,
+        active.version_id, MIGRATED_VERSION,
         "plain patch activates NEW by default"
     );
 

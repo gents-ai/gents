@@ -372,20 +372,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-        // Frozen verbatim rc0 SDL (the versioned step's SOURCE): fresh stores
-        // register this OLD SDL first, then the service_tier step patches them
-        // to the canonical NEW CID (steps_applied == 1). The lineage root pin
-        // below matches this SDL's content address. The live canonical SDL
-        // (with service_tier) is reached ONLY through the step, never
-        // registered directly by the baseline.
         INFERENCE_PROFILE_RC0_SDL,
-        // Lineage ROOT pin (compatibility review, rc0): the store's InferenceProfile
-        // DAG must descend from the rc0 schema version below (SDL without
-        // service_tier, INFERENCE_PROFILE_RC0_SDL). The fresh-apply CID (SDL with
-        // service_tier) is pinned by the versioned step; target_active_pins lets
-        // step pins overwrite the baseline pin per collection, so fresh stores
-        // verify against the step pin while rc0 stores satisfy the root gate.
-        // Do NOT "accept" arbitrary CIDs here.
         "bafyreiat2uhx24kbgbm54lz7nt56vtjjsfttkiwop2ntii7qn2xtceehxi"
     ),
     baseline_entry!(
@@ -630,11 +617,6 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
 ];
 
-/// Verbatim rc0 InferenceProfile SDL (`git show v0.21.0-rc0:...`), the lineage
-/// root for existing stores AND the frozen baseline source SDL: fresh stores
-/// register this (OLD CID), then the service_tier step patches them to the
-/// canonical live SDL (NEW CID). The ONLY difference from the live SDL is the
-/// absence of `service_tier`.
 pub const INFERENCE_PROFILE_RC0_SDL: &str = "\
 type InferenceProfile @branchable @index(fields: [\"node_did\", \"profile_id\"], unique: true) {
     profile_id: String
@@ -653,19 +635,16 @@ type InferenceProfile @branchable @index(fields: [\"node_did\", \"profile_id\"],
 }
 ";
 
-/// JSON-patch inserting `service_tier` immediately after `reasoning_effort`,
-/// positioned so the patched SDL is byte-identical to the canonical live SDL
-/// (inference_profile.graphql) and therefore content-addresses to the pinned
-/// fresh-apply CID.
+/// DefraDB field positions are durable identifiers; additions must append rather than move existing fields.
 pub const INFERENCE_PROFILE_ADD_SERVICE_TIER_PATCH: &str = "\
-[{\"op\":\"add\",\"path\":\"/InferenceProfile/Fields/7\",\"value\":{\"Name\":\"service_tier\",\"Kind\":\"String\"}}]";
+[{\"op\":\"add\",\"path\":\"/InferenceProfile/Fields/-\",\"value\":{\"Name\":\"service_tier\",\"Kind\":\"String\"}}]";
 
 pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[MigrationStep::PatchVersioned {
     id: "inference-profile-add-service-tier",
     collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,
     patch: INFERENCE_PROFILE_ADD_SERVICE_TIER_PATCH,
     lens: None,
-    expected_version: Some("bafyreidrxjg2xkpyyoi7k4szrvxojjmjg2vhzqlfwb2av4m65yvywimj3m"),
+    expected_version: Some("bafyreieksrjdkg546ymilx5qrpbtciuyr3cwqyq25u52o64lobpoek3qqi"),
     expected_transform: None,
     expected_state: CollectionExpectation::fields(&[
         "profile_id",
