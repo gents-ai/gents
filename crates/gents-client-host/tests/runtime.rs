@@ -26,6 +26,8 @@ use console::ConsoleChild as Child;
 mod configured_actions;
 #[path = "support/editor_history.rs"]
 mod editor_history;
+#[path = "support/editor_workspace.rs"]
+mod editor_workspace;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/mocks/fake_llm.rs"]
 mod fake_llm;
@@ -48,6 +50,8 @@ enum Journey {
     EditorSteering,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorHistory,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorWorkspace,
     Goal,
 }
 
@@ -57,6 +61,7 @@ impl Journey {
             Self::Editor => Some("full"),
             Self::EditorSteering => Some("steering"),
             Self::EditorHistory => Some("history"),
+            Self::EditorWorkspace => Some("workspace"),
             _ => None,
         }
     }
@@ -144,6 +149,30 @@ async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Res
 }
 
 #[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorWorkspace)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-workspace-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
 fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
     let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
@@ -185,6 +214,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 if let Some(reply) = editor_history::reply(&request) {
                     return ChatAction::Sse(fake_llm::completion_text_sse(&reply));
                 }
+            }
+            if matches!(journey, Journey::EditorWorkspace)
+                && request["messages"]
+                    .to_string()
+                    .contains(editor_workspace::PROMPT)
+            {
+                return ChatAction::Sse(fake_llm::completion_text_sse(editor_workspace::REPLY));
             }
             if matches!(journey, Journey::EditorSteering)
                 && request["messages"].to_string().contains(STEERING_INPUT)
@@ -1021,6 +1057,28 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "history",
         )
         .await?;
+    }
+    if matches!(journey, Journey::EditorWorkspace) {
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "workspace",
+        )
+        .await?;
+        let evidence =
+            editor_workspace::verify(&access, &provider, root, node_did, session, &client_did)
+                .await?;
+        std::fs::write(
+            root.join("editor-workspace-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
     }
     if matches!(journey, Journey::Conversation) {
         configured_actions::exercise(
