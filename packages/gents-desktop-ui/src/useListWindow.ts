@@ -36,7 +36,7 @@ export function useListWindow<T>(
     getScrollElement: () => scroller,
     estimateSize: (i) => sizeOf(rows[i]!),
     getItemKey,
-    enabled: active,
+    enabled,
     anchorTo: enabled ? options.anchorTo : undefined,
     initialRect: { width: 0, height: 800 },
     overscan: 8,
@@ -133,7 +133,7 @@ export function useListWindow<T>(
     items,
     attributes(index: number, start: number): ComponentProps<"li"> {
       return {
-        ref: active ? virtual.measureElement : undefined,
+        ref: enabled ? virtual.measureElement : undefined,
         "data-index": index,
         "aria-posinset": index + 1,
         "aria-setsize": rows.length,
