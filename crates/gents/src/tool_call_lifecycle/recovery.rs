@@ -674,6 +674,50 @@ mod tests {
         assert!(checked >= 12, "only {checked} generated native witnesses");
     }
 
+    /// The persisted `completionPending:<reason>` suffix is the replay
+    /// authority for the completed arm: a session-message settlement's
+    /// assignment handoff survives a crash-before-notice redrive
+    /// byte-identically, while a bare native `completionPending` stays
+    /// reasonless. The source snapshot cannot change on replay because the
+    /// projection reads only the persisted suffix, never live state.
+    #[test]
+    fn projection_completed_arm_replays_the_persisted_reason() {
+        // The real private row shape; no test-only re-encoding is exposed.
+        let row = |status: &str| TerminalBackgroundToolRow {
+            doc_id: "tool-doc".into(),
+            request_id: None,
+            request_doc_id: None,
+            node_did: None,
+            requester_did: None,
+            session_id: None,
+            tool_call_id: None,
+            tool_name: crate::toolset::AGENT_NEW_TOOL_NAME.into(),
+            status: status.into(),
+            lifecycle_state: Some("completed".into()),
+            cancel_cause: None,
+        };
+        assert_eq!(
+            background_completion_projection(&row("completionPending")),
+            Some(("completed", None)),
+            "a native completion keeps the reasonless success form"
+        );
+        assert_eq!(
+            background_completion_projection(&row("completionPending:assignment_active")),
+            Some(("completed", Some("assignment_active"))),
+            "a session-message handoff re-renders its persisted reason"
+        );
+        assert_eq!(
+            background_completion_projection(&row("completionPending:assignment_absent")),
+            Some(("completed", Some("assignment_absent"))),
+            "a no-goal handoff is distinguished from assignment success on replay"
+        );
+        assert_eq!(
+            background_completion_projection(&row("completionPending:assignment_unknown")),
+            Some(("completed", Some("assignment_unknown"))),
+            "an unreadable assignment never reads as success on replay"
+        );
+    }
+
     #[test]
     fn no_terminal_parent_terminalizes_background_rows() {
         let row = |await_mode: &str, tool_name: &str| -> RunningToolCallRow {
@@ -949,9 +993,16 @@ async fn load_pending_background_completion_rows(
 fn background_completion_projection(
     row: &TerminalBackgroundToolRow,
 ) -> Option<(&str, Option<&str>)> {
+    // The persisted `completionPending:<reason>` suffix is the authoritative
+    // snapshot of the notification reason: a redrive re-renders it instead of
+    // re-observing live state, so the first notice and a crash-before-notice
+    // replay render byte-identically. Session-message settlement persists the
+    // assignment handoff there (Lean
+    // `Recovery.sessionMessageHandoffReason`); native completions persist the
+    // bare status and keep the reasonless success form.
     let persisted_reason = row.status.strip_prefix("completionPending:");
     match row.lifecycle_state.as_deref()? {
-        "completed" => Some(("completed", None)),
+        "completed" => Some(("completed", persisted_reason)),
         "timedOut" => Some((
             "failed",
             Some(persisted_reason.unwrap_or("deadline_exceeded")),

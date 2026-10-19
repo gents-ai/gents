@@ -2764,7 +2764,8 @@ mod spawned_background_tests {
             .settle_session_message(
                 &crate::tool_call_lifecycle::CausedRequestTerminal::Completed {
                     output: final_bytes.into()
-                }
+                },
+                None,
             )
             .await
             .unwrap());
@@ -2897,8 +2898,8 @@ mod spawned_background_tests {
             output: "one result".into(),
         };
         let (left, right) = tokio::join!(
-            first.settle_session_message(&one_result),
-            second.settle_session_message(&one_result)
+            first.settle_session_message(&one_result, None),
+            second.settle_session_message(&one_result, None)
         );
         let left = left.unwrap();
         let right = right.unwrap();
@@ -2909,7 +2910,8 @@ mod spawned_background_tests {
             .settle_session_message(
                 &crate::tool_call_lifecycle::CausedRequestTerminal::Completed {
                     output: "one result".into()
-                }
+                },
+                None,
             )
             .await
             .unwrap());
@@ -2917,7 +2919,8 @@ mod spawned_background_tests {
             .settle_session_message(
                 &crate::tool_call_lifecycle::CausedRequestTerminal::Completed {
                     output: "different result".into()
-                }
+                },
+                None,
             )
             .await
             .is_err());

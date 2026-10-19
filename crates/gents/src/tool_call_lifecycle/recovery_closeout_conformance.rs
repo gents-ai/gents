@@ -170,6 +170,42 @@ fn assert_notification_reason(
     }
 }
 
+/// Corrupt a persisted Goal status through the document mutation path the
+/// goal controller tests use, producing an unreadable assignment observation
+/// (`parsed_status` resolves the document but cannot parse the status).
+async fn seed_goal_status(
+    node: &crate::defra_node::EmbeddedNode,
+    goal: &crate::goal::GoalDocument,
+    fields: &str,
+) {
+    let doc_id = crate::graphql::escape_graphql_string(&goal.doc_id);
+    let node_did = crate::graphql::escape_graphql_string(&goal.node_did);
+    let response = node.execute(&format!(
+        r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
+    ))
+    .await;
+    assert!(
+        !response.has_errors(),
+        "seed Goal status: {:?}",
+        response.errors
+    );
+}
+
+fn handoff_reason_for_case(name: &str) -> Option<&'static str> {
+    match name {
+        "session_message_request_failed_to_failed" => Some("request_failed"),
+        "session_message_request_interrupted_to_cancelled" => Some("request_interrupted"),
+        "session_message_request_dead_to_failed" => Some("request_dead"),
+        "session_message_request_superseded_to_failed" => Some("request_superseded"),
+        "session_message_request_completed_to_completed" => None,
+        "session_message_request_completed_no_goal_to_completed" => Some("assignment_absent"),
+        "session_message_request_completed_unknown_goal_to_completed" => Some("assignment_unknown"),
+        "session_message_request_completed_live_goal_to_completed" => Some("assignment_active"),
+        "session_message_request_completed_blocked_goal_to_completed" => Some("assignment_blocked"),
+        other => panic!("{other}: unhandled session-message case"),
+    }
+}
+
 #[tokio::test]
 async fn generated_session_message_recovery_cases_use_accepted_call() {
     let cases = crate::lean_vocab_test::lean_recovery_sweep_cases()
@@ -242,6 +278,111 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let caused_state = match cause {
             "requestCompleted" => {
+                // Each Lean sessionMessageRecoveryCase handoff binds a real
+                // Goal observation in the receipt-named caused session:
+                // complete (reasonless success form), absent (no Goal at
+                // all), unknown (a Goal whose persisted status is malformed,
+                // so parsed_status cannot resolve it), and live
+                // observations. The fixture states must be distinct or the
+                // generated witnesses do not exercise the vocabulary.
+                let caused_session_id = {
+                    let doc_id =
+                        crate::graphql::escape_graphql_string(&message.caused_request_doc_id);
+                    let response = admission.node.execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
+                    ))
+                    .await;
+                    assert!(!response.has_errors(), "{name}: {:?}", response.errors);
+                    response.data.unwrap()["AgentRequest"][0]["session_id"]
+                        .as_str()
+                        .expect("the caused request names its session")
+                        .to_owned()
+                };
+                match name {
+                    // The reasonless success form must be produced by an
+                    // actually-complete assignment, not by a missing Goal:
+                    // those are different production paths.
+                    "session_message_request_completed_to_completed" => {
+                        crate::test_support::install_test_agent(
+                            &admission.node,
+                            &admission.node_did,
+                            "general",
+                        )
+                        .await;
+                        crate::goal::set_goal(
+                            &admission.node,
+                            &admission.node_did,
+                            &caused_session_id,
+                            Some("done"),
+                            Some(crate::goal::GoalStatus::Complete),
+                            None,
+                        )
+                        .await
+                        .expect("persist a complete Goal in the caused session");
+                    }
+                    // Absent: the caused session carries no Goal document.
+                    "session_message_request_completed_no_goal_to_completed" => {}
+                    // Unknown: a Goal whose persisted status is malformed, so
+                    // the canonical read resolves the document but cannot
+                    // parse its status into the vocabulary.
+                    "session_message_request_completed_unknown_goal_to_completed" => {
+                        crate::test_support::install_test_agent(
+                            &admission.node,
+                            &admission.node_did,
+                            "general",
+                        )
+                        .await;
+                        let goal = crate::goal::set_goal(
+                            &admission.node,
+                            &admission.node_did,
+                            &caused_session_id,
+                            Some("hold"),
+                            Some(crate::goal::GoalStatus::Active),
+                            None,
+                        )
+                        .await
+                        .expect("persist a Goal in the caused session");
+                        seed_goal_status(&admission.node, &goal, r#"status: "corrupted-status""#)
+                            .await;
+                    }
+                    "session_message_request_completed_live_goal_to_completed" => {
+                        crate::test_support::install_test_agent(
+                            &admission.node,
+                            &admission.node_did,
+                            "general",
+                        )
+                        .await;
+                        crate::goal::set_goal(
+                            &admission.node,
+                            &admission.node_did,
+                            &caused_session_id,
+                            Some("hold"),
+                            Some(crate::goal::GoalStatus::Active),
+                            None,
+                        )
+                        .await
+                        .expect("persist an active Goal in the caused session");
+                    }
+                    "session_message_request_completed_blocked_goal_to_completed" => {
+                        crate::test_support::install_test_agent(
+                            &admission.node,
+                            &admission.node_did,
+                            "general",
+                        )
+                        .await;
+                        crate::goal::set_goal(
+                            &admission.node,
+                            &admission.node_did,
+                            &caused_session_id,
+                            Some("hold"),
+                            Some(crate::goal::GoalStatus::Blocked),
+                            None,
+                        )
+                        .await
+                        .expect("persist a blocked Goal in the caused session");
+                    }
+                    other => panic!("{other}: unhandled completed session-message case"),
+                }
                 complete_child(
                     &admission.node,
                     &message.caused_request_id,
@@ -285,10 +426,27 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         if case.terminal_state == "cancelled" {
             assert_eq!(row["cancel_cause"], "interrupted", "{name}");
         }
+        // After settle() the row has converged: settlement persists
+        // completionPending:<reason>, then append_background_tool_completion
+        // publishes the notice and advances the row to completed (verified in
+        // the settlement sequence). The persisted pre-delivery suffix is
+        // pinned separately, in the crash-before-notice regression where the
+        // side effect is actually skipped.
+        assert_eq!(row["status"], "completed", "{name}");
         let session_id = admission.tool.session_id().to_owned();
         let (notifications, _) =
             completion_obligations(&admission.node, &session_id, &admission.node_did).await;
         assert_eq!(notifications.len(), 1, "{name}");
+        // F3: the notification reason must be validated against the modeled
+        // handoff for the case, not only against the raw suffix: each
+        // generated case pins its own assignment_* vocabulary (or the
+        // reasonless success form).
+        let expected_reason = handoff_reason_for_case(name);
+        assert_eq!(
+            case.notification_reason.as_deref(),
+            expected_reason,
+            "{name}: the Lean contract's notificationReason must match the case's modeled handoff"
+        );
         assert_notification_reason(&notifications[0], case);
         assert_eq!(settle(admission).await, 0, "{name}");
         message.admission.node.shutdown().await;
