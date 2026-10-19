@@ -164,7 +164,10 @@ pub(super) fn build_rendered_timeline(
                     && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
                         || !normalize_timeline_text(message.reasoning.as_deref()).is_empty()
                         || message.has_tool_calls
-                        || !message.captured_context.is_empty())));
+                        || message
+                            .captured_context
+                            .as_ref()
+                            .is_some_and(|contexts| !contexts.is_empty()))));
         if !keep {
             continue;
         }
@@ -192,7 +195,11 @@ pub(super) fn build_rendered_timeline(
         } else if is_user {
             match (
                 normalized_content.clone(),
-                unresolved || !message.captured_context.is_empty(),
+                unresolved
+                    || message
+                        .captured_context
+                        .as_ref()
+                        .is_some_and(|contexts| !contexts.is_empty()),
             ) {
                 (Some(_), _) | (None, true) => (
                     true,
@@ -293,7 +300,7 @@ mod tests {
             role: Some("user".to_string()),
             display_role: Some("user".to_string()),
             display_content: Some(content.to_string()),
-            captured_context: Vec::new(),
+            captured_context: None,
             reasoning: None,
             has_tool_calls: false,
             has_tool_results: false,

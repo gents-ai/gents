@@ -669,7 +669,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 display_content: presentation.as_ref().and_then(|presentation| {
                     normalize_optional(Some(presentation.body_markdown.as_str()))
                 }),
-                captured_context,
+                captured_context: (!captured_context.is_empty()).then_some(captured_context),
                 reasoning: presentation.as_ref().and_then(|presentation| {
                     presentation
                         .reasoning_markdown
