@@ -102,6 +102,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
     let provider_gate = gate.clone();
+    let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let goal_provider_gate = editor_goal_gate.clone();
+    let goal_provider_hold = root.join("hold-goal-provider");
     let provider = FakeLlm::start_with_models(
         if matches!(journey, Journey::Editor) {
             &["editor-fixture", "editor-fixture-alternate"]
@@ -118,7 +121,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                         json!({"choices":[{"delta":{"content":"First part"},"finish_reason":null}],"usage":null})
                     ),
                 )],
-                provider_gate.clone(),
+                if goal_provider_hold.is_file() {
+                    goal_provider_gate.clone()
+                } else {
+                    provider_gate.clone()
+                },
                 fake_llm::completion_text_sse(" and final part."),
                 emitted.clone(),
             )
@@ -549,6 +556,16 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             loop {
                 if completion_path.is_file() {
                     completion_gate.add_permits(1);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+        let goal_completion_path = root.join("finish-goal-provider");
+        let _goal_completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if goal_completion_path.is_file() {
+                    editor_goal_gate.add_permits(1);
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
