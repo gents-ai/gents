@@ -17,6 +17,6 @@ pub use registry::{
     fixture_lens_wasm, BaselineCollection, BaselineCollectionOwned, DynamicRegistry, LensSpec,
     LensSpecOwned, MigrationStep, MigrationStepOwned, OrdinaryIndex, OrdinaryIndexField, Registry,
     CLIENT_AUTHORED_COLLECTIONS, DEFAULT_BASELINE, DEFAULT_ORDINARY_INDEXES, DEFAULT_REGISTRY,
-    DEFAULT_STEPS,
+    DEFAULT_STEPS, INFERENCE_PROFILE_ADD_SERVICE_TIER_PATCH, INFERENCE_PROFILE_RC0_SDL,
 };
 pub use report::{MaterializationStats, MigrationReport};

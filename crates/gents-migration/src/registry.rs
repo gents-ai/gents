@@ -373,7 +373,14 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
         gents_protocol::schemas::INFERENCE_PROFILE,
-        "bafyreidrxjg2xkpyyoi7k4szrvxojjmjg2vhzqlfwb2av4m65yvywimj3m"
+        // Lineage ROOT pin (compatibility review, rc0): the store's InferenceProfile
+        // DAG must descend from the rc0 schema version below (SDL without
+        // service_tier, INFERENCE_PROFILE_RC0_SDL). The fresh-apply CID (SDL with
+        // service_tier) is pinned by the versioned step; target_active_pins lets
+        // step pins overwrite the baseline pin per collection, so fresh stores
+        // verify against the step pin while rc0 stores satisfy the root gate.
+        // Do NOT "accept" arbitrary CIDs here.
+        "bafyreiat2uhx24kbgbm54lz7nt56vtjjsfttkiwop2ntii7qn2xtceehxi"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_RETRY_POLICY_NAME,
@@ -617,7 +624,58 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
 ];
 
-pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[];
+/// Verbatim rc0 InferenceProfile SDL (`git show v0.21.0-rc0:...`), the lineage
+/// root for existing stores. The ONLY difference from the live SDL is the
+/// absence of `service_tier`.
+pub const INFERENCE_PROFILE_RC0_SDL: &str = "\
+type InferenceProfile @branchable @index(fields: [\"node_did\", \"profile_id\"], unique: true) {
+    profile_id: String
+    node_did: String @index
+    display_name: String
+    description: String
+    backend_id: String @index
+    model_name: String
+    reasoning_effort: String
+    context_window: Int
+    max_output_tokens: Int
+    sampling_id: String @index
+    execution_id: String @index
+    tags: [String!]
+    updated_at: DateTime @index(direction: DESC)
+}
+";
+
+/// JSON-patch inserting `service_tier` immediately after `reasoning_effort`,
+/// positioned so the patched SDL is byte-identical to the canonical live SDL
+/// (inference_profile.graphql) and therefore content-addresses to the pinned
+/// fresh-apply CID.
+pub const INFERENCE_PROFILE_ADD_SERVICE_TIER_PATCH: &str = "\
+[{\"op\":\"add\",\"path\":\"/InferenceProfile/Fields/7\",\"value\":{\"Name\":\"service_tier\",\"Kind\":\"String\"}}]";
+
+pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[MigrationStep::PatchVersioned {
+    id: "inference-profile-add-service-tier",
+    collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,
+    patch: INFERENCE_PROFILE_ADD_SERVICE_TIER_PATCH,
+    lens: None,
+    expected_version: Some("bafyreidrxjg2xkpyyoi7k4szrvxojjmjg2vhzqlfwb2av4m65yvywimj3m"),
+    expected_transform: None,
+    expected_state: CollectionExpectation::fields(&[
+        "profile_id",
+        "node_did",
+        "display_name",
+        "description",
+        "backend_id",
+        "model_name",
+        "reasoning_effort",
+        "service_tier",
+        "context_window",
+        "max_output_tokens",
+        "sampling_id",
+        "execution_id",
+        "tags",
+        "updated_at",
+    ]),
+}];
 
 static AGENT_REQUEST_NODE_SESSION_FIELDS: &[OrdinaryIndexField<'static>] = &[
     OrdinaryIndexField {

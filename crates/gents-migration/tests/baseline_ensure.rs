@@ -28,7 +28,23 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         .collect::<Vec<_>>();
 
     assert_eq!(actual, expected, "baseline must use the canonical live SDL");
-    assert!(gents_migration::DEFAULT_STEPS.is_empty());
+    assert_eq!(
+        gents_migration::DEFAULT_STEPS.len(),
+        1,
+        "exactly the InferenceProfile service_tier step is expected: {steps:?}",
+        steps = gents_migration::DEFAULT_STEPS
+            .iter()
+            .map(|step| step.id())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        gents_migration::DEFAULT_STEPS[0].id(),
+        "inference-profile-add-service-tier"
+    );
+    assert_eq!(
+        gents_migration::DEFAULT_STEPS[0].collection(),
+        Some(gents_protocol::schemas::INFERENCE_PROFILE_NAME)
+    );
     let stepped_client_collections = gents_migration::DEFAULT_STEPS
         .iter()
         .filter_map(MigrationStep::collection)
