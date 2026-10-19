@@ -17,8 +17,8 @@ use crate::Collection;
 mod dependencies;
 mod documents;
 pub use documents::{
-    document_pack_schema_paths, install_prepared_document_pack, prepare_document_pack_install,
-    PreparedDocumentPackInstall,
+    document_pack_schema_paths, install_prepared_document_pack, plugin_data_unique_keys,
+    prepare_document_pack_install, PreparedDocumentPackInstall,
 };
 mod graph;
 

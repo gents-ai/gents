@@ -47,7 +47,11 @@ impl DefraSessionHook {
             let lifecycle = self
                 .load_authorized_background_tool(caller, tool_call_id)
                 .await?;
-            if lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::SessionMessage {
+            if matches!(
+                lifecycle.kind(),
+                crate::tool_call_lifecycle::ToolRowKind::SessionMessage
+                    | crate::tool_call_lifecycle::ToolRowKind::PluginJob
+            ) {
                 anyhow::bail!(
                     "{tool_call_id} is a {} call; its result arrives only as a completion message, so wait_process does not wait on it",
                     lifecycle.tool_name()

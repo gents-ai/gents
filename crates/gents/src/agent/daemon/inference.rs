@@ -226,6 +226,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     .with_background_execution_registry(self.background_execution_registry.clone())
                     .with_operator_tool_root(self.operator_tool_root.clone())
                     .with_remote_tools(self.remote_tools.clone())
+                    .with_job_tools(self.job_tools.clone())
                     .with_goal_tool_authority(
                         self.agent_config.tools.goal_tools_requested(),
                         self.agent_config.tools.goal_creation_requested(),
@@ -236,6 +237,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         self.request_admission.clone(),
                         lifecycle.natural_finish_allowed(),
                     );
+                    let hook = match &self.job_driver {
+                        Some(driver) => hook.with_job_driver(driver.clone()),
+                        None => hook,
+                    };
                     hook.set_active_request_binding(
                         Some(request.request_id.clone()),
                         Some(request.doc_id.clone()),

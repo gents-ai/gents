@@ -1253,6 +1253,7 @@ impl PackInstaller {
                 .iter()
                 .map(|d| &d.0.archive)
                 .collect::<Vec<_>>(),
+            crate::pack::InstalledVia::SelfConfig,
             &environment,
         )
         .await?;
@@ -1298,9 +1299,14 @@ impl PackInstaller {
             &access,
             owner,
             &distribution.0.archive,
+            &dependencies
+                .iter()
+                .map(|d| &d.0.archive)
+                .collect::<Vec<_>>(),
             &prepared,
             self.home.as_deref(),
             false,
+            crate::pack::InstalledVia::SelfConfig,
             crate::pack::DriftPolicy::Refuse,
         )
         .await?;
@@ -2281,6 +2287,7 @@ pub fn build_self_config_tools(
             .with_process_ceiling(config.process_ceiling.clone())
             .with_held_grants(OperatorGrants {
                 pack_install: config.enable_pack_install,
+                ..Default::default()
             }),
         Err(error) => {
             tracing::warn!(

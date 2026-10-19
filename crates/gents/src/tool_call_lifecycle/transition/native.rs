@@ -132,9 +132,9 @@ impl ToolCallLifecycle {
             )
             .await?
         };
-        if updated {
-            self.state = ToolCallState::Completed;
-        } else {
+        // A published terminal already set `self.state`: a refused plugin
+        // write publishes Failed instead.
+        if !updated {
             self.sync_after_lost_running_compare("complete").await?;
         }
         Ok(updated)

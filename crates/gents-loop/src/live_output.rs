@@ -31,6 +31,23 @@ struct LiveToolOutputState {
     receipts: [Vec<OutputReceipt>; 2],
     prepared: Option<PreparedToolPresentation>,
     plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
+    deferred_writes: Option<DeferredToolWrites>,
+}
+
+/// Host data a tool returned beside its output, to be committed by the
+/// terminal of the call that returned it. The loop only carries it from
+/// dispatch to terminalization; the host that produced it reads it back.
+#[derive(Debug, Clone)]
+pub struct DeferredToolWrites(Arc<dyn std::any::Any + Send + Sync>);
+
+impl DeferredToolWrites {
+    pub fn new<T: std::any::Any + Send + Sync>(writes: T) -> Self {
+        Self(Arc::new(writes))
+    }
+
+    pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +117,14 @@ impl LiveToolOutputRegistry {
             .await
             .get(tool_call_doc_id)
             .and_then(|state| state.plugin_receipt.clone())
+    }
+
+    pub async fn deferred_writes(&self, tool_call_doc_id: &str) -> Option<DeferredToolWrites> {
+        self.inner
+            .lock()
+            .await
+            .get(tool_call_doc_id)
+            .and_then(|state| state.deferred_writes.clone())
     }
 
     pub async fn live_ids(&self) -> Vec<String> {
@@ -427,6 +452,11 @@ pub struct LiveToolOutputWriter {
 }
 
 impl LiveToolOutputWriter {
+    /// The physical tool call this writer registers output for.
+    pub fn tool_call_doc_id(&self) -> &str {
+        &self.tool_call_id
+    }
+
     pub async fn record_plugin_receipt(
         &self,
         receipt: gents_protocol::plugin::PluginExecutionReceipt,
@@ -443,6 +473,17 @@ impl LiveToolOutputWriter {
             "plugin execution receipt conflicts with this physical tool invocation"
         );
         state.plugin_receipt = Some(receipt);
+        Ok(())
+    }
+
+    pub async fn record_deferred_writes(&self, writes: DeferredToolWrites) -> anyhow::Result<()> {
+        self.registry
+            .inner
+            .lock()
+            .await
+            .get_mut(&self.tool_call_id)
+            .context("deferred writes have no registered physical tool invocation")?
+            .deferred_writes = Some(writes);
         Ok(())
     }
 

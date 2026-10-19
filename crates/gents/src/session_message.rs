@@ -288,6 +288,21 @@ impl Plan {
         self.hop
     }
 
+    pub(crate) fn request(
+        session_id: String,
+        hop: u32,
+        create: gents_protocol::request_admission::AgentRequestCreate,
+    ) -> Self {
+        Self {
+            session_id,
+            hop,
+            write: PlannedWrite::Request {
+                create,
+                delivery: Delivery::Request,
+            },
+        }
+    }
+
     pub(crate) fn delivery(&self) -> Delivery {
         match self.write {
             PlannedWrite::Request { delivery, .. } => delivery,

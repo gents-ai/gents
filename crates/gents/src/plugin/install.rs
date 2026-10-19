@@ -19,6 +19,8 @@ pub fn install_from_pack(
     plugin: &PackPlugin,
     artifact_bytes: &[u8],
     instructions: Option<String>,
+    data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
+    data_collection_fields: BTreeMap<String, Vec<String>>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
     let lock = store::try_lock_store(home)?;
@@ -32,6 +34,8 @@ pub fn install_from_pack(
         plugin,
         artifact_bytes,
         instructions,
+        data_unique_keys,
+        data_collection_fields,
         consent,
     )
 }
@@ -47,6 +51,8 @@ fn install_from_pack_locked(
     plugin: &PackPlugin,
     artifact_bytes: &[u8],
     instructions: Option<String>,
+    data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
+    data_collection_fields: BTreeMap<String, Vec<String>>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
     // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
@@ -92,6 +98,8 @@ fn install_from_pack_locked(
         owner_pack_coordinate: Some(pack_coordinate.to_owned()),
         owner_pack_digest: Some(pack_digest.to_owned()),
         model_binding,
+        data_unique_keys,
+        data_collection_fields,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -170,6 +178,8 @@ fn install_pack_plugins_locked<'a>(
                 .as_deref()
                 .map(|path| crate::pack::tool_instructions(&plugin.name, asset(path)?))
                 .transpose()?;
+            let (data_unique_keys, data_collection_fields) =
+                crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;
             install_from_pack_locked(
                 lock,
                 home,
@@ -180,6 +190,8 @@ fn install_pack_plugins_locked<'a>(
                 plugin,
                 asset(&plugin.artifact)?,
                 instructions,
+                data_unique_keys,
+                data_collection_fields,
                 consent,
             )
         })

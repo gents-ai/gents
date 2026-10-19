@@ -28,11 +28,11 @@ pub use status_projection::OutputEvidence;
 use status_projection::WaitStatusProjection;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProcessControlScope {
-    pub(crate) request_id: String,
-    pub(crate) session_id: String,
-    pub(crate) node_did: String,
-    pub(crate) requester_did: Option<String>,
+pub struct ProcessControlScope {
+    pub request_id: String,
+    pub session_id: String,
+    pub node_did: String,
+    pub requester_did: Option<String>,
 }
 
 impl ProcessControlScope {
@@ -528,6 +528,7 @@ fn list_projection_matches(filter: ListStatusFilter, projection: &WaitStatusProj
 }
 
 pub use final_output::load_caused_request_terminal;
+pub(crate) use final_output::{caused_request_terminals_in_txn, load_caused_request_terminals};
 
 fn render_assistant_message_text(message: &Message) -> Result<String> {
     let Message::Assistant { content, .. } = message else {
