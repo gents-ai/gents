@@ -1462,9 +1462,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
             assert_eq!(data["TriggerFire"][0]["queued_serial"], true);
             assert_eq!(
                 request["content"],
-                format!(
-                    "Scheduled task instructions (rendered from saved configuration):\n\nwake captain"
-                )
+                "Scheduled task instructions (rendered from saved configuration):\n\nwake captain"
             );
         }
     }
