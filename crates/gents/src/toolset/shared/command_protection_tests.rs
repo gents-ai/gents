@@ -63,7 +63,7 @@ async fn kernel_guard_preserves_work_and_denies_permission_names_links_and_moves
     ] {
         let (_directory, root, home) = fixture();
         let state = home.join(crate::home::ALLOWED_DIRS_FILE_NAME);
-        let staging = home.join(".permission-staging");
+        let staging = home.join(crate::home::PERMISSION_STAGING_DIR_NAME);
         let questions = home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
         for (script, allowed) in [
             ("printf allowed > \"$1/ordinary.tmp\" && mv \"$1/ordinary.tmp\" \"$1/ordinary\"", true),

@@ -42,7 +42,7 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
         let question = queue.join("v3/question.decision");
         std::fs::write(&question, "operator answer").unwrap();
         let mut paths = vec![guarded.clone(), queue];
-        let staging = world.gents.join(protected::STAGING_DIR);
+        let staging = world.gents.join(crate::home::PERMISSION_STAGING_DIR_NAME);
         paths.push(staging.clone());
         let mut target = world.root.join("work/a.txt");
         match case.kind.as_str() {
@@ -198,7 +198,7 @@ fn staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts() {
     use std::io::Write;
 
     let world = world();
-    let directory = world.gents.join(protected::STAGING_DIR);
+    let directory = world.gents.join(crate::home::PERMISSION_STAGING_DIR_NAME);
     let context = crate::toolset::ToolContext::new(world.root.clone(), false).unwrap();
     write_permission_file(&world.gents, &file(&world.gents), |output| {
         output.write_all(b"new permissions")?;
@@ -246,7 +246,7 @@ fn failed_permission_encoding_keeps_the_prior_file_and_removes_staging() {
     assert!(result.is_err());
     assert_eq!(std::fs::read(&target).unwrap(), b"prior permissions");
     assert_eq!(
-        std::fs::read_dir(world.gents.join(protected::STAGING_DIR))
+        std::fs::read_dir(world.gents.join(crate::home::PERMISSION_STAGING_DIR_NAME))
             .unwrap()
             .count(),
         0
@@ -284,7 +284,7 @@ fn both_permission_writers_publish_without_leaving_staged_files() {
     assert_eq!(loaded.scope(), saved.scope());
     assert_eq!(loaded.selection.mode, saved.selection.mode);
     assert_eq!(
-        std::fs::read_dir(world.gents.join(protected::STAGING_DIR))
+        std::fs::read_dir(world.gents.join(crate::home::PERMISSION_STAGING_DIR_NAME))
             .unwrap()
             .count(),
         0
@@ -299,7 +299,7 @@ fn a_retargeted_staging_directory_cannot_publish_permissions() {
     let world = world();
     let target = file(&world.gents);
     std::fs::write(&target, "prior permissions").unwrap();
-    let directory = world.gents.join(protected::STAGING_DIR);
+    let directory = world.gents.join(crate::home::PERMISSION_STAGING_DIR_NAME);
     let outside = world.root.join("outside");
     std::os::unix::fs::symlink(&outside, &directory).unwrap();
     assert!(write_permission_file(&world.gents, &target, |_| {
@@ -557,7 +557,10 @@ fn the_file_tools_refuse_the_allowed_folders_file_and_the_approval_queue() {
             .join("q.decision")
     ));
     assert!(is_protected(
-        &world.gents.join(protected::STAGING_DIR).join("pending")
+        &world
+            .gents
+            .join(crate::home::PERMISSION_STAGING_DIR_NAME)
+            .join("pending")
     ));
     assert!(!is_protected(&world.gents.join("plugins/x")));
     assert!(!is_protected(&world.root.join("work/a.txt")));

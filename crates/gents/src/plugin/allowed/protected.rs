@@ -6,8 +6,6 @@ use std::sync::Mutex;
 use anyhow::Context as _;
 use same_file::Handle;
 
-pub(crate) const STAGING_DIR: &str = ".permission-staging";
-
 static PROTECTED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 fn reserved_paths(home: &Path) -> [PathBuf; 7] {
@@ -18,7 +16,7 @@ fn reserved_paths(home: &Path) -> [PathBuf; 7] {
         home.join(crate::plugin::approval::workspace::FILE),
         home.join(crate::plugin::approval::workspace::LOCK),
         home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME),
-        home.join(STAGING_DIR),
+        home.join(crate::home::PERMISSION_STAGING_DIR_NAME),
     ]
 }
 
@@ -134,7 +132,7 @@ pub(crate) fn write_permission_file(
             .file_name()
             .context("permission target has no name")?,
     );
-    let directory = home.join(STAGING_DIR);
+    let directory = home.join(crate::home::PERMISSION_STAGING_DIR_NAME);
     #[cfg(unix)]
     let create = {
         use std::os::unix::fs::DirBuilderExt;
