@@ -85,8 +85,9 @@ decoders and native adapters translate representations, not redefine policy.
 ## Ownership
 
 - Core is bounded to the owned agent loop and task and data management in
-  DefraDB: documents, triggers, tasks, workflows, identity and ACP. Other
-  capabilities (OCR, git and GitHub, web research, domain tools) ship as WASM
+  DefraDB: documents, triggers, tasks, identity and ACP, plus
+  generic plugin seams (tools, callbacks, plugin jobs). Workflow languages and
+  other capabilities (OCR, git and GitHub, web research, domain tools) ship as WASM
   plugins in packs (gents-ai/packs) and run as tools or workflow stages; core
   adds only the plugin seam a pack needs, not the capability.
 - Request state is only `lifecycle_state`, using
@@ -108,7 +109,9 @@ decoders and native adapters translate representations, not redefine policy.
   host process execution and request completion owners for ordering, timeouts,
   errors, and cancellation; do not introduce a TaskRun lifecycle. Hook state lives
   on the host, not in input/result mapping configuration. Existing event callbacks
-  retain their action journals. Workspace integration with general hooks remains
+  retain their action journals. A plugin job is an ordinary background tool
+  call; its pin and progress are fields on that call; guest notes are pack
+  data; it is not a TaskRun lifecycle or a new core action journal. Workspace integration with general hooks remains
   an explicit design TODO; preserve current workspace functionality until resolved.
 - AgentSession is the single durable session document.
   Agent is its only configuration selection. Title and creation provenance live
