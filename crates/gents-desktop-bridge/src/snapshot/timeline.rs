@@ -292,6 +292,7 @@ mod tests {
             role: Some("user".to_string()),
             display_role: Some("user".to_string()),
             display_content: Some(content.to_string()),
+            captured_context: Vec::new(),
             reasoning: None,
             has_tool_calls: false,
             has_tool_results: false,
