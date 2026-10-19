@@ -53,6 +53,60 @@ theorem selected_policy_preserves_eligibility (node task agent : String) (policy
     selectedTaskEligible node task agent policy.prompt policy = taskEligible node task agent policy := by
   simp [selectedTaskEligible]
 
+/-- The native encoder supplies complete incremental wire costs, including
+JSON escaping and separators. Required bytes retain the full policy, action
+and current request, with an upper bound for omission metadata. Entries are
+newest first; only whole entries from that prefix may be supplied. Correct
+wire costs are a transport premise, independently checked by native adapters. -/
+def contextCount (remaining : Nat) : List Nat → Nat
+  | [] => 0
+  | cost :: rest =>
+      if cost ≤ remaining then 1 + contextCount (remaining - cost) rest else 0
+
+def selectContext (required limit : Nat) (costs : List Nat) : Option Nat :=
+  if required ≤ limit then some (contextCount (limit - required) costs) else none
+
+theorem context_count_is_bounded (remaining : Nat) (costs : List Nat) :
+    contextCount remaining costs ≤ costs.length := by
+  induction costs generalizing remaining with
+  | nil => simp [contextCount]
+  | cons cost rest ih =>
+      simp only [contextCount, List.length_cons]
+      split
+      · have := ih (remaining - cost)
+        omega
+      · omega
+
+theorem context_cost_is_bounded (remaining : Nat) (costs : List Nat) :
+    (costs.take (contextCount remaining costs)).sum ≤ remaining := by
+  induction costs generalizing remaining with
+  | nil => simp [contextCount]
+  | cons cost rest ih =>
+      simp only [contextCount]
+      split
+      · simp only [Nat.add_comm 1, List.take_succ_cons, List.sum_cons]
+        have := ih (remaining - cost)
+        omega
+      · simp
+
+theorem required_overflow_needs_a_person (required limit : Nat) (costs : List Nat)
+    (large : limit < required) : selectContext required limit costs = none := by
+  simp [selectContext, Nat.not_le_of_gt large]
+
+theorem selected_context_fits (required limit : Nat) (costs : List Nat) (count : Nat)
+    (selected : selectContext required limit costs = some count) :
+    required + (costs.take count).sum ≤ limit := by
+  by_cases fits : required ≤ limit
+  · simp only [selectContext, if_pos fits, Option.some.injEq] at selected
+    subst count
+    have := context_cost_is_bounded (limit - required) costs
+    omega
+  · simp [selectContext, fits] at selected
+
+theorem an_oversized_recent_entry_stops_older_context (remaining cost : Nat) (rest : List Nat)
+    (large : remaining < cost) : contextCount remaining (cost :: rest) = 0 := by
+  simp [contextCount, Nat.not_le_of_gt large]
+
 /-- The reply names the invocation supplied by the native caller. A model
 cannot select an action, widen its scope, or authorize a later invocation.
 Malformed, oversized, or incomplete replies require a person. JSON transport

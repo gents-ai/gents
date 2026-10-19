@@ -9,6 +9,25 @@ pub(crate) fn accepts_completion(
     !has_tools || !purpose.is_auxiliary()
 }
 
+/// Costs are exact incremental wire bytes in newest-first order, including
+/// escaping and separators. The finite input retains only whole recent entries.
+pub fn select_context(
+    required: u64,
+    limit: u64,
+    costs: impl IntoIterator<Item = u64>,
+) -> Option<usize> {
+    let mut remaining = limit.checked_sub(required)?;
+    let mut count = 0;
+    for cost in costs {
+        let Some(next) = remaining.checked_sub(cost) else {
+            break;
+        };
+        remaining = next;
+        count += 1;
+    }
+    Some(count)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Reply {
@@ -112,6 +131,12 @@ mod tests {
     #[derive(Deserialize)]
     #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
     enum Case {
+        Context {
+            required: u64,
+            limit: u64,
+            costs: Vec<u64>,
+            expected: Option<usize>,
+        },
         Reply {
             action: String,
             raw: String,
@@ -150,6 +175,14 @@ mod tests {
         assert!(!snapshot.access_review_cases.is_empty());
         for case in snapshot.access_review_cases {
             match case {
+                Case::Context {
+                    required,
+                    limit,
+                    costs,
+                    expected,
+                } => {
+                    assert_eq!(select_context(required, limit, costs), expected);
+                }
                 Case::Reply {
                     action,
                     raw,

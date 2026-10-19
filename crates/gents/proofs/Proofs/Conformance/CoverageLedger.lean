@@ -1842,7 +1842,7 @@ def caseCoverage : List CoverageEntry :=
       "access_review_cases"
       "AccessReviewCases"
       "tool_policy::access_review::tests::generated_access_review_cases_drive_native_reply_and_routing"
-      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Traces bind denial windows and scoped routing. Signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require native adapter checks.")
+      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "access_review_task_cases"
