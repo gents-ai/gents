@@ -46,3 +46,5 @@ export * from "./inferenceSetup.js";
 export * from "./inferenceSettings.js";
 export * from "./inferenceSetupForm.js";
 export { PROVIDER_CREDENTIAL_KIND } from "./providerLogin.js";
+
+export * from "./capturedContext.js";
