@@ -38,6 +38,7 @@ pub(crate) fn installed_plugin(
         owner_pack_coordinate: None,
         owner_pack_digest: None,
         model_binding: None,
+        data_unique_keys: Default::default(),
     };
     store::write_record(home.path(), &record).unwrap();
     (home, record)

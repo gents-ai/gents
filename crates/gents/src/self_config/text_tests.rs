@@ -1051,6 +1051,36 @@ async fn crud_backend_creation_preserves_auth_boundary() {
 }
 
 #[tokio::test]
+async fn job_block_help_topic_states_bounds_defaults_and_policy() {
+    let (_node, _owner, tools) = setup("job-help", &["tools"]).await;
+    let page = call_config_tool(&tools, vec!["help".into(), "tools".into()])
+        .await
+        .unwrap();
+    assert!(
+        page.contains("integrations.plugins[].job") && page.contains("non-job verbs only"),
+        "{page}"
+    );
+    let shapes = call_config_tool(&tools, vec!["tools".into(), "edit".into(), "--help".into()])
+        .await
+        .unwrap();
+    for detail in [
+        "plugin must declare job: true",
+        "max_live: 1..64; default 8",
+        "max_spawns: 1..1024; default 128",
+        "max_messages_per_slot: 0..16; default 4",
+        "result_bytes: 1024..1048576; default 65536",
+        "max_wall_secs: 60..86400; default 7200",
+        "dynamic: off|check|run; default check",
+        "dynamic_targets",
+        "trusted_packs",
+        "project_roots",
+        "operator-only",
+    ] {
+        assert!(shapes.contains(detail), "missing {detail:?}: {shapes}");
+    }
+}
+
+#[tokio::test]
 async fn crud_help_exposes_parameters_for_the_named_resource_and_verb() {
     let (_node, _owner, tools) =
         setup("crud-help", &["node", "tools", "profile", "automation"]).await;

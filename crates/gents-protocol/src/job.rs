@@ -1015,23 +1015,31 @@ impl JobReadError {
     }
 }
 
-/// Operator-owned job ceiling of one plugin.
+/// Operator-owned job ceiling of one plugin: what a job it runs may start and
+/// how long it may live. An absent block means non-job verbs only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PluginJobSettings {
+    /// AgentTarget ids the job may start children on; at least one.
     #[serde(default)]
     pub agent_targets: Vec<String>,
+    /// Children alive at once across the job.
     #[serde(default = "PluginJobSettings::default_max_live")]
     pub max_live: u32,
+    /// Children the job may start in total.
     #[serde(default = "PluginJobSettings::default_max_spawns")]
     pub max_spawns: u32,
+    /// Messages one child slot may receive per attempt.
     #[serde(default = "PluginJobSettings::default_max_messages_per_slot")]
     pub max_messages_per_slot: u32,
+    /// Bytes of the job's result.
     #[serde(default = "PluginJobSettings::default_result_bytes")]
     pub result_bytes: u64,
+    /// Seconds the job may run.
     #[serde(default = "PluginJobSettings::default_max_wall_secs")]
     pub max_wall_secs: u64,
+    /// Operator-only rules for dynamic scripts, trusted packs and project roots.
     #[serde(default)]
     pub policy: JobPolicy,
 }

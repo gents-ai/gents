@@ -65,6 +65,7 @@ pub mod pack_registry;
 pub mod pack_resolve;
 pub mod pack_store;
 pub mod plugin;
+pub mod plugin_job;
 pub mod provider_http;
 pub(crate) mod provider_input;
 pub use gents_loop::provider_input::ProviderInputProfile;

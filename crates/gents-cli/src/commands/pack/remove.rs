@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
-use gents::pack::{InstalledPackPlugin, RemoveReport};
+use gents::pack::{InstalledPackPlugin, PackKind, RemoveReport};
 use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;
@@ -13,14 +13,20 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     let coordinate = format!("{namespace}/{name}");
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
 
+    // A documents pack's record has no assets or node-free removal: it goes
+    // through `remove_pack` below and the record is forgotten after.
+    let mut documents_record = false;
     if args.scope.graphql.is_none() {
-        if gents::pack::read_home_install(&home, &coordinate)?.is_some() {
-            anyhow::ensure!(
-                args.scope.node_did.is_none(),
-                "asset and plugins packs are removed locally with --home; identity flags do not apply"
-            );
-            let removed = remove_home_install(&home, &coordinate).await?;
-            return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
+        if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
+            if matches!(record.kind, PackKind::Assets | PackKind::Plugins) {
+                anyhow::ensure!(
+                    args.scope.node_did.is_none(),
+                    "asset and plugins packs are removed locally with --home; identity flags do not apply"
+                );
+                let removed = remove_home_install(&home, &coordinate).await?;
+                return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
+            }
+            documents_record = true;
         }
         anyhow::ensure!(
             gents::home::init_config_path(&home).is_file(),
@@ -32,6 +38,10 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
     let report =
         gents::pack::remove_pack(&access, &owner, &coordinate, args.drift.policy()).await?;
+    if documents_record {
+        // Before the archive scan below, which counts every file record.
+        gents::pack::forget_home_install(&home, &coordinate)?;
+    }
 
     let mut plugin_digests = BTreeSet::new();
     let pack_plugin_records = release_plugin_records(

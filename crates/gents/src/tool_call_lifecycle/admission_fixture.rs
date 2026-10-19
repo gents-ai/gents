@@ -15,6 +15,7 @@ pub struct PublishedAdmissionOptions {
     pub request_created_at: Option<String>,
     pub tool_name: Option<String>,
     pub paired_client: bool,
+    pub job_pin: bool,
 }
 
 impl Default for PublishedAdmissionOptions {
@@ -27,6 +28,7 @@ impl Default for PublishedAdmissionOptions {
             request_created_at: None,
             tool_name: None,
             paired_client: false,
+            job_pin: false,
         }
     }
 }

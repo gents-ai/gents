@@ -528,6 +528,7 @@ fn binding_slots_survives_a_reinstall_and_unbinding_clears_it() {
         &read().declaration,
         &artifact,
         None,
+        Default::default(),
         false,
     )
     .unwrap();

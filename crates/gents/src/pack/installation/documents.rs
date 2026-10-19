@@ -8,11 +8,27 @@ use crate::document_config::PackConfig;
 use crate::graph_package::{GraphInstallRecord, GraphPackageInstallBindings, LoadedGraphPackage};
 use crate::pack_archive::PackArchive;
 
-use super::super::{PackInferenceBindingPreview, PackInferenceBindings, PackInstallOptions};
+use super::super::{
+    HomePackInstall, InstalledVia, PackInferenceBindingPreview, PackInferenceBindings,
+    PackInstallOptions,
+};
 use super::{DriftPolicy, InstallReport, InstalledPackPlugin, PackIdentity};
 
+fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSet<&str> {
+    let mut paths: std::collections::BTreeSet<&str> = manifest
+        .metadata
+        .assets
+        .iter()
+        .map(String::as_str)
+        .filter(|path| {
+            path.starts_with("schemas/") && (path.ends_with(".graphql") || path.ends_with(".gql"))
+        })
+        .collect();
+    paths.extend(manifest.schemas.iter().map(String::as_str));
+    paths
+}
+
 pub fn document_pack_schema_paths(manifest: &super::super::PackManifest) -> Result<Vec<&str>> {
-    let mut paths = std::collections::BTreeSet::new();
     for path in manifest
         .metadata
         .assets
@@ -23,12 +39,104 @@ pub fn document_pack_schema_paths(manifest: &super::super::PackManifest) -> Resu
             !path.ends_with(".patch.json") && !path.ends_with(".json-patch"),
             "document packs containing schema patches require the CLI installer"
         );
-        if path.ends_with(".graphql") || path.ends_with(".gql") {
-            paths.insert(path.as_str());
-        }
     }
-    paths.extend(manifest.schemas.iter().map(String::as_str));
-    Ok(paths.into_iter().collect())
+    Ok(sdl_paths(manifest).into_iter().collect())
+}
+
+/// The fields of a declared collection and the field sets of its unique
+/// indexes, as DefraDB's SDL parser reads them.
+#[derive(Default)]
+struct SdlType {
+    fields: std::collections::BTreeSet<String>,
+    unique: Vec<Vec<String>>,
+}
+
+fn sdl_types(sdl: &str) -> Result<BTreeMap<String, SdlType>> {
+    let named = |value: &serde_json::Value| {
+        value
+            .get("Name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let list = |value: &serde_json::Value, key: &str| -> Vec<serde_json::Value> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut types = BTreeMap::new();
+    for collection in query::parse_sdl(sdl)? {
+        let collection = serde_json::to_value(&collection)?;
+        let mut declared = SdlType {
+            fields: list(&collection, "Fields")
+                .iter()
+                .filter_map(named)
+                .collect(),
+            ..SdlType::default()
+        };
+        for index in list(&collection, "Indexes") {
+            if index.get("Unique").and_then(serde_json::Value::as_bool) == Some(true) {
+                declared
+                    .unique
+                    .push(list(&index, "Fields").iter().filter_map(named).collect());
+            }
+        }
+        types.insert(
+            named(&collection).context("collection is missing Name")?,
+            declared,
+        );
+    }
+    Ok(types)
+}
+
+/// Checks `plugin`'s `data` and `asset_mounts` against the pack that ships it
+/// and returns each declared collection's unique key field sets. Every path
+/// that installs a pack plugin goes through this check.
+pub fn plugin_data_unique_keys<'a>(
+    manifest: &super::super::PackManifest,
+    plugin: &super::super::PackPlugin,
+    asset: &dyn Fn(&str) -> Result<&'a [u8]>,
+) -> Result<BTreeMap<String, Vec<Vec<String>>>> {
+    let name = &plugin.name;
+    for mount in &plugin.asset_mounts {
+        let prefix = format!("{}/", mount.class);
+        anyhow::ensure!(
+            manifest.metadata.assets.iter().any(|path| {
+                path.starts_with(&prefix) && super::super::is_distributable_asset_path(path)
+            }),
+            "plugin {name:?} asset_mounts class {:?} has no asset under {prefix}; ship one or \
+             drop the mount",
+            mount.class
+        );
+    }
+    let Some(data) = &plugin.data else {
+        return Ok(BTreeMap::new());
+    };
+    let mut types = BTreeMap::new();
+    for path in sdl_paths(manifest) {
+        types.extend(sdl_types(std::str::from_utf8(asset(path)?)?)?);
+    }
+    let mut keys = BTreeMap::new();
+    for collection in &data.collections {
+        let declared = types.get(collection).with_context(|| {
+            format!(
+                "plugin {name:?} data.collections names {collection:?}, which no schemas/*.graphql \
+                 in the pack declares; add the type to the pack's SDL or drop it"
+            )
+        })?;
+        keys.insert(collection.clone(), declared.unique.clone());
+    }
+    for field in data.stamped.keys() {
+        anyhow::ensure!(
+            data.collections
+                .iter()
+                .any(|collection| types[collection].fields.contains(field)),
+            "plugin {name:?} data.stamped field {field:?} is not a field of any collection in \
+             data.collections; stamp a field the pack's SDL declares"
+        );
+    }
+    Ok(keys)
 }
 
 pub struct PreparedDocumentPackInstall {
@@ -45,6 +153,7 @@ pub async fn prepare_document_pack_install(
     config: &PackConfig,
     requested: &PackInferenceBindings,
     dependencies: &[&PackArchive],
+    installed_via: InstalledVia,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<PreparedDocumentPackInstall> {
     for dependency in dependencies {
@@ -109,6 +218,27 @@ pub async fn prepare_document_pack_install(
         dependency_inference.insert(archive.manifest().name.clone(), preview);
         prepared_dependencies.push((package, bindings));
     }
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let shipped: Vec<(String, &PackConfig)> = std::iter::once((coordinate.clone(), &config))
+        .chain(prepared_dependencies.iter().map(|(package, _)| {
+            (
+                format!(
+                    "{}/{}",
+                    package.manifest.metadata.namespace, package.manifest.name
+                ),
+                &package.config,
+            )
+        }))
+        .collect();
+    for tools in &config.tools {
+        crate::plugin_job::settings::pack_job_block_admissible(
+            tools,
+            &manifest.metadata,
+            &coordinate,
+            &shipped,
+            installed_via,
+        )?;
+    }
     Ok(PreparedDocumentPackInstall {
         config,
         inference,
@@ -124,8 +254,17 @@ pub async fn install_prepared_document_pack(
     prepared: &PreparedDocumentPackInstall,
     plugin_home: Option<&Path>,
     grant_authority: bool,
+    installed_via: InstalledVia,
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
+    for plugin in &archive.manifest().metadata.plugins {
+        plugin_data_unique_keys(archive.manifest(), plugin, &|path| archive.asset(path))?;
+    }
+    for (package, _) in &prepared.dependencies {
+        for plugin in &package.manifest.metadata.plugins {
+            plugin_data_unique_keys(&package.manifest, plugin, &|path| package.asset(path))?;
+        }
+    }
     let all = std::iter::once(archive.manifest())
         .chain(prepared.dependencies.iter().map(|(p, _)| &p.manifest));
     for manifest in all {
@@ -157,6 +296,8 @@ pub async fn install_prepared_document_pack(
             &|path| package.asset(path),
             grant_authority,
         )?;
+        let identity =
+            PackIdentity::new(&package.manifest, &package.package_digest, plugins.clone());
         let record = GraphInstallRecord {
             plugins,
             explicit: false,
@@ -175,6 +316,9 @@ pub async fn install_prepared_document_pack(
         )
         .await
         .context("graph activation failed after local pack plugins were published; the plugins remain installed")?;
+        if let Some(home) = plugin_home {
+            record_home_install(home, &package.manifest, &identity, installed_via, false)?;
+        }
     }
     for (path, plan) in schemas {
         crate::config_client::apply_schema_install(
@@ -199,9 +343,41 @@ pub async fn install_prepared_document_pack(
         .iter()
         .map(|(p, _)| format!("{}/{}", p.manifest.metadata.namespace, p.manifest.name))
         .collect();
-    super::super::install_pack_documents(access, owner, &identity, &prepared.config, policy)
-        .await
-        .context("document pack installation failed after local pack plugins were published; the plugins remain installed")
+    let report =
+        super::super::install_pack_documents(access, owner, &identity, &prepared.config, policy)
+            .await
+            .context("document pack installation failed after local pack plugins were published; the plugins remain installed")?;
+    if let Some(home) = plugin_home {
+        record_home_install(home, archive.manifest(), &identity, installed_via, true)?;
+    }
+    Ok(report)
+}
+
+/// Writes the home record of an install through
+/// [`record_after_install`](super::super::record_after_install), which decides
+/// the provenance and writes nothing for a graph pack.
+pub(super) fn record_home_install(
+    home: &Path,
+    manifest: &super::super::PackManifest,
+    identity: &PackIdentity,
+    installed_via: InstalledVia,
+    explicit: bool,
+) -> Result<()> {
+    super::super::record_after_install(
+        home,
+        HomePackInstall {
+            coordinate: identity.coordinate.clone(),
+            version: identity.version.clone(),
+            digest: identity.digest.clone(),
+            kind: manifest.metadata.kind.clone(),
+            assets: String::new(),
+            plugins: identity.plugins.clone(),
+            installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            installed_via: Some(installed_via),
+        },
+        installed_via,
+        explicit,
+    )
 }
 
 fn install_plugins<'a>(

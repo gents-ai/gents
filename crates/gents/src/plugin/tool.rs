@@ -33,6 +33,11 @@ impl PluginTool {
         root: Option<PathBuf>,
     ) -> Result<Self> {
         let record = executor.resolve(&plugin.plugin, plugin.digest.as_deref())?;
+        anyhow::ensure!(
+            plugin.job.is_none() || record.declaration.job.0,
+            "plugin {} does not declare job dispatch; install a pack whose plugin sets `job: true`",
+            plugin.plugin
+        );
         let mut description = record
             .instructions
             .clone()

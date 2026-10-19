@@ -130,6 +130,7 @@ mod tests {
             owner_pack_coordinate: None,
             owner_pack_digest: None,
             model_binding: None,
+            data_unique_keys: Default::default(),
         }
     }
 
@@ -177,6 +178,7 @@ mod tests {
             &declaration,
             &bytes,
             None,
+            Default::default(),
             false,
         )
         .unwrap();
@@ -208,6 +210,7 @@ mod tests {
             &invalid.declaration,
             &bytes,
             None,
+            Default::default(),
             false
         )
         .is_err());
@@ -343,6 +346,7 @@ mod tests {
             &declaration,
             &bytes,
             None,
+            Default::default(),
             false,
         )
         .unwrap_err();
@@ -361,6 +365,7 @@ mod tests {
             &declaration,
             &bytes,
             None,
+            Default::default(),
             true,
         )
         .unwrap();
@@ -374,6 +379,7 @@ mod tests {
             &declaration,
             &bytes,
             None,
+            Default::default(),
             false,
         )
         .expect("the recorded grant covers the same request");

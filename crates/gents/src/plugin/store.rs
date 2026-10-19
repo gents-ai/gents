@@ -70,6 +70,11 @@ pub struct InstalledPlugin {
     pub owner_pack_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding: Option<super::model_calls::ModelBinding>,
+    /// Each collection of `declaration.data` and the field sets of its
+    /// `@index(unique: true)` declarations in the pack's own SDL, computed at
+    /// install so a call never reads SDL.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub data_unique_keys: std::collections::BTreeMap<String, Vec<Vec<String>>>,
 }
 
 impl InstalledPlugin {
@@ -439,12 +444,14 @@ mod tests {
                 limits: None,
                 model_slot: None,
                 service: None,
+                ..Default::default()
             },
             granted: None,
             instructions: None,
             owner_pack_coordinate: owner_pack_coordinate.map(str::to_owned),
             owner_pack_digest: owner_pack_coordinate.map(|_| "sha256:pack".to_owned()),
             model_binding: None,
+            data_unique_keys: Default::default(),
         }
     }
 

@@ -141,6 +141,7 @@ pub(crate) fn declaration_from_artifact(
         limits: None,
         model_slot: None,
         service: None,
+        ..Default::default()
     })
 }
 

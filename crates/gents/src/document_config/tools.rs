@@ -507,6 +507,8 @@ pub struct PluginToolRef {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<super::WriteToolField>>", optional = nullable))]
     pub input_fields: Vec<super::WriteToolField>,
+    /// Lets this plugin run job steps within the block's ceiling; the installed
+    /// plugin must declare `job: true`. Absent means non-job verbs only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub job: Option<gents_protocol::job::PluginJobSettings>,
@@ -864,6 +866,11 @@ impl Tools {
                         plugin.tool_name()
                     ));
                 }
+                if let Some(job) = &plugin.job {
+                    for error in crate::plugin_job::settings::validate(job) {
+                        errors.push(format!("integrations.plugins[{}].{error}", plugin.plugin));
+                    }
+                }
                 if let Some(digest) = &plugin.digest {
                     let hex = digest.strip_prefix("sha256:").unwrap_or_default();
                     if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -1013,5 +1020,46 @@ mod tests {
                 "remote": {"services": [{"mcp_service_id": "web"}]}
             })
         );
+    }
+
+    fn document(groups: serde_json::Value) -> Tools {
+        let mut value = groups;
+        value["tools_id"] = "tools".into();
+        value["node_did"] = "owner".into();
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn integrations_plugins_job_block_errors_name_the_field() {
+        let tools = |job: serde_json::Value| {
+            document(json!({"integrations":{"plugins":[{"plugin":"ns/runner","job":job}]}}))
+        };
+        assert!(tools(json!({"agent_targets":["a"]})).validate().is_ok());
+        for (job, field) in [
+            (json!({"agent_targets":[]}), "job.agent_targets"),
+            (json!({"agent_targets":["a"],"max_live":0}), "job.max_live"),
+            (
+                json!({"agent_targets":["a"],"policy":{"project_roots":["rel"]}}),
+                "job.policy.project_roots",
+            ),
+            (
+                json!({"agent_targets":["a"],"policy":{"trusted_packs":["not a pack"]}}),
+                "job.policy.trusted_packs",
+            ),
+            (
+                json!({"agent_targets":["a"],"policy":{"trusted_packs":["Bad-Pack"]}}),
+                "job.policy.trusted_packs",
+            ),
+            (
+                json!({"agent_targets":["a"],"policy":{"trusted_packs":["ns/pack@1.0.0"]}}),
+                "job.policy.trusted_packs",
+            ),
+        ] {
+            let message = tools(job).validate().unwrap_err().to_string();
+            assert!(
+                message.contains(&format!("integrations.plugins[ns/runner].{field}")),
+                "{message}"
+            );
+        }
     }
 }

@@ -487,6 +487,7 @@ fn plugin_named(name: &str, language: &str) -> PackPlugin {
         limits: None,
         model_slot: None,
         service: None,
+        ..Default::default()
     }
 }
 
@@ -732,6 +733,7 @@ fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
         limits: None,
         model_slot: None,
         service: None,
+        ..Default::default()
     };
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
     assert!(format!("{error:#}").contains("broken"), "{error:#}");
@@ -844,6 +846,44 @@ fn narrow_manifold_always_forces_listen_to_none() {
         ListenAccess::None,
         "a plugin is called, never a server, whatever either side asked for"
     );
+}
+
+fn job_tool_ref(job: Option<serde_json::Value>) -> crate::document_config::PluginToolRef {
+    crate::document_config::PluginToolRef {
+        plugin: "team/plugin".into(),
+        digest: None,
+        tool_calls: false,
+        input_fields: Vec::new(),
+        job: job.map(|job| serde_json::from_value(job).unwrap()),
+    }
+}
+
+#[test]
+fn job_block_on_a_plugin_without_job_true_is_refused() {
+    let (home, record) = executor::installed_echo();
+    assert!(!record.declaration.job.0);
+    let executor = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let block = serde_json::json!({"agent_targets": ["worker"]});
+    let error =
+        crate::plugin::tool::PluginTool::resolve(executor, &job_tool_ref(Some(block)), None)
+            .err()
+            .expect("a job block needs a plugin that declares job dispatch");
+    assert_eq!(
+        format!("{error:#}"),
+        "plugin team/plugin does not declare job dispatch; install a pack whose plugin sets `job: true`"
+    );
+}
+
+#[test]
+fn plugin_without_job_block_keeps_the_plugin_tool_path() {
+    let (home, _) = executor::installed_echo();
+    let executor = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    crate::plugin::tool::PluginTool::resolve(executor, &job_tool_ref(None), None)
+        .expect("a plugin without a job block resolves as before");
 }
 
 pub(crate) mod executor;

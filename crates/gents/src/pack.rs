@@ -1,9 +1,12 @@
 use anyhow::{Context, Result};
+use gents_protocol::job::{
+    AssetMountDeclaration, PluginCatalogDeclaration, PluginDataDeclaration, PluginJobDeclaration,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod authoring;
-mod home_install;
+pub mod home_install;
 mod inference;
 mod installation;
 pub mod interpolate;
@@ -15,7 +18,8 @@ mod provenance;
 #[cfg(test)]
 mod publication_contract_tests;
 pub use home_install::{
-    forget_home_install, list_home_installs, read_home_install, write_home_install, HomePackInstall,
+    forget_home_install, list_home_installs, read_home_install, record_after_install,
+    write_home_install, HomePackInstall, InstalledVia,
 };
 pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
@@ -24,10 +28,10 @@ pub use inference::{
 };
 pub use installation::{
     document_pack_schema_paths, install_prepared_document_pack, installed_packs,
-    list_installed_packs, prepare_document_pack_install, read_installed_pack,
-    record_plugin_store_change, record_plugin_store_change_as, referenced_pack_digests,
-    remove_pack, DriftPolicy, InstallReport, InstalledPack, InstalledPackPlugin, PackIdentity,
-    PreparedDocumentPackInstall, RemoveReport, Retained,
+    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
+    read_installed_pack, record_plugin_store_change, record_plugin_store_change_as,
+    referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstalledPack,
+    InstalledPackPlugin, PackIdentity, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{
@@ -96,6 +100,14 @@ fn default_namespace() -> String {
     crate::pack_archive::DEFAULT_NAMESPACE.to_owned()
 }
 
+fn undeclared_job() -> PluginJobDeclaration {
+    PluginJobDeclaration(false)
+}
+
+fn job_undeclared(job: &PluginJobDeclaration) -> bool {
+    !job.0
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackPlugin {
     pub name: String,
@@ -117,6 +129,46 @@ pub struct PackPlugin {
     pub model_slot: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service: Option<PluginService>,
+    /// Whether the plugin runs job steps; absent means it serves non-job
+    /// verbs only.
+    #[serde(default = "undeclared_job", skip_serializing_if = "job_undeclared")]
+    pub job: PluginJobDeclaration,
+    /// The collections, operations and host-stamped fields the plugin's data
+    /// calls and writes may use; absent means it has no data access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<PluginDataDeclaration>,
+    /// The asset classes the plugin reads through read-only mounts; absent
+    /// means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asset_mounts: Vec<AssetMountDeclaration>,
+    /// The argv of the plugin's catalog call; absent means it lists no
+    /// catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<PluginCatalogDeclaration>,
+}
+
+/// For literals that set only the fields they need.
+impl Default for PackPlugin {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            description: String::new(),
+            artifact: String::new(),
+            source: None,
+            language: String::new(),
+            input_schema: serde_json::Value::Null,
+            manifold: None,
+            instructions: None,
+            bind_dir: None,
+            limits: None,
+            model_slot: None,
+            service: None,
+            job: undeclared_job(),
+            data: None,
+            asset_mounts: Vec::new(),
+            catalog: None,
+        }
+    }
 }
 
 /// A pack-owned native process. Its first stdout line is a JSON object injected
@@ -435,9 +487,71 @@ impl PackPlugin {
                 );
             }
         }
+        self.validate_job_manifest_fields()
+    }
+
+    /// The static rules for the `data`, `asset_mounts` and `catalog` fields;
+    /// checks against the archive itself belong to install.
+    fn validate_job_manifest_fields(&self) -> Result<()> {
+        let name = &self.name;
+        if let Some(data) = &self.data {
+            anyhow::ensure!(
+                !data.collections.is_empty(),
+                "plugin {name:?} data.collections is empty; list the collections it may use or \
+                 drop data"
+            );
+            let mut seen = BTreeSet::new();
+            for collection in &data.collections {
+                anyhow::ensure!(
+                    seen.insert(collection),
+                    "plugin {name:?} data.collections lists {collection:?} twice; list each once"
+                );
+            }
+            for op in &data.ops {
+                anyhow::ensure!(
+                    DATA_OPS.contains(&op.as_str()),
+                    "plugin {name:?} data.ops has unknown op {op:?}; use {}",
+                    DATA_OPS.join(", ")
+                );
+            }
+            for field in data.stamped.keys() {
+                crate::graphql::validate_graphql_name(field).with_context(|| {
+                    format!(
+                        "plugin {name:?} data.stamped key {field:?} must be a GraphQL field name"
+                    )
+                })?;
+                anyhow::ensure!(
+                    !crate::toolset::is_secret_env_name(field),
+                    "plugin {name:?} data.stamped field {field:?} looks like a secret name; \
+                     rename the field"
+                );
+            }
+        }
+        let mut classes = BTreeSet::new();
+        for mount in &self.asset_mounts {
+            anyhow::ensure!(
+                asset_path::is_snake_case_name(&mount.class),
+                "plugin {name:?} asset_mounts class {:?} must be snake_case",
+                mount.class
+            );
+            anyhow::ensure!(
+                classes.insert(&mount.class),
+                "plugin {name:?} asset_mounts lists class {:?} twice; list each once",
+                mount.class
+            );
+        }
+        if let Some(catalog) = &self.catalog {
+            anyhow::ensure!(
+                !catalog.argv.is_empty() && catalog.argv.iter().all(|arg| !arg.is_empty()),
+                "plugin {name:?} catalog.argv must be non-empty and hold non-empty strings"
+            );
+        }
         Ok(())
     }
 }
+
+/// The operations `data.ops` may list.
+const DATA_OPS: &[&str] = &["query", "insert", "update", "delete"];
 
 fn limit_range_reason(value: u32, ceiling: u32, unit: &str) -> String {
     if value == 0 {
@@ -779,6 +893,7 @@ impl PackDigester {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::job::StampedField;
 
     fn valid_plugin() -> PackPlugin {
         PackPlugin {
@@ -794,6 +909,186 @@ mod tests {
             limits: None,
             model_slot: None,
             service: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn plugin_manifest_job_fields_parse_from_the_job_fixture() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/packs/job_plugin_fixture/manifest.json"
+        ))
+        .unwrap();
+        let plugin: PackPlugin = serde_json::from_value(manifest["plugins"][0].clone()).unwrap();
+        assert_eq!(plugin.job, PluginJobDeclaration(true));
+        let data = plugin.data.expect("the fixture declares data");
+        assert_eq!(data.collections, ["FixtureNote"]);
+        assert_eq!(data.ops, ["query", "insert"]);
+        assert_eq!(
+            data.stamped.get("job_row_doc_id"),
+            Some(&StampedField::JobRowDocId)
+        );
+        assert_eq!(
+            data.stamped.get("chain_root_doc_id"),
+            Some(&StampedField::ChainRootDocId)
+        );
+        assert_eq!(
+            plugin.asset_mounts,
+            [AssetMountDeclaration {
+                class: "fixture_assets".to_owned()
+            }]
+        );
+        assert_eq!(
+            plugin.catalog.map(|catalog| catalog.argv),
+            Some(vec!["catalog".to_owned()])
+        );
+    }
+
+    #[test]
+    fn plugin_manifest_job_fields_default_off_and_are_not_serialized() {
+        let plain = serde_json::json!({
+            "name": "format_check",
+            "description": "Checks formatting",
+            "artifact": "plugins/format_check.afb",
+            "language": "rust",
+            "input_schema": {"type": "object"}
+        });
+        let plugin: PackPlugin = serde_json::from_value(plain.clone()).unwrap();
+        assert_eq!(plugin.job, PluginJobDeclaration(false));
+        assert!(plugin.data.is_none());
+        assert!(plugin.asset_mounts.is_empty());
+        assert!(plugin.catalog.is_none());
+        assert_eq!(serde_json::to_value(&plugin).unwrap(), plain);
+    }
+
+    fn data_plugin(collections: &[&str], ops: &[&str]) -> PackPlugin {
+        PackPlugin {
+            data: Some(PluginDataDeclaration {
+                collections: collections.iter().map(|name| (*name).to_owned()).collect(),
+                ops: ops.iter().map(|name| (*name).to_owned()).collect(),
+                stamped: BTreeMap::new(),
+            }),
+            ..valid_plugin()
+        }
+    }
+
+    fn refusal(plugin: &PackPlugin) -> String {
+        format!("{:#}", plugin.validate().expect_err("must be refused"))
+    }
+
+    #[test]
+    fn data_collections_must_be_non_empty_and_unique() {
+        data_plugin(&["FixtureNote"], &["query"])
+            .validate()
+            .unwrap();
+        for collections in [&[][..], &["FixtureNote", "FixtureNote"][..]] {
+            let message = refusal(&data_plugin(collections, &["query"]));
+            assert!(message.contains("format_check"), "{message}");
+            assert!(message.contains("data.collections"), "{message}");
+        }
+    }
+
+    #[test]
+    fn unknown_data_ops_are_refused() {
+        data_plugin(&["FixtureNote"], &["query", "insert", "update", "delete"])
+            .validate()
+            .unwrap();
+        let message = refusal(&data_plugin(&["FixtureNote"], &["query", "upsert"]));
+        assert!(message.contains("format_check"), "{message}");
+        assert!(message.contains("data.ops"), "{message}");
+        assert!(message.contains("upsert"), "{message}");
+    }
+
+    #[test]
+    fn unknown_stamp_values_are_refused() {
+        let plugin = |stamp: &str| {
+            serde_json::from_value::<PackPlugin>(serde_json::json!({
+                "name": "format_check",
+                "description": "Checks formatting",
+                "artifact": "plugins/format_check.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+                "data": {
+                    "collections": ["FixtureNote"],
+                    "ops": ["insert"],
+                    "stamped": {"owner": stamp}
+                }
+            }))
+        };
+        plugin("node_did").unwrap().validate().unwrap();
+        let error = plugin("host_secret").expect_err("an unknown stamp value must not parse");
+        assert!(error.to_string().contains("host_secret"), "{error}");
+    }
+
+    #[test]
+    fn stamped_keys_must_be_graphql_names() {
+        let mut plugin = data_plugin(&["FixtureNote"], &["insert"]);
+        let data = plugin.data.as_mut().unwrap();
+        data.stamped
+            .insert("owner_did".to_owned(), StampedField::NodeDid);
+        plugin.validate().unwrap();
+        let data = plugin.data.as_mut().unwrap();
+        data.stamped
+            .insert("owner did {".to_owned(), StampedField::SessionId);
+        let message = refusal(&plugin);
+        assert!(message.contains("format_check"), "{message}");
+        assert!(message.contains("data.stamped"), "{message}");
+        assert!(message.contains("owner did {"), "{message}");
+    }
+
+    #[test]
+    fn secret_stamped_field_names_are_refused() {
+        for field in ["api_token", "clientSecret", "password_hash", "signing_key"] {
+            let mut plugin = data_plugin(&["FixtureNote"], &["insert"]);
+            plugin
+                .data
+                .as_mut()
+                .unwrap()
+                .stamped
+                .insert(field.to_owned(), StampedField::NodeDid);
+            let message = refusal(&plugin);
+            assert!(message.contains("format_check"), "{message}");
+            assert!(message.contains(field), "{message}");
+        }
+    }
+
+    #[test]
+    fn asset_mount_classes_must_be_unique_snake_case() {
+        let mounts = |classes: &[&str]| PackPlugin {
+            asset_mounts: classes
+                .iter()
+                .map(|class| AssetMountDeclaration {
+                    class: (*class).to_owned(),
+                })
+                .collect(),
+            ..valid_plugin()
+        };
+        mounts(&["fixture_assets", "docs2"]).validate().unwrap();
+        for classes in [
+            &["Fixture"][..],
+            &[""][..],
+            &["a-b"][..],
+            &["a_b", "a_b"][..],
+        ] {
+            let message = refusal(&mounts(classes));
+            assert!(message.contains("format_check"), "{message}");
+            assert!(message.contains("asset_mounts"), "{message}");
+        }
+    }
+
+    #[test]
+    fn empty_catalog_argv_is_refused() {
+        let catalog = |argv: &[&str]| PackPlugin {
+            catalog: Some(PluginCatalogDeclaration {
+                argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
+            }),
+            ..valid_plugin()
+        };
+        catalog(&["catalog"]).validate().unwrap();
+        for argv in [&[][..], &["catalog", ""][..]] {
+            let message = refusal(&catalog(argv));
+            assert!(message.contains("format_check"), "{message}");
+            assert!(message.contains("catalog.argv"), "{message}");
         }
     }
 
