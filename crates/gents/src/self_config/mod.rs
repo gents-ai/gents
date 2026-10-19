@@ -1007,12 +1007,25 @@ impl PackInstaller {
                     crate::pack::local::open(&crate::pack::local::LocalName::Path(&path), home)?
                 }
             };
+            // Local built artifacts flow through the same canonical
+            // installers as registry-resolved packs: documents through
+            // prepare/install_prepared_document_pack, graphs through
+            // load_graph + install_loaded_graph_package, plugins-only through
+            // plugins_pack. Plugin authority is unchanged: preview reports
+            // installation_blockers and commit refuses them unless the
+            // operator grants authority, so a locally built pack (e.g. one
+            // declaring child_process or bind_dir capabilities) cannot
+            // silently authorize itself.
             anyhow::ensure!(
                 matches!(
                     archive.manifest().metadata.kind,
-                    crate::pack::PackKind::Plugins
+                    crate::pack::PackKind::Graph
+                        | crate::pack::PackKind::Documents
+                        | crate::pack::PackKind::Plugins
                 ),
-                "native local lifecycle currently accepts plugins-only artifacts"
+                "pack {:?} is {:?}; the model-facing installer supports document, graph and plugins-only packs",
+                archive.manifest().name,
+                archive.manifest().metadata.kind
             );
             return Ok(ConfigPackDistribution(
                 crate::pack_resolve::ResolvedNamedPack {
@@ -1200,6 +1213,11 @@ impl PackInstaller {
             inspected.push(preview);
         }
         if !commit && !missing_slots.is_empty() {
+            // Incomplete previews still must reject unauthorized supplied bindings.
+            // Complete previews and installs retain the prepared-binding fence below.
+            for preview in &inspected {
+                self.fence_bindings(&preview.bindings).await?;
+            }
             return Ok(serde_json::to_string_pretty(&json!({
                 "committed": false, "ready": false, "operation": operation,
                 "package": distribution.manifest().name, "version": distribution.manifest().version,
@@ -1237,6 +1255,15 @@ impl PackInstaller {
             &environment,
         )
         .await?;
+        // Inference slot bindings pick provider accounts exactly like the
+        // graph lifecycle: every selected profile must be account-free or on
+        // its provider's default account. Fence before the preview return or
+        // any installation side effect so a documents pack cannot publish
+        // records or plugins through a binding the graph path would refuse.
+        self.fence_bindings(&prepared.inference.bindings).await?;
+        for dependency in &prepared.dependencies {
+            self.fence_bindings(&dependency.1.inference_slots).await?;
+        }
         let mut schemas = Vec::new();
         for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {
             let sdl = std::str::from_utf8(distribution.0.archive.asset(path)?)?;
