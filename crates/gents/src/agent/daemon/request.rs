@@ -87,7 +87,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             .collect::<Vec<_>>();
         let (mut provider_history, prompt) = super::inference::request_entry(
             provider_history,
-            &request.content,
+            &request.input.authored_message(&request.content)?,
             resume_from_history,
             request_context_message,
             wake_notifications,
