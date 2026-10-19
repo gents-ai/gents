@@ -975,7 +975,7 @@ impl DefraSessionHook {
                 .await;
         }
 
-        if lifecycle.is_session_message() {
+        if lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::SessionMessage {
             let mut lifecycle = lifecycle;
             let (status, request_id) =
                 match crate::session_message::kill(&self.node, &mut lifecycle).await? {

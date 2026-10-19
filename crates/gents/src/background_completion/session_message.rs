@@ -229,7 +229,9 @@ pub(crate) async fn settle_session_message_row(
     node: &Arc<EmbeddedNode>,
     lifecycle: &mut ToolCallLifecycle,
 ) -> Result<bool> {
-    if !lifecycle.is_running() || !lifecycle.is_session_message() {
+    if !lifecycle.is_running()
+        || lifecycle.kind() != crate::tool_call_lifecycle::ToolRowKind::SessionMessage
+    {
         return Ok(false);
     }
     let doc_id = lifecycle

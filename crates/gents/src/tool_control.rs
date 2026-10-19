@@ -38,7 +38,7 @@ pub async fn cancel_session_background_process(
         lifecycle.session_id(),
         lifecycle.node_did(),
         lifecycle.requester_did(),
-    ) || lifecycle.is_session_message()
+    ) || lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::SessionMessage
     {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     }
@@ -66,7 +66,7 @@ pub async fn cancel_background_tool_call(
         });
     }
 
-    if lifecycle.is_session_message() {
+    if lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::SessionMessage {
         return Ok(
             match crate::session_message::kill(&node, &mut lifecycle).await? {
                 crate::session_message::KillOutcome::Settled => {

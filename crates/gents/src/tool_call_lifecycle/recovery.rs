@@ -500,11 +500,12 @@ impl super::ToolCallLifecycle {
             };
             // A session-message completion returns its result to this session
             // (Lean `CausalHop.return_keeps_caller_hop`).
-            let wake = if crate::toolset::is_session_message_tool(&row.tool_name) {
-                crate::lifecycle::RequestHopCause::Return
-            } else {
-                crate::lifecycle::RequestHopCause::Continuation
-            };
+            let wake =
+                if super::ToolRowKind::of(&row.tool_name) == super::ToolRowKind::SessionMessage {
+                    crate::lifecycle::RequestHopCause::Return
+                } else {
+                    crate::lifecycle::RequestHopCause::Continuation
+                };
             let appended = crate::background_completion::append_background_tool_completion(
                 node,
                 session_id,
@@ -1308,7 +1309,7 @@ fn await_mode(row: &RunningToolCallRow) -> AwaitMode {
 
 fn is_background_tool_row(row: &RunningToolCallRow) -> bool {
     await_mode(row) == AwaitMode::Background
-        && !crate::toolset::is_session_message_tool(&row.tool_name)
+        && super::ToolRowKind::of(&row.tool_name) == super::ToolRowKind::Native
 }
 
 impl RecoveryOutcome {

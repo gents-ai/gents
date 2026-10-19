@@ -368,6 +368,7 @@ pub(crate) async fn plan(
             Some(format!("session-message:{}", cause.tool_call_doc_id)),
             hop,
             None,
+            None,
         )
         .await?;
         PlannedWrite::Goal {
@@ -399,6 +400,7 @@ pub(crate) async fn plan(
                 None,
                 hop,
                 queue,
+                None,
             )
             .await?,
             delivery: if steering.is_some() {
@@ -491,82 +493,73 @@ async fn commit_once(
         };
     let binding = lifecycle.background_receipt_binding()?;
     let start = lifecycle.dispatch_start()?;
-    let start = &start;
-    let session_id = plan.session_id;
-    let (receipt, started_at) = match plan.write {
+    let (start, binding, plan, receipt_for) = (&start, &binding, &plan, &receipt_for);
+    let (actor, label) = match &plan.write {
+        PlannedWrite::Request { .. } => (None, "session_message.commit_request"),
+        PlannedWrite::Goal { .. } => (
+            Some(
+                ::identity::Did::new(cause.caller_node_did.clone())
+                    .context("caller DID is not ACP-addressable")?,
+            ),
+            "session_message.commit_goal",
+        ),
+    };
+    let (receipt, started_at) =
+        crate::config_client::ConfigAccess::transact_local_write(node, actor, label, move |txn| {
+            Box::pin(async move {
+                let started_at = start_dispatch(txn, start).await?;
+                let enqueued = stage_planned_write_in_txn(txn, cause, plan).await?;
+                let receipt = receipt_for(&enqueued);
+                crate::tool_call_lifecycle::publish_background_receipt_in_txn(
+                    txn,
+                    binding,
+                    &serde_json::to_string(&receipt)?,
+                )
+                .await?;
+                Ok((receipt, started_at))
+            })
+        })
+        .await?;
+    lifecycle.mark_started(started_at);
+    Ok(receipt)
+}
+
+/// Create the planned request, or stage the Goal with it, in the caller's
+/// transaction. It writes no tool row.
+pub(crate) async fn stage_planned_write_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    _cause: &SessionMessageCause,
+    plan: &Plan,
+) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
+    match &plan.write {
         PlannedWrite::Request { create, .. } => {
+            ensure_planned_hop_current(txn, create).await?;
             let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-            let (mutation, binding, create, receipt_for) =
-                (&mutation, &binding, &create, &receipt_for);
-            crate::config_client::ConfigAccess::transact_local_write(
-                node,
-                None,
-                "session_message.commit_request",
-                move |txn| {
-                    Box::pin(async move {
-                        ensure_planned_hop_current(txn, create).await?;
-                        let started_at = start_dispatch(txn, start).await?;
-                        let response = txn.execute(mutation).await?;
-                        let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest")?;
-                        let receipt = receipt_for(&crate::lifecycle::EnqueuedAgentRequest {
-                            doc_id,
-                            request_id: create.request_id.clone(),
-                            session_id: create.session_id.clone(),
-                        });
-                        crate::tool_call_lifecycle::publish_background_receipt_in_txn(
-                            txn,
-                            binding,
-                            &serde_json::to_string(&receipt)?,
-                        )
-                        .await?;
-                        Ok((receipt, started_at))
-                    })
-                },
-            )
-            .await
+            let response = txn.execute(&mutation).await?;
+            let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest")?;
+            Ok(crate::lifecycle::EnqueuedAgentRequest {
+                doc_id,
+                request_id: create.request_id.clone(),
+                session_id: create.session_id.clone(),
+            })
         }
         PlannedWrite::Goal {
             create,
             objective,
             token_budget,
         } => {
-            let actor = ::identity::Did::new(cause.caller_node_did.clone())
-                .context("caller DID is not ACP-addressable")?;
-            let (create, objective, session_id, binding, receipt_for) =
-                (&create, &objective, &session_id, &binding, &receipt_for);
-            crate::config_client::ConfigAccess::transact_local_write(
-                node,
-                Some(actor),
-                "session_message.commit_goal",
-                move |txn| {
-                    Box::pin(async move {
-                        ensure_planned_hop_current(txn, create).await?;
-                        let started_at = start_dispatch(txn, start).await?;
-                        let enqueued = crate::goal::stage_goal_backed_request_in_txn(
-                            txn,
-                            &create.node_did,
-                            session_id,
-                            objective,
-                            token_budget,
-                            create,
-                        )
-                        .await?;
-                        let receipt = receipt_for(&enqueued);
-                        crate::tool_call_lifecycle::publish_background_receipt_in_txn(
-                            txn,
-                            binding,
-                            &serde_json::to_string(&receipt)?,
-                        )
-                        .await?;
-                        Ok((receipt, started_at))
-                    })
-                },
+            ensure_planned_hop_current(txn, create).await?;
+            crate::goal::stage_goal_backed_request_in_txn(
+                txn,
+                &create.node_did,
+                &plan.session_id,
+                objective,
+                *token_budget,
+                create,
             )
             .await
         }
-    }?;
-    lifecycle.mark_started(started_at);
-    Ok(receipt)
+    }
 }
 
 async fn ensure_planned_hop_current(
@@ -762,6 +755,58 @@ pub(crate) enum KillOutcome {
     Cancelled,
 }
 
+/// The caused-request step of a kill: `Some` when this step decides the kill
+/// (the terminal request settled the row, or the live local request was
+/// interrupted). `None` when the caller must cancel the row directly: a
+/// terminal request this step did not settle, or a live remote request
+/// (interrupted; a failed peer interrupt is only logged).
+pub(crate) async fn kill_caused_request(
+    node: &std::sync::Arc<EmbeddedNode>,
+    lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
+    caused: &gents_protocol::row::AgentRequestRow,
+) -> Result<Option<KillOutcome>> {
+    let terminal = caused
+        .lifecycle_state
+        .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
+    if terminal && crate::background_completion::settle_session_message_row(node, lifecycle).await?
+    {
+        return Ok(Some(KillOutcome::Settled));
+    }
+    let doc_id = caused
+        .doc_id
+        .as_deref()
+        .context("caused request lacks physical identity")?;
+    let node_did = caused
+        .node_did
+        .as_deref()
+        .context("caused request lacks node_did")?;
+    let local = node_did == lifecycle.node_did();
+    if !terminal {
+        let interrupted = crate::interrupt::interrupt_request_by_doc_id(
+            node,
+            doc_id,
+            node_did,
+            caused.requester_did.as_deref(),
+        )
+        .await;
+        match interrupted {
+            Ok(_) if local => {
+                return Ok(Some(KillOutcome::Interrupting {
+                    request_id: caused.request_id.clone(),
+                }))
+            }
+            Ok(_) => {}
+            Err(error) if local => return Err(error),
+            Err(error) => tracing::warn!(
+                caused_request_doc_id = doc_id,
+                error = %format!("{error:#}"),
+                "peer interrupt of a killed session message was not written"
+            ),
+        }
+    }
+    Ok(None)
+}
+
 pub(crate) async fn kill(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
@@ -771,45 +816,8 @@ pub(crate) async fn kill(
         CausedObservation::NotVisible | CausedObservation::Unbound(_) => None,
     };
     if let Some(caused) = &caused {
-        let terminal = caused
-            .lifecycle_state
-            .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
-        if terminal
-            && crate::background_completion::settle_session_message_row(node, lifecycle).await?
-        {
-            return Ok(KillOutcome::Settled);
-        }
-        let doc_id = caused
-            .doc_id
-            .as_deref()
-            .context("caused request lacks physical identity")?;
-        let node_did = caused
-            .node_did
-            .as_deref()
-            .context("caused request lacks node_did")?;
-        let local = node_did == lifecycle.node_did();
-        if !terminal {
-            let interrupted = crate::interrupt::interrupt_request_by_doc_id(
-                node,
-                doc_id,
-                node_did,
-                caused.requester_did.as_deref(),
-            )
-            .await;
-            match interrupted {
-                Ok(_) if local => {
-                    return Ok(KillOutcome::Interrupting {
-                        request_id: caused.request_id.clone(),
-                    })
-                }
-                Ok(_) => {}
-                Err(error) if local => return Err(error),
-                Err(error) => tracing::warn!(
-                    caused_request_doc_id = doc_id,
-                    error = %format!("{error:#}"),
-                    "peer interrupt of a killed session message was not written"
-                ),
-            }
+        if let Some(outcome) = kill_caused_request(node, lifecycle, caused).await? {
+            return Ok(outcome);
         }
     }
     if lifecycle
@@ -957,6 +965,186 @@ mod hop_tests {
                 "{name}"
             );
         }
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row() {
+        let message = published_session_message(PublishedAdmissionOptions {
+            name: "session-message-staging".to_owned(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = message.admission.node.clone();
+        let tool = &message.admission.tool;
+        let tool_doc_id = tool.doc_id().unwrap().to_owned();
+        let caused = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let target = SessionMessageTarget {
+            node_did: caused.node_did.clone(),
+            agent_id: caused.agent_id.clone(),
+            session_id: caused.session_id.clone(),
+        };
+        let cause = cause(&message, 0);
+        let body = RenderedBody {
+            content: "staged".to_owned(),
+            goal: None,
+        };
+        let planned = plan(&node, &cause, &target, body, None, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let load_tool = || {
+            crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+                node.clone(),
+                &tool_doc_id,
+                tool.node_did(),
+                tool.session_id(),
+                tool.requester_did(),
+            )
+        };
+        let before = load_tool().await.unwrap().unwrap();
+        let receipt_before = load_receipt(
+            &node,
+            &tool_doc_id,
+            tool.node_did(),
+            tool.session_id(),
+            tool.requester_did(),
+        )
+        .await
+        .unwrap();
+        let (cause, planned) = (&cause, &planned);
+        let enqueued = crate::config_client::ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "session_message.test_stage",
+            move |txn| {
+                Box::pin(async move { stage_planned_write_in_txn(txn, cause, planned).await })
+            },
+        )
+        .await
+        .unwrap();
+        let staged = crate::request_binding::load_agent_request_by_doc_id(&node, &enqueued.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(staged.request_id, enqueued.request_id);
+        assert_eq!(staged.session_id, target.session_id);
+        let after = load_tool().await.unwrap().unwrap();
+        assert_eq!(after.state(), before.state());
+        assert_eq!(after.is_running(), before.is_running());
+        let receipt_after = load_receipt(
+            &node,
+            &tool_doc_id,
+            tool.node_did(),
+            tool.session_id(),
+            tool.requester_did(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&receipt_after).unwrap(),
+            serde_json::to_value(&receipt_before).unwrap()
+        );
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planned_hop() {
+        let message = published_session_message(PublishedAdmissionOptions {
+            name: "session-message-stale-hop".to_owned(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = message.admission.node.clone();
+        let caused = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let target = SessionMessageTarget {
+            node_did: caused.node_did.clone(),
+            agent_id: caused.agent_id.clone(),
+            session_id: caused.session_id.clone(),
+        };
+        let stale_cause = cause(&message, 0);
+        let body = RenderedBody {
+            content: "stale".to_owned(),
+            goal: None,
+        };
+        let planned = plan(&node, &stale_cause, &target, body, None, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let ahead_cause = cause(&message, 10);
+        let ahead = plan(
+            &node,
+            &ahead_cause,
+            &target,
+            RenderedBody {
+                content: "ahead".to_owned(),
+                goal: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(ahead.hop() > planned.hop());
+        let (ahead_cause, ahead) = (&ahead_cause, &ahead);
+        crate::config_client::ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "session_message.test_ahead_stage",
+            move |txn| {
+                Box::pin(async move { stage_planned_write_in_txn(txn, ahead_cause, ahead).await })
+            },
+        )
+        .await
+        .unwrap();
+        let (stale_cause, planned) = (&stale_cause, &planned);
+        let error = crate::config_client::ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "session_message.test_stale_stage",
+            move |txn| {
+                Box::pin(async move { stage_planned_write_in_txn(txn, stale_cause, planned).await })
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("moved to hop"),
+            "unexpected error: {error:#}"
+        );
+        let PlannedWrite::Request { create, .. } = &planned.write else {
+            panic!("a message without a Goal is a request");
+        };
+        let response = node
+            .execute(&format!(
+                r#"query {{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&create.request_id)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let data = response.data.unwrap();
+        assert!(data["AgentRequest"].as_array().unwrap().is_empty());
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }

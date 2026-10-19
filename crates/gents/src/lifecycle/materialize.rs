@@ -556,6 +556,7 @@ pub(crate) async fn build_session_message_request(
     retry_key: Option<String>,
     hop: u32,
     queue: Option<gents_protocol::request_input::RequestQueue>,
+    cwd: Option<String>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     anyhow::ensure!(
@@ -591,6 +592,7 @@ pub(crate) async fn build_session_message_request(
                 source: gents_protocol::session::SessionTitleSource::Task,
             }),
         queue,
+        cwd,
         ..Default::default()
     };
     let spec = RequestSpec {
@@ -1116,6 +1118,41 @@ async fn project_refused_request_onto_session_in_txn(
     session::advance_refused_request_observation_in_txn(txn, &incoming, &request.content, now)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod session_message_tests {
+    use super::*;
+    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+
+    #[tokio::test]
+    async fn session_message_request_carries_the_cwd() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let _identity = pin_fixed_signing_identity(tempdir.path());
+        let cause = SessionMessageCause {
+            caller_node_did: PIN_FIXED_DID.to_owned(),
+            caller_request_id: "caller-request".to_owned(),
+            caller_request_doc_id: "caller-request-doc".to_owned(),
+            caller_hop: 0,
+            tool_call_id: "tool-call".to_owned(),
+            tool_call_doc_id: "tool-call-doc".to_owned(),
+            correlation: None,
+        };
+        let target = SessionMessageTarget {
+            node_did: PIN_FIXED_DID.to_owned(),
+            agent_id: "agent-1".to_owned(),
+            session_id: "session-1".to_owned(),
+        };
+        let build = |cwd: Option<String>| {
+            build_session_message_request(
+                &cause, &target, "hello", None, "req-cwd", None, 1, None, cwd,
+            )
+        };
+        let carried = build(Some("/work/tree".to_owned())).await.unwrap();
+        assert_eq!(carried.input.cwd.as_deref(), Some("/work/tree"));
+        let unset = build(None).await.unwrap();
+        assert_eq!(unset.input.cwd, None);
+    }
 }
 
 pub fn task_fire_key(identity: &gents_protocol::trigger_delivery::FireIdentity) -> String {
