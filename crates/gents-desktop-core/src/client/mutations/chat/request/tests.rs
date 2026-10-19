@@ -910,34 +910,15 @@ async fn fetch_request_row_for_test(
 ) -> Result<AgentRequestRow> {
     let escaped_request_id = escape_graphql_string(request_id);
     query_single_for_test(
-            node,
-            &format!(
-                r#"{{
-                    AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                        _docID
-                        request_id
-                        node_did
-                        requester_did
-                        agent_id
-                        session_id
-                        content
-                        input
-                        max_total_tokens
-                        lifecycle_state
-                        deadline
-                        backend_id
-                        execution_origin
-                        retry_root_request
-                        retry_parent_request
-                        retry_parent_request_doc_id
-                        retry_count
-                        max_retries
-                    }}
-                }}"#
-            ),
-            "AgentRequest",
-        )
-        .await
+        node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                {} backend_id
+            }} }}"#,
+            gents::SIGNED_REQUEST_FIELDS,
+        ),
+        "AgentRequest",
+    ).await
 }
 
 async fn latest_request_id_for_session_for_test(
@@ -1490,7 +1471,7 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
     )
     .await?;
     core.refresh_store().await?;
-    let parent = request_from_store_for_test(&core, &original.request_id)?;
+    let parent = fetch_request_row_for_test(core.node(), &original.request_id).await?;
 
     let (left, right) = tokio::join!(core.retry_request(&parent), core.retry_request(&parent));
     let left = left?;
