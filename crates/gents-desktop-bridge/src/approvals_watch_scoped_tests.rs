@@ -130,6 +130,52 @@ async fn changing_workspace_permissions_removes_an_orphaned_prompt_immediately()
 }
 
 #[tokio::test]
+async fn atomic_permission_replacements_remain_observable_without_queue_activity() {
+    async fn wait_revision(observed: &mut watch::Receiver<u64>, expected: u64) {
+        drop(
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                observed.wait_for(|revision| *revision == expected),
+            )
+            .await
+            .expect("permission revision was not observed")
+            .expect("permission observer ended"),
+        );
+    }
+    let fixture = Workspace::new();
+    let home = fixture.home.clone();
+    let key = fixture.settings.workspace.clone();
+    let (subscriptions, subscribed) = watch::channel(true);
+    let (changes, mut observed) = watch::channel(0);
+    let observing_home = home.clone();
+    let observing_key = key.clone();
+    let task = tokio::spawn(watch_queue(
+        home.clone(),
+        Duration::from_secs(3_600),
+        subscribed,
+        move |_| {
+            let revision = workspace::get(&observing_home, &observing_key)
+                .unwrap()
+                .unwrap()
+                .selection
+                .revision;
+            changes.send_replace(revision);
+        },
+    ));
+    let mut revision = fixture.settings.selection.revision;
+    wait_revision(&mut observed, revision).await;
+    for mode in [Mode::FullAccess, Mode::Ask, Mode::FullAccess] {
+        revision = workspace::save_mode(&home, &key, revision, mode, None)
+            .unwrap()
+            .selection
+            .revision;
+        wait_revision(&mut observed, revision).await;
+    }
+    drop(subscriptions);
+    task.await.unwrap();
+}
+
+#[tokio::test]
 async fn remembered_workspace_access_reaches_the_waiter_without_widening_global_access() {
     let fixture = Workspace::new();
     approval::mark_listening(&fixture.home).unwrap();

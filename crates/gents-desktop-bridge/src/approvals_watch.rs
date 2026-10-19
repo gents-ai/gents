@@ -123,9 +123,11 @@ fn changes_queue(event: &Event, queue: &Path) -> bool {
 /// macOS uses kqueue to keep approval watcher lifetimes independent.
 /// Its nonrecursive directory watches can grow recursively after changes, so
 /// watch roots must stay inside the approval tree to bound descriptor use.
+/// Permission preferences use a separate watch restricted to a regular file.
 struct QueueWatch {
     watcher: RecommendedWatcher,
     queues: [PathBuf; 2],
+    preferences: PathBuf,
 }
 
 impl QueueWatch {
@@ -135,6 +137,7 @@ impl QueueWatch {
         let queues = approval::queue_dirs(&parent);
         let watched_queues = queues.clone();
         let preferences = approval::workspace::preferences_file(&parent);
+        let watched_preferences = preferences.clone();
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
             let changed = match event {
                 Ok(event) => {
@@ -142,7 +145,7 @@ impl QueueWatch {
                         .iter()
                         .any(|queue| changes_queue(&event, queue))
                         || (!matches!(event.kind, EventKind::Access(_))
-                            && event.paths.iter().any(|path| path == &preferences))
+                            && event.paths.iter().any(|path| path == &watched_preferences))
                 }
                 Err(error) => {
                     tracing::warn!(%error, "plugin approval filesystem watch failed");
@@ -161,7 +164,29 @@ impl QueueWatch {
         for queue in &queues {
             watcher.watch(queue, RecursiveMode::Recursive)?;
         }
-        Ok(Self { watcher, queues })
+        let mut watch = Self {
+            watcher,
+            queues,
+            preferences,
+        };
+        watch.watch_preferences()?;
+        Ok(watch)
+    }
+
+    fn watch_preferences(&mut self) -> Result<()> {
+        match std::fs::symlink_metadata(&self.preferences) {
+            Ok(metadata) => {
+                anyhow::ensure!(
+                    metadata.file_type().is_file(),
+                    "workspace permission preferences must be a regular file"
+                );
+                self.watcher
+                    .watch(&self.preferences, RecursiveMode::NonRecursive)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspecting workspace permission preferences"),
+        }
+        Ok(())
     }
 
     fn reattach(&mut self, home: &Path) -> Result<()> {
@@ -175,6 +200,8 @@ impl QueueWatch {
             let _ = self.watcher.unwatch(queue);
             self.watcher.watch(queue, RecursiveMode::Recursive)?;
         }
+        let _ = self.watcher.unwatch(&self.preferences);
+        self.watch_preferences()?;
         Ok(())
     }
 }
