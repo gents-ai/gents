@@ -1,3 +1,5 @@
+mod consent;
+
 use super::*;
 use crate::tool_surface::{
     AgentToolSurfaceConfig, FileToolMode, ResolvedToolSelection, ToolCeiling,
@@ -478,6 +480,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
             expected_hash: Some(crate::toolset::file_tools::content_hash(b"fn first() {}\n")),
             version: None,
             rename_from: None,
+            rename_destination: None,
         },
         super::edits::PreparedEdit {
             path: std::fs::canonicalize(&stale).unwrap(),
@@ -485,6 +488,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
             expected_hash: Some("not-the-current-hash".into()),
             version: None,
             rename_from: None,
+            rename_destination: None,
         },
     ];
     let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
