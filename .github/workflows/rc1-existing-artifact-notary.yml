@@ -223,18 +223,25 @@ jobs:
           done
 
           # CLI tarball must be exactly the pinned archive under its pinned name.
-          cli_tarball="${staging}/run/cli/gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz"
-          if [[ ! -f "${cli_tarball}" ]]; then
-            echo "::error::CLI tarball missing from artifact ${GENTS_CLI_ARTIFACT_ID}; found:"
-            find "${staging}/run/cli" -maxdepth 1 -type f -printf '%f\n' | sort
+          # Artifact zips extract under a directory prefix; resolve by name.
+          cli_tarball="$(find "${staging}/run/cli" -type f -name 'gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz' -print)"
+          cli_tarball_count="$(printf '%s\n' "${cli_tarball}" | grep -c .)"
+          if [[ "${cli_tarball_count}" -ne 1 ]]; then
+            echo "::error::Expected exactly one pinned CLI tarball in artifact ${GENTS_CLI_ARTIFACT_ID}, found ${cli_tarball_count}."
+            printf '%s\n' "${cli_tarball}"
             exit 1
           fi
+          echo "CLI_TARBALL_SOURCE=${cli_tarball}" >> "${GITHUB_ENV}"
 
           # Desktop DMG must be exactly the pinned archive under its pinned name.
-          dmg_path="$(find "${staging}/run/desktop" -type f -name '*.dmg' -print -quit)"
-          if [[ -z "${dmg_path}" || "$(basename "${dmg_path}")" != "${GENTS_DESKTOP_DMG_BASENAME}" ]]; then
-            echo "::error::Desktop DMG '${GENTS_DESKTOP_DMG_BASENAME}' not found in artifact ${GENTS_DESKTOP_ARTIFACT_ID}; found:"
-            find "${staging}/run/desktop" -type f -printf '%f\n' | sort
+          dmg_path="$(find "${staging}/run/desktop" -type f -name '*.dmg' -print)"
+          if [[ "$(printf '%s\n' "${dmg_path}" | grep -c .)" -ne 1 ]]; then
+            echo "::error::Expected exactly one DMG in artifact ${GENTS_DESKTOP_ARTIFACT_ID}, found:"
+            printf '%s\n' "${dmg_path}"
+            exit 1
+          fi
+          if [[ "$(basename "${dmg_path}")" != "${GENTS_DESKTOP_DMG_BASENAME}" ]]; then
+            echo "::error::Found DMG '$(basename "${dmg_path}")' does not match the pinned name '${GENTS_DESKTOP_DMG_BASENAME}'."
             exit 1
           fi
           echo "DMG_SOURCE_PATH=${dmg_path}" >> "${GITHUB_ENV}"
@@ -244,15 +251,20 @@ jobs:
         run: |
           set -euo pipefail
           staging="${STAGING_DIR}"
+          manifest_path="$(find "${staging}/run/desktop" -type f -name 'candidate-build.json' -print)"
+          if [[ "$(printf '%s\n' "${manifest_path}" | grep -c .)" -ne 1 ]]; then
+            echo "::error::Expected exactly one candidate-build.json in artifact ${GENTS_DESKTOP_ARTIFACT_ID}."
+            exit 1
+          fi
           python3 .github/scripts/rc1-notary-verify.py \
             --repo "${GENTS_REPO}" \
             --build-run-id "${GENTS_BUILD_RUN_ID}" \
             --source-sha "${GENTS_SOURCE_SHA}" \
-            --cli-tarball "${staging}/run/cli/gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz" \
+            --cli-tarball "${CLI_TARBALL_SOURCE}" \
             --expected-cli-tarball-sha256 "${GENTS_CLI_TARBALL_SHA256}" \
             --expected-cli-binary-sha256 "${GENTS_CLI_BINARY_SHA256}" \
             --expected-desktop-manifest-sha256 "${GENTS_DESKTOP_MANIFEST_SHA256}" \
-            --desktop-manifest "${staging}/run/desktop/candidate-build.json" \
+            --desktop-manifest "${manifest_path}" \
             --dmg "${DMG_SOURCE_PATH}" \
             --expected-dmg-sha256 "${GENTS_DESKTOP_DMG_SHA256}" \
             --expected-app-binary-sha256 "${GENTS_DESKTOP_APP_BINARY_SHA256}" \
@@ -389,9 +401,14 @@ jobs:
             unzip -q "${staging}/run/${slot}.zip" -d "${staging}/run/${slot}"
           done
 
-          dmg_path="$(find "${staging}/run/desktop" -type f -name '*.dmg' -print -quit)"
-          if [[ -z "${dmg_path}" || "$(basename "${dmg_path}")" != "${GENTS_DESKTOP_DMG_BASENAME}" ]]; then
-            echo "::error::Desktop DMG '${GENTS_DESKTOP_DMG_BASENAME}' not found in artifact ${GENTS_DESKTOP_ARTIFACT_ID}."
+          dmg_path="$(find "${staging}/run/desktop" -type f -name '*.dmg' -print)"
+          if [[ "$(printf '%s\n' "${dmg_path}" | grep -c .)" -ne 1 ]]; then
+            echo "::error::Expected exactly one DMG in artifact ${GENTS_DESKTOP_ARTIFACT_ID}, found:"
+            printf '%s\n' "${dmg_path}"
+            exit 1
+          fi
+          if [[ "$(basename "${dmg_path}")" != "${GENTS_DESKTOP_DMG_BASENAME}" ]]; then
+            echo "::error::Found DMG '$(basename "${dmg_path}")' does not match the pinned name '${GENTS_DESKTOP_DMG_BASENAME}'."
             exit 1
           fi
           echo "DMG_SOURCE_PATH=${dmg_path}" >> "${GITHUB_ENV}"
@@ -401,15 +418,25 @@ jobs:
         run: |
           set -euo pipefail
           staging="${STAGING_DIR}"
+          cli_tarball="$(find "${staging}/run/cli" -type f -name 'gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz' -print)"
+          if [[ "$(printf '%s\n' "${cli_tarball}" | grep -c .)" -ne 1 ]]; then
+            echo "::error::Expected exactly one pinned CLI tarball in artifact ${GENTS_CLI_ARTIFACT_ID}."
+            exit 1
+          fi
+          manifest_path="$(find "${staging}/run/desktop" -type f -name 'candidate-build.json' -print)"
+          if [[ "$(printf '%s\n' "${manifest_path}" | grep -c .)" -ne 1 ]]; then
+            echo "::error::Expected exactly one candidate-build.json in artifact ${GENTS_DESKTOP_ARTIFACT_ID}."
+            exit 1
+          fi
           python3 .github/scripts/rc1-notary-verify.py \
             --repo "${GENTS_REPO}" \
             --build-run-id "${GENTS_BUILD_RUN_ID}" \
             --source-sha "${GENTS_SOURCE_SHA}" \
-            --cli-tarball "${staging}/run/cli/gents-aarch64-apple-darwin-signed-unnotarized-candidate.tar.gz" \
+            --cli-tarball "${cli_tarball}" \
             --expected-cli-tarball-sha256 "${GENTS_CLI_TARBALL_SHA256}" \
             --expected-cli-binary-sha256 "${GENTS_CLI_BINARY_SHA256}" \
             --expected-desktop-manifest-sha256 "${GENTS_DESKTOP_MANIFEST_SHA256}" \
-            --desktop-manifest "${staging}/run/desktop/candidate-build.json" \
+            --desktop-manifest "${manifest_path}" \
             --dmg "${DMG_SOURCE_PATH}" \
             --expected-dmg-sha256 "${GENTS_DESKTOP_DMG_SHA256}" \
             --expected-app-binary-sha256 "${GENTS_DESKTOP_APP_BINARY_SHA256}" \

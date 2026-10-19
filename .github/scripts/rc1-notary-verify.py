@@ -123,6 +123,28 @@ def check_desktop_manifest(manifest: Path, expected_manifest_sha: str,
     return {"manifest_sha256": manifest_sha, "manifest": payload}
 
 
+def check_manifest_inner_binaries(manifest_report: dict, expected_app_sha: str,
+                                  expected_cli_sha: str, expected_bridge_sha: str) -> None:
+    """Cross-check the hash-verified manifest's inner-binary hashes against the pins.
+
+    This binds the DMG-internal binaries to the notary pipeline without ever
+    mounting the image or executing anything: the manifest is trusted only
+    after its own sha256 matches the pinned manifest hash.
+    """
+    binaries = manifest_report["manifest"].get("binaries_sha256", {})
+    for name, expected in (
+        ("gents-desktop-tauri", expected_app_sha),
+        ("gents", expected_cli_sha),
+        ("bridge_runner", expected_bridge_sha),
+    ):
+        actual = binaries.get(name)
+        if actual != expected.lower():
+            die(
+                f"Desktop manifest binaries_sha256[{name!r}] is {actual!r}; "
+                f"expected pinned {expected.lower()!r}"
+            )
+
+
 def check_source_sha(source_sha: str) -> None:
     if len(source_sha) != 40 or any(c not in "0123456789abcdef" for c in source_sha):
         die(f"Pinned source SHA {source_sha!r} is not a full lowercase 40-character commit SHA")
@@ -159,6 +181,18 @@ def main() -> int:
             args.desktop_manifest, args.expected_desktop_manifest_sha256,
             args.manifest_source_sha or args.source_sha)
         print(f"desktop-manifest-sha256={manifest_report['manifest_sha256']}")
+        check_manifest_inner_binaries(
+            manifest_report,
+            args.expected_app_binary_sha256,
+            args.expected_cli_app_binary_sha256,
+            args.expected_bridge_binary_sha256,
+        )
+        print(
+            "desktop-inner-binaries-bound-to-pins: "
+            f"app={args.expected_app_binary_sha256.lower()} "
+            f"cli={args.expected_cli_app_binary_sha256.lower()} "
+            f"bridge={args.expected_bridge_binary_sha256.lower()}"
+        )
     else:
         # Manifest hash is pinned directly; content-level checks happen when a
         # manifest file is supplied (test suites and desktop slot layouts).

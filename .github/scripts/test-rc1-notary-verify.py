@@ -123,6 +123,27 @@ class VerifyTests(unittest.TestCase):
             "08edd1bdfedca73fa28e648e4781ae03aeacf5e6")
         self.assertEqual(report["manifest_sha256"], manifest_sha)
 
+    def test_manifest_inner_binaries_binding_accepts_match(self):
+        app_sha, cli_sha, bridge_sha = ("a" * 64, "b" * 64, "c" * 64)
+        report = {"manifest": {"binaries_sha256": {
+            "gents-desktop-tauri": app_sha, "gents": cli_sha,
+            "bridge_runner": bridge_sha}}}
+        verify.check_manifest_inner_binaries(report, app_sha, cli_sha, bridge_sha)
+
+    def test_manifest_inner_binaries_binding_rejects_mismatch(self):
+        report = {"manifest": {"binaries_sha256": {
+            "gents-desktop-tauri": "0" * 64, "gents": "b" * 64,
+            "bridge_runner": "c" * 64}}}
+        with self.assertRaisesRegex(SystemExit, "1"):
+            verify.check_manifest_inner_binaries(
+                report, "a" * 64, "b" * 64, "c" * 64)
+
+    def test_manifest_inner_binaries_binding_rejects_missing_key(self):
+        report = {"manifest": {"binaries_sha256": {"gents": "b" * 64}}}
+        with self.assertRaisesRegex(SystemExit, "1"):
+            verify.check_manifest_inner_binaries(
+                report, "a" * 64, "b" * 64, "c" * 64)
+
     def test_source_sha_shape_check(self):
         verify.check_source_sha("08edd1bdfedca73fa28e648e4781ae03aeacf5e6")
         with self.assertRaisesRegex(SystemExit, "1"):
