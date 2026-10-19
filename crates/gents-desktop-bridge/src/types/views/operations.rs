@@ -75,6 +75,24 @@ pub struct BackgroundedToolView {
     pub await_mode: Option<String>,
     pub stuck_since: Option<String>,
     pub native_executor: Option<NativeExecutorStatusView>,
+    /// Shared wait-status projection (gents-protocol::wait_status): parsed
+    /// lifecycle, elapsed truth, stable terminal duration. `None` fields mean
+    /// unknown — never fabricated.
+    pub wait_status: Option<WaitStatusProjectionView>,
+}
+
+/// ts-rs mirror of `gents_protocol::wait_status::WaitStatusProjection`.
+/// Field semantics documented there; do not diverge.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitStatusProjectionView {
+    pub lifecycle: String,
+    /// Verbatim persisted lifecycle_state token.
+    pub lifecycle_state_raw: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub running_elapsed_seconds: Option<i64>,
+    pub terminal_elapsed_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

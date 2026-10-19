@@ -148,6 +148,85 @@ async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
     )
 }
 
+/// wait_process with an explicit bounded timeout_secs (no polling loop):
+/// the failure diagnostic path uses 1s so an unfinished child is reported
+/// as wait_timeout with its current evidence instead of blocking 30s.
+async fn wait_tool_with_timeout(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    tool_call_id: &str,
+    timeout_secs: u64,
+) -> Value {
+    skip_reason_json(
+        accepted_call(
+            hook,
+            "wait_process",
+            Some(format!("model-{internal_call_id}")),
+            internal_call_id,
+            &json!({ "tool_call_id": tool_call_id, "timeout_secs": timeout_secs }).to_string(),
+        )
+        .await,
+    )
+}
+
+async fn read_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id: &str) -> Value {
+    skip_reason_json(
+        accepted_call(
+            hook,
+            "read_process",
+            Some(format!("model-{internal_call_id}")),
+            internal_call_id,
+            &json!({ "tool_call_id": tool_call_id, "offset": 0, "max_tokens": 64 }).to_string(),
+        )
+        .await,
+    )
+}
+
+/// Test-only persisted-row snapshot, ACP-scoped to this test's session and
+/// sanitized: state tokens, await_mode token, and booleans only (no raw
+/// timestamps or payloads). Distinguishes at failure time whether the
+/// spawned row (a) was never persisted / has a different identity, (b)
+/// exists but is stuck pending, (c) exists and failed, or (d) is running
+/// with unexpected bytes.
+async fn persisted_row_snapshot(hook: &DefraSessionHook, handle_tool_call_id: &str) -> Value {
+    let session_id = hook.session_id().await.expect("session id");
+    let session = crate::graphql::escape_graphql_string(&session_id);
+    let response = hook
+        .node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ _docID: asc }}) {{ tool_call_id tool_name lifecycle_state await_mode started_at completed_at }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "persisted row snapshot query failed: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .expect("persisted row snapshot query returned no data")
+        .get("AgentToolCall")
+        .expect("AgentToolCall collection missing from snapshot response")
+        .as_array()
+        .expect("AgentToolCall snapshot is not an array")
+        .clone();
+    let sanitized: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "tool_call_id_matches_handle": row["tool_call_id"].as_str() == Some(handle_tool_call_id),
+                "tool_name": row["tool_name"].as_str(),
+                "lifecycle_state": row["lifecycle_state"].as_str(),
+                "await_mode": row["await_mode"].as_str(),
+                "has_started_at": row["started_at"].as_str().is_some(),
+                "has_completed_at": row["completed_at"].as_str().is_some(),
+            })
+        })
+        .collect();
+    json!({ "row_count": rows.len(), "rows": sanitized })
+}
+
 async fn list_background_tools(
     hook: &DefraSessionHook,
     internal_call_id: &str,
@@ -254,42 +333,175 @@ async fn list_background_tools_reports_running_live_output_bytes() {
         registry(tools, &["bash_unrestricted"]),
     )
     .await;
+    // Byte semantics under test (explicit contract):
+    // - `stdout_bytes` / `stderr_bytes` are the DEPRECATED COMBINED LEGACY
+    //   fields: they carry the length of the CANONICAL rendering of all
+    //   output observed so far (never per-channel accounting; stderr is
+    //   hard-coded 0). At base 02351da4d the list handler counted exactly
+    //   the same thing (git show 02351da4d:crates/gents/src/background_tools.rs
+    //   L171-176: `(output.len() as u64, 0)` over `canonical_tool_output`).
+    // - `available_bytes` / `preview` expose the same canonical evidence
+    //   and coordinate with read_process, which slices the identical
+    //   rendering (agreement asserted below at the mid-run observation).
+    // Base behavior was timing-dependent: an early poll caught the 4-byte
+    // "live" Open observation while a poll after completion saw the full
+    // terminal rendering (53 in the failing run). The child is now gated
+    // by a release FILE (portable: no flock — separate-process flock -u
+    // cannot release the child fd, and macOS lacks flock): it prints
+    // "live", then polls for the release file's existence in a bounded
+    // loop, so the mid-run observation is deterministic. The parent writes
+    // the release file only after its assertions; if an assertion fails,
+    // the bounded loop expires and the child's tool timeout reaps it. No
+    // post-release byte arithmetic is asserted.
+    let release_path = tempdir.path().join("release-gate");
+    std::fs::create_dir_all(tempdir.path()).expect("tempdir exists");
+    // POSIX-safe single-quoted path (tempdir paths contain no single
+    // quotes; assert to keep that invariant load-bearing).
+    assert!(!release_path.to_string_lossy().contains('\''));
+    // Simple approved executable invocation per TPM direction: the gate
+    // loop lives in a script file written by the test, invoked as
+    // command=/bin/sh with the script path as a separate argument. This
+    // avoids the /bin/sh -lc inline compound-string path (validator treats
+    // an empty `args` as a shell string; the identical-shape sleep command
+    // worked at combinedc3984a342, so the inline while compound is the
+    // remaining variable). The script content is the same gate: print
+    // live, bounded wait for the release file, print done.
+    let script_path = tempdir.path().join("gate-child.sh");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nprintf live\ni=0\nwhile [ ! -e '{release}' ] && [ \"$i\" -lt 200 ]; do\n  sleep 0.05\n  i=$((i+1))\ndone\nprintf done\n",
+            release = release_path.display()
+        ),
+    )
+    .expect("write gate script");
     let handle = background_tool_with_args(
         &hook,
         "bg-live-output",
         "bash_unrestricted",
         json!({
-            "command": "printf live; sleep 2; printf done",
-            "args": [],
-            "timeout_secs": 5
+            "command": "/bin/sh",
+            "args": [script_path.to_string_lossy().to_string()],
+            "timeout_secs": 20
         }),
     )
     .await;
     let tool_call_id = handle["tool_call_id"].as_str().unwrap();
 
+    // First observation happens while the child is gate-blocked after
+    // printing "live": exactly 4 canonical bytes are observable.
+    //
+    // Root-cause instrumentation (closeout-status-accounting failure at
+    // line 330): the previous loop ran only 40x50ms (2s) — shorter than
+    // the child's own gate budget — and on exhaustion the code asserted
+    // against an empty json!({}), discarding every actual response. The
+    // loop now spans the gate window (60x100ms = 6s < 10s gate ceiling)
+    // and, if no entry matches, panics with the LAST captured list
+    // response plus the tracked per-attempt observation of this
+    // tool_call_id (status and stdout_bytes over time), so failures are
+    // diagnosed from evidence, not inference.
     let mut entry = json!({});
-    for attempt in 0..40 {
+    let mut last_response = json!(null);
+    let mut observations: Vec<(String, u64, String)> = Vec::new();
+    for attempt in 0..60 {
         let result =
             list_background_tools(&hook, &format!("list-live-output-{attempt}"), json!({})).await;
         let entries = result["entries"].as_array().expect("entries");
         if let Some(candidate) = entries
             .iter()
             .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
-            .filter(|entry| entry["stdout_bytes"].as_u64().unwrap_or_default() >= 4)
         {
-            entry = candidate.clone();
+            observations.push((
+                candidate["status"]
+                    .as_str()
+                    .unwrap_or("<missing>")
+                    .to_string(),
+                candidate["stdout_bytes"].as_u64().unwrap_or(u64::MAX),
+                candidate["available_bytes"]
+                    .as_u64()
+                    .map(|bytes| bytes.to_string())
+                    .unwrap_or_else(|| "<missing>".to_string()),
+            ));
+        }
+        last_response = result.clone();
+        if let Some(matched) = entries
+            .iter()
+            .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
+            .filter(|entry| entry["status"].as_str() == Some("running"))
+            .filter(|entry| entry["stdout_bytes"].as_u64().unwrap_or_default() == 4)
+        {
+            entry = matched.clone();
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-
-    assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"));
+    // Failure diagnostics run BEFORE any observations/mid-run asserts and
+    // use an explicit found-boolean (entry starts as json!({}), so is_null
+    // can never be true - reviewer-caught bug in 452e0c4a).
+    let found = !entry.as_object().is_some_and(|o| o.is_empty());
+    if !found {
+        let waited_failure = wait_tool_with_timeout(
+            &hook,
+            "wait-failure",
+            tool_call_id,
+            1, // explicit timeout_secs=1: bounded, not 10 loops at the 30s default
+        )
+        .await;
+        let read_failure = read_tool(&hook, "read-failure", tool_call_id).await;
+        panic!(
+            "gate window closed with an empty observation list; \
+             tool_call_id {tool_call_id} never appeared in any list response; \
+             last response: {last_response}; \
+             persisted-row snapshot: {}; \
+             wait envelope (timeout_secs=1): {}; \
+             bounded read (min 64 tokens): {}",
+            serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await).unwrap(),
+            serde_json::to_string(&waited_failure).unwrap(),
+            read_failure["output"].as_str().unwrap_or("<no output>")
+        );
+    }
+    assert!(
+        !observations.is_empty(),
+        "tool_call_id {tool_call_id} never appeared in any list response; \
+         last response: {last_response}; \
+         persisted-row snapshot: {}",
+        serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await).unwrap()
+    );
+    assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"),
+        "no running observation with stdout_bytes==4 within the gate window; per-attempt status/bytes: {observations:?}; last response: {last_response}");
     assert_eq!(entry["status"].as_str(), Some("running"));
-    assert_eq!(entry["stdout_bytes"].as_u64(), Some(4));
+    assert_eq!(
+        entry["stdout_bytes"].as_u64(),
+        Some(4),
+        "canonical bytes observed while the child is gate-blocked after printing 'live'"
+    );
     assert_eq!(entry["stderr_bytes"].as_u64(), Some(0));
+    assert_eq!(
+        entry["available_bytes"].as_u64(),
+        Some(4),
+        "available_bytes agrees with the deprecated legacy count on the same canonical rendering"
+    );
+    assert_eq!(entry["preview"].as_str(), Some("live"));
+
+    // Coordinate with read_process on the identical canonical evidence.
+    let read = read_tool(&hook, "read-live-output", tool_call_id).await;
+    assert_eq!(read["total_bytes"].as_u64(), Some(4));
+    assert_eq!(read["output"].as_str(), Some("live"));
+
+    // Release the gate: the child observes the file, prints "done", and
+    // completes. Its exit status is asserted via wait_process; no byte
+    // count is asserted for the terminal state.
+    tokio::fs::write(&release_path, b"release")
+        .await
+        .expect("write release file");
 
     let waited = wait_tool(&hook, "wait-live-output", tool_call_id).await;
-    assert_eq!(waited["status"].as_str(), Some("completed"));
+    assert_eq!(
+        waited["status"].as_str(),
+        Some("completed"),
+        "child failed at terminal state; canonical terminal envelope: {}",
+        serde_json::to_string(&waited).unwrap()
+    );
 }
 
 #[tokio::test]

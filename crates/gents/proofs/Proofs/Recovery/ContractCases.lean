@@ -66,7 +66,8 @@ def orphanedBackgroundRecoveryCase
   }
 
 def sessionMessageRecoveryCase
-    (name : String) (cause : ToolRecoveryCause) : RecoverySweepCase :=
+    (name : String) (cause : ToolRecoveryCause)
+    (handoff : Recovery.AssignmentHandoff := .complete) : RecoverySweepCase :=
   let row : ToolCallRecoveryRow :=
     { call := { r6NativeToolFixture with operation := .sessionMessage }
     , cause := cause }
@@ -80,7 +81,11 @@ def sessionMessageRecoveryCase
       (toolCallRecoveryMeasure true row)
       (toolCallRecoveryMeasure true recovered)) with
     recoveryCause := some cause.toContract
-    notificationReason := cause.notificationReason
+    notificationReason :=
+      if cause.toContract = "requestCompleted" then
+        Recovery.sessionMessageHandoffReason true handoff
+      else
+        cause.notificationReason
   }
 
 def taskHookRecordRecoveryCase
@@ -196,6 +201,18 @@ def recoverySweepCases : List RecoverySweepCase :=
       "session_message_caused_request_unbound_to_failed" .causedRequestUnbound
   , sessionMessageRecoveryCase
       "session_message_request_completed_to_completed" .requestCompleted
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_no_goal_to_completed" .requestCompleted
+      .absent
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_unknown_goal_to_completed" .requestCompleted
+      .unknown
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_live_goal_to_completed" .requestCompleted
+      (.live "active")
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_blocked_goal_to_completed" .requestCompleted
+      (.live "blocked")
   , sessionMessageRecoveryCase
       "session_message_request_failed_to_failed" .requestFailed
   , sessionMessageRecoveryCase
