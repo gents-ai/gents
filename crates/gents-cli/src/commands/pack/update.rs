@@ -127,6 +127,8 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
             registry: args.registry.clone(),
             drift: args.drift,
             grant_authority: false,
+            wire: Vec::new(),
+            expect_digest: None,
             explicit: false,
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
@@ -238,6 +240,8 @@ mod tests {
             registry: Some(registry_a),
             drift: crate::cli::PackDriftArgs::default(),
             grant_authority: false,
+            wire: Vec::new(),
+            expect_digest: None,
             explicit: true,
         }))
         .await
@@ -315,6 +319,8 @@ mod tests {
                 registry: Some("http://127.0.0.1:9".to_owned()),
                 drift: crate::cli::PackDriftArgs::default(),
                 grant_authority: false,
+                wire: Vec::new(),
+                expect_digest: None,
                 explicit,
             }))
         };
@@ -359,6 +365,8 @@ mod tests {
             registry: None,
             drift: crate::cli::PackDriftArgs::default(),
             grant_authority: false,
+            wire: Vec::new(),
+            expect_digest: None,
             explicit: true,
         }))
         .await

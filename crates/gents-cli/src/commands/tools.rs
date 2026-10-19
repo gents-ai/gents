@@ -87,26 +87,9 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             configuration_issues.insert(agent.agent_id.clone(), "agent is disabled".to_owned());
         }
         let resolved = (|| -> Result<_> {
-            let context = agent
-                .context_id
-                .as_deref()
-                .map(|id| {
-                    bundle
-                        .config
-                        .contexts
-                        .iter()
-                        .find(|context| context.node_did == node_did && context.context_id == id)
-                        .with_context(|| format!("referenced AgentContext {id} is missing"))
-                })
-                .transpose()?;
+            let (context, tools) = agent_tools_document(&bundle, &node_did, agent)?;
             let tools_id = context.and_then(|context| context.tools_id.as_deref());
-            let config = if let Some(id) = tools_id {
-                let tools = bundle
-                    .config
-                    .tools
-                    .iter()
-                    .find(|tools| tools.node_did == node_did && tools.tools_id == id)
-                    .with_context(|| format!("referenced Tools {id} is missing"))?;
+            let config = if let Some(tools) = tools {
                 AgentToolSurfaceConfig::from_tools_documents(
                     &agent.agent_id,
                     tools,
@@ -221,6 +204,42 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     Ok(())
 }
 
+/// The agent's Context, then that Context's Tools document, each when named.
+/// Plugin entries, manifests and targets are not resolved here.
+pub(crate) fn agent_tools_document<'a>(
+    bundle: &'a crate::shared::ConfigExportBundle,
+    node_did: &str,
+    agent: &gents::document_config::Agent,
+) -> Result<(
+    Option<&'a gents::document_config::AgentContext>,
+    Option<&'a gents::document_config::Tools>,
+)> {
+    let context = agent
+        .context_id
+        .as_deref()
+        .map(|id| {
+            bundle
+                .config
+                .contexts
+                .iter()
+                .find(|context| context.node_did == node_did && context.context_id == id)
+                .with_context(|| format!("referenced AgentContext {id} is missing"))
+        })
+        .transpose()?;
+    let tools = context
+        .and_then(|context| context.tools_id.as_deref())
+        .map(|id| {
+            bundle
+                .config
+                .tools
+                .iter()
+                .find(|tools| tools.node_did == node_did && tools.tools_id == id)
+                .with_context(|| format!("referenced Tools {id} is missing"))
+        })
+        .transpose()?;
+    Ok((context, tools))
+}
+
 #[derive(Serialize)]
 struct ExplainReport<'a> {
     node_did: &'a str,
@@ -326,5 +345,69 @@ impl HostCeiling {
             live_node_did: None,
             home: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shared::ConfigExportBundle;
+
+    fn bundle(node_did: &str) -> ConfigExportBundle {
+        ConfigExportBundle {
+            format: "test".into(),
+            node_did: node_did.into(),
+            exported_at: "2026-01-01T00:00:00Z".into(),
+            access_mode: "test".into(),
+            config: serde_json::from_value(json!({
+                "node": {"node_did": node_did},
+                "agents": [
+                    agent_json(node_did, "with-tools", Some("ctx-tools")),
+                    agent_json(node_did, "no-context", None),
+                    agent_json(node_did, "missing-tools", Some("ctx-missing")),
+                ],
+                "contexts": [
+                    {"context_id": "ctx-tools", "node_did": node_did, "tools_id": "tools-a"},
+                    {"context_id": "ctx-missing", "node_did": node_did, "tools_id": "gone"},
+                ],
+                "tools": [{"node_did": node_did, "tools_id": "tools-a"}],
+            }))
+            .unwrap(),
+        }
+    }
+
+    fn agent_json(node_did: &str, agent_id: &str, context_id: Option<&str>) -> Value {
+        json!({
+            "agent_id": agent_id,
+            "node_did": node_did,
+            "context_id": context_id,
+            "inference_profile_id": "profile",
+        })
+    }
+
+    #[test]
+    fn agent_tools_document_follows_context_to_tools() {
+        let bundle = bundle("did:key:node");
+        let agent = |id: &str| {
+            bundle
+                .config
+                .agents
+                .iter()
+                .find(|agent| agent.agent_id == id)
+                .unwrap()
+        };
+
+        let (context, tools) =
+            agent_tools_document(&bundle, "did:key:node", agent("with-tools")).unwrap();
+        assert_eq!(context.unwrap().context_id, "ctx-tools");
+        assert_eq!(tools.unwrap().tools_id, "tools-a");
+
+        let (context, tools) =
+            agent_tools_document(&bundle, "did:key:node", agent("no-context")).unwrap();
+        assert!(context.is_none() && tools.is_none());
+
+        let error =
+            agent_tools_document(&bundle, "did:key:node", agent("missing-tools")).unwrap_err();
+        assert_eq!(error.to_string(), "referenced Tools gone is missing");
     }
 }

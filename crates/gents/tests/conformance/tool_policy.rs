@@ -12,7 +12,7 @@ use gents::plugin::data::{
 };
 use gents::plugin::mounts::MountAccess;
 use gents_protocol::job::AssetMount;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[path = "tool_policy_codec.rs"]
 mod tool_policy_codec;
@@ -70,7 +70,7 @@ fn stamp(lean: LeanPluginDataStamp) -> Stamp {
     }
 }
 
-fn stamps(lean: &BTreeMap<String, LeanPluginDataStamp>) -> Vec<(String, Stamp)> {
+fn stamps(lean: &[(String, LeanPluginDataStamp)]) -> Vec<(String, Stamp)> {
     lean.iter()
         .map(|(field, value)| (field.clone(), stamp(*value)))
         .collect()
@@ -142,10 +142,8 @@ fn generated_plugin_data_cases_drive_admit_write() {
         let applicable =
             plugin_data::applicable_stamps(&stamps(&row.declared_stamps), &row.collection_fields);
         assert_eq!(
-            applicable.iter().cloned().collect::<BTreeMap<_, _>>(),
-            stamps(&row.applicable)
-                .into_iter()
-                .collect::<BTreeMap<_, _>>(),
+            applicable,
+            stamps(&row.applicable),
             "write {index}: applicable stamps"
         );
         let observation = plugin_data::WriteObservation {

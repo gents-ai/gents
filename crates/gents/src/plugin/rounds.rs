@@ -4,7 +4,10 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
-use super::{http_calls, model_calls, tool_calls, PluginBudget, PluginOutcome, PluginVerdict};
+use super::{
+    data, http_calls, job_calls, model_calls, tool_calls, PluginBudget, PluginOutcome,
+    PluginVerdict,
+};
 
 pub const MAX_ROUNDS: u32 = 64;
 pub const FINAL_ROUND_RESERVE_DIVISOR: u32 = 8;
@@ -16,11 +19,17 @@ pub(super) struct HostCalls {
     pub(super) model: Option<model_calls::Session>,
     pub(super) http: Option<http_calls::Session>,
     pub(super) tools: Option<tool_calls::Session>,
+    pub(super) data: Option<data::Session>,
+    pub(super) jobs: Option<job_calls::Session>,
 }
 
 impl HostCalls {
     pub(super) fn is_empty(&self) -> bool {
-        self.model.is_none() && self.http.is_none() && self.tools.is_none()
+        self.model.is_none()
+            && self.http.is_none()
+            && self.tools.is_none()
+            && self.data.is_none()
+            && self.jobs.is_none()
     }
 
     pub(super) fn prepare_input(&self, input: Value) -> Result<Value> {
@@ -44,6 +53,14 @@ impl HostCalls {
             base.remove("tool_results");
             base.insert("tool_calls".to_owned(), Value::Bool(true));
         }
+        if self.data.is_some() {
+            base.remove("data_results");
+            base.insert("data_calls".to_owned(), Value::Bool(true));
+        }
+        if self.jobs.is_some() {
+            base.remove("job_results");
+            base.insert("job_calls".to_owned(), Value::Bool(true));
+        }
         Ok(Value::Object(base))
     }
 }
@@ -52,6 +69,8 @@ enum Asked {
     Model(model_calls::Batch),
     Http(http_calls::Batch),
     Tools(tool_calls::Batch),
+    Data(data::Batch),
+    Job(job_calls::Batch),
 }
 
 fn refused(started: Instant, fuel: u64, verdict: PluginVerdict, why: String) -> PluginOutcome {
@@ -77,13 +96,25 @@ fn asked(calls: &HostCalls, output: &Value) -> Result<Option<Asked>, String> {
         Some(_) => tool_calls::parse_batch(output)?,
         None => None,
     };
-    match (model, http, tools) {
-        (None, None, None) => Ok(None),
-        (Some(model), None, None) => Ok(Some(Asked::Model(model))),
-        (None, Some(http), None) => Ok(Some(Asked::Http(http))),
-        (None, None, Some(tools)) => Ok(Some(Asked::Tools(tools))),
+    let data = match calls.data {
+        Some(_) => data::parse_batch(output)?,
+        None => None,
+    };
+    let jobs = match calls.jobs {
+        Some(_) => job_calls::parse_batch(output)?,
+        None => None,
+    };
+    let mut asks = Vec::new();
+    asks.extend(model.map(Asked::Model));
+    asks.extend(http.map(Asked::Http));
+    asks.extend(tools.map(Asked::Tools));
+    asks.extend(data.map(Asked::Data));
+    asks.extend(jobs.map(Asked::Job));
+    match asks.len() {
+        0 | 1 => Ok(asks.pop()),
         _ => Err(
-            "one round asks for exactly one of model_calls, http_calls or tool_calls".to_owned(),
+            "one round asks for exactly one of model_calls, http_calls, tool_calls, data_calls or job_calls"
+                .to_owned(),
         ),
     }
 }
@@ -181,6 +212,18 @@ pub(super) async fn drive(
                     return Ok(refused(started, fuel, PluginVerdict::Failed, reason));
                 }
                 object.insert("tool_results".to_owned(), Value::Object(results));
+                batch.state
+            }
+            Asked::Data(batch) => {
+                let session = calls.data.as_ref().expect("parsed only when offered");
+                let results = session.serve(batch.requests, budget.max_output_bytes).await;
+                object.insert("data_results".to_owned(), Value::Object(results));
+                batch.state
+            }
+            Asked::Job(batch) => {
+                let session = calls.jobs.as_ref().expect("parsed only when offered");
+                let results = session.serve(batch.requests, budget.max_output_bytes).await;
+                object.insert("job_results".to_owned(), Value::Object(results));
                 batch.state
             }
             Asked::Model(batch) => {

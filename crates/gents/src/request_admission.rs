@@ -816,65 +816,13 @@ pub(crate) async fn load_request_context(
     Option<crate::document_config::Tools>,
     Vec<crate::document_config::AgentTargetDocument>,
 )> {
-    use crate::collection::Collection;
-    use crate::config_client::{read_desired_state_document_in_txn as read, ConfigAccess};
-    use crate::document_config::{Agent, AgentContext, AgentTargetDocument, Tools};
+    use crate::config_client::ConfigAccess;
     let owner = node_did.to_owned();
     let agent_id = agent_id.to_owned();
     ConfigAccess::transact_local_readonly(node, None, "request_admission.context", move |txn| {
         let owner = owner.clone();
         let agent_id = agent_id.clone();
-        Box::pin(async move {
-            let agent: Agent = serde_json::from_value(
-                read(txn, Collection::Agent, &owner, &agent_id)
-                    .await?
-                    .ok_or_else(|| {
-                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                            "request agent is missing"
-                        ))
-                    })?,
-            )?;
-            deny_if(agent.enabled, "request agent is disabled")?;
-            let Some(context_id) = agent.context_id else {
-                return Ok((None, None, Vec::new()));
-            };
-            let context: AgentContext = serde_json::from_value(
-                read(txn, Collection::AgentContext, &owner, &context_id)
-                    .await?
-                    .ok_or_else(|| {
-                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                            "request context is missing"
-                        ))
-                    })?,
-            )?;
-            let tools: Option<Tools> = match context.tools_id.as_deref() {
-                None => None,
-                Some(id) => Some(serde_json::from_value(
-                    read(txn, Collection::Tools, &owner, id)
-                        .await?
-                        .ok_or_else(|| {
-                            AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                                "request tools are missing"
-                            ))
-                        })?,
-                )?),
-            };
-            let mut targets = Vec::<AgentTargetDocument>::new();
-            if let Some(agents) = tools.as_ref().and_then(|tools| tools.agents.as_ref()) {
-                for id in &agents.target_ids {
-                    targets.push(serde_json::from_value(
-                        read(txn, Collection::AgentTarget, &owner, id)
-                            .await?
-                            .ok_or_else(|| {
-                                AgentRequestAdmissionError::denied(anyhow::anyhow!(
-                                    "request agent target is missing"
-                                ))
-                            })?,
-                    )?);
-                }
-            }
-            Ok((Some(context), tools, targets))
-        })
+        Box::pin(async move { load_request_context_in_txn(txn, &owner, &agent_id).await })
     })
     .await
     .map_err(
@@ -883,6 +831,65 @@ pub(crate) async fn load_request_context(
             Err(error) => AgentRequestAdmissionError::unavailable(error),
         },
     )
+}
+
+/// [`load_request_context`] inside `txn`; a refusal is an
+/// [`AgentRequestAdmissionError`] in the returned error.
+pub(crate) async fn load_request_context_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    agent_id: &str,
+) -> anyhow::Result<(
+    Option<crate::document_config::AgentContext>,
+    Option<crate::document_config::Tools>,
+    Vec<crate::document_config::AgentTargetDocument>,
+)> {
+    use crate::collection::Collection;
+    use crate::config_client::read_desired_state_document_in_txn as read;
+    use crate::document_config::{Agent, AgentContext, AgentTargetDocument, Tools};
+    let agent: Agent = serde_json::from_value(
+        read(txn, Collection::Agent, owner, agent_id)
+            .await?
+            .ok_or_else(|| {
+                AgentRequestAdmissionError::denied(anyhow::anyhow!("request agent is missing"))
+            })?,
+    )?;
+    deny_if(agent.enabled, "request agent is disabled")?;
+    let Some(context_id) = agent.context_id else {
+        return Ok((None, None, Vec::new()));
+    };
+    let context: AgentContext = serde_json::from_value(
+        read(txn, Collection::AgentContext, owner, &context_id)
+            .await?
+            .ok_or_else(|| {
+                AgentRequestAdmissionError::denied(anyhow::anyhow!("request context is missing"))
+            })?,
+    )?;
+    let tools: Option<Tools> = match context.tools_id.as_deref() {
+        None => None,
+        Some(id) => Some(serde_json::from_value(
+            read(txn, Collection::Tools, owner, id)
+                .await?
+                .ok_or_else(|| {
+                    AgentRequestAdmissionError::denied(anyhow::anyhow!("request tools are missing"))
+                })?,
+        )?),
+    };
+    let mut targets = Vec::<AgentTargetDocument>::new();
+    if let Some(agents) = tools.as_ref().and_then(|tools| tools.agents.as_ref()) {
+        for id in &agents.target_ids {
+            targets.push(serde_json::from_value(
+                read(txn, Collection::AgentTarget, owner, id)
+                    .await?
+                    .ok_or_else(|| {
+                        AgentRequestAdmissionError::denied(anyhow::anyhow!(
+                            "request agent target is missing"
+                        ))
+                    })?,
+            )?);
+        }
+    }
+    Ok((Some(context), tools, targets))
 }
 
 async fn verify_automated_trigger_source(

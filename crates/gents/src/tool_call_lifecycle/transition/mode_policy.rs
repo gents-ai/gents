@@ -61,10 +61,65 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
+    /// [`Self::background`] inside `txn` for a plugin job's adoption: the same
+    /// running-foreground compare, also writing `deadline_at`. Returns the
+    /// lifecycle as it reads once `txn` commits, or `None` when the row is no
+    /// longer a running foreground call.
+    pub(crate) async fn adopt_plugin_job_in_txn(
+        &self,
+        txn: &crate::config_client::ConfigApplyTxn<'_>,
+        deadline_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<Self>> {
+        self.ensure_state(&[ToolCallState::Running], "adopt_plugin_job")?;
+        anyhow::ensure!(
+            self.plugin_effect.is_none() && self.await_mode == AwaitMode::Foreground,
+            "only a running foreground call can be adopted as a plugin job"
+        );
+        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
+            anyhow!("adopt_plugin_job called before start_running persisted a row")
+        })?;
+        let started_at = self
+            .started_at
+            .ok_or_else(|| anyhow!("adopt_plugin_job called without started_at set"))?;
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let response = txn
+            .execute(&format!(
+                r#"mutation {{
+                update_AgentToolCall(
+                    docID: "{escaped_doc_id}",
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "running" }},
+                        await_mode: {{ _eq: "foreground" }}
+                    }},
+                    input: {{ await_mode: "background", started_at: "{}", deadline_at: "{}" }}
+                ) {{ _docID }}
+            }}"#,
+                started_at.to_rfc3339(),
+                deadline_at.to_rfc3339()
+            ))
+            .await?;
+        if !response
+            .pointer("/data/update_AgentToolCall")
+            .is_some_and(response_has_documents)
+        {
+            return Ok(None);
+        }
+        let mut adopted = self.clone();
+        adopted.await_mode = AwaitMode::Background;
+        adopted.kind = ToolRowKind::PluginJob;
+        adopted.deadline_at = deadline_at;
+        Ok(Some(adopted))
+    }
+
     pub async fn foreground(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "foreground")?;
-        if self.kind() == ToolRowKind::SessionMessage {
-            return Err(IllegalToolCallTransition::SessionMessageIsBackgroundOnly.into());
+        if !self.kind().may_foreground() {
+            return Err(match self.kind() {
+                ToolRowKind::PluginJob => IllegalToolCallTransition::PluginJobIsBackgroundOnly,
+                _ => IllegalToolCallTransition::SessionMessageIsBackgroundOnly,
+            }
+            .into());
         }
         if self.await_mode == AwaitMode::Foreground {
             return Err(IllegalToolCallTransition::ModeAlreadyForeground.into());

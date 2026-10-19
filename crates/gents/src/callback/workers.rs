@@ -122,8 +122,15 @@ impl CallbackWorkers {
             let result = async {
                 // A queued snapshot can finish before its slot opens.
                 if let Some(current) = load_invocation(&node, &id, &owner).await? {
-                    run_owned_invocation(&node, &current, &callback, ceiling.as_deref(), &plugins)
-                        .await?;
+                    run_owned_invocation(
+                        &node,
+                        &current,
+                        &callback,
+                        ceiling.as_deref(),
+                        &plugins,
+                        Some(&node),
+                    )
+                    .await?;
                 }
                 anyhow::Ok(())
             }
@@ -162,6 +169,7 @@ impl CallbackEngine {
             callback,
             self.ceiling.as_deref(),
             &self.plugins,
+            Some(&self.node),
         )
         .await
     }

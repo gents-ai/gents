@@ -1,4 +1,5 @@
 mod backends;
+mod plugin_jobs;
 mod schema;
 mod tool_ceiling;
 
@@ -13,6 +14,7 @@ use crate::{
 };
 
 use backends::diagnose_backends;
+use plugin_jobs::diagnose_plugin_jobs;
 use schema::{diagnose_schema_presence, load_runtime_row};
 use tool_ceiling::diagnose_tool_ceiling;
 
@@ -173,6 +175,11 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let tool_ceiling_ok = tool_ceiling_check
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let plugin_jobs_check = diagnose_plugin_jobs(&home_dir, bundle.as_ref());
+    let plugin_jobs_ok = plugin_jobs_check
         .get("ok")
         .and_then(Value::as_bool)
         .unwrap_or(false);
@@ -377,6 +384,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         && principal_present
         && default_agent_ok
         && tool_ceiling_ok
+        && plugin_jobs_ok
         && backends_ok
         && chatgpt_auth_ok
         && xai_auth_ok
@@ -410,6 +418,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "default_agent": default_agent_check,
             "runtime_node_readiness": runtime_node_readiness_check,
             "tool_ceiling": tool_ceiling_check,
+            "plugin_jobs": plugin_jobs_check,
             "chatgpt_auth": chatgpt_auth_check,
             "xai_auth": xai_auth_check,
             "claude_auth": claude_auth_check,

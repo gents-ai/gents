@@ -602,6 +602,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created",
         },
         ConformanceConsumer::RustTest {
+            id: "caused_sessions::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/caused_sessions.rs",
+            module_path: "caused_sessions::tests",
+            function: "generated_plugin_job_lineage_cases_drive_caused_session_readers",
+        },
+        ConformanceConsumer::RustTest {
             id: "optimization::gate::seeds::tests::exact_seed_rendering_matches_lean",
             package: "gents",
             source_path: "crates/gents/src/optimization/gate/seeds.rs",
@@ -1559,6 +1566,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents-desktop-bridge/src/snapshot/operations_snapshot/tests.rs",
             module_path: "gents_desktop_bridge::snapshot::operations_snapshot::tests",
             function: "project_filters_to_background_await_mode_only",
+        },
+        ConformanceConsumer::RustTest {
+            id: "gents_desktop_bridge::provenance::tests::generated_plugin_job_lineage_cases_drive_desktop_opening_request",
+            package: "gents-desktop-bridge",
+            source_path: "crates/gents-desktop-bridge/src/provenance.rs",
+            module_path: "gents_desktop_bridge::provenance::tests",
+            function: "generated_plugin_job_lineage_cases_drive_desktop_opening_request",
         },
         ConformanceConsumer::RustTest {
             id: "hook::tests::background_admission::spawn_process_rejects_target_policy_before_spawned_admission",

@@ -13,6 +13,32 @@ where
     Option::<T>::deserialize(deserializer)
 }
 
+/// A JSON object read as its pairs in document order, which a `BTreeMap` would sort.
+pub(crate) fn ordered_pairs<'de, D, T>(deserializer: D) -> Result<Vec<(String, T)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Pairs<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Pairs<T> {
+        type Value = Vec<(String, T)>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a JSON object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut pairs = Vec::new();
+            while let Some(pair) = map.next_entry()? {
+                pairs.push(pair);
+            }
+            Ok(pairs)
+        }
+    }
+    deserializer.deserialize_map(Pairs(std::marker::PhantomData))
+}
+
 pub(crate) type LeanFeatureMatrix = BTreeMap<String, BTreeMap<String, LeanFeatureMatrixCell>>;
 
 #[derive(Debug, Clone, Copy)]
@@ -1021,11 +1047,13 @@ pub(crate) struct LeanPluginDataWriteCase {
     pub(crate) stamped_supplied_by_guest: bool,
     pub(crate) invocation: LeanPluginDataInvocation,
     /// The manifest's `data.stamped` map: field to host fact.
-    pub(crate) declared_stamps: BTreeMap<String, LeanPluginDataStamp>,
+    #[serde(deserialize_with = "ordered_pairs")]
+    pub(crate) declared_stamps: Vec<(String, LeanPluginDataStamp)>,
     pub(crate) collection_fields: Vec<String>,
     pub(crate) write: LeanPluginDataWriteFacts,
     /// `applicableStamps`: the declared stamps of the written collection's fields.
-    pub(crate) applicable: BTreeMap<String, LeanPluginDataStamp>,
+    #[serde(deserialize_with = "ordered_pairs")]
+    pub(crate) applicable: Vec<(String, LeanPluginDataStamp)>,
     pub(crate) admitted: bool,
     #[serde(deserialize_with = "required_nullable")]
     pub(crate) refusal: Option<LeanPluginDataRefusal>,

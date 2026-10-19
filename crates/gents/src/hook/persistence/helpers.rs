@@ -6,7 +6,20 @@ struct BackgroundedRow {
 }
 
 pub(super) async fn count_live_backgrounded_rows(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    request_id: &str,
+) -> anyhow::Result<usize> {
+    count_live_backgrounded_rows_in(
+        &crate::config_client::ConfigAccess::local(node.clone()),
+        request_id,
+    )
+    .await
+}
+
+/// The caller request's backgrounded tool rows that have not ended, read
+/// through `reader` so an adoption counts them inside its transaction.
+pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::ConfigRead>(
+    reader: &R,
     request_id: &str,
 ) -> anyhow::Result<usize> {
     let escaped_request_id = crate::graphql::escape_graphql_string(request_id);
@@ -22,16 +35,13 @@ pub(super) async fn count_live_backgrounded_rows(
             }}
         }}"#
     );
-    let response = crate::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "count_live_backgrounded_rows",
-    )
-    .await?;
+    let response = reader.execute_read(&query).await.map_err(|error| {
+        error.context(format!(
+            "query live backgrounded tool count for request {request_id} failed"
+        ))
+    })?;
     let rows: Vec<BackgroundedRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
+        .pointer("/data/AgentToolCall")
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
     Ok(rows

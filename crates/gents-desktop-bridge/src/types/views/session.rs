@@ -106,6 +106,21 @@ pub struct ToolCallView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_progress: Option<gents_protocol::job::JobProgress>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_state: Option<gents_protocol::job::JobState>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_outcome: Option<gents_protocol::job::JobOutcome>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub job_next_calls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -246,6 +261,21 @@ pub struct RenderedToolCallView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub cancel_cause: Option<DerivedCancelCauseView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_progress: Option<gents_protocol::job::JobProgress>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_state: Option<gents_protocol::job::JobState>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_outcome: Option<gents_protocol::job::JobOutcome>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub job_next_calls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

@@ -487,6 +487,7 @@ fn plugin_named(name: &str, language: &str) -> PackPlugin {
         limits: None,
         model_slot: None,
         service: None,
+        ..Default::default()
     }
 }
 
@@ -732,6 +733,7 @@ fn a_plugin_whose_artifact_is_not_a_readable_afb_is_refused() {
         limits: None,
         model_slot: None,
         service: None,
+        ..Default::default()
     };
     let error = PluginRunner::compile(b"not an afb", &plugin).expect_err("must be refused");
     assert!(format!("{error:#}").contains("broken"), "{error:#}");
@@ -843,6 +845,107 @@ fn narrow_manifold_always_forces_listen_to_none() {
         narrow_manifold(&declared, &ceiling).listen,
         ListenAccess::None,
         "a plugin is called, never a server, whatever either side asked for"
+    );
+}
+
+fn job_tool_ref(job: Option<serde_json::Value>) -> crate::document_config::PluginToolRef {
+    crate::document_config::PluginToolRef {
+        plugin: "team/plugin".into(),
+        digest: None,
+        tool_calls: false,
+        input_fields: Vec::new(),
+        job: job.map(|job| serde_json::from_value(job).unwrap()),
+    }
+}
+
+#[test]
+fn job_block_on_a_plugin_without_job_true_is_refused() {
+    let (home, record) = executor::installed_echo();
+    assert!(!record.declaration.job.0);
+    let executor = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let block = serde_json::json!({"agent_targets": ["worker"]});
+    let error =
+        crate::plugin::tool::PluginTool::resolve(executor, &job_tool_ref(Some(block)), None)
+            .err()
+            .expect("a job block needs a plugin that declares job dispatch");
+    assert_eq!(
+        format!("{error:#}"),
+        "plugin team/plugin does not declare job dispatch; install a pack whose plugin sets `job: true`"
+    );
+}
+
+#[test]
+fn plugin_without_job_block_keeps_the_plugin_tool_path() {
+    let (home, _) = executor::installed_echo();
+    let executor = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    crate::plugin::tool::PluginTool::resolve(executor, &job_tool_ref(None), None)
+        .expect("a plugin without a job block resolves as before");
+}
+
+fn job_resolutions() -> (
+    tempfile::TempDir,
+    Vec<(
+        crate::document_config::PluginToolRef,
+        Option<crate::plugin::store::InstalledPlugin>,
+    )>,
+) {
+    let (home, plain) = executor::installed_echo();
+    let mut job_capable = plain.clone();
+    job_capable.declaration.job = gents_protocol::job::PluginJobDeclaration(true);
+    let mut not_job = job_tool_ref(None);
+    not_job.plugin = "team/plain".into();
+    let mut not_installed = job_tool_ref(None);
+    not_installed.plugin = "team/missing".into();
+    let resolutions = vec![
+        (job_tool_ref(None), Some(job_capable)),
+        (not_job, Some(plain)),
+        (not_installed, None),
+    ];
+    (home, resolutions)
+}
+
+#[test]
+fn job_tools_are_bound_only_for_job_capable_plugins() {
+    let (_home, resolutions) = job_resolutions();
+    let job_tools = crate::plugin_job::JobBinding::bind_all(&resolutions);
+    assert_eq!(
+        job_tools.keys().collect::<Vec<_>>(),
+        vec!["plugin"],
+        "only the entry whose installed plugin declares job: true binds"
+    );
+    let binding = &job_tools["plugin"];
+    assert_eq!(binding.tool_name, "plugin");
+    assert_eq!(binding.plugin, job_tool_ref(None));
+    assert_eq!(
+        binding.settings, None,
+        "an absent block binds as the empty ceiling"
+    );
+}
+
+#[test]
+fn plugin_child_call_naming_a_job_tool_is_hook_owned_child_refused() {
+    let (_home, resolutions) = job_resolutions();
+    let job_tools: std::collections::BTreeSet<String> =
+        crate::plugin_job::JobBinding::bind_all(&resolutions)
+            .into_keys()
+            .collect();
+    assert!(!crate::plugin::tool_calls::supported("plugin", &job_tools));
+    assert!(crate::plugin::tool_calls::supported("plain", &job_tools));
+}
+
+#[test]
+fn plugin_job_keys_reexports_the_encoders_and_the_decoder() {
+    use crate::plugin_job::keys::{
+        decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
+    };
+    let _ = (job_message_key, job_session_id);
+    assert_eq!(
+        decode_job_retry_key(&job_spawn_key("r", "s", 2)),
+        Some(("s".to_string(), 2))
     );
 }
 

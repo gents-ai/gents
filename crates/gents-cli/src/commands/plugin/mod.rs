@@ -106,6 +106,24 @@ fn list(args: PluginListArgs) -> Result<()> {
 async fn remove(args: PluginRemoveArgs) -> Result<()> {
     let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    // A pack's home record lists its plugins: release both through the pack
+    // removal owner, never the plugin record alone.
+    let owner = store::read_record(&home, namespace, name)
+        .ok()
+        .and_then(|record| record.owner_pack_coordinate);
+    if let Some(coordinate) = owner {
+        if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
+            anyhow::ensure!(
+                matches!(
+                    record.kind,
+                    gents::pack::PackKind::Assets | gents::pack::PackKind::Plugins
+                ) && record.plugins.iter().all(|plugin| plugin.name == name),
+                "{namespace}/{name} is installed by pack {coordinate} with other contents; remove it with gents pack remove {coordinate}"
+            );
+            let removed = crate::commands::pack::remove_home_install(&home, &coordinate).await?;
+            return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
+        }
+    }
     let removed = store::remove_record(&home, namespace, name).with_context(|| {
         format!(
             "{namespace}/{name} is not installed under {}",
@@ -141,6 +159,7 @@ pub(crate) fn declaration_from_artifact(
         limits: None,
         model_slot: None,
         service: None,
+        ..Default::default()
     })
 }
 

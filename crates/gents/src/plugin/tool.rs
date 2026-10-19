@@ -3,11 +3,18 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use defra_node::EmbeddedNode;
+use gents_protocol::job::DataWrite;
+
+use super::data::DataCaller;
 use super::executor::PluginExecutor;
 use super::store::InstalledPlugin;
 use super::PluginVerdict;
 use crate::document_config::{PluginToolRef, WriteToolField};
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError};
+use crate::tool_call_lifecycle::delivery::PluginToolWrites;
+use gents_loop::live_output::DeferredToolWrites;
+use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -24,6 +31,9 @@ pub struct PluginTool {
     root: Option<PathBuf>,
     input_fields: Vec<WriteToolField>,
     tool_calls: bool,
+    /// The node a data-declaring plugin's `data_calls` read and whose
+    /// terminal commits its writes; absent, the plugin gets no data session.
+    data_node: Option<Arc<EmbeddedNode>>,
 }
 
 impl PluginTool {
@@ -33,6 +43,11 @@ impl PluginTool {
         root: Option<PathBuf>,
     ) -> Result<Self> {
         let record = executor.resolve(&plugin.plugin, plugin.digest.as_deref())?;
+        anyhow::ensure!(
+            plugin.job.is_none() || record.declaration.job.0,
+            "plugin {} does not declare job dispatch; install a pack whose plugin sets `job: true`",
+            plugin.plugin
+        );
         let mut description = record
             .instructions
             .clone()
@@ -52,7 +67,54 @@ impl PluginTool {
             root,
             input_fields: plugin.input_fields.clone(),
             tool_calls: plugin.tool_calls,
+            data_node: None,
         })
+    }
+
+    /// Offers `node` as the data store of a plugin that declares `data`.
+    pub fn with_data_node(mut self, node: Arc<EmbeddedNode>) -> Self {
+        self.data_node = Some(node);
+        self
+    }
+
+    /// The `data_calls` caller for this tool call: the invoking node's DID.
+    fn data_caller(&self) -> Option<DataCaller> {
+        let node_did = current_tool_runtime_context()?.node_did?;
+        DataCaller::new(self.data_node.clone()?, &node_did).ok()
+    }
+
+    /// Takes the `writes` a data-declaring plugin returned beside its output
+    /// and hands them to the dispatch result, which carries them to the
+    /// terminal of this tool call to commit with the tool row. A plugin
+    /// without a data grant keeps its output whole.
+    fn defer_writes(
+        &self,
+        output: &mut serde_json::Value,
+    ) -> Result<Option<DeferredToolWrites>, ToolError> {
+        let Some(grant) = self.record.data_grant() else {
+            return Ok(None);
+        };
+        let Some(writes) = output.as_object_mut().and_then(|o| o.remove("writes")) else {
+            return Ok(None);
+        };
+        let writes: Vec<DataWrite> = serde_json::from_value(writes).map_err(|error| {
+            tool_error(format!(
+                "plugin writes must be [{{op, collection, doc_id?, fields, on_conflict?}}]: {error}"
+            ))
+        })?;
+        if writes.is_empty() {
+            return Ok(None);
+        }
+        if current_tool_runtime_context()
+            .and_then(|context| context.live_output)
+            .is_none()
+        {
+            return Err(tool_error("plugin writes commit with a persisted tool call, and this call has none; call the tool from a session"));
+        }
+        Ok(Some(DeferredToolWrites::new(PluginToolWrites {
+            grant,
+            writes,
+        })))
     }
 }
 
@@ -77,6 +139,7 @@ impl ToolDyn for PluginTool {
                     return ToolDispatchResult {
                         result: Err(error),
                         plugin_receipt: None,
+                        deferred_writes: None,
                     };
                 }
             };
@@ -84,30 +147,36 @@ impl ToolDyn for PluginTool {
                 return ToolDispatchResult {
                     result: Err(tool_error(format!("{error:#}"))),
                     plugin_receipt: Some(super::executor::initial_receipt(&self.record, &input)),
+                    deferred_writes: None,
                 };
             }
             let (call, receipt) = self
                 .executor
-                .call_data_bound_with_receipt(
+                .call_data_bound_with_receipt_for(
                     &self.record,
                     input,
                     self.root.as_deref(),
                     self.tool_calls,
+                    self.data_caller(),
                 )
                 .await;
-            let result =
-                call.map_err(|error| tool_error(format!("{error:#}")))
-                    .and_then(|call| match call.outcome.verdict {
-                        PluginVerdict::Success => serde_json::to_string(&call.outcome.output)
-                            .map_err(ToolError::JsonError),
-                        _ => Err(tool_error(format!(
-                            "plugin {} did not return a result: {}",
-                            call.coordinate, call.outcome.diagnostics
-                        ))),
-                    });
+            let mut deferred_writes = None;
+            let result = call
+                .map_err(|error| tool_error(format!("{error:#}")))
+                .and_then(|mut call| match call.outcome.verdict {
+                    PluginVerdict::Success => {
+                        deferred_writes = self.defer_writes(&mut call.outcome.output)?;
+                        serde_json::to_string(&call.outcome.output).map_err(ToolError::JsonError)
+                    }
+                    _ => Err(tool_error(format!(
+                        "plugin {} did not return a result: {}",
+                        call.coordinate, call.outcome.diagnostics
+                    ))),
+                });
             ToolDispatchResult {
                 result,
                 plugin_receipt: Some(receipt),
+                deferred_writes,
             }
         })
     }

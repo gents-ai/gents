@@ -452,3 +452,560 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         .remove(&hook_execution_fixture_key(&owner, &owner_cancel_request));
     node.shutdown().await;
 }
+
+mod job_control {
+    use super::*;
+    use crate::background_tools::ProcessControlScope;
+    use crate::config_client::ConfigAccess;
+    use crate::plugin_job::admit::Refusal;
+    use crate::plugin_job::control::control;
+    use crate::plugin_job::driver::{settle_plugin_job, Settlement};
+    use crate::plugin_job::keys::job_spawn_key;
+    use crate::plugin_job::records::{
+        write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn, HostProgressFacts,
+    };
+    use crate::tool_call_lifecycle::admission_fixture::{
+        fixture_job_pin, publish_accepted_on_claimed_request,
+    };
+    use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
+    use crate::tool_control::{
+        cancel_background_tool_call, cancel_session_background_process,
+        CancelBackgroundToolCallOutcome,
+    };
+    use gents_protocol::job::{
+        JobBudget, JobControlKind, JobControlOutcome, JobPin, JobProgress, JobReadError, JobState,
+    };
+    use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
+
+    struct JobHook {
+        _dir: tempfile::TempDir,
+        node: Arc<EmbeddedNode>,
+        executions: BackgroundExecutionRegistry,
+        owner: DefraSessionHook,
+        session_id: String,
+        request_id: String,
+    }
+
+    impl JobHook {
+        async fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let identity =
+                crate::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
+                    .unwrap();
+            let node = Arc::new(
+                EmbeddedNode::builder()
+                    .data_path(dir.path())
+                    .with_node_identity_did(identity.did())
+                    .build()
+                    .await
+                    .unwrap(),
+            );
+            crate::ensure_runtime_schemas(&node).await.unwrap();
+            crate::test_support::install_test_agent(&node, identity.did(), "general").await;
+            let executions = BackgroundExecutionRegistry::default();
+            let owner = DefraSessionHook::with_identity(
+                node.clone(),
+                identity.did(),
+                FailurePolicy::default(),
+            )
+            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+                vec![Box::new(PendingTool)],
+                &["slow_tool".into()],
+            ))
+            .with_background_execution_registry(executions.clone());
+            owner
+                .on_completion_call(&user_text_message("run job control work"), &[])
+                .await;
+            let session_id = owner.session_id().await.unwrap();
+            let request_id = format!("job-control-{}", uuid::Uuid::new_v4());
+            bind_interruptible_request_with_requester(
+                &node,
+                &owner,
+                &request_id,
+                &session_id,
+                Utc::now() + chrono::Duration::minutes(5),
+                None,
+            )
+            .await;
+            Self {
+                _dir: dir,
+                node,
+                executions,
+                owner,
+                session_id,
+                request_id,
+            }
+        }
+
+        fn scope(&self, requester_did: Option<&str>) -> ProcessControlScope {
+            ProcessControlScope {
+                request_id: self.request_id.clone(),
+                session_id: self.session_id.clone(),
+                node_did: self.owner.node_did.clone(),
+                requester_did: requester_did.map(str::to_owned),
+            }
+        }
+
+        fn access(&self) -> ConfigAccess {
+            ConfigAccess::local(self.node.clone())
+        }
+
+        async fn load(&self, tool_call_id: &str) -> ToolCallLifecycle {
+            ToolCallLifecycle::load(self.node.clone(), &self.session_id, tool_call_id)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        async fn stored(&self, tool_call_id: &str) -> serde_json::Value {
+            let doc_id = self.load(tool_call_id).await.doc_id().unwrap().to_owned();
+            self.access()
+                .execute(&format!(
+                    r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
+                    crate::graphql::escape_graphql_string(&doc_id),
+                ))
+                .await
+                .unwrap()["data"]["AgentToolCall"][0]
+                .clone()
+        }
+
+        async fn receipt(&self, tool_call_id: &str) -> PluginExecutionReceipt {
+            serde_json::from_value(
+                self.stored(tool_call_id).await["plugin_execution_receipt"].clone(),
+            )
+            .expect("a settled job row holds its receipt")
+        }
+
+        /// A running background job row published on the owner's bound request;
+        /// it is its own chain root and holds one running progress record.
+        async fn job_row(&self, tool_call_id: &str) -> String {
+            let hook = &self.owner;
+            let lifecycle = {
+                let mut fixtures = hook_execution_fixtures().lock().await;
+                let fixture = fixtures
+                    .get_mut(&hook_execution_fixture_key(hook, &self.request_id))
+                    .expect("owned job request fixture");
+                let turn = fixture.turn;
+                fixture.turn += 1;
+                publish_accepted_on_claimed_request(
+                    hook.node.clone(),
+                    &mut fixture.lifecycle,
+                    &hook.node_did,
+                    turn,
+                    "workflow",
+                    tool_call_id,
+                    json!({"argv": ["run"]}),
+                    AwaitMode::Background,
+                    true,
+                )
+                .await
+                .unwrap()
+            };
+            let row = lifecycle.doc_id().unwrap().to_owned();
+            ConfigAccess::transact_local_write(
+                &hook.node,
+                None,
+                "test.process_control_scope.job_row",
+                |txn| {
+                    let row = &row;
+                    Box::pin(async move {
+                        let pin = JobPin {
+                            chain_root_doc_id: row.clone(),
+                            ..fixture_job_pin()
+                        };
+                        write_pin_in_txn(txn, row, &pin).await?;
+                        let guest = JobProgress {
+                            title: "audit".into(),
+                            state: JobState::Running,
+                            pause_reason: None,
+                            phases: Vec::new(),
+                            active: Vec::new(),
+                            spawned: 0,
+                            budget: JobBudget {
+                                total: 0,
+                                spent: 0,
+                                remaining: 0,
+                            },
+                            last_event: "scanning".into(),
+                            last_event_at: None,
+                            question: None,
+                            observed_terminal_children: 0,
+                            revision: 0,
+                        };
+                        let host = HostProgressFacts {
+                            spawned: 1,
+                            budget: JobBudget {
+                                total: 4,
+                                spent: 1,
+                                remaining: 3,
+                            },
+                            observed_terminal_children: 0,
+                            state: JobState::Running,
+                            pause_reason: None,
+                        };
+                        write_progress_in_txn(txn, row, 0, guest, host).await?;
+                        Ok(())
+                    })
+                },
+            )
+            .await
+            .unwrap();
+            // The published lifecycle predates the pin, so it is not a job row; the
+            // reloaded one is.
+            let mut job = self.load(tool_call_id).await;
+            assert!(job.publish_background_receipt("started").await.unwrap());
+            row
+        }
+
+        /// The evidence of the job step that ran, persisted on `row`.
+        async fn persist_evidence(&self, row: &str) -> PluginExecutionReceipt {
+            let evidence = evidence();
+            ConfigAccess::transact_local_write(
+                &self.node,
+                None,
+                "test.process_control_scope.step_state",
+                |txn| {
+                    let evidence = &evidence;
+                    Box::pin(async move { write_step_state_in_txn(txn, row, evidence, None).await })
+                },
+            )
+            .await
+            .unwrap();
+            evidence
+        }
+
+        /// A live local child the job spawned: a processing request of this node.
+        async fn live_child(&self, row: &str) -> String {
+            crate::plugin_job::input::tests::insert(
+                &self.node,
+                "AgentRequest",
+                json!({
+                    "request_id": "child-slot-a",
+                    "purpose": "normal",
+                    "node_did": self.owner.node_did,
+                    "requester_did": null,
+                    "session_id": "child-session-slot-a",
+                    "agent_id": "general",
+                    "lifecycle_state": "processing",
+                    "retry_key": job_spawn_key(row, "slot-a", 0),
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "caused_by_parent_tool_call_doc_id": row,
+                    "caused_by_parent_tool_call_id": "call",
+                    "caused_by_parent_request_id": "parent",
+                    "caused_by_parent_request_doc_id": "parent-doc",
+                }),
+            )
+            .await
+        }
+
+        async fn interrupted(&self, child: &str) -> bool {
+            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&self.node, child)
+                .await
+                .unwrap()
+                .is_some()
+        }
+
+        async fn settle(&self, tool_call_id: &str, settlement: Settlement) {
+            let mut lifecycle = self.load(tool_call_id).await;
+            settle_plugin_job(&mut lifecycle, settlement).await.unwrap();
+        }
+
+        async fn finish(self) {
+            hook_execution_fixtures()
+                .lock()
+                .await
+                .remove(&hook_execution_fixture_key(&self.owner, &self.request_id));
+            self.node.shutdown().await;
+        }
+    }
+
+    fn evidence() -> PluginExecutionReceipt {
+        PluginExecutionReceipt {
+            coordinate: "fixture/engine".into(),
+            artifact_digest: "sha256:engine".into(),
+            input_digest: "step".into(),
+            output_digest: Some("sha256:output".into()),
+            authority: None,
+            limits: None,
+            verdict: PluginExecutionVerdict::Success,
+        }
+    }
+
+    /// What a cancelled row publishes of its step evidence (Lean `PluginReceipt.published`).
+    fn cancelled(evidence: PluginExecutionReceipt) -> PluginExecutionReceipt {
+        PluginExecutionReceipt {
+            output_digest: None,
+            verdict: PluginExecutionVerdict::ExecutionError,
+            ..evidence
+        }
+    }
+
+    #[tokio::test]
+    async fn job_control_stop_is_applied_with_killed_children() {
+        let hook = JobHook::new().await;
+        let row = hook.job_row("job-stop").await;
+        let evidence = hook.persist_evidence(&row).await;
+        let child = hook.live_child(&row).await;
+        let outcome = control(
+            &hook.access(),
+            &hook.scope(None),
+            "job-stop",
+            JobControlKind::Stop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            JobControlOutcome::Applied {
+                state: JobState::Cancelled,
+                killed_children: 1
+            }
+        );
+        assert!(hook.interrupted(&child).await);
+        let stored = hook.stored("job-stop").await;
+        assert_eq!(stored["lifecycle_state"], "cancelled");
+        assert_eq!(hook.receipt("job-stop").await, cancelled(evidence));
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn job_control_pause_is_applied_paused() {
+        let hook = JobHook::new().await;
+        let row = hook.job_row("job-pause").await;
+        hook.persist_evidence(&row).await;
+        let outcome = control(
+            &hook.access(),
+            &hook.scope(None),
+            "job-pause",
+            JobControlKind::Pause,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            JobControlOutcome::Applied {
+                state: JobState::Paused,
+                killed_children: 0
+            }
+        );
+        assert_eq!(
+            hook.stored("job-pause").await["lifecycle_state"],
+            "completed"
+        );
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn job_control_on_a_terminal_row_is_already_terminal() {
+        let hook = JobHook::new().await;
+        hook.job_row("job-done").await;
+        hook.settle("job-done", Settlement::Result(json!({"findings": 3})))
+            .await;
+        let outcome = control(
+            &hook.access(),
+            &hook.scope(None),
+            "job-done",
+            JobControlKind::Stop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            JobControlOutcome::AlreadyTerminal {
+                state: JobState::Completed
+            }
+        );
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn job_control_on_a_non_job_row_is_not_a_job() {
+        let hook = JobHook::new().await;
+        let receipt = invoke(
+            &hook.owner,
+            "plain-spawn",
+            "spawn_process",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await;
+        let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_owned();
+        let outcome = control(
+            &hook.access(),
+            &hook.scope(None),
+            &tool_call_id,
+            JobControlKind::Stop,
+        )
+        .await;
+        assert_eq!(outcome, Err(JobReadError::NotAJob));
+        let args = json!({"tool_call_id": tool_call_id}).to_string();
+        invoke(&hook.owner, "plain-cancel", "cancel_process", &args).await;
+        hook.executions.wait_for_completion(&tool_call_id).await;
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn job_control_on_a_missing_row_is_not_yet_observable() {
+        let hook = JobHook::new().await;
+        let outcome = control(
+            &hook.access(),
+            &hook.scope(None),
+            "no-such-call",
+            JobControlKind::Stop,
+        )
+        .await;
+        assert_eq!(outcome, Err(JobReadError::NotYetObservable));
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn job_control_outside_scope_is_not_authorized() {
+        let hook = JobHook::new().await;
+        hook.job_row("job-scoped").await;
+        let outcome = control(
+            &hook.access(),
+            &hook.scope(Some("did:key:another-requester")),
+            "job-scoped",
+            JobControlKind::Stop,
+        )
+        .await;
+        assert_eq!(outcome, Err(JobReadError::NotAuthorized));
+        assert_eq!(
+            hook.stored("job-scoped").await["lifecycle_state"],
+            "running"
+        );
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn job_control_over_graphql_access_is_unavailable_naming_the_in_session_routes() {
+        let hook = JobHook::new().await;
+        let outcome = control(
+            &ConfigAccess::graphql("http://127.0.0.1:1"),
+            &hook.scope(None),
+            "job-remote",
+            JobControlKind::Stop,
+        )
+        .await;
+        let Err(JobReadError::Unavailable { message }) = outcome else {
+            panic!("graphql access must be unavailable: {outcome:?}")
+        };
+        assert!(message.contains("workflow stop"), "{message}");
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn operator_cancel_on_a_job_row_ends_it_cancelled() {
+        let hook = JobHook::new().await;
+        let row = hook.job_row("job-operator").await;
+        let evidence = hook.persist_evidence(&row).await;
+        let child = hook.live_child(&row).await;
+        let outcome = cancel_background_tool_call(
+            hook.node.clone(),
+            &hook.executions,
+            &hook.session_id,
+            "job-operator",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            CancelBackgroundToolCallOutcome::Cancelled {
+                live_execution_cancelled: false
+            }
+        );
+        assert_eq!(
+            hook.stored("job-operator").await["lifecycle_state"],
+            "cancelled"
+        );
+        assert_eq!(hook.receipt("job-operator").await, cancelled(evidence));
+        assert!(hook.interrupted(&child).await);
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn client_cancel_on_a_job_row_ends_it_cancelled() {
+        let hook = JobHook::new().await;
+        let row = hook.job_row("job-client").await;
+        let evidence = hook.persist_evidence(&row).await;
+        let child = hook.live_child(&row).await;
+        let denied = cancel_session_background_process(
+            hook.node.clone(),
+            &hook.executions,
+            &hook.owner.node_did,
+            Some("did:key:another-requester"),
+            &hook.session_id,
+            "job-client",
+        )
+        .await
+        .unwrap();
+        assert_eq!(denied, CancelBackgroundToolCallOutcome::NotFound);
+        assert_eq!(
+            hook.stored("job-client").await["lifecycle_state"],
+            "running"
+        );
+        let outcome = cancel_session_background_process(
+            hook.node.clone(),
+            &hook.executions,
+            &hook.owner.node_did,
+            None,
+            &hook.session_id,
+            "job-client",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            CancelBackgroundToolCallOutcome::Cancelled {
+                live_execution_cancelled: false
+            }
+        );
+        assert_eq!(
+            hook.stored("job-client").await["lifecycle_state"],
+            "cancelled"
+        );
+        assert_eq!(hook.receipt("job-client").await, cancelled(evidence));
+        assert!(hook.interrupted(&child).await);
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn cancel_on_a_settled_job_row_reports_the_lifecycle_spelling() {
+        let hook = JobHook::new().await;
+        let row = hook.job_row("job-late").await;
+        hook.persist_evidence(&row).await;
+        hook.settle("job-late", Settlement::Refused(Refusal::TimedOut))
+            .await;
+        let outcome = cancel_background_tool_call(
+            hook.node.clone(),
+            &hook.executions,
+            &hook.session_id,
+            "job-late",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            CancelBackgroundToolCallOutcome::AlreadyTerminal {
+                state: "timedOut".into()
+            }
+        );
+        hook.finish().await;
+    }
+
+    #[tokio::test]
+    async fn model_cancel_process_on_a_job_row_replies_cancelled() {
+        let hook = JobHook::new().await;
+        let row = hook.job_row("job-model").await;
+        let evidence = hook.persist_evidence(&row).await;
+        let args = json!({"tool_call_id": "job-model"}).to_string();
+        let reply = invoke(&hook.owner, "model-cancel", "cancel_process", &args).await;
+        assert_eq!(reply["status"], "cancelled", "{reply}");
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(
+            hook.stored("job-model").await["lifecycle_state"],
+            "cancelled"
+        );
+        assert_eq!(hook.receipt("job-model").await, cancelled(evidence));
+        hook.finish().await;
+    }
+}

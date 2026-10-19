@@ -258,14 +258,12 @@ pub(super) async fn cancel_projected_background_tool_key(
     state: &ShimState,
     tool_call_key: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
-    let Some((session_id, tool_call_id)) = tool_call_key.split_once(':') else {
-        anyhow::bail!("Codex process id `{tool_call_key}` is not a GENTS background tool key");
-    };
+    let (session_id, tool_call_id) = background_tool_address(state, tool_call_key).await?;
     let outcome = gents::cancel_background_tool_call(
         state.node.clone(),
         &state.background_execution_registry,
-        session_id,
-        tool_call_id,
+        &session_id,
+        &tool_call_id,
     )
     .await?;
     match &outcome {
@@ -286,6 +284,32 @@ pub(super) async fn cancel_projected_background_tool_key(
     }
 }
 
+/// Codex holds a row's stored `tool_call_key` as its process id, and that key
+/// is `{request_doc_id}:...`, not `session_id:tool_call_id`. A key that names
+/// no stored row is read as the `session_id:tool_call_id` form `clean` builds.
+async fn background_tool_address(
+    state: &ShimState,
+    tool_call_key: &str,
+) -> Result<(String, String)> {
+    let escaped_key = escape_graphql_string(tool_call_key);
+    let query = format!(
+        r#"{{ AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{escaped_key}" }} }}, limit: 1) {{ session_id tool_call_id }} }}"#
+    );
+    let response = query_node_json(state.node.as_ref(), &query).await?;
+    if let Some(row) = response.pointer("/data/AgentToolCall/0") {
+        if let (Some(session_id), Some(tool_call_id)) = (
+            row.get("session_id").and_then(Value::as_str),
+            row.get("tool_call_id").and_then(Value::as_str),
+        ) {
+            return Ok((session_id.to_owned(), tool_call_id.to_owned()));
+        }
+    }
+    let Some((session_id, tool_call_id)) = tool_call_key.split_once(':') else {
+        anyhow::bail!("Codex process id `{tool_call_key}` is not a GENTS background tool key");
+    };
+    Ok((session_id.to_owned(), tool_call_id.to_owned()))
+}
+
 async fn load_running_background_terminal_rows(
     node: &EmbeddedNode,
     thread_id: &str,
@@ -301,7 +325,8 @@ async fn load_running_background_terminal_rows(
                 }},
                 order: {{ started_at: ASC }}
             ) {{
-                tool_call_key
+                session_id
+                tool_call_id
             }}
         }}"#
     );
@@ -319,7 +344,11 @@ async fn load_running_background_terminal_rows(
 
 fn decode_background_terminal_row(row: &Value) -> Option<BackgroundTerminalRow> {
     Some(BackgroundTerminalRow {
-        tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
+        tool_call_key: format!(
+            "{}:{}",
+            row.get("session_id")?.as_str()?,
+            row.get("tool_call_id")?.as_str()?
+        ),
     })
 }
 
@@ -335,11 +364,13 @@ mod tests {
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents_protocol::job::JobState;
     use gents_protocol::output::{OutputSegment, TranscriptMessage};
     use tokio::sync::{mpsc, oneshot, Mutex};
 
     use super::super::{CodexSidecar, ConnectionState, ShimState};
     use super::*;
+    use crate::commands::grok_shim::test_fixtures::seed_job_row;
 
     async fn insert_segment(node: &EmbeddedNode, segment: &OutputSegment) -> String {
         let response = node
@@ -836,5 +867,148 @@ mod tests {
     #[tokio::test]
     async fn background_tool_watcher_completes_spawned_process_without_child_result_header() {
         assert_watcher_recovers_after_initial_observation("spawned-process", true, true).await;
+    }
+
+    /// Job control authors as the node, so the node DID must be a registered
+    /// signing identity.
+    async fn job_test_state(dir: &std::path::Path) -> ShimState {
+        let mut state = super::super::turn_projection::tests::notification_test_state(dir).await;
+        let identity = gents::KeyIdentity::load_or_create(dir.join("actor.key"), None).unwrap();
+        state.node_did = Arc::from(gents::NodeIdentity::did(&identity));
+        state
+    }
+
+    async fn seed_running_job(state: &ShimState, session: &str, call: &str) {
+        let (node, did) = (&state.node, &state.node_did);
+        seed_job_row(node, did, session, call, call, "running", JobState::Running).await;
+    }
+
+    async fn job_state(state: &ShimState, session: &str, call: &str) -> JobState {
+        gents::plugin_job::view::load_job_view(
+            &ConfigAccess::local(state.node.clone()),
+            None,
+            gents::plugin_job::view::JobKey::Address {
+                session_id: session.into(),
+                tool_call_id: call.into(),
+            },
+        )
+        .await
+        .unwrap()
+        .state
+    }
+
+    /// Codex receives the stored `tool_call_key` as the row's `process_id`
+    /// (`command_execution_item`).
+    async fn stored_tool_call_key(state: &ShimState, session: &str, call: &str) -> String {
+        let query = format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_call_id: {{ _eq: "{call}" }} }}) {{ tool_call_key }} }}"#
+        );
+        let response = query_node_json(state.node.as_ref(), &query).await.unwrap();
+        response["data"]["AgentToolCall"][0]["tool_call_key"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    #[tokio::test]
+    async fn job_row_is_tracked_as_background_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = job_test_state(dir.path()).await;
+        seed_running_job(&state, "codex-job", "call-a").await;
+
+        let rows = load_running_background_terminal_rows(state.node.as_ref(), "codex-job")
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tool_call_key, "codex-job:call-a");
+        state.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn job_row_stops_through_its_process_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = job_test_state(dir.path()).await;
+        seed_running_job(&state, "codex-job", "call-a").await;
+        let process_id = stored_tool_call_key(&state, "codex-job", "call-a").await;
+
+        let outcome = cancel_projected_background_tool_key(&state, &process_id).await;
+
+        assert!(
+            matches!(
+                outcome,
+                Ok(CancelBackgroundToolCallOutcome::Cancelled {
+                    live_execution_cancelled: false
+                })
+            ),
+            "{outcome:?}"
+        );
+        let stopped = job_state(&state, "codex-job", "call-a").await;
+        assert_eq!(stopped, JobState::Cancelled);
+        state.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn job_rows_stop_on_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = job_test_state(dir.path()).await;
+        seed_running_job(&state, "codex-clean", "call-a").await;
+        seed_running_job(&state, "codex-clean", "call-b").await;
+        seed_running_job(&state, "codex-other", "call-c").await;
+
+        clean_background_terminals(&state, "codex-clean")
+            .await
+            .unwrap();
+
+        for call in ["call-a", "call-b"] {
+            let stopped = job_state(&state, "codex-clean", call).await;
+            assert_eq!(stopped, JobState::Cancelled, "{call}");
+        }
+        let other = job_state(&state, "codex-other", "call-c").await;
+        assert_eq!(other, JobState::Running);
+        state.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn job_row_already_ended_is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = job_test_state(dir.path()).await;
+        let (node, did) = (&state.node, &state.node_did);
+        seed_job_row(
+            node,
+            did,
+            "codex-job",
+            "call-a",
+            "call-a",
+            "completed",
+            JobState::Completed,
+        )
+        .await;
+
+        let outcome = cancel_projected_background_tool_key(&state, "codex-job:call-a").await;
+
+        let Ok(CancelBackgroundToolCallOutcome::AlreadyTerminal { state: ended }) = outcome else {
+            panic!("expected AlreadyTerminal, got {outcome:?}");
+        };
+        assert_eq!(ended, "completed");
+        let still = job_state(&state, "codex-job", "call-a").await;
+        assert_eq!(still, JobState::Completed);
+        state.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn job_unknown_key_reports_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::turn_projection::tests::notification_test_state(dir.path()).await;
+
+        let err = cancel_projected_background_tool_key(&state, "codex-none:call-none")
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "unknown GENTS background tool `codex-none:call-none`"
+        );
+        state.node.shutdown().await;
     }
 }

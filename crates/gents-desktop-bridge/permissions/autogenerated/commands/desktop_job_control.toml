@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-job-control"
+description = "Enables the desktop_job_control command without any pre-configured scope."
+commands.allow = ["desktop_job_control"]
+
+[[permission]]
+identifier = "deny-desktop-job-control"
+description = "Denies the desktop_job_control command without any pre-configured scope."
+commands.deny = ["desktop_job_control"]

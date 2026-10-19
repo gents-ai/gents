@@ -23,6 +23,8 @@ pub enum IllegalToolCallTransition {
     ParentLinkageIncoherent,
     #[error("foreground rejected: an agent_new/agent_message row is background-only")]
     SessionMessageIsBackgroundOnly,
+    #[error("foreground rejected: a plugin job row is background-only")]
+    PluginJobIsBackgroundOnly,
 }
 
 impl ToolCallLifecycle {
@@ -117,3 +119,8 @@ mod session_message;
 pub use session_message::CausedRequestTerminal;
 mod mode_policy;
 mod native;
+mod plugin_job;
+pub(crate) use plugin_job::PluginJobTerminal;
+
+#[cfg(test)]
+mod tests;

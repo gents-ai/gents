@@ -5,6 +5,10 @@ use super::super::background::{cancel_projected_background_tool_key, clean_backg
 use super::super::protocol::{send_error, send_result};
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 
+/// `thread/backgroundTerminals/clean` cancels every running background row of
+/// the thread, plugin jobs included, by design. ProcessKill and
+/// CommandExecTerminate stop a job row through the shared cancel owner, which
+/// reports no children count.
 pub(super) async fn handle_background_request(
     outbound: &Outbound,
     state: &ShimState,

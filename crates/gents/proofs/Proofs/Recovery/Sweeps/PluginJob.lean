@@ -172,7 +172,7 @@ def pluginJobRecoverySweep : RecoverySweep :=
   , sweepId := "tool_call_lifecycle_recover_plugin_job_rows"
   , rustFunction := "plugin_job::recovery::redrive_running_jobs"
   , cadence := .periodic
-  , implementationStatus := .obligation
+  , implementationStatus := .implemented
   , stale := pluginJobStale
   , recover := fun row => pluginJobRecover (pluginJobRecover row)
   , terminal := fun row => ¬ pluginJobStale row

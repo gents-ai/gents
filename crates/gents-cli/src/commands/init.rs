@@ -21,10 +21,12 @@ use gents::{
     Collection, CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity, NodeIdentity,
 };
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
+use crate::output_format::OutputFormat;
+use crate::request_helpers::capture_report;
 use crate::shared::*;
 use crate::{
     clear_runtime_state, dangerously_overwrite_home, default_data_dir, default_key_path,
@@ -153,7 +155,42 @@ fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<P
     Ok(resolved)
 }
 
-pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
+pub(crate) async fn init(args: InitArgs) -> Result<()> {
+    let home = resolve_home_dir(args.home.as_deref());
+    let workflows = args.workflows;
+    // The install runs after `init_home` returns: init's exclusive store lock
+    // and node are released by then, and a second claim in this process is refused.
+    let mut output = init_home(args).await?;
+    if workflows {
+        let agent = output["default_agent_id"]
+            .as_str()
+            .context("init output has no default_agent_id")?
+            .to_owned();
+        output["workflows"] = capture_report(crate::commands::pack::install(PackInstallArgs {
+            package: "gents/rhai_workflows".to_owned(),
+            bindings: None,
+            inference_slots: Vec::new(),
+            preview: false,
+            scope: ScopeArgs {
+                home: Some(home),
+                graphql: None,
+                node_did: None,
+            },
+            output: OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry: None,
+            drift: PackDriftArgs::default(),
+            grant_authority: true,
+            wire: vec![agent],
+            expect_digest: None,
+            explicit: true,
+        }))
+        .await?;
+    }
+    print_json(&output)
+}
+
+async fn init_home(mut args: InitArgs) -> Result<Value> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
@@ -214,8 +251,7 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
             ],
             "init": null
         });
-        print_json(&output)?;
-        return Ok(());
+        return Ok(output);
     }
 
     let initialized_identity = load_or_create_home_identity(HomeIdentityOptions {
@@ -337,9 +373,7 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         ),
         "init": summary,
     });
-    print_json(&output)?;
-
-    Ok(())
+    Ok(output)
 }
 
 fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
@@ -1422,6 +1456,10 @@ fn init_next_steps(
     steps.push("gents server".to_string());
     steps.push("gents codex".to_string());
     steps.push(format!(
+        "gents pack install gents/rhai_workflows --wire {} --grant-authority",
+        summary.default_agent_id
+    ));
+    steps.push(format!(
         "gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL> --max-concurrent {}",
         summary.backend_id, summary.backend_name, summary.max_concurrent
     ));
@@ -1855,6 +1893,72 @@ mod tests {
         );
     }
 
+    fn init_summary(provider_kind: gents::BackendProviderKind, endpoint: &str) -> InitSummary {
+        InitSummary {
+            backend_id: "did:key:z-init:backend".to_string(),
+            backend_name: "test-agent backend".to_string(),
+            provider_kind,
+            endpoint: endpoint.to_string(),
+            api_key: None,
+            api_key_env_var: None,
+            model_name: "test-model".to_string(),
+            max_concurrent: 2,
+            max_queue_depth: 16,
+            default_agent_id: "default".to_string(),
+            tools_id: "default-tools".to_string(),
+            wide_open_preset_id: "wide-open".to_string(),
+            inference_profile_id: "default-profile".to_string(),
+            tool_package: ToolPackageArg::Readonly,
+            tool_ceiling: ToolCeilingArg::Readonly,
+            tool_root: None,
+            enable_memory: false,
+            enable_defra_query: false,
+            defra_query_collections: Vec::new(),
+            created_node: true,
+            created_default_agent: true,
+        }
+    }
+
+    #[test]
+    fn init_workflows_flag_parses() {
+        let parse = |argv: &[&str]| <Cli as clap::Parser>::try_parse_from(argv);
+        let Command::Init(args) = parse(&["gents", "init", "--workflows"]).unwrap().command else {
+            panic!("init must parse as init");
+        };
+        assert!(args.workflows);
+        let Command::Init(args) = parse(&["gents", "init"]).unwrap().command else {
+            panic!("init must parse as init");
+        };
+        assert!(!args.workflows);
+        assert!(parse(&["gents", "init", "--workflows", "--identity-only"]).is_err());
+    }
+
+    #[test]
+    fn init_hint_names_install_and_wire_with_agent_id() {
+        let steps = init_next_steps(
+            &init_summary(
+                gents::BackendProviderKind::OpenAiCompatible,
+                "http://127.0.0.1:8080/v1",
+            ),
+            false,
+            false,
+            false,
+        );
+        assert!(steps.iter().any(|step| step
+            == "gents pack install gents/rhai_workflows --wire default --grant-authority"));
+    }
+
+    #[tokio::test]
+    async fn init_without_workflows_installs_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        assert!(!args.workflows);
+        init(args).await.expect("an offline init succeeds");
+        assert!(gents::pack::list_home_installs(&home).unwrap().is_empty());
+    }
+
     fn init_args() -> InitArgs {
         InitArgs {
             home: None,
@@ -1888,6 +1992,7 @@ mod tests {
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            workflows: false,
         }
     }
 }

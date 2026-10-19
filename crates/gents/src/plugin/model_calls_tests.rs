@@ -528,6 +528,8 @@ fn binding_slots_survives_a_reinstall_and_unbinding_clears_it() {
         &read().declaration,
         &artifact,
         None,
+        Default::default(),
+        Default::default(),
         false,
     )
     .unwrap();
@@ -831,6 +833,8 @@ async fn fuel_is_spent_across_rounds() {
         model: Some(session(&fake)),
         http: None,
         tools: None,
+        data: None,
+        jobs: None,
     };
     let outcome = drive(calls, json!({}), budget, round).await.unwrap();
     assert_eq!(outcome.verdict, PluginVerdict::OutOfFuel);

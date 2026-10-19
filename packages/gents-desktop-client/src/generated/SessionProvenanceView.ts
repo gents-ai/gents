@@ -6,4 +6,9 @@ import type { TurnSenderView } from "./TurnSenderView.js";
 /**
  * Provenance only: no hierarchy, cascade or authority follows.
  */
-export type SessionProvenanceView = { sessionId: string, startedBy: LinkedSessionView | null, started: Array<LinkedSessionView>, sent: Array<LinkedSessionView>, received: Array<LinkedSessionView>, senders: Array<TurnSenderView>, calls: Array<CausedCallView>, };
+export type SessionProvenanceView = { sessionId: string, startedBy: LinkedSessionView | null, started: Array<LinkedSessionView>, sent: Array<LinkedSessionView>, received: Array<LinkedSessionView>,
+/**
+ * The request of this session that its starter's call opened it with
+ * (C7), while that request is visible.
+ */
+openingRequestId?: string | null, senders: Array<TurnSenderView>, calls: Array<CausedCallView>, };
