@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
                 "transportSupported": cfg!(any(unix, windows)),
-                "editorStoreBootstrapVersion": 1,
+                "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
             }),
         )?;
         output.write_all(b"\n")?;
