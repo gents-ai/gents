@@ -24,9 +24,7 @@ use gents::pack_resolve::{resolve_named, ResolveOptions, ResolvedFrom};
 use serde_json::json;
 use std::collections::BTreeMap;
 
-#[cfg(test)]
-use cache::lock_exclusive;
-use cache::CacheRelease;
+use gents::pack::materialize::CacheRelease;
 
 pub(crate) fn parse_inference_slot_bindings(
     values: &[String],
@@ -302,15 +300,6 @@ pub(crate) async fn resolve_pack_source(
     })
 }
 
-fn materialize(pack: &PackSource, root: &std::path::Path) -> Result<()> {
-    gents::pack::materialize::materialize(&pack.archive, root)
-}
-
-#[cfg(test)]
-fn set_distribution_permissions(file: &std::fs::File) -> Result<()> {
-    gents::pack::materialize::set_distribution_permissions(file)
-}
-
 fn materialize_cached_pack(
     home: &std::path::Path,
     pack: &PackSource,
@@ -410,7 +399,7 @@ fn names_a_directory(spec: &str) -> bool {
 }
 
 fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::path::PathBuf> {
-    cache::asset_cache_root_for(
+    gents::pack::materialize::cache_root(
         home,
         &pack.manifest().metadata.namespace,
         &pack.manifest().name,
@@ -556,7 +545,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .into_iter()
                     .collect::<Result<Vec<_>>>()?;
             let temp = tempfile::tempdir()?;
-            materialize(&pack, temp.path())?;
+            gents::pack::materialize::materialize(pack.archive(), temp.path())?;
             let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
             if authored.is_none() {
                 (authored, report) =
@@ -787,67 +776,11 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_materialization_publishes_complete_assets() {
-        let home = tempfile::tempdir().unwrap();
-        let source = test_support::fixture_pack_source("assets_fixture", home.path());
-        let root = tempfile::tempdir().unwrap();
-        let barrier = std::sync::Barrier::new(8);
-        std::thread::scope(|scope| {
-            for _ in 0..8 {
-                scope.spawn(|| {
-                    barrier.wait();
-                    materialize(&source, root.path()).unwrap();
-                });
-            }
-        });
-        for path in std::iter::once("manifest.json")
-            .chain(source.manifest().metadata.assets.iter().map(String::as_str))
-        {
-            assert_eq!(
-                std::fs::read(root.path().join(path)).unwrap(),
-                source.asset(path).unwrap()
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn materialized_assets_are_readable_like_distribution_files() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let home = tempfile::tempdir().unwrap();
-        let source = test_support::fixture_pack_source("assets_fixture", home.path());
-        let root = tempfile::tempdir().unwrap();
-        materialize(&source, root.path()).unwrap();
-        for path in std::iter::once("manifest.json")
-            .chain(source.manifest().metadata.assets.iter().map(String::as_str))
-        {
-            assert_eq!(
-                std::fs::metadata(root.path().join(path))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o644,
-                "{path}"
-            );
-        }
-
-        let cached = root.path().join("README.md");
-        std::fs::set_permissions(&cached, std::fs::Permissions::from_mode(0o600)).unwrap();
-        materialize(&source, root.path()).unwrap();
-        assert_eq!(
-            std::fs::metadata(cached).unwrap().permissions().mode() & 0o777,
-            0o644
-        );
-    }
-
-    #[test]
     fn scenario_cache_lease_excludes_pruning() {
         let home = tempfile::tempdir().unwrap();
         let pack = test_support::fixture_pack_source("documents_fixture", home.path());
         let (root, lease) = materialize_cached_pack(home.path(), &pack).unwrap();
-        let exclusive = cache::cache_lock(root.parent().unwrap()).unwrap();
+        let exclusive = gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap();
         assert!(exclusive.try_lock().is_err());
         drop(lease);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -863,34 +796,11 @@ mod tests {
     }
 
     #[test]
-    fn abandoned_staging_file_does_not_poison_install_or_allow_overwrite() {
-        use std::io::Write;
-        let home = tempfile::tempdir().unwrap();
-        let pack = test_support::fixture_pack_source("assets_fixture", home.path());
-        let root = tempfile::tempdir().unwrap();
-        let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
-        staged.write_all(b"partial").unwrap();
-        let (_file, abandoned) = staged.keep().unwrap();
-        materialize(&pack, root.path()).unwrap();
-        materialize(&pack, root.path()).unwrap();
-        assert_eq!(std::fs::read(abandoned).unwrap(), b"partial");
-        std::fs::write(root.path().join("README.md"), "operator edit").unwrap();
-        assert!(materialize(&pack, root.path())
-            .unwrap_err()
-            .to_string()
-            .contains("installed asset was modified"));
-        assert_eq!(
-            std::fs::read_to_string(root.path().join("README.md")).unwrap(),
-            "operator edit"
-        );
-    }
-
-    #[test]
     fn a_document_pack_materializes_a_valid_configuration() {
         let home = tempfile::tempdir().unwrap();
         let pack = test_support::fixture_pack_source("documents_fixture", home.path());
         let root = tempfile::tempdir().unwrap();
-        materialize(&pack, root.path()).unwrap();
+        gents::pack::materialize::materialize(pack.archive(), root.path()).unwrap();
         let config = gents::pack::load_pack_config(
             pack.manifest(),
             &gents::pack::PackInstallOptions {
