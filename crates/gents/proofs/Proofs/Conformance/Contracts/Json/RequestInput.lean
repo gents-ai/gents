@@ -51,12 +51,33 @@ private def workspaceJson (w : RequestWorkspace) : String :=
   ",\"workspace_authority\":" ++ optionalString (w.authority.map BindingAuthority.toDefraDB) ++
   ",\"workspace_seal_hash\":" ++ optionalString w.sealHash ++ "}"
 
+private def capturedPositionJson (position : CapturedPosition) : String :=
+  "{\"line\":" ++ toString position.line ++ ",\"character\":" ++ toString position.character ++ "}"
+
+private def capturedRangeJson : Option CapturedRange → String
+  | none => "null"
+  | some range => "{\"start\":" ++ capturedPositionJson range.start ++
+      ",\"end\":" ++ capturedPositionJson range.end ++ "}"
+
+private def capturedContextJson (context : CapturedContext) : String :=
+  "{\"kind\":" ++ jsonString context.kind.toWireName ++
+  ",\"source\":" ++ jsonString context.source.toWireName ++
+  ",\"capturedAt\":" ++ jsonString context.capturedAt ++
+  ",\"uri\":" ++ optionalString context.uri ++
+  ",\"terminalName\":" ++ optionalString context.terminalName ++
+  ",\"workspaceUri\":" ++ optionalString context.workspaceUri ++
+  ",\"version\":" ++ jsonOptionalNat context.version ++
+  ",\"unsaved\":" ++ boolString context.unsaved ++
+  ",\"range\":" ++ capturedRangeJson context.range ++
+  ",\"content\":" ++ jsonString context.content ++ "}"
+
 private def requestInputJson (input : RequestInput) : String :=
   "{\"selected_skill_ids\":" ++ jsonStringArray input.selectedSkillIds ++
   ",\"cwd\":" ++ optionalString input.cwd ++
   ",\"initial_title\":" ++ titleJson input.initialTitle ++
   ",\"queue\":" ++ queueJson input.queue ++
-  ",\"goal_continuation\":" ++ goalJson input.goalContinuation ++ "}"
+  ",\"goal_continuation\":" ++ goalJson input.goalContinuation ++
+  ",\"captured_context\":" ++ jsonArray (input.capturedContext.map capturedContextJson) ++ "}"
 
 private def requestInputCaseJson (c : RequestInputCase) : String :=
   let queue := c.input.queue.getD { source := .backgroundCompletion, policy := .coalesce }
@@ -84,6 +105,7 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
       jsonArray (field.map (fun byte => toString byte.toNat)))) ++
   ",\"canonical_input_bytes\":" ++
     jsonArray ((serializeWireFields (requestInputFields c.input)).map (fun byte => toString byte.toNat)) ++
+  ",\"expected_captures_well_formed\":" ++ boolString (c.input.capturedContext.all CapturedContext.wellFormed) ++
   ",\"expected_accepted\":" ++ boolString c.accepted ++
   ",\"expected_title\":" ++ titleJson (materializedTitle c.sessionExists c.currentTitle c.input) ++ "}"
 
