@@ -929,6 +929,27 @@ async fn labeled_session_rows_in_txn(
     })
 }
 
+/// The provenance a request records on the session its claim or refusal
+/// creates: its calling request and, when it names a calling tool call, the
+/// request itself as the session's opening request (Lean
+/// `AgentSession.Provenance.openingRequestDoc`, read by
+/// `DurableLineage.openingRequest`). `ensure_session_in_txn` keeps an
+/// existing session's provenance, so only the request that creates the
+/// session writes it.
+pub(crate) fn created_session_provenance(
+    request: &AgentRequest,
+) -> Option<gents_protocol::session::SessionProvenance> {
+    let parent = request.caused_by_parent_request_doc_id.clone()?;
+    Some(gents_protocol::session::SessionProvenance {
+        parent_request_doc_id: Some(parent),
+        opening_request_doc_id: request
+            .caused_by_parent_tool_call_doc_id
+            .as_ref()
+            .map(|_| request.doc_id.clone()),
+        ..Default::default()
+    })
+}
+
 pub(super) async fn apply_request_session_projection(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
@@ -970,13 +991,7 @@ pub(super) async fn apply_request_session_projection(
         &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
-        request
-            .caused_by_parent_request_doc_id
-            .as_ref()
-            .map(|parent| gents_protocol::session::SessionProvenance {
-                parent_request_doc_id: Some(parent.clone()),
-                ..Default::default()
-            }),
+        created_session_provenance(request),
         now,
     )
     .await?;
@@ -1060,13 +1075,7 @@ async fn project_refused_request_onto_session_in_txn(
         &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
-        request
-            .caused_by_parent_request_doc_id
-            .as_ref()
-            .map(|parent| gents_protocol::session::SessionProvenance {
-                parent_request_doc_id: Some(parent.clone()),
-                ..Default::default()
-            }),
+        created_session_provenance(request),
         now,
     )
     .await?;

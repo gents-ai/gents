@@ -15,6 +15,7 @@ def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
 private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
   [("task_id", toJson p.task), ("graph_run_id", toJson p.graphRun),
    ("parent_request_doc_id", toJson p.parentRequestDoc),
+   ("opening_request_doc_id", toJson p.openingRequestDoc),
    ("fork", p.fork.map (fun f => Json.mkObj
      [("source_session_id", toJson f.sourceSession), ("at_user_turn", toJson f.atUserTurn)])
      |>.getD Json.null)]

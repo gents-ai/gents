@@ -1716,6 +1716,7 @@ mod tests {
             Some("did:test:grok-shim"),
             "test-child",
             parent_request_doc_id,
+            None,
         )
         .await;
         let mutation = format!(

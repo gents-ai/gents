@@ -257,7 +257,7 @@ async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn create_request(
+pub async fn create_request(
     core: &Arc<ClientCore>,
     request_id: &str,
     node_did: &str,
@@ -316,7 +316,7 @@ async fn create_session(
     .await;
 }
 
-async fn create_tool_call(core: &Arc<ClientCore>, call: &str, tool: &str) -> String {
+pub async fn create_tool_call(core: &Arc<ClientCore>, call: &str, tool: &str) -> String {
     created_doc_id(
         core,
         &format!(

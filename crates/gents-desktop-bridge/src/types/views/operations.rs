@@ -66,6 +66,7 @@ pub struct BackgroundedToolView {
     pub request_id: String,
     pub tool_call_id: String,
     pub tool_name: String,
+    pub starts_session: bool,
     pub lifecycle_state: Option<String>,
     pub status: Option<String>,
     pub started_at: Option<String>,

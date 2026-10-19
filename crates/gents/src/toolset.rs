@@ -661,7 +661,7 @@ pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
         .build_native_tools()
 }
 
-pub(crate) fn is_session_message_tool(tool_name: &str) -> bool {
+pub fn is_session_message_tool(tool_name: &str) -> bool {
     tool_name == AGENT_NEW_TOOL_NAME || tool_name == AGENT_MESSAGE_TOOL_NAME
 }
 

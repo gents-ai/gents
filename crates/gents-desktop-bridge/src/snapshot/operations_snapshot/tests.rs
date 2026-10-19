@@ -275,3 +275,34 @@ fn wait_status_future_started_at_yields_no_age() {
     );
     assert_eq!(projection.running_elapsed_seconds, None);
 }
+
+#[test]
+fn backgrounded_tools_flag_session_starting_calls() {
+    let row = |tool_call_id: &str, tool_name: &str| ToolCallRow {
+        request_id: "req_a".into(),
+        tool_call_id: tool_call_id.into(),
+        tool_name: tool_name.into(),
+        lifecycle_state: Some("running".into()),
+        status: None,
+        started_at: Some("2026-05-20T12:00:00Z".into()),
+        completed_at: None,
+        deadline_at: None,
+        await_mode: Some("background".into()),
+        stuck_since: None,
+    };
+    let rows = vec![
+        row("tc_new", "agent_new"),
+        row("tc_msg", "agent_message"),
+        row("tc_grep", "grep"),
+    ];
+
+    let projected = project_backgrounded_tools(&rows, &liveness_with(Vec::new(), Vec::new()));
+    let starts: Vec<(&str, bool)> = projected
+        .iter()
+        .map(|t| (t.tool_call_id.as_str(), t.starts_session))
+        .collect();
+    assert_eq!(
+        starts,
+        vec![("tc_new", true), ("tc_msg", true), ("tc_grep", false)]
+    );
+}

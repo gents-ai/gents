@@ -177,3 +177,30 @@ fn caused_thread(session: CausedSession, model: Option<String>) -> CausedThread 
 fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_call_that_started_two_sessions_projects_two_threads() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let state =
+            super::super::turn_projection::tests::notification_test_state(temp.path()).await;
+        crate::caused_sessions::fixtures::seed_one_call_two_sessions(
+            &state.node,
+            "did:test:notification",
+            "parent",
+        )
+        .await;
+        let mut threads = load_caused_threads_for_root_ids(&state, &["parent".to_owned()])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|thread| thread.session_id)
+            .collect::<Vec<_>>();
+        threads.sort();
+        assert_eq!(threads, ["child-a", "child-b"]);
+        state.node.shutdown().await;
+    }
+}

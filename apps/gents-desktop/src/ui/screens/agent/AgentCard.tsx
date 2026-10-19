@@ -21,9 +21,7 @@ function pulse(
 ) {
   const live = sessions.filter((s) => isLive(s.turnState)).length;
   const tools = ops?.backgroundedTools ?? [];
-  const worker = (t: (typeof tools)[number]) =>
-    t.toolName === "agent_new" || t.toolName === "agent_message";
-  const workers = tools.filter(worker).length;
+  const workers = tools.filter((t) => t.startsSession).length;
   const jobs = tools.length - workers;
   const overdue = tools.filter((t) => t.deadlineExpired).length;
   const parts = [

@@ -1471,6 +1471,19 @@ describe("configuration panels", () => {
     expect(view.nav().canBack).toBe(true);
   });
 
+  it("counts session-starting background rows apart from background jobs", async () => {
+    const { api, app } = harness();
+    api.fetchOperationsSnapshot.mockResolvedValue({
+      backgroundedTools: [
+        { toolCallId: "call-session", toolName: "agent_new", startsSession: true },
+        { toolCallId: "call-job-a", toolName: "shell", startsSession: false },
+        { toolCallId: "call-job-b", toolName: "shell", startsSession: false },
+      ],
+    });
+    renderIn(app, <AgentPanel deployment={deployment} />);
+    expect(await screen.findByText(/1 session call · 2 background jobs/)).toBeVisible();
+  });
+
   it("requires the node identity fields and saves editable node tags", async () => {
     const { api, app } = harness();
     renderIn(app, <AgentPanel deployment={deployment} />);
