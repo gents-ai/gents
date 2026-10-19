@@ -95,8 +95,71 @@ impl ClientHost {
                     .await.map_err(|_| BridgeError::untyped("Authentication save could not be confirmed. Reopen Accounts before trying again."))?;
                 encode(())
             }
+            ClientCommand::RuntimeIsLocal { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                encode(
+                    self.core
+                        .peer_records()
+                        .await
+                        .iter()
+                        .any(|peer| peer.node_did == node_did && peer.is_managed_runtime()),
+                )
+            }
             ClientCommand::InferenceCatalog {} => {
                 encode(gents::inference_setup::inference_setup_catalog())
+            }
+            ClientCommand::InferenceSetupState { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                self.core
+                    .operator_access(&node_did)
+                    .map_err(backend_error)?;
+                self.core
+                    .refresh_node(&node_did)
+                    .await
+                    .map_err(backend_error)?;
+                let snapshot = crate::snapshot::build_runtime_snapshot(self.core.as_ref()).await;
+                if !snapshot
+                    .operator_config_authoritative_node_dids
+                    .as_ref()
+                    .is_some_and(|nodes| nodes.contains(&node_did))
+                {
+                    return Err(BridgeError::new(BridgeErrorCode::EndpointUnreachable,
+                        "Runtime configuration is not available. Check the runtime connection and try again."));
+                }
+                let deployment = snapshot
+                    .deployments
+                    .into_iter()
+                    .find(|node| node.node_did == node_did)
+                    .ok_or_else(|| {
+                        BridgeError::new(
+                            BridgeErrorCode::InvalidArgument,
+                            "The configured runtime is no longer available.",
+                        )
+                    })?;
+                encode(crate::inference_setup::InferenceSetupState::from(
+                    deployment,
+                ))
+            }
+            ClientCommand::InferenceModelsDiscover { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                encode(
+                    crate::inference_setup::discover_inference_models_for_core(
+                        request,
+                        Some(&self.core),
+                    )
+                    .await?,
+                )
+            }
+            ClientCommand::InferenceModelRecommendation { request } => encode(
+                crate::inference_setup::inference_model_recommendation(request)?,
+            ),
+            ClientCommand::ConfigApply { request } => {
+                self.require_configured_runtime(&request.document.node.node_did)
+                    .await?;
+                crate::commands::apply_config_components(&self.core, request)
+                    .await
+                    .map_err(backend_error)?;
+                encode(())
             }
             ClientCommand::AccountsList { request } => {
                 self.require_configured_runtime(&request.node_did).await?;
@@ -355,10 +418,35 @@ impl ClientHost {
                         "use an absolute local runtime home path",
                     ));
                 }
-                self.core
+                let peer = self
+                    .core
                     .refresh_local_standard_peer(&home, "Local runtime")
                     .await
                     .map_err(backend_error)?;
+                let target = crate::local_pairing::ManagedPairingTarget {
+                    node_name: peer.label,
+                    node_did: peer.node_did,
+                    graphql: peer.graphql.ok_or_else(|| {
+                        BridgeError::untyped(
+                            "The local runtime did not provide a configuration endpoint.",
+                        )
+                    })?,
+                };
+                crate::local_pairing::retry_managed_pairing(
+                    &cancel,
+                    crate::local_pairing::MANAGED_PAIRING_ATTEMPTS,
+                    crate::local_pairing::MANAGED_PAIRING_RETRY_DELAY,
+                    || {
+                        crate::local_pairing::ensure_managed_runtime_pairing(
+                            Arc::clone(&self.core),
+                            &home,
+                            &target,
+                            &cancel,
+                        )
+                    },
+                )
+                .await
+                .map_err(|error| BridgeError::untyped(error.to_string()))?;
                 encode(())
             }
             ClientCommand::ApprovalSubscribe { node_did, token } => {

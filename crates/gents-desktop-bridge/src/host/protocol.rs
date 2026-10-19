@@ -35,8 +35,30 @@ pub enum ClientCommand {
     BackendAuthenticationSave {
         request: crate::accounts::BackendAuthenticationSaveRequest,
     },
+    #[serde(rename = "client_runtime_is_local")]
+    RuntimeIsLocal {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
     #[serde(rename = "client_inference_setup_catalog")]
     InferenceCatalog {},
+    #[serde(rename = "client_inference_setup_state")]
+    InferenceSetupState {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
+    #[serde(rename = "client_inference_models_discover")]
+    InferenceModelsDiscover {
+        request: crate::inference_setup::InferenceDiscoveryRequest,
+    },
+    #[serde(rename = "client_inference_model_recommendation")]
+    InferenceModelRecommendation {
+        request: crate::inference_setup::InferenceRecommendationRequest,
+    },
+    #[serde(rename = "client_config_apply")]
+    ConfigApply {
+        request: crate::types::ConfigComponentsApplyRequest,
+    },
     #[serde(rename = "client_provider_accounts_list")]
     AccountsList {
         request: crate::accounts::ProviderAccountsRequest,
@@ -188,7 +210,12 @@ impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
         "client_backend_authentication",
         "client_backend_authentication_save",
+        "client_runtime_is_local",
         "client_inference_setup_catalog",
+        "client_inference_setup_state",
+        "client_inference_models_discover",
+        "client_inference_model_recommendation",
+        "client_config_apply",
         "client_provider_accounts_list",
         "client_provider_account_sign_in",
         "client_provider_account_disconnect",
@@ -229,6 +256,10 @@ impl ClientCommand {
             Self::Snapshot {}
                 | Self::BackendAuthentication { .. }
                 | Self::InferenceCatalog {}
+                | Self::InferenceSetupState { .. }
+                | Self::RuntimeIsLocal { .. }
+                | Self::InferenceModelsDiscover { .. }
+                | Self::InferenceModelRecommendation { .. }
                 | Self::AccountsList { .. }
                 | Self::ConfigCatalog { .. }
                 | Self::ConfigRead { .. }

@@ -148,6 +148,7 @@ async fn read_capped<R>(
                     match tokio::time::timeout(remaining, reader.read(&mut buf)).await {
                         Ok(result) => result,
                         Err(_) => {
+                            post_exit_read_time = POST_EXIT_DRAIN_READ_BUDGET;
                             match tokio::task::unconstrained(reader.read(&mut buf)).now_or_never() {
                                 Some(result) => result,
                                 None => {

@@ -6,6 +6,7 @@ use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
+use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
     BackendUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
@@ -151,6 +152,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
     let mut paths = vec![
         source_root.join("contract.rs"),
         source_root.join("host/protocol.rs"),
+        source_root.join("inference_setup.rs"),
         source_root.join("../../gents-desktop-core/src/error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
@@ -250,6 +252,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
         InferenceDiscoveryRequest,
+        InferenceSetupState,
         InferenceRecommendationRequest,
         InferenceBackendRecommendationRequest,
         CodexLoginRequest,
