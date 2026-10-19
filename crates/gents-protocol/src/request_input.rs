@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::session::SessionTitle;
 
+mod captured_context;
+pub use captured_context::*;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestInput {
@@ -30,6 +33,13 @@ pub struct RequestInput {
     /// Goal/parent identities remain in the existing signed request lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_continuation: Option<GoalContinuationInput>,
+    /// Submitted snapshots, distinct from authored prose and configuration grants.
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub captured_context: Vec<CapturedContext>,
 }
 
 impl RequestInput {
