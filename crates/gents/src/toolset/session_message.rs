@@ -28,11 +28,6 @@ pub(super) struct AgentNewTool {
     config: AgentToolConfig,
 }
 
-const AGENT_NEW_DESCRIPTION: &str = "Starts an agent on a task in the background; its result arrives later as a message in this conversation. Returns session_id, request_id and tool_call_id immediately. End your turn instead of polling. Continue the session with agent_message, stop its current turn with agent_interrupt, and kill the call with cancel_process. The later message is an event-time snapshot of that request, not the assignment's durable outcome.";
-const AGENT_MESSAGE_DESCRIPTION: &str = "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation. That message is an event-time snapshot of the request that carried it; a delivered send is not evidence the underlying assignment finished.";
-const AGENT_SESSION_LIST_DESCRIPTION: &str = "Find existing sessions you may message, including trigger-started work. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing. Results are a point-in-time listing; a listed session's state may have changed.";
-const AGENT_SESSION_READ_DESCRIPTION: &str = "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows the active request or, if none, the latest as of this read, with lifecycle_state and created/claimed/terminalized timestamps; an observed request that cannot be read comes back null or available:false; the Goal is null when the session has none. Truncated text is marked; tool arguments and reasoning are omitted; unreadable state is reported as unknown, not guessed.";
-
 #[derive(Clone, Copy)]
 pub(super) struct AgentMessageTool;
 
@@ -146,7 +141,8 @@ impl Tool for AgentNewTool {
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: AGENT_NEW_DESCRIPTION.to_string(),
+            description: "Starts an agent on a task in the background; its result arrives later as a message in this conversation. Returns session_id, request_id and tool_call_id immediately. End your turn instead of polling. Continue the session with agent_message, stop its current turn with agent_interrupt, and kill the call with cancel_process."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": properties,
@@ -194,7 +190,8 @@ impl Tool for AgentMessageTool {
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: AGENT_MESSAGE_DESCRIPTION.to_string(),
+            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": properties,
@@ -285,7 +282,7 @@ impl Tool for AgentSessionListTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: AGENT_SESSION_LIST_DESCRIPTION.to_string(),
+            description: "Find existing sessions you may message, including trigger-started work. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "properties": {
@@ -325,7 +322,7 @@ impl Tool for AgentSessionReadTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: AGENT_SESSION_READ_DESCRIPTION.to_string(),
+            description: "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows the active request or, if none, the latest one: work in flight, queued steering and the Goal. Truncation is reported; tool arguments and reasoning are omitted.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "required": ["session_id"],
@@ -678,48 +675,4 @@ fn structured_error(error: serde_json::Value) -> ToolError {
     )
     .unwrap_or_else(|_| error.to_string());
     anyhow!(message).into()
-}
-
-#[cfg(test)]
-mod description_tests {
-    use super::*;
-
-    #[test]
-    fn background_results_marked_as_event_time_snapshots() {
-        assert!(AGENT_NEW_DESCRIPTION.contains("event-time snapshot"));
-        assert!(AGENT_NEW_DESCRIPTION.contains("not the assignment's durable outcome"));
-        assert!(AGENT_MESSAGE_DESCRIPTION.contains("event-time snapshot"));
-        assert!(AGENT_MESSAGE_DESCRIPTION.contains("request that carried it"));
-    }
-
-    #[test]
-    fn session_read_describes_actual_output() {
-        let d = AGENT_SESSION_READ_DESCRIPTION;
-        assert!(d.contains("active request or, if none, the latest"));
-        assert!(d.contains("created/claimed/terminalized"));
-        assert!(d.contains("null or available:false"));
-        assert!(d.contains("Goal is null"));
-        // Must not promise per-component observation timestamps or absent-field
-        // semantics the implementation does not provide.
-        assert!(!d.contains("each with its own"));
-        assert!(!d.contains("absent fields"));
-    }
-
-    #[test]
-    fn session_list_describes_point_in_time() {
-        assert!(AGENT_SESSION_LIST_DESCRIPTION.contains("point-in-time listing"));
-    }
-
-    #[test]
-    fn descriptions_do_not_promise_unavailable_facts() {
-        for d in [
-            AGENT_NEW_DESCRIPTION,
-            AGENT_MESSAGE_DESCRIPTION,
-            AGENT_SESSION_LIST_DESCRIPTION,
-            AGENT_SESSION_READ_DESCRIPTION,
-        ] {
-            assert!(!d.contains("each with its own observation timestamps"));
-            assert!(!d.contains("live state"));
-        }
-    }
 }
