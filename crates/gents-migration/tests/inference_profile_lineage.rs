@@ -289,15 +289,15 @@ async fn fresh_store_baseline_is_rc0_then_step_applies() {
 
 #[tokio::test]
 async fn crash_between_patch_and_set_active_recovers() {
-    // Upstream evidence (defradb store_new_version): a plain patch_collection
-    // defaults new_schema.is_active = true, so a raw patch leaves NEW ACTIVE.
-    // The real crash window the engine defends against is the one AFTER a
-    // patch created NEW-inactive-with-OLD-active, which only occurs when
-    // IsActive=false is explicit (store.rs:293-296 keeps old active). This
-    // test reproduces that shape by patching with explicit IsActive=false,
-    // then proves ensure_migrations detects dest (NEW exists, inactive) with
-    // active OLD, verifies state, and activates NEW (engine.rs 315-364)
-    // without re-patching or rolling backward.
+    // Upstream evidence (defradb): version_id is content-addressed from the
+    // SDL ONLY; IsActive is a column on the version row, never part of the
+    // CID (apply.rs:69 tracks explicit IsActive; mod.rs:214-228 routes
+    // fields+IsActive patches through new-version creation with
+    // is_active=false preserved). Therefore this test also pins the CID
+    // logic exactly: NEW created inactive still carries the CANONICAL
+    // new-root CID, and the step must recognize it as its destination
+    // (no VersionPinMismatch, no duplicate version) and activate it
+    // (engine.rs 315-364).
     let node = fresh_node().await;
     node.add_schema(INFERENCE_PROFILE_RC0_SDL)
         .await
@@ -309,6 +309,8 @@ async fn crash_between_patch_and_set_active_recovers() {
         )
         .await
         .expect("crash-window manual patch (inactive NEW)");
+    // Exact pin check: the inactive NEW version has the SAME content CID as
+    // the step's pin — IsActive does not perturb the version_id.
     assert_eq!(patched.version_id, NEW_ROOT);
     let patched_version = node
         .get_collection_by_version_id(NEW_ROOT)
