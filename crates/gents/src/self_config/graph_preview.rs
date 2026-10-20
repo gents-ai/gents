@@ -234,7 +234,7 @@ mod tests {
     }
 
     async fn node() -> Arc<defra_node::EmbeddedNode> {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         node
     }

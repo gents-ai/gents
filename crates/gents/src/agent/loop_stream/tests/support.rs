@@ -671,13 +671,13 @@ async fn owned_test_hook_with_identity_policy(
         .map_or("did:test:test", |identity| identity.did());
     let requester_did = identity.as_ref().map(|_| node_did);
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
+    let builder = match identity.as_ref() {
+        Some(identity) => {
+            defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+        }
+        None => crate::test_support::node_builder(),
+    };
+    let node = Arc::new(builder.data_path(&data_path).build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();

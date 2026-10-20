@@ -64,7 +64,7 @@ impl crate::identity::NodeIdentity for LeaseTestIdentity {
 async fn test_node() -> (Arc<EmbeddedNode>, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await

@@ -1170,17 +1170,18 @@ impl TitleFixture {
         parent_limit: Option<u64>,
     ) -> Self {
         let directory = tempfile::tempdir().unwrap();
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
+            KeyIdentity::load_or_create(directory.path().join("principal.key"), None).unwrap(),
+        );
         let node = Arc::new(
             EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
                 .data_path(directory.path())
                 .build()
                 .await
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(directory.path().join("principal.key"), None).unwrap(),
-        );
         let principal = Arc::new(RuntimeNode {
             node_did: identity.did().to_owned(),
             identity: identity.clone(),

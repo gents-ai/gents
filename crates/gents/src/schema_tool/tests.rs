@@ -99,7 +99,7 @@ async fn apply(tool: &SchemaTool, mut value: Value) -> Value {
     call(tool, preview["next_call"]["args"].clone()).await
 }
 async fn node() -> Arc<EmbeddedNode> {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node
 }

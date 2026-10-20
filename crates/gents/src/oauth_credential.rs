@@ -4571,7 +4571,7 @@ pub(crate) mod test_support {
 
     pub(crate) async fn test_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .build()
                 .await
                 .expect("embedded node"),
