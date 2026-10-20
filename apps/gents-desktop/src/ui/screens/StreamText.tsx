@@ -16,7 +16,14 @@ function smoothingOn() {
   }
 }
 
-export function StreamText({ text }: { text: string }) {
+export function StreamText({
+  text,
+  directives = false,
+}: {
+  text: string;
+  /** as Markdown's: the caller says whether this is the model's own reply */
+  directives?: boolean;
+}) {
   const [enabled] = useState(smoothingOn);
   const [initial] = useState(() =>
     initialReveal(enabled ? 0 : text.length, text.length),
@@ -52,5 +59,8 @@ export function StreamText({ text }: { text: string }) {
 
   const shown = !enabled || visible >= text.length ? text : text.slice(0, visible);
   const display = shown.length < text.length ? closeOpenFence(shown) : shown;
-  return useMemo(() => (display ? <Markdown>{display}</Markdown> : null), [display]);
+  return useMemo(
+    () => (display ? <Markdown directives={directives}>{display}</Markdown> : null),
+    [display, directives],
+  );
 }

@@ -99,6 +99,14 @@ import type {
   PluginApprovalDecision,
   PluginApprovalRequest,
 } from "../types/hostAccess.js";
+import type {
+  PackPluginCallRequest,
+  UxDataCallRequest,
+  UxDataCallResult,
+  UxDataSurfacesRequest,
+  UxPluginListing,
+  UxPluginSource,
+} from "../types/uxPlugins.js";
 
 export type ManagedServerAuthorityInput = {
   toolCeiling: ManagedServerToolCeiling;
@@ -393,6 +401,15 @@ export type DesktopApiAdapter = {
     id: string,
     decision: PluginApprovalDecision,
   ) => Promise<void>;
+  listUxPlugins: () => Promise<{ plugins: UxPluginListing[] }>;
+  readUxPluginSource: (id: string) => Promise<UxPluginSource>;
+  callPackPlugin: (
+    request: PackPluginCallRequest,
+  ) => Promise<{ output: unknown }>;
+  callUxData: (request: UxDataCallRequest) => Promise<UxDataCallResult>;
+  listUxDataSurfaces: (
+    request: UxDataSurfacesRequest,
+  ) => Promise<{ surfaces: unknown[] }>;
 };
 
 export type PackCommand =
@@ -417,6 +434,13 @@ export type HostAccessCommand =
   | "unsubscribePluginApprovals"
   | "listPendingPluginApprovals"
   | "decidePluginApproval";
+
+export type UxPluginCommand =
+  | "listUxPlugins"
+  | "readUxPluginSource"
+  | "callPackPlugin"
+  | "callUxData"
+  | "listUxDataSurfaces";
 
 export type {
   HomeResetDisposition,

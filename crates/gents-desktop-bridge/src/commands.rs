@@ -23,7 +23,7 @@ mod tool_service;
 mod util;
 
 pub use chat::{
-    edit_pending_queue, fork_session_before_message, rename_session, request_output,
+    edit_pending_queue, fork_session_before_message, rename_session, request_output, retry_request,
     send_chat_message, steer_pending_message,
 };
 #[cfg_attr(test, allow(unused_imports))]

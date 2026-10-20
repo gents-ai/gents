@@ -1,11 +1,12 @@
 import type { NodeView } from "../../../hooks/fleetStore";
-import type { ComponentType } from "react";
+import { useMemo, type ComponentType, type ReactNode } from "react";
 import {
   FolderOpen,
   ListChecks,
   Package,
   Play,
   Plug,
+  Puzzle,
   Radio,
   Sparkles,
   Timer,
@@ -14,6 +15,9 @@ import {
   Wrench,
   Zap,
 } from "lucide-react";
+import { ContribBoundary, ContribRender } from "@/contrib/react/boundary";
+import { useContributions } from "@/contrib/react/use-contributions";
+import { AGENT_SECTIONS_AREA, type AgentSectionData } from "@/contrib/types";
 import { AgentPanel } from "./AgentPanel";
 import { AllowedFoldersPanel } from "./AllowedFoldersPanel";
 import { AgentsPanel } from "./BehaviorsPanel";
@@ -28,6 +32,7 @@ import { TasksPanel } from "./TasksPanel";
 import { ToolServicesPanel } from "./ToolServicesPanel";
 import { ToolsPanel } from "./ToolsPanel";
 import { TriggersPanel } from "./TriggersPanel";
+import { UxPluginsPanel } from "./UxPluginsPanel";
 
 export type SectionPanelProps = {
   deployment: NodeView;
@@ -151,4 +156,71 @@ export const SECTIONS: AgentSection[] = [
     Panel: AllowedFoldersPanel,
   },
   { group: "Packs", id: "packs", label: "Packs", icon: Package, Panel: PacksPanel },
+  {
+    group: "Packs",
+    id: "ux-plugins",
+    label: "UX Plugins",
+    icon: Puzzle,
+    Panel: UxPluginsPanel,
+  },
 ];
+
+/* A section a UX plugin contributes through the `agent.sections` area: a
+   listed tab in the group it names, drawing the page it carries. Its route
+   id is the registry's namespaced contribution id (`<plugin>:<local>`),
+   already unique and already a legal route segment. The page is mounted
+   behind a boundary, so a plugin's throw stays on its own tab. */
+function isSectionData(data: unknown): data is AgentSectionData {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    typeof (data as AgentSectionData).group === "string" &&
+    typeof (data as AgentSectionData).label === "string" &&
+    typeof (data as AgentSectionData).render === "function"
+  );
+}
+
+/* the section id becomes a route segment; one that could not round-trip
+   through the route is left out rather than left unreachable */
+const isRouteSegment = (id: string) => !/[\s/?#]/.test(id);
+
+/* a plugin's icon is a node, not a component; the sidebar wants a component */
+const iconOf = (node: ReactNode): ComponentType<{ className?: string }> =>
+  node === undefined || node === null ? Puzzle : () => <>{node}</>;
+
+function contributedSection(id: string, data: AgentSectionData): AgentSection {
+  return {
+    group: data.group,
+    id,
+    label: data.label,
+    icon: iconOf(data.icon),
+    Panel: ({ deployment, item }) => (
+      <ContribBoundary id={id} variant="pane">
+        {/* the plugin's own render function, mounted once per registration:
+            a throw is the boundary's to catch, its hooks are its own, and the
+            screen's re-renders reach it as new props */}
+        <ContribRender
+          render={data.render}
+          props={{ nodeDid: deployment.nodeDid, item }}
+        />
+      </ContribBoundary>
+    ),
+  };
+}
+
+/** The app's sections and every contributed one, in sidebar order;
+    re-renders when a plugin registers or unregisters a section. */
+export function useAgentSections(): readonly AgentSection[] {
+  const contributed = useContributions(AGENT_SECTIONS_AREA);
+  return useMemo(
+    () => [
+      ...SECTIONS,
+      ...contributed.flatMap((c) =>
+        isSectionData(c.data) && isRouteSegment(c.id)
+          ? [contributedSection(c.id, c.data)]
+          : [],
+      ),
+    ],
+    [contributed],
+  );
+}

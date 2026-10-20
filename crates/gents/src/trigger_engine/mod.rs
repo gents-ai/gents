@@ -685,6 +685,15 @@ impl TriggerEngine {
                 return result;
             }
         };
+        // Schedule triggers label their rendered prompt as saved
+        // configuration; event and manual prompts keep their existing bytes.
+        let rendered = if matches!(intent.trigger_kind, TriggerKind::Schedule) {
+            format!(
+                "Scheduled task instructions (rendered from saved configuration):\n\n{rendered}"
+            )
+        } else {
+            rendered
+        };
         if let Some(delivery) = &mut delivery {
             delivery.receipt.goal_objective = rendered_goal_objective.clone();
         }

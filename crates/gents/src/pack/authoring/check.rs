@@ -42,6 +42,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     if !report.problems.is_empty() {
         return report;
     }
+    // Before the unbuilt early return: a scaffolded pack is linted on its
+    // first `check`, not only once its .afb plugins have been built.
+    check_ux_plugins(dir, &manifest, &mut report.problems);
     if !unbuilt.is_empty() {
         if let Err(error) = crate::pack::validate_manifest(&manifest.name, &manifest) {
             report.problems.push(format!("{error:#}"));
@@ -275,6 +278,27 @@ pub fn write_topology(dir: &Path) -> Result<()> {
     std::fs::write(&readme, updated).with_context(|| format!("writing {}", readme.display()))
 }
 
+/// The static lint every file-produced UX plugin must pass: what the
+/// webview would refuse at load, reported here at the pack instead.
+fn check_ux_plugins(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) {
+    if manifest.metadata.ux.is_empty() {
+        return;
+    }
+    match crate::ux_plugin::lint_pack_dir(dir, &manifest.metadata.ux) {
+        Ok(findings) => {
+            for (name, findings) in findings {
+                if !findings.is_empty() {
+                    problems.push(format!(
+                        "ux plugin {name:?} is refused by the static lint:\n{}",
+                        crate::ux_plugin::lint::describe(&findings)
+                    ));
+                }
+            }
+        }
+        Err(error) => problems.push(format!("{error:#}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +312,7 @@ mod tests {
                 namespace: "acme".into(),
                 template: Some(super::super::template::Template::Minimal),
                 language: None,
+                ux: false,
             },
         )
         .unwrap();
@@ -302,6 +327,7 @@ mod tests {
                 namespace: "acme".into(),
                 template: Some(super::super::template::Template::Graph),
                 language: None,
+                ux: false,
             },
         )
         .unwrap();

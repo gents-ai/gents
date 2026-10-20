@@ -1255,6 +1255,18 @@
           "markdownDescription": "Denies the desktop_plugin_approvals_pending command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_plugin_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-plugin-call",
+          "markdownDescription": "Enables the desktop_plugin_call command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_plugin_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-plugin-call",
+          "markdownDescription": "Denies the desktop_plugin_call command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_probe_inference_endpoint command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-probe-inference-endpoint",
@@ -1675,6 +1687,54 @@
           "markdownDescription": "Denies the desktop_trigger_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_ux_data_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ux-data-call",
+          "markdownDescription": "Enables the desktop_ux_data_call command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ux_data_call command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ux-data-call",
+          "markdownDescription": "Denies the desktop_ux_data_call command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_ux_data_surfaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ux-data-surfaces",
+          "markdownDescription": "Enables the desktop_ux_data_surfaces command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ux_data_surfaces command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ux-data-surfaces",
+          "markdownDescription": "Denies the desktop_ux_data_surfaces command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_ux_plugin_source command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ux-plugin-source",
+          "markdownDescription": "Enables the desktop_ux_plugin_source command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ux_plugin_source command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ux-plugin-source",
+          "markdownDescription": "Denies the desktop_ux_plugin_source command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_ux_plugins_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-ux-plugins-list",
+          "markdownDescription": "Enables the desktop_ux_plugins_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_ux_plugins_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-ux-plugins-list",
+          "markdownDescription": "Denies the desktop_ux_plugins_list command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_workspace_list command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-workspace-list",
@@ -1777,6 +1837,18 @@
           "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`"
         },
         {
+          "description": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`",
+          "type": "string",
+          "const": "ux-plugins-read",
+          "markdownDescription": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`"
+        },
+        {
+          "description": "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`\n- `allow-desktop-ux-data-call`",
+          "type": "string",
+          "const": "ux-plugins-call",
+          "markdownDescription": "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`\n- `allow-desktop-ux-data-call`"
+        },
+        {
           "description": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`",
           "type": "string",
           "const": "packs-admin",
@@ -1843,10 +1915,10 @@
           "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
         },
         {
-          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`\n- `allowed-dirs-read`\n- `allowed-dirs-admin`",
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`\n- `ux-plugins-read`\n- `ux-plugins-call`\n- `allowed-dirs-read`\n- `allowed-dirs-admin`",
           "type": "string",
           "const": "full",
-          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`\n- `allowed-dirs-read`\n- `allowed-dirs-admin`"
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`\n- `ux-plugins-read`\n- `ux-plugins-call`\n- `allowed-dirs-read`\n- `allowed-dirs-admin`"
         }
       ]
     }

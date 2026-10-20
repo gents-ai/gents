@@ -386,7 +386,10 @@ pub(crate) fn validate_query_tool_declarations(
                     field.name
                 )
             })?;
-            if matches!(field.name.trim(), "fields" | "limit" | "field_page") {
+            if matches!(
+                field.name.trim(),
+                "fields" | "limit" | "offset" | "order" | "field_page"
+            ) {
                 return Err(anyhow::anyhow!(
                     "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} collides with a reserved query argument",
                     decl.tool_name,

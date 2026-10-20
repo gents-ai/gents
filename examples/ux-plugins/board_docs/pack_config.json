@@ -1,0 +1,49 @@
+{
+  "node": {},
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "board",
+      "display_name": "Board",
+      "tags": ["board"],
+      "entries": [
+        {
+          "kind": "query",
+          "tool_name": "list_tasks",
+          "collection": "BoardTask",
+          "description": "Every task on the board: its id, title, the lane it was created in, and when.",
+          "fields": ["task_id", "title", "lane", "created_at"],
+          "filter_fields": [{ "name": "task_id", "required": false }]
+        },
+        {
+          "kind": "query",
+          "tool_name": "list_moves",
+          "collection": "BoardMove",
+          "description": "Every move a task made between lanes; the latest move per task is its current lane. A move to `archived` takes a task off the board.",
+          "fields": ["task_id", "lane", "moved_at"],
+          "filter_fields": [{ "name": "task_id", "required": false }]
+        },
+        {
+          "tool_name": "add_task",
+          "collection": "BoardTask",
+          "description": "Put a new task on the board. `task_id` is a short unique id the caller mints; `lane` is one of triage, ready, running, done; `created_at` an RFC 3339 time.",
+          "fields": [
+            { "name": "task_id", "required": true },
+            { "name": "title", "required": true },
+            { "name": "lane", "required": true },
+            { "name": "created_at", "required": true }
+          ]
+        },
+        {
+          "tool_name": "move_task",
+          "collection": "BoardMove",
+          "description": "Move a task to a lane (triage, ready, running, done, or archived to take it off the board). `moved_at` is an RFC 3339 time; the latest move wins.",
+          "fields": [
+            { "name": "task_id", "required": true },
+            { "name": "lane", "required": true },
+            { "name": "moved_at", "required": true }
+          ]
+        }
+      ]
+    }
+  ]
+}

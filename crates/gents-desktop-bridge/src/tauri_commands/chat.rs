@@ -206,20 +206,9 @@ pub async fn desktop_request_retry(
     };
 
     let scope = node_did.or_else(|| core.selected_node_did());
-    let parent = core
-        .request_in_scope(&request_id, scope.as_deref())
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let submitted = core
-        .retry_request(&parent)
+    crate::commands::retry_request(&core, &request_id, scope.as_deref())
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    Ok(ChatSendResult {
-        session_id: submitted.session_id,
-        request_id: submitted.request_id,
-        node_did: submitted.node_did,
-        agent_id: submitted.agent_id,
-        outcome: None,
-    })
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]

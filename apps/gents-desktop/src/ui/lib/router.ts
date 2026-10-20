@@ -1,14 +1,43 @@
 // Native host adapter: screens keep calling href/navigate/useRoute;
 // MemoryNavProvider owns the stack and this module never writes location.
-import { parseRoute, pathFor, useNav, type Nav, type Route } from "@gents/shell";
+import {
+  parseRoute as shellParseRoute,
+  pathFor as shellPathFor,
+  useNav,
+  type Nav,
+  type Route as ShellRoute,
+} from "@gents/shell";
 
-export type { Route };
-export { pathFor, parseRoute };
+/* the desktop's routes: the kit's, and a UX plugin's own page. The kit's
+   memory history carries any route object and never re-parses, so the
+   extra route costs it nothing; only the path functions must know it. */
+export type Route = ShellRoute | { name: "plugin"; pluginId: string };
 
-let current: Nav | null = null;
+export function pathFor(route: Route): string {
+  if (route.name === "plugin") return `/plugins/${encodeURIComponent(route.pluginId)}`;
+  return shellPathFor(route);
+}
+
+export function parseRoute(path: string): Route {
+  const parts = path.replace(/^#\/?/, "").replace(/^\//, "").split("/").filter(Boolean);
+  if (parts[0] === "plugins" && parts[1]) {
+    return { name: "plugin", pluginId: decodeURIComponent(parts[1]) };
+  }
+  return shellParseRoute(path);
+}
+
+/* the kit's nav typed with the desktop's routes */
+type DesktopNav = Omit<Nav, "route" | "navigate"> & {
+  readonly route: Route;
+  navigate: (route: Route) => void;
+};
+
+const asDesktop = (nav: Nav): DesktopNav => nav as unknown as DesktopNav;
+
+let current: DesktopNav | null = null;
 
 export function bindNav(nav: Nav | null) {
-  current = nav;
+  current = nav ? asDesktop(nav) : null;
 }
 
 export function href(route: Route) {
@@ -42,7 +71,7 @@ export function replace(from: Route, to: Route) {
 }
 
 export function useRoute(): Route {
-  return useNav().route;
+  return asDesktop(useNav()).route;
 }
 
 export type History = Pick<Nav, "canBack" | "canForward" | "back" | "forward">;

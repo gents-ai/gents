@@ -143,10 +143,9 @@ test.describe("half-screen window", () => {
       await page.getByRole("menuitem", { name: "Trace" }).click();
       const sheet = page.getByRole("dialog", { name: "Side panel" });
       await expect(sheet).toBeVisible();
-      await sheet.evaluate((element) =>
-        element.getAnimations({ subtree: true }).forEach((a) => a.finish()),
-      );
-      await expectInsideViewport(page, sheet);
+      await expect(async () => {
+        await expectInsideViewport(page, sheet);
+      }).toPass({ timeout: 10_000 });
       await expect(page.getByRole("separator", { name: "Resize panel" })).toHaveCount(
         0,
       );

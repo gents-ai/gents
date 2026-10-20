@@ -97,6 +97,11 @@ export function createBridgeHttpAdapter(
     unsubscribePluginApprovals: unsupported("unsubscribePluginApprovals"),
     listPendingPluginApprovals: unsupported("listPendingPluginApprovals"),
     decidePluginApproval: unsupported("decidePluginApproval"),
+    listUxPlugins: async () => ({ plugins: [] }),
+    readUxPluginSource: unsupported("readUxPluginSource"),
+    callPackPlugin: unsupported("callPackPlugin"),
+    callUxData: unsupported("callUxData"),
+    listUxDataSurfaces: unsupported("listUxDataSurfaces"),
 
     fetchDesktopSnapshot: async () =>
       client.getJson<DesktopClientSnapshot>("/desktop/client/snapshot"),

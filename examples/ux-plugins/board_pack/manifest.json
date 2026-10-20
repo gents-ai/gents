@@ -1,0 +1,30 @@
+{
+  "manifest_version": 1,
+  "name": "board_pack",
+  "version": "0.2.0",
+  "description": "The board's page: a Board nav row, the board page it opens, and a ::board directive card. Reads and writes the board through the `board` surface that ../board_docs installs on the node.",
+  "namespace": "examples",
+  "authors": ["gents"],
+  "tags": ["example", "ux", "board"],
+  "kind": "assets",
+  "assets": [
+    "README.md",
+    "ux/board/plugin.js",
+    "ux/board/plugin.css"
+  ],
+  "ux": [
+    {
+      "name": "board",
+      "description": "A Board page of its own, a Board nav row that opens it, and a ::board{id=...} card the agent can emit in chat.",
+      "entry": "ux/board/plugin.js",
+      "css": "ux/board/plugin.css",
+      "contributes": {
+        "areas": ["nav", "plugin.pages", "transcript.directives"],
+        "directives": ["board"]
+      },
+      "data": [
+        { "surface": "board", "tools": ["list_tasks", "list_moves", "add_task", "move_task"] }
+      ]
+    }
+  ]
+}

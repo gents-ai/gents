@@ -1268,7 +1268,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
     );
 
     assert!(
-        crate::list_datastore_tool_surfaces(&node, owner)
+        crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner)
             .await?
             .is_empty(),
         "a refused obligation publishes no surface"
@@ -1322,7 +1322,8 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
     )
     .await?;
 
-    let surfaces = crate::list_datastore_tool_surfaces(&node, owner).await?;
+    let surfaces =
+        crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), count_fields.len() + 1, "{surfaces:?}");
     node.shutdown().await;
     Ok(())
@@ -1345,7 +1346,8 @@ async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Res
     )
     .await?;
 
-    let surfaces = crate::list_datastore_tool_surfaces(&node, owner).await?;
+    let surfaces =
+        crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), 1, "{surfaces:?}");
     node.shutdown().await;
     Ok(())
@@ -1367,11 +1369,11 @@ fn obligation_surface_payloads(
 }
 
 async fn published_count_field(
-    node: &EmbeddedNode,
+    access: &ConfigAccess,
     owner: &str,
     surface_id: &str,
 ) -> Result<String> {
-    let surface = crate::list_datastore_tool_surfaces(node, owner)
+    let surface = crate::list_datastore_tool_surfaces(access, owner)
         .await?
         .into_iter()
         .find(|surface| surface.surface_id == surface_id)
@@ -1421,9 +1423,11 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
         "{previewed:#}"
     );
-    assert!(crate::list_datastore_tool_surfaces(&node, owner)
-        .await?
-        .is_empty());
+    assert!(
+        crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner)
+            .await?
+            .is_empty()
+    );
 
     apply(
         &access,
@@ -1433,7 +1437,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
     )
     .await?;
     assert_eq!(
-        published_count_field(&node, owner, "created").await?,
+        published_count_field(&access, owner, "created").await?,
         "total"
     );
     node.shutdown().await;
@@ -1485,7 +1489,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         "{previewed:#}"
     );
     assert_eq!(
-        published_count_field(&node, owner, "replaced").await?,
+        published_count_field(&access, owner, "replaced").await?,
         "total"
     );
 
@@ -1497,7 +1501,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
     )
     .await?;
     assert_eq!(
-        published_count_field(&node, owner, "replaced").await?,
+        published_count_field(&access, owner, "replaced").await?,
         "amount"
     );
     node.shutdown().await;

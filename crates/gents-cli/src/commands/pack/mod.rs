@@ -705,6 +705,7 @@ async fn install_documents_pack(
                 assets: materialized_assets,
                 dependency_assets,
                 plugins: identity.plugins.clone(),
+                ux: pack.manifest().metadata.ux.clone(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 installed_via: Some(gents::pack::InstalledVia::Operator),
             },
@@ -863,6 +864,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     "source": pack.label(),
                     "digest": pack.digest(),
                     "installed_plugins": pack.manifest().metadata.plugins,
+                    "ux_plugins": pack.manifest().metadata.ux,
                     "inference_slots": pack.manifest().metadata.inference_slots,
                     "would_write": false,
                 }));

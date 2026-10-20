@@ -13,8 +13,16 @@ export type ChatState = {
   localWorkflow: ChatWorkflowState;
   sending: boolean;
   optimisticPendingTurn: OptimisticPendingTurn | null;
+  /** the messages sent from here, newest last, and whether each queued
+      behind a running turn: kept after the transcript holds them, for
+      what follows a send (the view going to the turn once it begins) */
+  sentTurns: readonly SentTurn[];
   folders: ChatFolders;
 };
+
+export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
+/* enough for a run of sends queued behind one turn */
+const SENT_TURNS_KEPT = 16;
 
 export type ChatStore = WithSelectors<StoreApi<ChatState>>;
 
@@ -24,6 +32,7 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       localWorkflow: { kind: "ready" },
       sending: false,
       optimisticPendingTurn: null,
+      sentTurns: [],
       folders: loadChatFolders(),
       ...initial,
     })),
@@ -65,8 +74,16 @@ export const chat = {
       return next === state.localWorkflow ? state : { localWorkflow: next };
     });
   },
-  showPendingTurn(store: ChatStore, turn: OptimisticPendingTurn) {
-    store.setState({ optimisticPendingTurn: turn });
+  /** the turn a person sent, drawn until the transcript holds it; `queued`
+      when it waits behind a turn already running */
+  showPendingTurn(store: ChatStore, turn: OptimisticPendingTurn, queued = false) {
+    store.setState((state) => ({
+      optimisticPendingTurn: turn,
+      sentTurns: [
+        ...state.sentTurns.slice(-(SENT_TURNS_KEPT - 1)),
+        { sessionId: turn.sessionId, requestId: turn.requestId, queued },
+      ],
+    }));
   },
   endPendingTurn(store: ChatStore, requestId: string) {
     if (store.getState().optimisticPendingTurn?.requestId === requestId)

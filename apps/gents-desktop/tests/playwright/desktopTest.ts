@@ -52,6 +52,15 @@ export async function gotoHarness(page: Page, scenario: HarnessScenario = "defau
   await expect(page.locator(KIT_SURFACE).first()).toBeVisible();
 }
 
+/* an init script runs in every frame of the page, and a plugin frame's origin
+   is opaque: its storage throws, so the seed stays in the top window */
+export async function seedLocalStorage(page: Page, entries: Record<string, string>) {
+  await page.addInitScript((seed: Record<string, string>) => {
+    if (window !== window.top) return;
+    for (const [key, value] of Object.entries(seed)) localStorage.setItem(key, value);
+  }, entries);
+}
+
 export async function gotoLiveHarness(page: Page, bridgeUrl?: string) {
   const params = new URLSearchParams({ backend: "live" });
   if (bridgeUrl) {

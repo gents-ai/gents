@@ -55,6 +55,9 @@ pub const REGISTRY_DIR_NAME: &str = "registry";
 pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
 pub const EVAL_DIR_NAME: &str = "eval";
 pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
+/// UX plugins dropped in by hand for development (`<id>/plugin.js`); the
+/// desktop's dev door. Installed packs keep theirs in the pack store.
+pub const UX_PLUGINS_DIR_NAME: &str = "ux-plugins";
 
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
@@ -73,6 +76,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     CODEX_UI_DIR_NAME,
     EVAL_DIR_NAME,
     PACK_INSTALLS_DIR_NAME,
+    UX_PLUGINS_DIR_NAME,
 ];
 
 /// Lock files stay in place when state is retired: replacing a held lock file

@@ -172,6 +172,15 @@ export type {
   PluginApprovalRequest,
 } from "./types/hostAccess.js";
 export type {
+  PackPluginCallRequest,
+  UxDataCallRequest,
+  UxDataCallResult,
+  UxDataSurfacesRequest,
+  UxDeclaredContributions,
+  UxPluginListing,
+  UxPluginSource,
+} from "./types/uxPlugins.js";
+export type {
   BackendDisplayState,
   BackendHealth,
   InferenceCallSummary,

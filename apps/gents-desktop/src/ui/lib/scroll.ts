@@ -177,14 +177,39 @@ function createPositionCorrection(viewport: HTMLElement, content: HTMLElement | 
     if (hidden) content?.style.removeProperty("margin-top");
     hidden = 0;
   };
+  /* put back now, resting or not: a view about to be taken elsewhere
+     starts from where the content is */
+  const flush = () => {
+    window.clearTimeout(timer);
+    timer = 0;
+    if (!hidden || !content) return;
+    const before = viewport.scrollTop;
+    content.style.removeProperty("margin-top");
+    setScroll(
+      viewport,
+      Math.max(
+        0,
+        Math.min(before + hidden, viewport.scrollHeight - viewport.clientHeight),
+      ),
+    );
+    hidden = 0;
+  };
   return {
     get pending() {
       return hidden !== 0;
     },
     listeners,
     clear,
+    flush,
     shift(delta: number) {
       if (disposed || Math.abs(delta) < 0.5) return;
+      /* no further than the extent allows: hiding content above shrinks
+         the extent by as much, which the browser clamps away again */
+      if (delta > 0) {
+        const room = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+        delta = Math.min(delta, Math.max(0, room));
+        if (delta < 0.5) return;
+      }
       if (!content || viewport.scrollTop <= 0 || (resting() && !hidden)) {
         setScroll(viewport, viewport.scrollTop + delta);
         return;
@@ -255,6 +280,7 @@ const NAV_KEYS = new Set([
 ]);
 const UP_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 const HOLDABLE = "[data-step-key],[data-anchor-key],[data-timeline-key]";
+/* a row's key: shared by every row that stands for the same message */
 const KEY_ATTRIBUTES = ["data-step-key", "data-anchor-key", "data-timeline-key"];
 
 const insetAt = (el: Element) => {
@@ -270,8 +296,7 @@ const decorative = (node: Node) =>
   ) != null;
 
 const keyOf = (el: Element) =>
-  KEY_ATTRIBUTES.map((name) => el.getAttribute(name)).find((key) => key != null) ??
-  null;
+  KEY_ATTRIBUTES.map((name) => el.getAttribute(name)).find((key) => key) ?? null;
 
 const quoted = (value: string) => `"${value.replace(/["\\]/g, "\\$&")}"`;
 
@@ -284,6 +309,24 @@ export function jumpToRow(el: Element | null) {
 }
 
 const TURN = "[data-turn]";
+/* a sent turn settles this far below the inset: a line of what came
+   before stays in view */
+const TURN_PEEK = 32;
+/* the lowest a sent turn's foot may sit, so a tall message leaves its
+   reply room below it */
+const TURN_FOOT_SHARE = 1 / 3;
+const TURN_FOOT_MIN_PX = 240;
+/* a tool step after the turn: a turn doing work, not only answering */
+const WORK = "[data-step-key]";
+/* how long a sent turn takes to glide to its place */
+const TURN_GLIDE_MS = 420;
+/* the follow's ease toward the foot: this share of the way left each
+   frame, never less than this many pixels */
+const FOLLOW_EASE = 0.28;
+const FOLLOW_MIN_PX = 6;
+/* how long after an End key the browser's own scroll for it may still
+   arrive (WebKit animates it over a few hundred milliseconds) */
+const END_MS = 600;
 
 export function turnFrom(scroller: HTMLElement, way: -1 | 1): Element | null {
   const line = scroller.getBoundingClientRect().top + READING_LINE_PX;
@@ -295,9 +338,49 @@ export function turnFrom(scroller: HTMLElement, way: -1 | 1): Element | null {
   return turns[at + way] ?? null;
 }
 
-/** Holdable rows must stack in DOM order for the fallback search. Scroll
- * writes wait for momentum to settle because browsers may discard them mid-scroll. */
-export function useFollowTail(scroller: HTMLElement | null, subject: string | null) {
+/**
+ * The reader's place in a scroller, held. Two modes, and the reader chooses
+ * between them: at the foot, the view follows whatever grows; anywhere else
+ * it holds still, keeping the row under the reading line where it is on
+ * screen whether the change is above it, below it, or in it.
+ *
+ * Both are enforced from a ResizeObserver on the content, which runs after
+ * layout and before paint, so a correction lands in the frame of the change.
+ * The mode changes only on the reader's own input (a wheel, a touch, a key
+ * that scrolls, a scrollbar drag): a scroll with none behind it (the
+ * browser clamping as content shrinks, WebKit resetting the position while
+ * a session loads) says nothing about where they want to be. A row opening
+ * or closing announces itself with a `transcript:hold` event first, and is
+ * held while it moves.
+ *
+ * The row is found again by its key when it is drawn anew. The browser's own
+ * scroll anchoring is off: WebKit has none, and Chromium's corrected some of
+ * the same changes a second time. A new subject starts at its foot.
+ */
+export function useFollowTail(
+  scroller: HTMLElement | null,
+  subject: string | null,
+  options: {
+    /** a turn the person sends settles near the top of the view, with the
+        reply filling in beneath it, instead of the view following the foot */
+    anchorSentTurn?: boolean;
+    /** the key of the turn the person just sent from here, while the app
+        still shows its own copy of it: the view goes to that turn once its
+        row is the last of the transcript, and once only */
+    sentTurn?: string | null;
+  } = {},
+) {
+  const anchorSentTurn = useRef(options.anchorSentTurn ?? false);
+  anchorSentTurn.current = options.anchorSentTurn ?? false;
+  const offerSent = useRef<((key: string) => void) | null>(null);
+  const sentTurn = useRef(options.sentTurn ?? null);
+  sentTurn.current = options.sentTurn ?? null;
+  /* the last sent turn the view went to, kept across subjects: a session
+     opened again offers its last send again */
+  const takenSent = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (sentTurn.current) offerSent.current?.(sentTurn.current);
+  }, [options.sentTurn]);
   const following = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const settleRef = useRef<(() => void) | null>(null);
@@ -317,18 +400,170 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
         (scroller.firstElementChild as HTMLElement | null),
       subject,
     );
+    /* the row held still, by element while it lasts and by key after */
     let anchor: { el: Element; key: string | null; offset: number } | null = null;
+    /* whether anything but a held turn's empty room lies past the foot */
+    const moreBelow = () =>
+      scroller.scrollHeight - emptyRoom() - scroller.clientHeight - scroller.scrollTop >
+      4;
+    const publishBottom = () => setAtBottom(following.current || !moreBelow());
     const setFollowing = (next: boolean) => {
       following.current = next;
       scroller.dataset.following = String(next);
-      setAtBottom(next);
+      publishBottom();
     };
     scroller.dataset.following = "true";
     const top = () => scroller.getBoundingClientRect().top;
+    /* The room a sent turn has for its reply: the last turn's block is at
+       least this tall, so the turn can sit near the top before the reply
+       exists. One number, never sized from the content: at the scroll
+       limit every change of it is a clamp. */
+    const roomOf = () =>
+      parseFloat(scroller.style.getPropertyValue("--turn-room")) || 0;
+    const setRoom = (height: number) => {
+      const next = Math.max(0, Math.ceil(height));
+      if (next === roomOf()) return;
+      if (next === 0) scroller.style.removeProperty("--turn-room");
+      else scroller.style.setProperty("--turn-room", `${next}px`);
+    };
+    /* the last turn block, and from it the last turn and row: read from
+       the end, as this runs on every streamed chunk */
+    const lastBlock = () => {
+      const blocks = scroller.querySelectorAll("[data-turn-block]");
+      return blocks[blocks.length - 1] ?? null;
+    };
+    const lastTurn = () => {
+      const block = lastBlock();
+      const inBlock = block?.querySelector(TURN) ?? null;
+      if (inBlock) return inBlock;
+      const turns = scroller.querySelectorAll(TURN);
+      return turns[turns.length - 1] ?? null;
+    };
+    /* the row that stands for a turn now, whichever the transcript draws */
+    const turnEl = (key: string) =>
+      scroller.querySelector(`${TURN}[data-timeline-key=${quoted(key)}]`);
+    /* the sent turn the room below is kept for */
+    type Room = {
+      key: string;
+      /** its row as last found; looked up again by key once gone */
+      row: Element | null;
+      /** the turn before it: a row that left for good, against one
+          replaced under another key */
+      before: string | null;
+      /** whether the reply fit the room at the last layout */
+      fit: boolean;
+      /** the view height the room was sized for */
+      view: number;
+      /** where its block and the block before begin, as last laid out:
+          known before the commit that takes the turn away is measured */
+      blockStart: number;
+      blockBeforeStart: number | null;
+    };
+    let room: Room | null = null;
+    /* the turn before a lost room's, while a row under another key may
+       still come for the message */
+    let lostBefore: string | null = null;
+    const roomTurn = () => {
+      if (!room) return null;
+      if (!room.row?.isConnected || keyOf(room.row) !== room.key)
+        room.row = turnEl(room.key);
+      return room.row;
+    };
+    const anchorAt = (el: Element, key = keyOf(el)) => {
+      anchor = { el, key, offset: el.getBoundingClientRect().top - top() };
+    };
+    /* the turn sent from here that the view has yet to go to */
+    let sentKey: string | null = null;
+    /* where a sent turn's top rests: below the inset and the peek, or
+       higher for a tall message, whose foot is kept up in the view */
+    const restOf = (turn: Element) => {
+      const h = scroller.clientHeight;
+      const footLimit = Math.min(h, Math.max(h * TURN_FOOT_SHARE, TURN_FOOT_MIN_PX));
+      const rect = turn.getBoundingClientRect();
+      return Math.min(insetAt(turn) + TURN_PEEK, footLimit - (rect.bottom - rect.top));
+    };
+    /* the room a turn at its place needs for its reply: the view below
+       that place, less the composer's share of the foot */
+    const composerRoom = () =>
+      parseFloat(getComputedStyle(scroller).getPropertyValue("--composer-h")) || 0;
+    const roomFor = (turn: Element) =>
+      Math.max(0, scroller.clientHeight - restOf(turn) - composerRoom());
+    /* the foot of the last row: what the reader can scroll down to, the
+       empty part of a room aside */
+    const lastRowBottom = () => {
+      const block = lastBlock();
+      if (block) {
+        for (let el = block.lastElementChild; el; el = el.previousElementSibling)
+          if (el.matches(HOLDABLE)) return el.getBoundingClientRect().bottom;
+      }
+      const rows = scroller.querySelectorAll(HOLDABLE);
+      for (let i = rows.length - 1; i >= 0; i -= 1)
+        if (holdable(rows[i]!) === rows[i])
+          return rows[i]!.getBoundingClientRect().bottom;
+      return null;
+    };
+    /* how much of the held turn's room its reply has yet to fill */
+    const emptyRoom = () => {
+      const turn = roomTurn();
+      if (!turn) return 0;
+      const bottom = lastRowBottom();
+      if (bottom === null) return 0;
+      return Math.max(0, roomOf() - (bottom - turn.getBoundingClientRect().top));
+    };
+    /* the turn from this sent row on is doing work: a tool step follows it */
+    const turnHasWork = (turn: Element) => {
+      for (let row = turn.nextElementSibling; row; row = row.nextElementSibling)
+        if (row.matches(WORK) || row.querySelector(WORK)) return true;
+      return false;
+    };
+    const reducedMotion = () =>
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const footOf = () => scroller.scrollHeight - scroller.clientHeight;
+    /* the ease toward the foot while following; content that shrank, a
+       move of more than half a view, a reader whose scroll is recent, and
+       reduced motion are written at once */
+    let followFrame = 0;
+    const stopFollowGlide = () => {
+      if (!followFrame) return;
+      cancelAnimationFrame(followFrame);
+      followFrame = 0;
+    };
+    const stepFollow = () => {
+      followFrame = 0;
+      if (!following.current) return;
+      const delta = footOf() - scroller.scrollTop;
+      if (delta < 0.5) {
+        if (delta < 0 || delta >= 0.5) setScroll(scroller, footOf());
+        return;
+      }
+      const move = Math.min(delta, Math.max(delta * FOLLOW_EASE, FOLLOW_MIN_PX));
+      setScroll(scroller, scroller.scrollTop + move);
+      if (footOf() - scroller.scrollTop >= 0.5)
+        followFrame = requestAnimationFrame(stepFollow);
+    };
+    /* the foot as last seen: growth since is eased; any shortfall beyond
+       it is a clamp under the reader, put back at once */
+    let lastFoot = footOf();
     const pin = () => {
       position.correction.clear();
-      const foot = scroller.scrollHeight - scroller.clientHeight;
-      if (Math.abs(scroller.scrollTop - foot) >= 0.5) setScroll(scroller, foot);
+      const foot = footOf();
+      const growth = Math.max(0, foot - lastFoot);
+      lastFoot = foot;
+      const delta = foot - scroller.scrollTop;
+      if (Math.abs(delta) < 0.5) return;
+      const displaced = delta - growth;
+      if (delta < 0 || displaced >= 0.5)
+        setScroll(scroller, scroller.scrollTop + displaced);
+      if (foot - scroller.scrollTop < 0.5) return;
+      const now = performance.now();
+      const readerRecent = now <= intentUntil || now - tailAt < TAIL_MS;
+      if (growth > scroller.clientHeight / 2 || readerRecent || reducedMotion()) {
+        stopFollowGlide();
+        setScroll(scroller, foot);
+        return;
+      }
+      if (!followFrame) followFrame = requestAnimationFrame(stepFollow);
     };
     const holdable = (el: Element | null): Element | null => {
       let at = el?.closest(HOLDABLE) ?? null;
@@ -342,7 +577,8 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       let el = holdable(
         document.elementFromPoint?.(box.left + box.width / 2, line) ?? null,
       );
-
+      /* the line falls in a gap: the first row whose foot is below it,
+         by halving over the rows, which stack in document order */
       if (!el) {
         const rows = Array.from(scroller.querySelectorAll(HOLDABLE)).filter(
           (row) => holdable(row) === row,
@@ -402,15 +638,231 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     };
     leaving.current = false;
     let dragging = false;
+    /* the view's height as last laid out */
+    let viewHeight = 0;
+    const onRoomTurn = () =>
+      room !== null && anchor?.key === room.key && !following.current;
+    const measureBlocks = (turn: Element) => {
+      if (!room) return;
+      const block = turn.closest("[data-turn-block]");
+      const before = block?.previousElementSibling;
+      room.blockStart = (block?.getBoundingClientRect().top ?? 0) + scroller.scrollTop;
+      room.blockBeforeStart =
+        before?.matches("[data-turn-block]") === true
+          ? before.getBoundingClientRect().top + scroller.scrollTop
+          : null;
+    };
+    const turnBefore = (turn: Element) => {
+      const from = turn.closest("[data-turn-block]") ?? turn;
+      for (let el = from.previousElementSibling; el; el = el.previousElementSibling) {
+        if (el.matches(TURN)) return el;
+        const inner = el.querySelector(TURN);
+        if (inner) return inner;
+      }
+      return null;
+    };
+    const giveRoom = (turn: Element, key: string) => {
+      const before = turnBefore(turn);
+      room = {
+        key,
+        row: turn,
+        before: before ? keyOf(before) : null,
+        fit: true,
+        view: scroller.clientHeight,
+        blockStart: 0,
+        blockBeforeStart: null,
+      };
+      lostBefore = null;
+      setRoom(roomFor(turn));
+      measureBlocks(turn);
+    };
+    /* the sent turn has no row any more: a reader on it keeps the view
+       where it is, held by the row on the reading line */
+    const dropRoom = () => {
+      const wasOnTurn = onRoomTurn();
+      room = null;
+      if (wasOnTurn) {
+        anchor = null;
+        capture();
+      }
+    };
+    /* The sent row is gone. Drawn again under another key (the runtime
+       names the request anew), in the same commit or later, the hold and
+       the room move to it. Until then the room stays with the block
+       before: taking it away shrinks the content under a reader at its
+       end, which the browser clamps as a jump. */
+    const lastTurnAfter = (before: string | null) => {
+      const next = lastTurn();
+      const key = next ? keyOf(next) : null;
+      return next && key && key !== before ? { next, key } : null;
+    };
+    const adopt = ({ next, key }: { next: Element; key: string }, held: boolean) => {
+      giveRoom(next, key);
+      takenSent.current = key;
+      if (held) anchorAt(next, key);
+    };
+    const dropLostTurn = () => {
+      if (room && !roomTurn()) {
+        /* the block before takes the room, larger by the lost block's
+           start less its own, before anything is measured: the extent
+           stays, so the browser clamps nothing */
+        if (room.blockBeforeStart !== null)
+          setRoom(roomOf() + room.blockStart - room.blockBeforeStart);
+        const found = lastTurnAfter(room.before);
+        if (found) {
+          adopt(found, onRoomTurn() || (!following.current && anchor === null));
+          return;
+        }
+        lostBefore = room.before ?? "";
+        dropRoom();
+        return;
+      }
+      if (!room && lostBefore !== null) {
+        const found = lastTurnAfter(lostBefore);
+        if (found) adopt(found, !following.current);
+      }
+    };
+    /* The held turn after a change. The room follows the view's size and
+       grows as the composer shrinks; it never shrinks for the composer,
+       which would clamp a reader at the end. A turn doing work is followed
+       from the layout where its reply crosses the room's end; a plain
+       answer stays held however long it grows. */
+    const settleTurn = () => {
+      if (!room) return;
+      const turn = roomTurn();
+      if (!turn) {
+        dropRoom();
+        return;
+      }
+      const want = roomFor(turn);
+      if (scroller.clientHeight !== room.view) {
+        room.view = scroller.clientHeight;
+        setRoom(want);
+      } else if (want > roomOf()) setRoom(want);
+      measureBlocks(turn);
+      const bottom = lastRowBottom();
+      const over =
+        bottom === null ? 0 : bottom - turn.getBoundingClientRect().top - roomOf();
+      const crossing = over > 0 && room.fit;
+      room.fit = over <= 0;
+      if (crossing && !gliding && onRoomTurn() && turnHasWork(turn)) {
+        anchor = null;
+        setFollowing(true);
+        pin();
+      }
+    };
+    /* the glide of a sent turn to its place; ended by the reader's input,
+       a jump, and the way back */
+    let glide = 0;
+    /* from the glide's first frame to its last */
+    let gliding = false;
+    const stopGlide = () => {
+      gliding = false;
+      if (!glide) return;
+      cancelAnimationFrame(glide);
+      glide = 0;
+    };
+    const anchorTurn = (turn: Element, key: string) => {
+      const rest = restOf(turn);
+      giveRoom(turn, key);
+      /* a correction still hidden would land on the glide as one jump */
+      position.correction.flush();
+      let from = turn.getBoundingClientRect().top - top();
+      setFollowing(false);
+      leaving.current = false;
+      stopGlide();
+      /* from further than a view away: put within a view at once, glide
+         the rest */
+      const reach = scroller.clientHeight;
+      if (Math.abs(from - rest) > reach) {
+        const skip = from - rest - Math.sign(from - rest) * reach;
+        setScroll(scroller, scroller.scrollTop + skip);
+        from = turn.getBoundingClientRect().top - top();
+      }
+      const delta = from - rest;
+      /* the hold keeps the row where the glide has it so far */
+      anchor = { el: turn, key, offset: from };
+      if (reducedMotion() || Math.abs(delta) < 24) {
+        anchor.offset = rest;
+        position.correction.shift(delta);
+        publishBottom();
+        return;
+      }
+      const started = performance.now();
+      gliding = true;
+      const step = () => {
+        glide = 0;
+        if (!anchor || anchor.key !== key || following.current) {
+          gliding = false;
+          return;
+        }
+        /* one replaced mid-glide is glided on from where its copy is */
+        const row = turnEl(key);
+        if (!row) return;
+        const p = Math.min(1, (performance.now() - started) / TURN_GLIDE_MS);
+        const eased = 1 - (1 - p) ** 3;
+        const offset = from - delta * eased;
+        anchor.offset = offset;
+        const at = row.getBoundingClientRect().top - top();
+        if (Math.abs(at - offset) >= 0.5)
+          setScroll(scroller, scroller.scrollTop + (at - offset));
+        if (p < 1) glide = requestAnimationFrame(step);
+        else {
+          gliding = false;
+          publishBottom();
+        }
+      };
+      glide = requestAnimationFrame(step);
+    };
+
+    /* the turn sent from here, once its row is the last: held near the
+       top with room below, or followed, by the preference; not while the
+       reader drags the scrollbar */
+    const takeSentTurn = () => {
+      if (!sentKey || dragging) return false;
+      const key = sentKey;
+      const turn = turnEl(key);
+      if (!turn || turn !== lastTurn()) return false;
+      takenSent.current = key;
+      sentKey = null;
+      stopGlide();
+      if (!anchorSentTurn.current) {
+        anchor = null;
+        leaving.current = false;
+        setFollowing(true);
+        pin();
+        return true;
+      }
+      /* a view's height of room before anything is measured: the commit
+         may also have taken rows away below, and the first layout would
+         clamp a view at its foot before the exact room is given */
+      if (viewHeight) setRoom(viewHeight);
+      anchorTurn(turn, key);
+      hold();
+      return true;
+    };
+    offerSent.current = (key) => {
+      if (key === takenSent.current) return;
+      sentKey = key;
+      takeSentTurn();
+    };
     const reconcile = () => {
       if (dragging) return;
+      dropLostTurn();
+      settleTurn();
       if (following.current) pin();
       else hold();
+      publishBottom();
+      viewHeight = scroller.clientHeight;
     };
     settleRef.current = reconcile;
     pin();
+    viewHeight = scroller.clientHeight;
+    /* a send known as the view mounts (a new session's first message):
+       taken from the foot, after the view has been put there */
+    if (sentTurn.current) offerSent.current(sentTurn.current);
 
-    const sizes = new ResizeObserver(reconcile);
+    const sizes = new ResizeObserver(() => reconcile());
     const watch = () => {
       sizes.disconnect();
       for (const child of Array.from(scroller.children)) sizes.observe(child);
@@ -420,21 +872,31 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       const content = records.filter((record) => !decorative(record.target));
       if (content.length === 0) return;
       if (content.some((record) => record.target === scroller)) watch();
+      if (content.some((record) => record.addedNodes.length > 0) && takeSentTurn())
+        return;
       reconcile();
     });
     changes.observe(scroller, { childList: true, subtree: true, characterData: true });
 
     const intend = () => {
       intentUntil = performance.now() + INTENT_MS;
+      stopGlide();
     };
     const release = () => {
+      stopFollowGlide();
       leaving.current = true;
       if (following.current) {
         anchor = null;
         setFollowing(false);
       }
     };
+    /* until when the browser's own scroll for an End key may still be
+       arriving: each of its events is a move to the foot, whatever position
+       its animation passes through, not a reader leaving it. Any other
+       input ends it first, as its event comes before the scroll it makes. */
+    let endingUntil = 0;
     const onWheel = (event: WheelEvent) => {
+      endingUntil = 0;
       intend();
       if (event.deltaY < 0) release();
       else if (event.deltaY > 0) leaving.current = false;
@@ -444,6 +906,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       touchY = event.touches[0]?.clientY;
     };
     const onTouchMove = (event: TouchEvent) => {
+      endingUntil = 0;
       intend();
       const y = event.touches[0]?.clientY;
       if (touchY !== undefined && y !== undefined && y > touchY) release();
@@ -458,12 +921,25 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       intend();
       if (UP_KEYS.has(event.key)) release();
       else leaving.current = false;
+      /* End asks for the end, whatever the browser's own scroll lands on:
+         its animation aims at the foot as it was at the key, and a reply
+         still streaming has moved the foot on by the time it lands, which
+         left the reader short of it and not following */
+      endingUntil = event.key === "End" ? performance.now() + END_MS : 0;
+      if (endingUntil) {
+        stopGlide();
+        anchor = null;
+        setFollowing(true);
+        pin();
+      }
     };
     const area = scroller.parentElement;
     const onPointerDown = (event: PointerEvent) => {
       if (
         (event.target as Element | null)?.closest?.("[data-slot=scroll-area-scrollbar]")
       ) {
+        /* a drag has no direction to read: where it lets go decides */
+        endingUntil = 0;
         dragging = true;
         leaving.current = false;
       }
@@ -474,9 +950,27 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     };
     const onScroll = () => {
       readerMoved();
+      if (endingUntil && performance.now() <= endingUntil) {
+        setFollowing(true);
+        pin();
+        return;
+      }
+      endingUntil = 0;
       if (!dragging && performance.now() > intentUntil) return;
-      setFollowing(!leaving.current && distanceFromFoot(scroller) <= REPIN_PX);
+      const nearFoot = !leaving.current && distanceFromFoot(scroller) <= REPIN_PX;
+      /* while a reply has yet to fill its room, the foot is the turn's
+         held place: a reader coming back down is held there again */
+      const turn = roomTurn();
+      if (nearFoot && turn && room && emptyRoom() > 0) {
+        setFollowing(false);
+        anchorAt(turn, room.key);
+        room.fit = true;
+        settled.set(scroller, scroller.scrollTop);
+        return;
+      }
+      setFollowing(nearFoot);
       if (!following.current) capture();
+      publishBottom();
     };
     const onHold = (event: Event) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -520,12 +1014,14 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
         scroller,
         scroller.scrollTop + (el.getBoundingClientRect().top - top() - inset),
       );
-      anchor = { el, key: keyOf(el), offset: el.getBoundingClientRect().top - top() };
+      anchorAt(el);
+      publishBottom();
     };
     const onJump = (event: Event) => {
       const target = event.target instanceof Element ? event.target : null;
       const el = holdable(target) ?? target;
       if (!el) return;
+      stopGlide();
       jumpTo = el;
       leaving.current = false;
       jump();
@@ -534,6 +1030,13 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     scroller.addEventListener("transcript:hold", onHold);
     scroller.addEventListener("transcript:jump", onJump);
     return () => {
+      stopGlide();
+      stopFollowGlide();
+      offerSent.current = null;
+      room = null;
+      lostBefore = null;
+      sentKey = null;
+      setRoom(0);
       window.clearTimeout(jumpTimer);
       scroller.removeEventListener("transcript:jump", onJump);
       settleRef.current = null;

@@ -701,7 +701,9 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     );
     assert_eq!(
         row.get("content").and_then(|v| v.as_str()),
-        Some("integration fire"),
+        Some(
+            "Scheduled task instructions (rendered from saved configuration):\n\nintegration fire"
+        ),
         "rendered prompt template should land in AgentRequest.content: {row}"
     );
 

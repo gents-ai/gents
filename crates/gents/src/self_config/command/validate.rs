@@ -71,7 +71,7 @@ impl ConfigCommandTool {
                             crate::mailbox::validate_mailbox_write_decl(&decl)
                         } else {
                             crate::defra_write::BoundedWriteTool::new(
-                                self.node.clone(),
+                                crate::config_client::ConfigAccess::local(self.node.clone()),
                                 decl.clone(),
                             )
                             .ensure_well_formed()
@@ -80,7 +80,7 @@ impl ConfigCommandTool {
                     }
                     SurfaceToolDecl::Query(decl) => {
                         let result = crate::defra_query::BoundedQueryTool::new(
-                            self.node.clone(),
+                            crate::config_client::ConfigAccess::local(self.node.clone()),
                             decl.clone(),
                         )
                         .validate_schema()
