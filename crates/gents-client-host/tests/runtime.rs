@@ -1139,7 +1139,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
-        run_editor_journey(
+        let editor_result = run_editor_journey(
             root,
             &paths,
             &host_binary,
@@ -1147,7 +1147,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             provider.endpoint(),
             "retry",
         )
-        .await?;
+        .await;
+        std::fs::write(
+            root.join("editor-retry-provider.json"),
+            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        copy_editor_evidence(root, "editor-retry-provider.json")?;
+        editor_result?;
         let evidence = editor_retry::verify(
             &mut client,
             &mut id,

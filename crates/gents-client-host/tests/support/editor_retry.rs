@@ -15,9 +15,8 @@ fn is_retry_input(request: &Value) -> bool {
         .as_array()
         .into_iter()
         .flatten()
-        .rev()
-        .find(|message| message["role"] == "user")
-        .is_some_and(|message| match &message["content"] {
+        .filter(|message| message["role"] == "user")
+        .any(|message| match &message["content"] {
             Value::String(text) => text == PROMPT,
             Value::Array(parts) => parts.iter().any(|part| part["text"] == PROMPT),
             _ => false,
@@ -142,15 +141,47 @@ pub async fn verify(
         after.len() == before.len(),
         "refused or repeated retry admitted extra work"
     );
-    let provider_attempts = provider
-        .captured_chat_requests()
+    let captured = provider.captured_chat_requests();
+    let attempts = captured
         .iter()
         .filter(|request| is_retry_input(request))
-        .count();
+        .collect::<Vec<_>>();
+    let provider_attempts = attempts.len();
     ensure!(
         provider_attempts == 2,
         "retry must make exactly one additional provider attempt"
     );
+    for request in attempts {
+        let inputs = request["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|message| message["role"] == "user")
+            .filter_map(|message| message["content"].as_array())
+            .filter(|parts| parts.iter().any(|part| part["text"] == PROMPT))
+            .collect::<Vec<_>>();
+        ensure!(
+            inputs.len() == 1,
+            "provider input duplicated the authored retry input"
+        );
+        let parts = inputs[0];
+        ensure!(
+            parts.len() == 2 && parts[0]["text"] == PROMPT,
+            "provider retry input shape"
+        );
+        let context = parts[1]["text"]
+            .as_str()
+            .and_then(|text| {
+                text.strip_prefix(
+                    "Editor context (captured text; URI identifies its editor location):\n",
+                )
+            })
+            .context("provider retry context")?;
+        ensure!(
+            serde_json::from_str::<Value>(context)? == capture,
+            "provider received a different retry snapshot"
+        );
+    }
     Ok(json!({
         "nodeDid":node, "sessionId":session, "authorDid":author,
         "parentRequestId":parent.request_id, "retryRequestId":child.request_id,
