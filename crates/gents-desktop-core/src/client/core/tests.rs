@@ -1469,7 +1469,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
                 r#"mutation {{ create_AgentRequest(input: {{
                     request_id: "stale-seed", session_id: "stale-session",
                     node_did: "{escaped_owner}", requester_did: "{escaped_requester}",
-                    agent_id: "agent", content: "resend directly",
+                    agent_id: "agent", content: "resend directly", purpose: "normal",
                     lifecycle_state: "dead", failure_reason: "Stale", created_at: "{created_at}"
                 }}) {{ _docID }} }}"#
             ),
