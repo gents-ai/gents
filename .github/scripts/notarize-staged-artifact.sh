@@ -79,7 +79,8 @@ notary_failure() {
 for var in ARTIFACT_SHA256 NOTARY_MODE RUN_DIR; do
   [[ -n "${!var:-}" ]] || fail 2 "required setting ${var} is empty"
 done
-SUBMISSION_ID="${SUBMISSION_ID:-}"
+# Apple returns lowercase ids; normalize so exact comparisons hold.
+SUBMISSION_ID="$(printf '%s' "${SUBMISSION_ID:-}" | tr '[:upper:]' '[:lower:]')"
 [[ "${ARTIFACT_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
   || fail 2 "artifact_sha256 must be 64 lowercase hex characters"
 case "${NOTARY_MODE}" in
@@ -202,6 +203,10 @@ phase_submit() {
   local status=0
 
   if [[ "${NOTARY_MODE}" == "resume" ]]; then
+    # Durably establish the host guard for this artifact before anything else,
+    # so a resumed submission blocks later submit-mode runs.
+    json state-ensure "${NOTARY_STATE_DIR}" "${ARTIFACT_SHA256}" \
+      || fail 15 "could not durably create host state for this artifact; refusing"
     if [[ -f "${state}/receipt.json" ]]; then
       local recorded
       recorded="$(json json-field "${state}/receipt.json" submission_id)" \
@@ -217,6 +222,12 @@ phase_submit() {
       || fail 11 "submission ${SUBMISSION_ID} does not belong to artifact ${SUBMISSION_NAME}; refusing before waiting"
     echo "::notice::notary resume submission_id=${SUBMISSION_ID} name=${SUBMISSION_NAME} status=${pre_status}"
     summary "notary resume: \`${SUBMISSION_ID}\` (\`${SUBMISSION_NAME}\`), status at resume: ${pre_status}"
+    if [[ ! -f "${state}/receipt.json" ]]; then
+      json state-write "${state}" receipt.json state resumed submission_id "${SUBMISSION_ID}" \
+        submission_name "${SUBMISSION_NAME}" artifact_sha256 "${ARTIFACT_SHA256}" mode resume \
+        run_id "${GITHUB_RUN_ID:-local}" run_attempt "${GITHUB_RUN_ATTEMPT:-0}" \
+        || fail 15 "could not durably record the resumed submission on the host; refusing before waiting"
+    fi
     json write-json-excl "${OUT}/receipt.json" submission_id "${SUBMISSION_ID}" \
       submission_name "${SUBMISSION_NAME}" artifact_sha256 "${ARTIFACT_SHA256}" mode resume \
       run_id "${GITHUB_RUN_ID:-local}" run_attempt "${GITHUB_RUN_ATTEMPT:-0}"
@@ -224,16 +235,14 @@ phase_submit() {
   fi
 
   # --- submit mode: host state is the primary duplicate authority.
-  mkdir -p "${NOTARY_STATE_DIR}"
-  chmod 0700 "${NOTARY_STATE_DIR}"
-  if [[ -e "${state}" ]]; then
+  if [[ -e "${state}" || -L "${state}" ]]; then
     local f
     for f in "${state}"/*.json; do
       [[ -f "${f}" ]] || continue
       printf 'notarize-staged[submit]: existing record %s: submission_id=%s state=%s\n' \
-        "$(basename "${f}")" \
-        "$(json json-field "${f}" submission_id 2>/dev/null || echo none)" \
-        "$(json json-field "${f}" state 2>/dev/null || echo unknown)" >&2
+        "$(safe "$(basename "${f}")")" \
+        "$(safe "$(json json-field "${f}" submission_id 2>/dev/null || echo none)")" \
+        "$(safe "$(json json-field "${f}" state 2>/dev/null || echo unknown)")" >&2
     done
     fail 9 "a notarization record already exists for this artifact; use mode=resume with its submission_id, or reconcile ${state} per the runbook"
   fi
@@ -251,28 +260,27 @@ phase_submit() {
     fail 9 "a submission for this artifact already exists in notary history; use mode=resume with its submission_id"
   fi
 
-  # Durable intent BEFORE the external operation.
-  mkdir -m 0700 "${state}" || fail 9 "could not create state for this artifact (concurrent attempt?)"
-  json write-json-excl "${state}/intent.json" state submitting artifact_sha256 "${ARTIFACT_SHA256}" \
-    submission_name "${SUBMISSION_NAME}" run_id "${GITHUB_RUN_ID:-local}" run_attempt "${GITHUB_RUN_ATTEMPT:-0}"
+  # Durable intent BEFORE the external operation: the state directory, its
+  # parent entry and intent.json are all flushed to stable storage first.
+  json state-create-intent "${NOTARY_STATE_DIR}" "${ARTIFACT_SHA256}" state submitting \
+    artifact_sha256 "${ARTIFACT_SHA256}" submission_name "${SUBMISSION_NAME}" \
+    run_id "${GITHUB_RUN_ID:-local}" run_attempt "${GITHUB_RUN_ATTEMPT:-0}" \
+    || fail 15 "could not durably record submission intent on the host; refusing to submit"
   cp "${state}/intent.json" "${OUT}/intent.json"
 
   xcrun notarytool submit "${SUBMIT_ZIP}" "${AUTH[@]}" --no-wait --output-format json \
     >"${CRED_DIR}/submit.json" 2>"${CRED_DIR}/submit.err" || status=$?
   if [[ "${status}" -ne 0 ]]; then
-    json write-json-excl "${state}/outcome.json" state uncertain reason submit-exit-nonzero \
-      run_id "${GITHUB_RUN_ID:-local}" || true
-    cp "${state}/outcome.json" "${OUT}/outcome.json" 2>/dev/null || true
+    record_uncertain "${state}" submit-exit-nonzero
     notary_failure submit "${CRED_DIR}/submit.err" "${status}" \
       "outcome recorded as uncertain; check notary history and ${state} before any retry"
   fi
   local id
   if ! id="$(json submit-id "${CRED_DIR}/submit.json" 2>/dev/null)"; then
-    json write-json-excl "${state}/outcome.json" state uncertain reason no-submission-id \
-      run_id "${GITHUB_RUN_ID:-local}" || true
-    cp "${state}/outcome.json" "${OUT}/outcome.json" 2>/dev/null || true
+    record_uncertain "${state}" no-submission-id
     fail 10 "submit returned no parseable submission id; outcome recorded as uncertain; check notary history and ${state} before any retry"
   fi
+  id="$(printf '%s' "${id}" | tr '[:upper:]' '[:lower:]')"
 
   # Announce first (log evidence), then persist.
   echo "::notice::notary submission_id=${id} name=${SUBMISSION_NAME} mode=submit"
@@ -280,10 +288,24 @@ phase_submit() {
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     printf 'submission_id=%s\n' "${id}" >>"${GITHUB_OUTPUT}"
   fi
-  json write-json-excl "${state}/receipt.json" state submitted submission_id "${id}" \
+  json write-json-excl "${OUT}/receipt.json" state submitted submission_id "${id}" \
     submission_name "${SUBMISSION_NAME}" artifact_sha256 "${ARTIFACT_SHA256}" mode submit \
     run_id "${GITHUB_RUN_ID:-local}" run_attempt "${GITHUB_RUN_ATTEMPT:-0}"
-  cp "${state}/receipt.json" "${OUT}/receipt.json"
+  json state-write "${state}" receipt.json state submitted submission_id "${id}" \
+    submission_name "${SUBMISSION_NAME}" artifact_sha256 "${ARTIFACT_SHA256}" mode submit \
+    run_id "${GITHUB_RUN_ID:-local}" run_attempt "${GITHUB_RUN_ATTEMPT:-0}" \
+    || fail 16 "submission ${id} was made but its host receipt could not be persisted; do not submit again: re-dispatch with mode=resume and submission_id=${id}"
+}
+
+# Best-effort uncertain marker; intent.json already blocks resubmission.
+record_uncertain() {
+  local state="$1" reason="$2"
+  if json state-write "${state}" outcome.json state uncertain reason "${reason}" \
+    run_id "${GITHUB_RUN_ID:-local}"; then
+    cp "${state}/outcome.json" "${OUT}/outcome.json" 2>/dev/null || true
+  else
+    printf 'notarize-staged[submit]: warning: could not persist uncertain outcome; intent.json still blocks resubmission\n' >&2
+  fi
 }
 
 # ============================================================== complete
@@ -351,9 +373,12 @@ phase_complete() {
     cd "${OUT}"
     shasum -a 256 "$(basename "${out_zip}")" >SHA256SUMS
   )
-  if [[ -n "${NOTARY_STATE_DIR:-}" && -d "${NOTARY_STATE_DIR%/}/${ARTIFACT_SHA256}" ]]; then
-    json write-json-excl "${NOTARY_STATE_DIR%/}/${ARTIFACT_SHA256}/accepted-${id}.json" state accepted \
-      submission_id "${id}" run_id "${GITHUB_RUN_ID:-local}" 2>/dev/null || true
+  [[ -n "${NOTARY_STATE_DIR:-}" ]] || fail 2 "required setting NOTARY_STATE_DIR is empty"
+  local accepted="${NOTARY_STATE_DIR%/}/${ARTIFACT_SHA256}/accepted-${id}.json"
+  if [[ ! -f "${accepted}" ]]; then
+    json state-write "${NOTARY_STATE_DIR%/}/${ARTIFACT_SHA256}" "accepted-${id}.json" state accepted \
+      submission_id "${id}" run_id "${GITHUB_RUN_ID:-local}" \
+      || fail 16 "acceptance of ${id} could not be persisted on the host; re-dispatch with mode=resume"
   fi
   say "stapled, validated and packaged: $(cat "${OUT}/SHA256SUMS")"
   summary "stapled output: \`$(cat "${OUT}/SHA256SUMS")\`"

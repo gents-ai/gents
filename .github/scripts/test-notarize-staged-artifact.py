@@ -11,6 +11,7 @@ Run: python3 .github/scripts/test-notarize-staged-artifact.py
 """
 
 import hashlib
+import importlib.util
 import json
 import os
 import stat
@@ -19,10 +20,16 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".github" / "scripts" / "notarize-staged-artifact.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "notarize-staged-artifact.yml"
+HELPER = ROOT / ".github" / "scripts" / "notary_json.py"
+
+_spec = importlib.util.spec_from_file_location("notary_json", HELPER)
+nj = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(nj)
 
 SECRET = "-----BEGIN PRIVATE KEY-----TOPSECRETKEYMATERIAL-----END PRIVATE KEY-----"
 KEY_ID = "KEYID12345"
@@ -75,6 +82,9 @@ receipt=0; [[ -f "$RUN_DIR/out/receipt.json" ]] && receipt=1
 intent=0; compgen -G "$NOTARY_STATE_DIR/*/intent.json" >/dev/null && intent=1
 senv=0; env | grep -q TOPSECRET && senv=1
 echo "$tool $sub receipt=$receipt intent=$intent secret_env=$senv" >> "$SHIM_LOG"
+if [[ -n "${SHIM_LOCK_STATE_ON:-}" && "$sub" == "$SHIM_LOCK_STATE_ON" ]]; then
+  chmod 0500 "$NOTARY_STATE_DIR/$ARTIFACT_SHA256"
+fi
 if [[ "$tool" == "stapler" ]]; then
   app="${args[${#args[@]}-1]}"
   case "$sub" in
@@ -350,6 +360,185 @@ class ArchiveContainmentTests(Harness):
     def test_device_entry(self):
         self.assert_rejected(lambda zf: _zip_entry(zf, "Gents.app/dev", mode=0o020644))
 
+    # --- filesystem aliases (runner volume is case/normalization-insensitive)
+    def test_case_alias_beneath_symlink(self):
+        self.assert_rejected(
+            lambda zf: (
+                _zip_entry(zf, "Gents.app/Contents/x", b"x"),
+                _zip_entry(zf, "Gents.app/Link", b"Contents", mode=0o120755),
+                _zip_entry(zf, "Gents.app/link/escape", b"x"),
+            )
+        )
+
+    def test_unicode_alias_beneath_symlink(self):
+        self.assert_rejected(
+            lambda zf: (
+                _zip_entry(zf, "Gents.app/Contents/x", b"x"),
+                _zip_entry(zf, "Gents.app/caf\u00e9", b"Contents", mode=0o120755),
+                _zip_entry(zf, "Gents.app/cafe\u0301/escape", b"x"),
+            )
+        )
+
+    def test_case_alias_duplicate_names(self):
+        self.assert_rejected(lambda zf: (_zip_entry(zf, "Gents.app/A", b"1"), _zip_entry(zf, "Gents.app/a", b"2")))
+
+    def test_unicode_alias_duplicate_names(self):
+        self.assert_rejected(
+            lambda zf: (_zip_entry(zf, "Gents.app/caf\u00e9", b"1"), _zip_entry(zf, "Gents.app/cafe\u0301", b"2"))
+        )
+
+    def test_case_alias_top_level(self):
+        self.assert_rejected(lambda zf: (_zip_entry(zf, "Gents.app/x"), _zip_entry(zf, "gents.APP/y")))
+
+    def test_chained_symlinks_escape(self):
+        # Lexically l2 stays inside the root; physically it climbs through l1.
+        self.assert_rejected(
+            lambda zf: (
+                _zip_entry(zf, "Gents.app/x"),
+                _zip_entry(zf, "Gents.app/l1", b"..", mode=0o120755),
+                _zip_entry(zf, "Gents.app/l2", b"l1/x/../../..", mode=0o120755),
+            )
+        )
+
+    def test_dotdot_symlink_inside_root_rejected_conservatively(self):
+        self.assert_rejected(
+            lambda zf: (
+                _zip_entry(zf, "Gents.app/Contents/A/f", b"x"),
+                _zip_entry(zf, "Gents.app/Contents/B/link", b"../A/f", mode=0o120755),
+            )
+        )
+
+    def test_dot_component_symlink_rejected(self):
+        self.assert_rejected(
+            lambda zf: (_zip_entry(zf, "Gents.app/x"), _zip_entry(zf, "Gents.app/link", b"./x", mode=0o120755))
+        )
+
+    def test_chained_descending_symlinks_pass(self):
+        def build(zf):
+            _zip_entry(zf, "Gents.app/", mode=0o040755)
+            _zip_entry(zf, "Gents.app/Contents/Frameworks/X.framework/Versions/A/X", b"bin")
+            _zip_entry(zf, "Gents.app/Contents/Frameworks/X.framework/Versions/Current", b"A", mode=0o120755)
+            _zip_entry(zf, "Gents.app/Contents/Frameworks/X.framework/X", b"Versions/Current/X", mode=0o120755)
+
+        sha = self.stage_zip(build)
+        self.assertEqual(self.run_phases(sha=sha, phases=("verify",)).returncode, 0)
+
+
+class FilesystemEvidenceTests(unittest.TestCase):
+    """Documents the property the alias checks defend against, on this host."""
+
+    def test_host_volume_aliases_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            os.mkdir(os.path.join(directory, "Link"))
+            if not os.path.exists(os.path.join(directory, "link")):
+                self.skipTest("case-sensitive volume")
+            Path(directory, "caf\u00e9").write_text("")
+            self.assertTrue(os.path.exists(os.path.join(directory, "cafe\u0301")))
+            self.assertEqual(nj.alias_key("Gents.app/Link"), nj.alias_key("gents.APP/link"))
+            self.assertEqual(nj.alias_key("caf\u00e9"), nj.alias_key("CAFE\u0301"))
+
+
+class DurableStateUnitTests(unittest.TestCase):
+    SHA = "a" * 64
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="state-unit-"))
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
+        self.root = self.tmp / "state"
+
+    def test_creation_order_flushes_namespace_before_intent_visible(self):
+        events = []
+        real_sync, real_link, real_mkdir = nj._sync_dir, os.link, os.mkdir
+
+        def sync(path):
+            events.append(("sync", os.path.basename(path)))
+            real_sync(path)
+
+        def link(src, dst):
+            events.append(("link", os.path.basename(dst)))
+            real_link(src, dst)
+
+        def mkdir(path, mode=0o777):
+            events.append(("mkdir", os.path.basename(path)))
+            real_mkdir(path, mode)
+
+        with mock.patch.object(nj, "_sync_dir", sync), mock.patch.object(nj.os, "link", link), \
+                mock.patch.object(nj.os, "mkdir", mkdir):
+            nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+        self.assertEqual(
+            events,
+            [
+                ("mkdir", "state"), ("sync", self.tmp.name), ("sync", "state"),
+                ("mkdir", self.SHA), ("sync", "state"),
+                ("link", "intent.json"), ("sync", self.SHA),
+            ],
+        )
+        record = json.loads((self.root / self.SHA / "intent.json").read_text())
+        self.assertEqual(record["state"], "submitting")
+        self.assertEqual(sorted(os.listdir(self.root / self.SHA)), ["intent.json"])
+
+    def test_file_flush_failure_never_publishes_intent(self):
+        real = nj._full_sync
+
+        def fail_on_files(fd):
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(5, "EIO")
+            real(fd)
+
+        with mock.patch.object(nj, "_full_sync", fail_on_files):
+            with self.assertRaises(OSError):
+                nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+        self.assertEqual(os.listdir(self.root / self.SHA), [])  # no intent, no temp left
+
+    def test_link_failure_never_publishes_intent(self):
+        with mock.patch.object(nj.os, "link", side_effect=OSError(28, "ENOSPC")):
+            with self.assertRaises(OSError):
+                nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+        self.assertEqual(os.listdir(self.root / self.SHA), [])
+
+    def test_directory_flush_failure_is_an_error(self):
+        real = nj._sync_dir
+        calls = []
+
+        def flaky(path):
+            calls.append(path)
+            if os.path.basename(path) == self.SHA:
+                raise OSError(5, "EIO")
+            real(path)
+
+        with mock.patch.object(nj, "_sync_dir", flaky):
+            with self.assertRaises(OSError):
+                nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+
+    def test_root_flush_failure_is_an_error(self):
+        with mock.patch.object(nj, "_sync_dir", side_effect=OSError(5, "EIO")):
+            with self.assertRaises(OSError):
+                nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+
+    def test_existing_state_refused_and_records_never_overwritten(self):
+        nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+        with self.assertRaises(nj.Refused):
+            nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+        state = str(self.root / self.SHA)
+        nj.state_write(state, "receipt.json", "submission_id", "x")
+        with self.assertRaises(FileExistsError):
+            nj.state_write(state, "receipt.json", "submission_id", "y")
+        self.assertEqual(json.loads(Path(state, "receipt.json").read_text())["submission_id"], "x")
+        self.assertFalse([n for n in os.listdir(state) if n.startswith(".")])
+
+    def test_symlinked_root_or_state_refused(self):
+        real = self.tmp / "elsewhere"
+        real.mkdir()
+        os.symlink(real, self.root)
+        with self.assertRaises(nj.Refused):
+            nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+
+    def test_full_fsync_used(self):
+        with mock.patch.object(nj.fcntl, "fcntl") as fcntl_call:
+            nj.state_create_intent(str(self.root), self.SHA, "state", "submitting")
+        self.assertTrue(fcntl_call.call_args_list)
+        self.assertTrue(all(c.args[1] == nj.fcntl.F_FULLFSYNC for c in fcntl_call.call_args_list))
+
 
 class VerificationTests(Harness):
     def test_bad_sha_input_fails_before_credentials(self):
@@ -468,6 +657,52 @@ class DuplicateGuardTests(Harness):
         self.assertEqual(retry.returncode, 9)
         self.assertEqual(len(self.called("notarytool submit")), 1)
 
+    def unlock_state_on_cleanup(self):
+        self.addCleanup(subprocess.run, ["chmod", "-R", "u+w", str(self.tmp)])
+
+    def test_intent_persistence_failure_refuses_before_submit(self):
+        locked = self.tmp / "locked"
+        locked.mkdir()
+        locked.chmod(0o500)
+        self.unlock_state_on_cleanup()
+        self.notary_state = locked / "state"
+        result = self.run_phases()
+        self.assertEqual(result.returncode, 15, result.stderr)
+        self.assertIn("refusing to submit", result.stderr)
+        self.assertEqual(self.called("notarytool submit"), [])
+        self.assert_credentials_removed()
+
+    def test_receipt_persistence_failure_after_submit(self):
+        self.unlock_state_on_cleanup()
+        result = self.run_phases(SHIM_LOCK_STATE_ON="submit")
+        self.assertEqual(result.returncode, 16, result.stderr)
+        self.assertIn(SUBMISSION, result.stderr)
+        self.assertIn("mode=resume", result.stderr)
+        self.assertIn(f"submission_id={SUBMISSION}", result.stdout)  # announced before persisting
+        self.assertTrue((self.run_dir / "out" / "receipt.json").exists())
+        self.assertEqual(self.called("notarytool wait"), [])
+        (self.notary_state / self.sha).chmod(0o700)
+        self.assertEqual(self.run_phases().returncode, 9)  # intent still blocks resubmission
+        resumed = self.run_phases(mode="resume", submission_id=SUBMISSION)
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertEqual(len(self.called("notarytool submit")), 1)
+        self.assertIn("receipt.json", self.state_files())
+
+    def test_acceptance_persistence_failure_fails_closed(self):
+        self.unlock_state_on_cleanup()
+        result = self.run_phases(SHIM_LOCK_STATE_ON="log")
+        self.assertEqual(result.returncode, 16, result.stderr)
+        self.assertIn("mode=resume", result.stderr)
+
+    def test_existing_record_values_are_sanitized(self):
+        state = self.notary_state / self.sha
+        state.mkdir(parents=True)
+        (state / "receipt.json").write_text(json.dumps({"submission_id": "x\u001b[31mevil", "state": "ok"}))
+        result = self.run_phases()
+        self.assertEqual(result.returncode, 9)
+        self.assertNotIn("\u001b", result.stderr)
+        self.assertIn("submission_id=<redacted>", result.stderr)
+
     def test_submit_without_id_records_uncertain(self):
         result = self.run_phases(SHIM_SUBMIT_JSON='{"message":"odd"}')
         self.assertEqual(result.returncode, 10)
@@ -538,6 +773,21 @@ class ResumeTests(Harness):
         result = self.run_phases(mode="resume", submission_id=OTHER_ID)
         self.assertEqual(result.returncode, 11)
         self.assertEqual(self.called("notarytool wait")[1:], [])
+
+    def test_resume_without_state_persists_host_guard(self):
+        result = self.run_phases(mode="resume", submission_id=SUBMISSION)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads((self.notary_state / self.sha / "receipt.json").read_text())
+        self.assertEqual(receipt["state"], "resumed")
+        self.assertEqual(receipt["submission_id"], SUBMISSION)
+        self.assertIn(f"accepted-{SUBMISSION}.json", self.state_files())
+        self.assertEqual(self.run_phases().returncode, 9)  # later submit is blocked
+        self.assertEqual(self.called("notarytool submit"), [])
+
+    def test_resume_accepts_uppercase_id(self):
+        result = self.run_phases(mode="resume", submission_id=SUBMISSION.upper())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.run_dir / "out" / "receipt.json").read_text())["submission_id"], SUBMISSION)
 
     def test_resume_after_uncertain_submit_reconciles(self):
         self.assertEqual(self.run_phases(SHIM_SUBMIT_RC="1").returncode, 21)

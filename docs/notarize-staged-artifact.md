@@ -3,9 +3,10 @@
 Workflow: `.github/workflows/notarize-staged-artifact.yml`
 Script: `.github/scripts/notarize-staged-artifact.sh verify|submit|complete`
 (+ `notary_json.py`)
-Tests: `python3 .github/scripts/test-notarize-staged-artifact.py` (macOS; the
-static workflow checks need PyYAML and are skipped without it). These tests
-are **not** wired into `ci.yml`; run them manually before changing these files.
+Tests: `python3 .github/scripts/test-notarize-staged-artifact.py`. They need
+macOS (real `ditto`/`shasum`); the static workflow checks need PyYAML. The
+`notary-control-tests` job in `ci.yml` runs them, with PyYAML, on every pull
+request.
 
 Use this workflow when a Developer-ID-signed `.app` already exists and only
 notarization and stapling are missing. It does not build, re-sign or publish
@@ -22,13 +23,25 @@ The workflow runs as one job with these steps, in order:
 2. **`verify` (no credentials in the step environment).**
    - Copies `<inbox>/<sha256>.zip` privately and checks its SHA-256.
    - Validates every archive entry **before** extraction:
-     - No absolute paths, empty/`.`/`..` components, backslashes, NUL or
-       duplicate names.
+     - No absolute paths, empty/`.`/`..` components, backslashes or NUL.
+     - **Names are compared as the runner's filesystem compares them.** The
+       studio-1 data volume is APFS, which is case-insensitive and
+       Unicode-normalization-insensitive; the tests confirm both properties
+       on the test host. Names are therefore compared by an alias key (NFD,
+       then casefold). Two entries with the same key are rejected, and so is
+       any entry beneath an alias of a symlink entry. This includes
+       `Link`/`link/x`, and `café` (NFC) versus `café` (NFD).
      - Only regular files, directories and symlinks.
      - Exactly one top-level `<Name>.app`, which is not itself a symlink.
-     - No entry beneath a symlink entry.
-     - Symlink targets are relative and stay inside the app.
-     - `__MACOSX/` is rejected.
+     - **Conservative symlink policy.** A target must be relative and must not
+       contain empty, `.` or `..` components. Such a target can only descend
+       from the link's own directory, which is inside the app. So no chain of
+       links can leave the app, and no link resolution is needed. Legitimate
+       links that climb with `..` are rejected rather than resolved; framework
+       links (`Versions/Current -> A`, `X -> Versions/Current/X`) pass. The
+       `039e22998` desktop zip contains no symlinks.
+     - `__MACOSX/` is rejected. See the operator procedure for how to build
+       the zip.
    - Extracts the archive, then re-checks the real tree: only the app at top
      level, the app is a real directory, and every symlink's real path stays
      inside the app.
@@ -46,15 +59,26 @@ The workflow runs as one job with these steps, in order:
        `history` list is missing, if any entry lacks a string
        `id`/`name`/`status`, or if any entry already has this artifact's
        name.
-     - It then atomically creates `intent.json` in that host state directory
-       and runs exactly one `notarytool submit --no-wait`.
-     - It announces the id (notice, summary, step output) and writes
-       `receipt.json`.
-     - If submit exits non-zero or returns no id, it writes
-       `outcome.json` with `state: uncertain` and fails. Any later submit for
-       that artifact is refused until the uncertainty is reconciled.
+     - It then **durably** creates the state directory and `intent.json`
+       (see *Host-state durability*). Only after that succeeds does it run
+       exactly one `notarytool submit --no-wait`. If any part of the
+       persistence fails, it refuses to submit (exit 15).
+     - It announces the id (notice, summary, step output), writes
+       `out/receipt.json`, then durably writes the host `receipt.json`. If
+       the host receipt cannot be persisted, it fails (exit 16) telling the
+       operator to resume with that id. `intent.json` still blocks a resubmit.
+     - If submit exits non-zero or returns no id, it records
+       `outcome.json` with `state: uncertain` (best effort) and fails. Any
+       later submit for that artifact is refused, because the intent exists,
+       until the uncertainty is reconciled.
    - **Resume mode:**
      - Never submits and never reads history.
+     - Durably creates the host state directory for the artifact if it does
+       not exist yet. After Apple's identity check, it durably records
+       `receipt.json` (`state: resumed`) if none exists. A resumed submission
+       therefore blocks later submit-mode runs, even when the original
+       submission was made elsewhere.
+     - Submission ids are lowercased, so uppercase input works.
      - The id must match any recorded `receipt.json`.
      - Apple's `info` for the id must report this artifact's submission name.
        This is checked **before** any waiting.
@@ -93,6 +117,47 @@ The workflow runs as one job with these steps, in order:
 - **Uploaded provider data.** `notary-info*.json` and `notary-log.json` are
   Apple provider data (non-secret) and are uploaded as artifacts as-is.
 
+## Host-state durability
+
+Records are created by `notary_json.py` as follows:
+
+- **State root.** Created if missing (mode 0700). Its parent directory is
+  flushed, then the root itself is flushed.
+- **Artifact directory.** `<root>/<full sha256>/` is created with an
+  exclusive `mkdir`; an existing directory refuses the submit. The root is
+  then flushed so the new directory entry is stable.
+- **Each record** (`intent.json`, `receipt.json`, `outcome.json`,
+  `accepted-<id>.json`) is published in four steps:
+  1. The JSON is written to a temporary file.
+  2. The file is flushed with `fsync` plus `F_FULLFSYNC`.
+  3. The file is hard-linked to its final name. The link fails if the name
+     exists, so records are never overwritten and are never visible
+     half-written.
+  4. The temporary name is removed and the directory is flushed.
+- **Errors.** Every flush and link error is a failure, and the script fails
+  closed.
+
+`F_FULLFSYNC` is what asks macOS to push data through the drive's write cache
+to stable storage; plain `fsync` does not guarantee that. It is applied to
+files and directories, and works on directories on studio-1 (checked).
+
+What this guarantees, and what it does not:
+
+- **Process interruption** (cancel, timeout, SIGKILL, runner restart) with the
+  host still up: every record that was written is visible.
+  - An interruption before the intent exists means no Apple contact happened.
+  - An interruption after it means the intent blocks any automatic resubmit.
+- **Host crash or power loss.** The intent, including its directory entries,
+  has reached stable storage before `notarytool submit` starts. A crash
+  between the submit and a durable receipt leaves an intent with no receipt.
+  That is reconciled by hand (operator step 4), never resubmitted
+  automatically.
+- **Not covered:**
+  - Hardware that ignores cache-flush requests.
+  - Loss or corruption of the volume.
+  - Deleting the state directory or replacing the host.
+  - Submissions made from anywhere other than this host.
+
 ## Duplicate-guard limitations (read before dispatching)
 
 - **The host state directory is the primary authority.** It is
@@ -117,6 +182,10 @@ The workflow runs as one job with these steps, in order:
 
 1. **Stage the zip** on studio-1. It must be readable by the runner user
    `admin`.
+
+   Build the zip with `ditto -c -k --keepParent Gents.app Gents.zip`.
+   **Do not** pass `--sequesterRsrc`: it adds a top-level `__MACOSX/` folder,
+   which the single-top-level-entry check rejects.
 
    ```sh
    SHA=$(shasum -a 256 Gents.zip | cut -d' ' -f1)
