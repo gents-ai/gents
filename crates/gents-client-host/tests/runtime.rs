@@ -128,25 +128,30 @@ async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::EditorHistory)
+    let evidence = editor_history::ProfileEvidence::from_env(temp.path())?;
+    let result = exercise(temp.path(), Journey::EditorHistory)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-                "editor-history-seed-progress.json",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
-    copy_editor_evidence(temp.path(), "editor-history-canonical.json")
+        .and_then(|()| copy_editor_evidence(temp.path(), "editor-history-canonical.json"));
+    if let Some(evidence) = evidence {
+        evidence.finish(temp.path(), &result)?;
+    }
+    result.with_context(|| {
+        [
+            "runtime.log",
+            "runtime.err",
+            "client-host.log",
+            "editor.log",
+            "editor-history-seed-progress.json",
+            "editor-history-seed-failure.json",
+        ]
+        .map(|name| {
+            format!(
+                "{name}:\n{}",
+                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+            )
+        })
+        .join("\n")
+    })
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -218,8 +223,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         None,
         Arc::new(move |request| {
             if let Some(options) = history {
-                if let Some(reply) = editor_history::reply(&request, options.turns) {
-                    return ChatAction::Sse(fake_llm::completion_text_sse(&reply));
+                if let Some(reply) = editor_history::reply(&request, options) {
+                    return reply;
                 }
             }
             if matches!(journey, Journey::EditorWorkspace)
