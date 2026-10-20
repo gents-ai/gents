@@ -100,6 +100,10 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
           , { field := "node_did", value := ownerDid } ] }
+    , { collection := "FileImageHydrationRequest"
+      , clauses :=
+          [ { field := "requester_did", value := requesterDid }
+          , { field := "node_did", value := ownerDid } ] }
     , { collection := "AgentSessionInputEdit"
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
@@ -561,5 +565,21 @@ theorem goal_observation_conjoins_requester_and_destination (requesterDid ownerD
         , { field := "node_did", value := ownerDid } ] } := by
   simp [clientRouteFilters, clientTranscriptPredicates,
     clientTranscriptCollections, transcriptCollections]
+
+theorem file_image_demand_conjoins_requester_and_destination
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    (clientRouteFilters direction requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "FileImageHydrationRequest") =
+      some { collection := "FileImageHydrationRequest"
+           , clauses := [ { field := "requester_did", value := requesterDid }
+                        , { field := "node_did", value := ownerDid } ] } := by
+  cases direction <;> simp [clientRouteFilters, clientTranscriptPredicates,
+    clientTranscriptCollections, transcriptCollections]
+
+theorem file_images_are_not_ordinary_replication :
+    "ToolFileChange" ∉ clientCollections ∧
+    "ToolFileChange" ∉ conversationCollections ∧
+    "ToolFileChange" ∉ clientToRuntimeCollections := by
+  decide
 
 end ScopeTemplates

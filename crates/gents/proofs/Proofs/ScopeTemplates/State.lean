@@ -69,6 +69,12 @@ structure Template where
 
 abbrev Catalog := List Template
 
+/-- These records travel through filtered control routes or explicit document
+push. Whole-collection subscriptions would bypass the file-review selection
+boundary and eagerly hydrate retained images. -/
+def explicitDeliveryCollections : List String :=
+  ["ToolFileChange", "FileImageHydrationRequest"]
+
 def transcriptCollections : List String :=
   ["AgentRequest", "AgentMessage", "AgentToolCall", "AgentOutputSegment",
    "AgentSession", "CompactionEntry"]
@@ -102,7 +108,8 @@ def clientOwnerProjectionCollections : List String :=
 
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
-    ["PeerEndpoint", "SessionHydrationRequest", "AgentSessionInputEdit", "AgentSessionGoalControl"]
+    ["PeerEndpoint", "SessionHydrationRequest", "FileImageHydrationRequest",
+     "AgentSessionInputEdit", "AgentSessionGoalControl"]
 
 def clientControlPlaneCollections : List String :=
   agentConfigCollections ++

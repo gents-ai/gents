@@ -1330,6 +1330,22 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases"
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_review_subscription_cases"
+      "FileReviewSubscriptionCases"
+      "client::schema::tests::generated_file_review_rules_exclude_whole_collection_delivery")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_image_hydration_route_cases"
+      "FileImageHydrationRouteCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_hydration_cases"
+      "FileImageHydrationCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_cases_drive_exact_tool_selection"
+      "Drives native selection with exact enrollment, session and physical tool/image observations. Delivery, signed receipts and client demand wiring remain transport refinement obligations.")
+      "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_change_review_cases"
       "WorkspaceChangeReviewCases"

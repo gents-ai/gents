@@ -28,6 +28,7 @@ import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.ChangeReview
+import Proofs.Conformance.FileImageHydration
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
@@ -500,6 +501,12 @@ def snapshotJson : String :=
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
     ++ "\"workspace_change_review_cases\":"
       ++ Conformance.ChangeReviewContracts.casesJson ++ ","
+    ++ "\"file_image_hydration_cases\":"
+      ++ Conformance.FileImageHydrationContracts.casesJson ++ ","
+    ++ "\"file_image_hydration_route_cases\":"
+      ++ Conformance.FileImageHydrationContracts.routeCasesJson ++ ","
+    ++ "\"file_review_subscription_cases\":"
+      ++ Conformance.FileImageHydrationContracts.subscriptionCasesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
     ++ "\"workspace_cases\":"
