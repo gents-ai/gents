@@ -1266,7 +1266,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         }));
-        run_editor_journey(
+        let editor_result = run_editor_journey(
             root,
             &paths,
             &host_binary,
@@ -1274,7 +1274,16 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             provider.endpoint(),
             "goals",
         )
-        .await?;
+        .await;
+        std::fs::write(
+            root.join("editor-goal-recovery-provider.json"),
+            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        if root.join("editor-artifacts-path").is_file() {
+            copy_editor_evidence(root, "editor-goal-recovery-provider.json")?;
+        }
+        editor_result?;
         let observation =
             wait_goal(&mut client, &mut id, node_did, session, "budget_limited").await?;
         let evidence = editor_goal_recovery::verify(

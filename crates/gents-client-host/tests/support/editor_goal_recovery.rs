@@ -194,7 +194,7 @@ pub async fn verify(
         "usage failure or bounded budget wrap-up missing"
     );
     Ok(
-        json!({"nodeDid":node,"sessionId":session,"goalId":goal["goal_id"],"verifiedSignatures":rows.len(),"providerAttempts":4,"explicitResumes":2,"usageLimited":true,"budgetWrapupCompleted":true,"observation":observation,"ui":ui}),
+        json!({"nodeDid":node,"sessionId":session,"goalId":goal["goal_id"],"verifiedSignatures":rows.len(),"providerAttempts":captured.len(),"goalProviderAttempts":4,"explicitResumes":2,"usageLimited":true,"budgetWrapupCompleted":true,"observation":observation,"ui":ui}),
     )
 }
 
