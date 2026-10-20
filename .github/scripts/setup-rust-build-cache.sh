@@ -6,10 +6,17 @@ if [[ -z "${CARGO_BUILD_JOBS:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${CARGO_TARGET_ROOT:-}" ]]; then
-  echo "::error::CARGO_TARGET_ROOT must be set for persistent Cargo target output."
+if [[ -z "${RUNNER_TEMP:-}" ]]; then
+  echo "::error::RUNNER_TEMP must be set; Cargo target output is scoped to the job."
   exit 1
 fi
+
+# The runner empties RUNNER_TEMP around every job, so linked artifacts never
+# outlive the job that built them. The host sccache service is the shared,
+# size-capped compiler cache. Keep this path free of run IDs: sccache hashes
+# CARGO_* environment values, so a per-runner stable path keeps hits warm.
+export CARGO_TARGET_ROOT="${RUNNER_TEMP}/gents-cargo-target"
+echo "CARGO_TARGET_ROOT=${CARGO_TARGET_ROOT}" >> "${GITHUB_ENV}"
 
 if [[ -z "${RUNNER_NAME:-}" ]]; then
   echo "::error::RUNNER_NAME must be set to isolate Cargo target output per runner process."
@@ -64,7 +71,7 @@ if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
   echo "Installed isolated Cargo configuration at ${runner_cargo_home}/config.toml."
   echo "Installed stable direct rustc wrapper at ${direct_wrapper}."
   echo "Shared dependency caches remain rooted at ${shared_cargo_home}."
-  echo "sccache is disabled for this suite; using the runner-local Cargo target tree."
+  echo "sccache is disabled for this suite; using the job-scoped Cargo target tree."
   exit 0
 fi
 

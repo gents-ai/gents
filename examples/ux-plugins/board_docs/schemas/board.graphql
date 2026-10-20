@@ -1,0 +1,12 @@
+type BoardTask {
+  task_id: String
+  title: String
+  lane: String
+  created_at: String
+}
+
+type BoardMove {
+  task_id: String
+  lane: String
+  moved_at: String
+}

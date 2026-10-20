@@ -24,3 +24,6 @@ test-results
 *.njsproj
 *.sln
 *.sw?
+
+# the plugin sandbox runtime, built by `npm run build:sandbox`
+public/ux-sandbox/

@@ -14,6 +14,7 @@ pub mod peers;
 pub(crate) mod service_executable;
 pub mod tasks;
 pub mod tools_explain;
+pub mod ux_plugins;
 
 #[cfg(test)]
 #[path = "tauri_commands/operations_tests.rs"]

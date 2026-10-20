@@ -213,6 +213,7 @@ mod tests {
                 assets,
                 dependency_assets: vec![],
                 plugins: vec![],
+                ux: Vec::new(),
                 installed_at: "2026-01-01T00:00:00Z".into(),
                 installed_via: Some(via),
             },
@@ -422,6 +423,7 @@ mod tests {
                     .map(|(coordinate, dir)| ((*coordinate).into(), (*dir).into()))
                     .collect(),
                 plugins: vec![],
+                ux: Vec::new(),
                 installed_at: "2026-01-01T00:00:00Z".into(),
                 installed_via: Some(InstalledVia::Operator),
             },
@@ -470,6 +472,7 @@ mod tests {
                 assets: content.clone(),
                 dependency_assets: vec![],
                 plugins: vec![],
+                ux: Vec::new(),
                 installed_at: "2026-01-01T00:00:00Z".into(),
                 installed_via: Some(InstalledVia::Operator),
             },

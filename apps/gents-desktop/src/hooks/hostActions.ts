@@ -5,6 +5,9 @@ import type {
   PackInstallRequest,
   PackWireRequest,
   PluginApprovalDecision,
+  PackPluginCallRequest,
+  UxDataCallRequest,
+  UxDataSurfacesRequest,
 } from "@source-inc/gents-desktop-client";
 
 import { openInBrowser } from "../lib/externalLinks";
@@ -36,6 +39,12 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     listPendingPluginApprovals: () => api.listPendingPluginApprovals(),
     decidePluginApproval: (id: string, decision: PluginApprovalDecision) =>
       api.decidePluginApproval(id, decision),
+    listUxPlugins: () => api.listUxPlugins(),
+    readUxPluginSource: (id: string) => api.readUxPluginSource(id),
+    callPackPlugin: (request: PackPluginCallRequest) => api.callPackPlugin(request),
+    callUxData: (request: UxDataCallRequest) => api.callUxData(request),
+    listUxDataSurfaces: (request: UxDataSurfacesRequest) =>
+      api.listUxDataSurfaces(request),
     async openExternalUrl(url: string) {
       if (inNativeShell() && api.openExternalUrl) {
         try {

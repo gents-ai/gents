@@ -13,6 +13,8 @@ pub struct ScaffoldInput {
     pub template: Option<Template>,
     pub kind: Option<Kind>,
     pub language: Option<String>,
+    /// also scaffold a UX plugin (`ux/<name>/plugin.js`) and declare it under `ux`
+    pub ux: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,6 +54,9 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     // Resolve generated paths through the rooted owner before writing, refusing nested symlink escapes.
     let context = crate::toolset::ToolContext::new(dir.to_path_buf(), false)?;
     let mut output_paths = vec!["README.md".to_owned(), "manifest.json".to_owned()];
+    if input.ux {
+        output_paths.push(format!("ux/{}/plugin.js", names.name));
+    }
     match template {
         Template::Assets => {}
         Template::Minimal | Template::Automation | Template::Graph => {
@@ -174,6 +179,21 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
         }
     }
 
+    if input.ux {
+        let (path, source) = ux_plugin_source(&names);
+        let directive = names.name.replace('_', "-");
+        manifest["ux"] = json!([{
+            "name": names.name,
+            "description": format!("{} page, nav row and ::{directive} directive.", names.title),
+            "entry": path,
+            "contributes": {
+                "areas": ["nav", "plugin.pages", "transcript.directives"],
+                "directives": [directive],
+            },
+        }]);
+        files.push((path, source));
+    }
+
     for (path, contents) in &files {
         let target = dir.join(path);
         if let Some(parent) = target.parent() {
@@ -224,6 +244,60 @@ fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The scaffolded UX plugin: a plain ESM file (no build) that lands a nav
+/// row, the plugin's own page and a transcript directive, each in the
+/// smallest shape that works: the row and the chip are data the shell
+/// draws, the page renders in the plugin's frame. Returns its
+/// pack-relative path and source.
+fn ux_plugin_source(names: &Names) -> (String, String) {
+    let path = format!("ux/{}/plugin.js", names.name);
+    let directive = names.name.replace('_', "-");
+    let source = format!(
+        r#"// {title}: a UX plugin the desktop loads from this pack into a frame of
+// its own. Plain ESM, no build step; only `@gents/ux-sdk`, `react` and
+// `react/jsx-runtime` may be imported. Everything it does goes through
+// `ctx`, so disabling the plugin undoes all of it. Run `gents pack check`
+// to lint, `gents ux module` to see what the desktop receives. To read and
+// write the node's documents, declare a surface under `ux[].data` in the
+// manifest and use `useQuery` / `useWrite` from the SDK.
+import {{ NAV_AREA, PLUGIN_PAGE_AREA, TRANSCRIPT_DIRECTIVE_AREA, Group, Row }} from '@gents/ux-sdk'
+import {{ jsx }} from 'react/jsx-runtime'
+
+/* the plugin's own page, where its nav row goes; a configuration page
+   would be an AGENT_SECTIONS_AREA contribution instead */
+function Page() {{
+  return jsx(Group, {{ title: '{title}', children:
+    jsx(Row, {{ label: 'Page', description: 'the plugin\'s own page', children:
+      jsx('code', {{ className: 'font-mono text-xs', children: '/plugins/{name}' }}) }}) }})
+}}
+
+export default {{
+  id: '{name}',
+  name: '{title}',
+  description: '{title} page, nav row and ::{directive} directive.',
+  register(ctx) {{
+    ctx.registerMany([
+      {{ id: 'nav', area: NAV_AREA, order: 80, data: {{
+        id: '{name}:nav', label: '{title}', icon: 'puzzle',
+        to: {{ name: 'plugin', pluginId: '{name}' }},
+        placement: 'footer', order: 80 }} }},
+      {{ id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Page, {{}}) }},
+      /* the ::{directive}{{id="..."}} chip the model can write; the shell draws
+         the label from the attributes, the click lands here */
+      {{ id: 'directive', area: TRANSCRIPT_DIRECTIVE_AREA, data: {{
+        name: '{directive}', label: '{title}: {{id}}',
+        onClick: () => ctx.shell.navigate({{ name: 'plugin', pluginId: '{name}' }}) }} }},
+    ])
+  }},
+}}
+"#,
+        title = names.title,
+        name = names.name,
+        directive = directive,
+    );
+    (path, source)
 }
 
 pub fn tool_markdown(name: &str) -> (String, String) {
@@ -467,6 +541,7 @@ mod tests {
             namespace: "acme".into(),
             template: Some(template),
             language: None,
+            ux: false,
         }
     }
 
@@ -506,6 +581,87 @@ mod tests {
         }
     }
 
+    /// `pack new --ux` on a plugins template leaves the .afb unbuilt; the
+    /// first `pack check` must still lint the UX module, and the manifest
+    /// must name the directive the module actually claims.
+    #[tokio::test]
+    async fn a_ux_scaffold_is_linted_before_its_plugin_is_built_and_names_its_directive() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        let args = ScaffoldInput {
+            ux: true,
+            ..input(Template::PluginTool)
+        };
+        scaffold(&dir, "review_toolkit", &args).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        let description = manifest["ux"][0]["description"].as_str().unwrap();
+        assert!(description.contains("::review-toolkit"), "{description}");
+        assert_eq!(
+            manifest["ux"][0]["contributes"]["directives"][0],
+            "review-toolkit"
+        );
+
+        let check = super::super::check::check_dir(&dir).await;
+        assert!(check.problems.is_empty(), "{:#?}", check.problems);
+        assert_eq!(check.digest, None, "the plugin is not built yet");
+
+        let entry = dir.join(manifest["ux"][0]["entry"].as_str().unwrap());
+        std::fs::write(
+            &entry,
+            "export default { id: 'review_toolkit', register() { eval('1') } }\n",
+        )
+        .unwrap();
+        let check = super::super::check::check_dir(&dir).await;
+        assert!(
+            check
+                .problems
+                .iter()
+                .any(|p| p.contains("refused by the static lint") && p.contains("dynamic code")),
+            "{:#?}",
+            check.problems
+        );
+    }
+
+    struct NoPlugins;
+
+    impl super::super::build::PluginCompiler for NoPlugins {
+        fn load_and_validate(&self, _owner: &str, _dir: &Path) -> Result<()> {
+            unreachable!("an assets pack has no plugin to build")
+        }
+        fn compile(&self, _owner: &str, _dir: &Path, _out_path: &Path) -> Result<()> {
+            unreachable!("an assets pack has no plugin to build")
+        }
+    }
+
+    /// `pack build` refuses a file-produced UX module the webview would
+    /// refuse, so a built archive is lint-clean by construction.
+    #[tokio::test]
+    async fn build_refuses_a_ux_module_the_lint_refuses() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        let args = ScaffoldInput {
+            ux: true,
+            ..input(Template::Assets)
+        };
+        scaffold(&dir, "review_toolkit", &args).unwrap();
+        let check = super::super::check::check_dir(&dir).await;
+        assert!(check.problems.is_empty(), "{:#?}", check.problems);
+        let built = super::super::build::build_pack(&dir, &NoPlugins, None).unwrap();
+        assert_eq!(Some(built.digest), check.digest);
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        let entry = dir.join(manifest["ux"][0]["entry"].as_str().unwrap());
+        std::fs::write(&entry, "import x from 'https://evil/s.js'\nexport default { id: 'review_toolkit', register() {} }\n").unwrap();
+        let error = super::super::build::build_pack(&dir, &NoPlugins, None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("static lint refuses")
+                && format!("{error:#}").contains("non-sdk import"),
+            "{error:#}"
+        );
+    }
+
     #[test]
     fn the_plugin_template_declares_an_unbuilt_artifact() {
         let root = tempfile::tempdir().unwrap();
@@ -537,6 +693,7 @@ mod tests {
                 template: Some(Template::PluginTool),
                 kind: None,
                 language: None,
+                ux: false,
             },
         );
 

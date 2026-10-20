@@ -85,6 +85,7 @@ import type { PendingQueueEditRequest } from "./PendingQueueEditRequest.js";
 import type { PendingQueueEditResult } from "./PendingQueueEditResult.js";
 import type { PluginApprovalsView } from "./PluginApprovalsView.js";
 import type { PluginBindRequest } from "./PluginBindRequest.js";
+import type { PluginCallRequest } from "./PluginCallRequest.js";
 import type { ProviderAccountDisconnectRequest } from "./ProviderAccountDisconnectRequest.js";
 import type { ProviderAccountRemoveRequest } from "./ProviderAccountRemoveRequest.js";
 import type { ProviderAccountRenameRequest } from "./ProviderAccountRenameRequest.js";
@@ -118,6 +119,8 @@ import type { ToolsDeleteRequest } from "./ToolsDeleteRequest.js";
 import type { ToolsSaveRequest } from "./ToolsSaveRequest.js";
 import type { TriggerDeleteRequest } from "./TriggerDeleteRequest.js";
 import type { TriggerSaveRequest } from "./TriggerSaveRequest.js";
+import type { UxDataCallRequest } from "./UxDataCallRequest.js";
+import type { UxDataSurfacesRequest } from "./UxDataSurfacesRequest.js";
 import type { WorkspaceListingView } from "./WorkspaceListingView.js";
 
 export type DesktopCommands = {
@@ -201,6 +204,7 @@ export type DesktopCommands = {
   desktop_plugin_approval_subscribe: { args: { token: string }; result: void };
   desktop_plugin_approval_unsubscribe: { args: { token: string }; result: void };
   desktop_plugin_approvals_pending: { args: Record<string, never>; result: PluginApprovalsView };
+  desktop_plugin_call: { args: { request: PluginCallRequest }; result: JsonValue };
   desktop_probe_inference_endpoint: { args: { request: InferenceProbeRequest }; result: InferenceProbeResult };
   desktop_probe_mcp_service: { args: { request: DesktopProbeMcpServiceRequest }; result: McpServiceProbeResult };
   desktop_provider_account_disconnect: { args: { request: ProviderAccountDisconnectRequest }; result: void };
@@ -236,5 +240,9 @@ export type DesktopCommands = {
   desktop_tools_save: { args: { request: ToolsSaveRequest }; result: DesktopClientSnapshot };
   desktop_trigger_delete: { args: { request: TriggerDeleteRequest }; result: DesktopClientSnapshot };
   desktop_trigger_save: { args: { request: TriggerSaveRequest }; result: DesktopClientSnapshot };
+  desktop_ux_data_call: { args: { request: UxDataCallRequest }; result: JsonValue };
+  desktop_ux_data_surfaces: { args: { request: UxDataSurfacesRequest }; result: JsonValue };
+  desktop_ux_plugin_source: { args: { id: string }; result: JsonValue };
+  desktop_ux_plugins_list: { args: Record<string, never>; result: JsonValue };
   desktop_workspace_list: { args: { subpath?: string | null }; result: WorkspaceListingView };
 };

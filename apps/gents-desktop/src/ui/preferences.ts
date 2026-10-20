@@ -8,10 +8,16 @@ import { ZOOM_STEPS } from "./lib/zoom";
 
 export type NavMode = "hover" | "expanded" | "collapsed";
 
+/** Where a message the person sends settles: the view keeps following the
+    foot as the reply grows, or the message is kept near the top of the view
+    with the reply filling in beneath it. */
+export type SentTurnPlacement = "follow" | "anchor";
+
 export type Preferences = {
   theme: ThemePreference;
   nav: NavMode;
   zoom: number;
+  sentTurn: SentTurnPlacement;
 };
 
 const NAV_MODES: readonly string[] = ["hover", "expanded", "collapsed"];
@@ -20,6 +26,7 @@ const initial = (): Preferences => ({
   theme: systemTheme(),
   nav: "hover",
   zoom: 1,
+  sentTurn: "follow",
 });
 
 export function restorePreferences(
@@ -40,6 +47,10 @@ export function restorePreferences(
     zoom: (ZOOM_STEPS as readonly unknown[]).includes(saved.zoom)
       ? (saved.zoom as number)
       : defaults.zoom,
+    sentTurn:
+      saved.sentTurn === "follow" || saved.sentTurn === "anchor"
+        ? saved.sentTurn
+        : defaults.sentTurn,
   };
 }
 
@@ -62,6 +73,9 @@ export const preferences = {
   },
   setZoom(zoom: number) {
     store.setState({ zoom });
+  },
+  setSentTurn(sentTurn: SentTurnPlacement) {
+    store.setState({ sentTurn });
   },
 };
 
@@ -91,5 +105,6 @@ export function usePreferences<T>(select: (preferences: Preferences) => T): T {
 export const useTheme = () => usePreferences((p) => p.theme);
 export const useNavMode = () => usePreferences((p) => p.nav);
 export const zoomLevel = () => store.getState().zoom;
+export const useSentTurnPlacement = () => usePreferences((p) => p.sentTurn);
 
 export const resetPreferences = () => store.setState(initial(), true);

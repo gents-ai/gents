@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use crate::llm::tool::ToolDefinition;
 use anyhow::{anyhow, bail, Context, Result};
-use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
+use crate::config_client::ConfigAccess;
 use crate::document_config::WriteToolDecl;
 
 mod input;
@@ -46,15 +44,18 @@ pub struct BoundedWriteParams(pub Map<String, Value>);
 
 #[derive(Clone)]
 pub struct BoundedWriteTool {
-    node: Arc<EmbeddedNode>,
+    access: ConfigAccess,
     decl: WriteToolDecl,
     surface_id: Option<String>,
 }
 
 impl BoundedWriteTool {
-    pub fn new(node: Arc<EmbeddedNode>, decl: WriteToolDecl) -> Self {
+    /// `access` is where the document is written and whose principal
+    /// writes it: the embedded node, or a served node's GraphQL endpoint
+    /// acting as its DID.
+    pub fn new(access: ConfigAccess, decl: WriteToolDecl) -> Self {
         Self {
-            node,
+            access,
             decl,
             surface_id: None,
         }
@@ -69,7 +70,18 @@ impl BoundedWriteTool {
         self.ensure_well_formed().is_ok()
     }
 
+    /// The declaration's own rules, plus the collection's field types when
+    /// the embedded node is at hand. A GraphQL endpoint's schema is read
+    /// over HTTP at the call, so for it this judges the declaration alone.
     pub(crate) fn ensure_well_formed(&self) -> Result<()> {
+        self.ensure_declaration()?;
+        if matches!(self.access, ConfigAccess::Local(_)) {
+            self.field_types()?;
+        }
+        Ok(())
+    }
+
+    fn ensure_declaration(&self) -> Result<()> {
         if self.decl.collection == crate::mailbox::MAILBOX_COLLECTION {
             bail!(
                 "MailboxItem requires the dedicated stamped mailbox tool and cannot use BoundedWriteTool"
@@ -77,16 +89,43 @@ impl BoundedWriteTool {
         }
         self.decl
             .validate()
-            .map_err(|error| anyhow!("invalid bounded write tool declaration: {error}"))?;
-        self.field_types()?;
-        Ok(())
+            .map_err(|error| anyhow!("invalid bounded write tool declaration: {error}"))
     }
 
+    /// The field types read from the embedded node, without I/O.
     fn field_types(&self) -> Result<std::collections::BTreeMap<String, String>> {
-        let collection = self
-            .node
+        let ConfigAccess::Local(local) = &self.access else {
+            bail!(
+                "collection `{}` is read over HTTP at the call",
+                self.decl.collection
+            );
+        };
+        let collection = local
+            .node()
             .get_collection(&self.decl.collection)?
             .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
+        self.field_types_of(&collection)
+    }
+
+    /// The field types from wherever `access` reads the schema.
+    async fn resolved_field_types(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        if matches!(self.access, ConfigAccess::Local(_)) {
+            return self.field_types();
+        }
+        let version = self
+            .access
+            .collection_version(&self.decl.collection)
+            .await?
+            .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
+        let collection: ::schema::CollectionVersion = serde_json::from_value(version)
+            .with_context(|| format!("decoding the `{}` schema", self.decl.collection))?;
+        self.field_types_of(&collection)
+    }
+
+    fn field_types_of(
+        &self,
+        collection: &::schema::CollectionVersion,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
         self.decl
             .fields
             .iter()
@@ -109,9 +148,12 @@ impl BoundedWriteTool {
             .collect()
     }
 
-    fn build_mutation(&self, args: &Map<String, Value>) -> Result<String> {
-        self.ensure_well_formed()?;
-        let types = self.field_types()?;
+    fn build_mutation(
+        &self,
+        args: &Map<String, Value>,
+        types: &std::collections::BTreeMap<String, String>,
+    ) -> Result<String> {
+        self.ensure_declaration()?;
 
         for key in args.keys() {
             let field = self.decl.fields.iter().find(|field| &field.name == key);
@@ -211,7 +253,7 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         let mut properties = Map::new();
         let mut required = Vec::new();
-        let types = match self.field_types() {
+        let types = match self.resolved_field_types().await {
             Ok(types) => types,
             Err(error) => {
                 tracing::error!(tool = %self.decl.tool_name, %error, "bounded writer schema unavailable");
@@ -252,18 +294,14 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let mutation = self.build_mutation(&args.0)?;
+        self.ensure_declaration()?;
+        let types = self.resolved_field_types().await?;
+        let mutation = self.build_mutation(&args.0, &types)?;
 
-        let resp = crate::config_client::ConfigAccess::write_local_response(
-            &self.node,
-            "tool.defra_write",
-            &mutation,
-        )
-        .await?;
+        let resp = self.access.write("tool.defra_write", &mutation).await?;
 
         let document = resp
-            .data
-            .as_ref()
+            .get("data")
             .and_then(|data| data.get(format!("add_{}", self.decl.collection)))
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())

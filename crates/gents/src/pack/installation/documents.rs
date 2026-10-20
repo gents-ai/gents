@@ -574,6 +574,7 @@ pub(super) fn record_home_install(
             assets,
             dependency_assets,
             plugins: identity.plugins.clone(),
+            ux: manifest.metadata.ux.clone(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed_via: Some(installed_via),
         },

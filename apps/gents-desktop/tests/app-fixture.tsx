@@ -87,11 +87,14 @@ export function renderRouted(
     bindNav(nav);
     /* a later test's navigate must not drive this unmounted nav */
     useEffect(() => () => bindNav(null), []);
-    return page(nav.route);
+    /* the kit's nav carries the desktop's routes (the plugin page among them) */
+    return page(nav.route as Route);
   }
   const view = renderIn(
     app,
-    <MemoryNavProvider initial={initial}>
+    <MemoryNavProvider
+      initial={initial as Parameters<typeof MemoryNavProvider>[0]["initial"]}
+    >
       <Routed />
     </MemoryNavProvider>,
   );

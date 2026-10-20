@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src/ui", import.meta.url)),
+      "@gents/ux-sdk": fileURLToPath(new URL("./src/ui/sdk/index.ts", import.meta.url)),
     },
   },
   test: {

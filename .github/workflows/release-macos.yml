@@ -40,14 +40,11 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   # Keep release provenance stable without making the CLI build script watch
-  # checkout-managed Git files. Re-running the same workflow commit can then
-  # reuse the trusted final-crate artifact as well as its dependencies.
+  # checkout-managed Git files.
   GENTS_BUILD_GIT_SHA: ${{ github.sha }}
   GENTS_BUILD_GIT_REF: ${{ github.ref }}
   GENTS_BUILD_GIT_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
   GENTS_BUILD_GIT_DIRTY: "false"
-  # Do not reuse linked artifacts from the target trees populated by PR jobs.
-  CARGO_TARGET_ROOT: ${{ vars.CARGO_RELEASE_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target-release' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   RUSTC_WRAPPER: sccache
@@ -55,6 +52,8 @@ env:
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
   SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
+  # Compile locally instead of failing the job if the host server drops a request.
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
   # Release builds must not consume compiler objects written by PR jobs. This
   # forces rustc to rebuild and replace every otherwise-cacheable result while
   # ephemeral, isolated macOS release runners remain future work.
@@ -66,12 +65,10 @@ env:
 jobs:
   build-sign-package:
     name: Build, sign, and package macOS CLI and desktop
-    # Release artifacts remain isolated under CARGO_RELEASE_TARGET_ROOT. Pin the
-    # job to the registration that owns the trusted release target tree so a
-    # normal source edit reuses prior release artifacts instead of randomly
-    # landing on one of three cold Studio registrations. SCCACHE_RECACHE stays
-    # enabled below: rustc invocations still cannot consume PR-populated cache
-    # objects.
+    # Release artifacts live in this job's RUNNER_TEMP target tree, so every
+    # release links from a clean tree and never sees PR-built artifacts.
+    # SCCACHE_RECACHE stays enabled above: rustc invocations still cannot
+    # consume PR-populated cache objects.
     runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-desktop]
     timeout-minutes: 180
 

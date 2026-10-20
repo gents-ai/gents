@@ -8,6 +8,8 @@ import {
   initialReveal,
   noDrawKeys,
   revealedText,
+  sentTurnKey,
+  lingerSentTurn,
   withSentTurns,
   type LocalTurn,
   stepReveal,
@@ -320,6 +322,23 @@ describe("the rows drawn for sent messages", () => {
     ]);
   });
 
+  /* a message that queued behind a running turn is not drawn as a row: the
+     tray shows it until the queue lists it */
+  it("keeps the copy after the session takes the request, until its row is drawn", () => {
+    expect(lingerSentTurn([person], null, local)).toBe(local);
+    expect(lingerSentTurn([person, pending], null, local)).toBeNull();
+    expect(lingerSentTurn([person], null, null)).toBeNull();
+    const next = { ...local, requestId: "r3" };
+    expect(lingerSentTurn([person], next, local)).toBe(next);
+  });
+
+  it("leaves a queued send to the tray", () => {
+    expect(withSentTurns([person, live("On it")], local, "s", true)).toEqual([
+      person,
+      live("On it"),
+    ]);
+  });
+
   it("shows the bridge's pending turn in place of the copy", () => {
     expect(
       withSentTurns([person, pending], local, "s").map((row) => row.itemKey),
@@ -416,5 +435,53 @@ describe("withSentTurns with folded messages", () => {
       "authored:doc-head:folded:doc-first",
       "authored:doc-head:folded:doc-second",
     ]);
+  });
+});
+
+describe("the turn the view goes to after a send", () => {
+  const sent = { sessionId: "s1", requestId: "r1", queued: false };
+
+  it("is the sent message as soon as it is drawn, with nothing running", () => {
+    expect(sentTurnKey([sent], "s1", "r0", [])).toBe("turn:r1");
+    expect(sentTurnKey([sent], "s1", "r1", [])).toBe("turn:r1");
+  });
+
+  it("is nothing for another session, or with nothing sent", () => {
+    expect(sentTurnKey([sent], "s2", "r1", [])).toBeNull();
+    expect(sentTurnKey([], "s1", "r1", [])).toBeNull();
+  });
+
+  /* a message that waits behind a running turn is not the latest request
+     until its turn */
+  it("waits for a queued send until the session makes it the latest, or folds it", () => {
+    const queued = { ...sent, queued: true };
+    expect(sentTurnKey([queued], "s1", "r0", [])).toBeNull();
+    expect(sentTurnKey([queued], "s1", "r1", [])).toBe("turn:r1");
+    expect(
+      sentTurnKey([queued], "s1", "r0", [
+        { requestId: "r1", foldedIntoRequestId: "x" },
+      ]),
+    ).toBe("turn:r1");
+  });
+
+  /* queued sends folded into one request begin together: the first of
+     them is where their turn starts */
+  it("goes to the first of the sends folded into the same turn", () => {
+    const a = { sessionId: "s1", requestId: "a", queued: true };
+    const b = { sessionId: "s1", requestId: "b", queued: true };
+    const c = { sessionId: "s1", requestId: "c", queued: true };
+    const folds = [
+      { requestId: "a", foldedIntoRequestId: "x" },
+      { requestId: "b", foldedIntoRequestId: "x" },
+    ];
+    expect(sentTurnKey([sent, a, b, c], "s1", "x", folds)).toBe("turn:a");
+    expect(
+      sentTurnKey([sent, a, b, c], "s1", "y", [
+        ...folds,
+        { requestId: "c", foldedIntoRequestId: "y" },
+      ]),
+    ).toBe("turn:c");
+    /* a send that started its own turn after them wins */
+    expect(sentTurnKey([a, b, sent], "s1", "r1", folds)).toBe("turn:r1");
   });
 });

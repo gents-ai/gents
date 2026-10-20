@@ -34,6 +34,46 @@ pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
     crate::print_json(&output)
 }
 
+/// Runs the installed `namespace/name` with `input` and returns its own
+/// JSON result, for an embedding caller (the desktop's `ctx.plugin`, a ux
+/// module producer) that holds no argv. The model slot is honored exactly
+/// as the CLI honors it. The input's declared `bind_dir` field is bound
+/// through the same owner a model tool's call uses
+/// ([`PluginExecutor::call_data_bound`]): the folder it names must be one
+/// the operator allowed, or be approved by them when the caller runs under
+/// [`gents::plugin::approval::scope_interactive`]; an input without the
+/// field runs sealed. There is no `--bind-dir` here: the operator never
+/// names a folder directly on this path.
+pub async fn call_installed(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+    input: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let record = store::read_record(home, namespace, name).with_context(|| {
+        format!(
+            "{namespace}/{name} is not installed under {}",
+            home.display()
+        )
+    })?;
+    let mut executor = PluginExecutor::new(Some(home.to_owned()));
+    if record.declaration.model_slot.is_some() && record.model_binding.is_some() {
+        let (access, _) = crate::resolve_config_access(Some(home), None).await?;
+        executor = executor.with_models(Arc::new(AccessModels(access)));
+    }
+    let coordinate = format!("{namespace}/{name}");
+    // No tool-effect grant: a call from the desktop or a module producer
+    // runs outside any model turn, so the guest has no runtime to call back.
+    let call = executor
+        .call_data_bound(&record, input, None, false)
+        .await
+        .with_context(|| format!("calling plugin {coordinate}"))?;
+    if let Some(note) = &call.binding_note {
+        tracing::warn!(plugin = %coordinate, "{note}");
+    }
+    outcome_output(&coordinate, call.outcome)
+}
+
 async fn run_plugin(
     executor: &PluginExecutor,
     record: &InstalledPlugin,
@@ -389,5 +429,54 @@ mod tests {
             false,
         )
         .expect("the recorded grant covers the same request");
+    }
+
+    /// A `ctx.plugin` call names no folder on the command line: the one its
+    /// input carries under the declared `bind_dir` field is bound only when
+    /// the operator allowed it, and refused naming the field until then. An
+    /// input without the field runs sealed, where the fixture's own
+    /// `read_dir` traps.
+    #[tokio::test]
+    async fn call_installed_binds_the_named_root_only_when_allowed() {
+        let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
+        let manifest: gents::pack::PackManifest =
+            serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
+                .unwrap();
+        let (archive_bytes, _) = gents::pack_archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents::pack_archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        gents::plugin::install::install_pack_plugins(
+            home.path(),
+            &manifest,
+            archive.digest(),
+            |path| archive.asset(path),
+            false,
+        )
+        .unwrap();
+
+        let listing = tempfile::tempdir().unwrap();
+        std::fs::write(listing.path().join("one.txt"), b"1").unwrap();
+        std::fs::write(listing.path().join("two.txt"), b"2").unwrap();
+        let input = serde_json::json!({ "root": listing.path().to_str().unwrap() });
+
+        let error = call_installed(home.path(), "fixture", "list_files", input.clone())
+            .await
+            .expect_err("a folder the operator has not allowed must be refused");
+        let message = format!("{error:#}");
+        assert!(message.contains("cannot read \"root\""), "{message}");
+
+        gents::plugin::allowed::add(home.path(), listing.path(), gents::pack::BindAccess::Read)
+            .unwrap();
+        let output = call_installed(home.path(), "fixture", "list_files", input)
+            .await
+            .expect("an allowed folder binds and the plugin lists it");
+        assert_eq!(output, serde_json::json!({"files": ["one.txt", "two.txt"]}));
+
+        let error = call_installed(home.path(), "fixture", "list_files", serde_json::json!({}))
+            .await
+            .expect_err("without the field the plugin runs sealed and cannot read anything");
+        let message = format!("{error:#}");
+        assert!(!message.contains("cannot read"), "{message}");
+        assert!(message.contains("trapped"), "{message}");
     }
 }

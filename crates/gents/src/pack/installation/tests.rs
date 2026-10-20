@@ -949,6 +949,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
             dependency_assets: Vec::new(),
             plugins: current.plugins.clone(),
             installed_at: "2026-01-01T00:00:00Z".into(),
+            ux: Vec::new(),
             installed_via: None,
         },
     )
@@ -1179,6 +1180,7 @@ fn operator_record(archive: &crate::pack_archive::PackArchive) -> crate::pack::H
         assets: String::new(),
         dependency_assets: Vec::new(),
         plugins: Vec::new(),
+        ux: Vec::new(),
         installed_at: "2026-01-01T00:00:00Z".into(),
         installed_via: Some(crate::pack::InstalledVia::Operator),
     }

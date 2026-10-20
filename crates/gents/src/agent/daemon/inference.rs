@@ -23,6 +23,26 @@ type RequestDeadline = Option<DateTime<Utc>>;
 
 const RETRY_CONTINUATION: &str = "Continue the failed request from the recorded progress. Use recorded tool outcomes; do not repeat completed actions.";
 
+/// Provider-frontier-only framing for background-completion wakes. Applied
+/// before the frontier prompt when nonempty wake notifications follow; the
+/// durable wake prompt carries no `status` attribute (the XML notifications
+/// do), so it is swapped for that exact prompt only; all else passes verbatim.
+const BACKGROUND_WAKE_RESULT_FRAMING: &str = "Review the background execution results above. Their status describes a turn/tool result, not assignment completion. Continue the task if needed.";
+
+/// Only the exact plain wake prompt (no captured context) is reframed; any
+/// authored message carrying captures or other content passes through
+/// unchanged, preserving its provenance.
+fn wake_frontier_message(authored: &Message, wake_notifications: &[TaggedMessage]) -> Message {
+    if !wake_notifications.is_empty()
+        && *authored
+            == Message::user(crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
+    {
+        Message::user(BACKGROUND_WAKE_RESULT_FRAMING)
+    } else {
+        authored.clone()
+    }
+}
+
 pub(super) fn request_entry(
     mut history: Vec<TaggedMessage>,
     authored: &Message,
@@ -32,7 +52,10 @@ pub(super) fn request_entry(
 ) -> Result<(Vec<TaggedMessage>, TaggedMessage)> {
     if !resume {
         history = super::wake_input::project(history, wake_notifications);
-        history.push(TaggedMessage::unassociated(authored.clone()));
+        history.push(TaggedMessage::unassociated(wake_frontier_message(
+            authored,
+            wake_notifications,
+        )));
     } else if let Some(context) = context {
         history.push(TaggedMessage::unassociated(context.clone()));
     } else if history
@@ -1357,6 +1380,98 @@ pub(super) mod tests {
         crate::request_admission::load_request_for_admission_test(node, doc_id)
             .await
             .unwrap()
+    }
+
+    #[test]
+    fn wake_frontier_prompt_framing_scopes() {
+        use super::{
+            request_entry, wake_frontier_message, TaggedMessage, BACKGROUND_WAKE_RESULT_FRAMING,
+        };
+        use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        use crate::llm::message::Message;
+
+        let notification = TaggedMessage::unassociated(Message::user(
+            "<tool-completion tool_call_id=\"c1\" status=\"completed\">".to_owned(),
+        ));
+        let notifications = [notification.clone()];
+
+        for (content, wake_notifications, expected) in [
+            (
+                BACKGROUND_COMPLETION_WAKE_PROMPT,
+                notifications.as_slice(),
+                BACKGROUND_WAKE_RESULT_FRAMING,
+            ),
+            (
+                BACKGROUND_COMPLETION_WAKE_PROMPT,
+                &[],
+                BACKGROUND_COMPLETION_WAKE_PROMPT,
+            ),
+            (
+                "Summarize the repo layout.",
+                notifications.as_slice(),
+                "Summarize the repo layout.",
+            ),
+        ] {
+            assert_eq!(
+                wake_frontier_message(&Message::user(content), wake_notifications),
+                Message::user(expected)
+            );
+        }
+
+        // A wake prompt carrying captured editor context is authored input with
+        // provenance; it is never reframed and its document parts survive.
+        let captured = Message::User {
+            content: vec![
+                crate::llm::message::UserContent::text(BACKGROUND_COMPLETION_WAKE_PROMPT),
+                crate::llm::message::UserContent::Document(crate::llm::message::Document {
+                    data: crate::llm::message::DocumentSourceKind::String("fn main() {}".into()),
+                    media_type: Some(crate::llm::message::DocumentMediaType::TXT),
+                    additional_params: Some(
+                        serde_json::json!({ "captured_context": { "kind": "selection" } }),
+                    ),
+                }),
+            ],
+        };
+        assert_eq!(wake_frontier_message(&captured, &notifications), captured);
+        let (_, frontier) =
+            request_entry(Vec::new(), &captured, false, None, &notifications).unwrap();
+        assert_eq!(
+            frontier.message, captured,
+            "captured provenance reaches provider"
+        );
+
+        let (history, frontier) = request_entry(
+            Vec::new(),
+            &Message::user(BACKGROUND_COMPLETION_WAKE_PROMPT),
+            false,
+            None,
+            &notifications,
+        )
+        .unwrap();
+        assert_eq!(
+            frontier.message,
+            Message::user(BACKGROUND_WAKE_RESULT_FRAMING)
+        );
+        assert_eq!(
+            history.first().map(|row| row.message.clone()),
+            Some(notification.message.clone()),
+            "projected notification reaches provider input verbatim"
+        );
+
+        // Resume pops the existing final row instead of appending content: the
+        // recorded frontier is returned unchanged and the notification row is
+        // not re-projected.
+        let recorded = TaggedMessage::unassociated(Message::user("recorded frontier".to_owned()));
+        let (history, frontier) = request_entry(
+            vec![notification.clone(), recorded.clone()],
+            &Message::user(BACKGROUND_COMPLETION_WAKE_PROMPT),
+            true,
+            None,
+            &notifications,
+        )
+        .unwrap();
+        assert_eq!(frontier, recorded);
+        assert_eq!(history, vec![notification], "resume is byte-identical");
     }
 
     #[test]

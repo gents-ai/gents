@@ -2104,6 +2104,32 @@ Denies the desktop_plugin_approvals_pending command without any pre-configured s
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-plugin-call`
+
+</td>
+<td>
+
+Enables the desktop_plugin_call command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-plugin-call`
+
+</td>
+<td>
+
+Denies the desktop_plugin_call command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-probe-inference-endpoint`
 
 </td>
@@ -3014,6 +3040,110 @@ Denies the desktop_trigger_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-ux-data-call`
+
+</td>
+<td>
+
+Enables the desktop_ux_data_call command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-data-call`
+
+</td>
+<td>
+
+Denies the desktop_ux_data_call command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-ux-data-surfaces`
+
+</td>
+<td>
+
+Enables the desktop_ux_data_surfaces command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-data-surfaces`
+
+</td>
+<td>
+
+Denies the desktop_ux_data_surfaces command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-ux-plugin-source`
+
+</td>
+<td>
+
+Enables the desktop_ux_plugin_source command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-plugin-source`
+
+</td>
+<td>
+
+Denies the desktop_ux_plugin_source command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-ux-plugins-list`
+
+</td>
+<td>
+
+Enables the desktop_ux_plugins_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ux-plugins-list`
+
+</td>
+<td>
+
+Denies the desktop_ux_plugins_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-workspace-list`
 
 </td>
@@ -3215,6 +3345,32 @@ Open a web link in the person's own browser
 <td>
 
 Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:ux-plugins-read`
+
+</td>
+<td>
+
+The ux plugins on disk and each one's module, for the desktop loader
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:ux-plugins-call`
+
+</td>
+<td>
+
+A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares
 
 </td>
 </tr>

@@ -81,7 +81,6 @@ mod tests {
         )
         .unwrap();
     }
-
     fn write_plugin_pack(root: &Path, name: &str, plugin: serde_json::Value) {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(root.join("README.md"), b"# a plugins pack").unwrap();
@@ -207,6 +206,7 @@ mod tests {
                 namespace: "acme".into(),
                 template: Some(crate::cli::PackTemplate::PluginTool),
                 language: None,
+                ux: false,
             },
         )
         .unwrap();

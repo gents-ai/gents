@@ -64,6 +64,7 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                     template,
                     kind,
                     language: parsed.one("language")?.map(ToOwned::to_owned),
+                    ux: false,
                 },
             })
         }

@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 import type { OptimisticPendingTurn } from "@source-inc/gents-desktop-chat";
+import type { SentTurn } from "./chatStore";
 
 import {
   projectSessionLoadingStatus,
@@ -19,6 +20,10 @@ import {
 export type ShellView = ShellProjection & {
   loadingStatus: SessionLoadingStatus | null;
   pendingTurn: OptimisticPendingTurn | null;
+  /** the messages sent from here, kept after the transcript holds them */
+  sentTurns: readonly SentTurn[];
+  /** the composer's draft, by session or by the new-session screen's node
+      and agent */
   draftKey: string;
 };
 
@@ -27,6 +32,7 @@ export type ShellViewStore = StoreApi<ShellView>;
 type ViewInputs = ProjectionInputs & {
   load: SessionLoadState;
   optimisticPendingTurn: OptimisticPendingTurn | null;
+  sentTurns: readonly SentTurn[];
 };
 
 function inputsOf(stores: ShellStores): ViewInputs {
@@ -35,6 +41,7 @@ function inputsOf(stores: ShellStores): ViewInputs {
     ...projectionInputsOf(stores),
     load: session.load,
     optimisticPendingTurn: stores.chat.getState().optimisticPendingTurn,
+    sentTurns: stores.chat.getState().sentTurns,
   };
 }
 
@@ -57,6 +64,7 @@ function viewOf(inputs: ViewInputs): ShellView {
       operationalState: projection.operationalState,
     }),
     pendingTurn: turn,
+    sentTurns: inputs.sentTurns,
     draftKey: JSON.stringify(
       selection.sessionId
         ? ["session", selection.nodeDid, selection.sessionId]
