@@ -31,6 +31,8 @@ mod editor_workspace;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/mocks/fake_llm.rs"]
 mod fake_llm;
+#[path = "support/initialization.rs"]
+mod initialization;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
@@ -258,8 +260,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }),
     )?;
     let node_home = root.join("runtime");
-    let init = Command::new(&cli)
-        .current_dir(root)
+    let mut init = Command::new(&cli);
+    init.current_dir(root)
+        .env_remove("GENTS_SYSTEM_LOG")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
         .args([
@@ -279,18 +282,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "editor-fixture",
             "--inference-url",
         ])
-        .arg(provider.endpoint())
-        .kill_on_drop(true)
-        .output();
-    let init = tokio::time::timeout(Duration::from_secs(30), init)
-        .await
-        .context("initializing the fixture runtime timed out")??;
-    ensure!(
-        init.status.success(),
-        "runtime initialization failed: {}",
-        String::from_utf8_lossy(&init.stderr)
-    );
-    let init: Value = serde_json::from_slice(&init.stdout)?;
+        .arg(provider.endpoint());
+    let output = initialization::Initialization::spawn(&mut init, root)?
+        .wait(Duration::from_secs(30))
+        .await?;
+    let init: Value = serde_json::from_slice(&output)?;
     let node_did = init["node_did"].as_str().context("initialized node DID")?;
     let identity = gents::KeyIdentity::load_or_create(
         init["key_path"]
