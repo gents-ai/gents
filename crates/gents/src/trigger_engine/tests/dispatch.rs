@@ -370,7 +370,7 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
     assert!(matches!(other_run, FireResult::Fired { .. }));
     assert_eq!(materializer.calls().len(), 1);
     // Event prompts must not receive the scheduled-configuration label.
-    assert_eq!(materializer.calls()[0].2, "run run-a");
+    assert_eq!(materializer.calls()[0].2, "run run-b");
     let mut changed = make_intent("run-a");
     changed.durable_fire_key =
         super::super::durable_fire_key("event-group", &["run-a:new-membership"]);
@@ -643,7 +643,10 @@ async fn scheduled_target_uses_stable_receipt_and_actual_session_template_scope(
         assert_eq!(kind, TriggerKind::Schedule);
         assert_eq!(
             prompt,
-            format!("session=captain-session request={}", identity.request_id())
+            format!(
+                "Scheduled task instructions (rendered from saved configuration):\n\nsession=captain-session request={}",
+                identity.request_id()
+            )
         );
     }
 }
