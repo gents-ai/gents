@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::session::SessionTitle;
 
+mod captured_context;
+pub use captured_context::*;
+
+pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 1;
+pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestInput {
@@ -30,6 +36,53 @@ pub struct RequestInput {
     /// Goal/parent identities remain in the existing signed request lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_continuation: Option<GoalContinuationInput>,
+    /// Submitted snapshots, distinct from authored prose and configuration grants.
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub captured_context: Vec<CapturedContext>,
+}
+
+impl RequestInput {
+    /// The serving runtime must advertise support before a client publishes
+    /// typed captures. This observation grants no request or workspace authority.
+    pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
+        self.captured_context.is_empty()
+            || runtime_version == Some(u64::from(REQUEST_INPUT_CONTRACT_VERSION))
+    }
+
+    pub fn has_authored_input(&self, prose: &str) -> bool {
+        !prose.trim().is_empty() || !self.captured_context.is_empty()
+    }
+
+    pub fn authored_message(&self, prose: &str) -> anyhow::Result<crate::message::Message> {
+        use crate::message::{Message, UserContent};
+        let mut content = Vec::with_capacity(self.captured_context.len() + 1);
+        if !prose.is_empty() || self.captured_context.is_empty() {
+            content.push(UserContent::text(prose));
+        }
+        for context in &self.captured_context {
+            content.push(UserContent::Document(context.to_document()?));
+        }
+        Ok(Message::User { content })
+    }
+
+    /// Runtime continuations retain the invocation directory; the host still
+    /// validates it against the current workspace and configured tool ceiling.
+    pub fn continuation(
+        &self,
+        queue: RequestQueue,
+        goal_continuation: Option<GoalContinuationInput>,
+    ) -> Self {
+        Self {
+            cwd: self.cwd.clone(),
+            queue: Some(queue),
+            goal_continuation,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

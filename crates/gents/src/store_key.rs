@@ -91,6 +91,18 @@ impl StoreKey {
         Ok(Self(Zeroizing::new(bytes)))
     }
 
+    /// A trusted host supplies keys only over its private startup channel.
+    /// The key must remain bound to the store's durable custody record.
+    pub fn from_host(bytes: &[u8]) -> Result<Self> {
+        Self::from_slice(bytes, "host secret storage")
+    }
+
+    /// A trusted host may cache this value in encrypted secret storage. Native
+    /// custody remains the durable owner; bytes must never enter logs or a webview.
+    pub fn with_secret<T>(&self, operation: impl FnOnce(&[u8]) -> T) -> T {
+        operation(self.0.as_ref())
+    }
+
     /// Opens `builder`'s persistent store encrypted with this key.
     pub fn encrypt(&self, builder: defra_node::NodeBuilder) -> defra_node::NodeBuilder {
         builder.with_at_rest_encryption_key(*self.0)

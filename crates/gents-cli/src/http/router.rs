@@ -166,6 +166,10 @@ pub(crate) fn runtime_contract_router(
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/accounts/usage/read", post(account_usage_read_handler))
+        .route(
+            gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+            get(crate::http::inference::inference_settings_handler),
+        )
         .route("/self", get(self_handler))
         .route("/sessions", get(sessions_handler))
         .route("/fleet", get(fleet_handler))
@@ -638,6 +642,14 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
         };
         map.insert("enrollment".to_string(), json!(enrollment));
         map.insert(
+            gents_protocol::request_input::STATUS_INPUT_CONTRACT_FIELD.to_owned(),
+            json!(gents_protocol::request_input::REQUEST_INPUT_CONTRACT_VERSION),
+        );
+        map.insert(
+            gents::plugin::approval::workspace::STATUS_SUPPORT_FIELD.to_owned(),
+            json!(gents::plugin::approval::workspace::support()),
+        );
+        map.insert(
             gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD.to_string(),
             replicated_schema_status(&state.replicated_schema),
         );
@@ -879,6 +891,65 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn inference_settings_authenticates_the_client_before_reading_configuration() {
+        use gents_desktop_core::{
+            client::{DesktopPaths, PrincipalIdentity},
+            inference::INFERENCE_SETTINGS_PATH,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(temp.path());
+        paths.ensure_root_dirs().await.unwrap();
+        let identity = PrincipalIdentity::load_or_create(&paths).await.unwrap();
+        let app = Router::new()
+            .route(
+                INFERENCE_SETTINGS_PATH,
+                get(crate::http::inference::inference_settings_handler),
+            )
+            .with_state(state());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let url = format!("http://{addr}{INFERENCE_SETTINGS_PATH}");
+        let client = reqwest::Client::new();
+        let response = client.get(&url).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let response = client
+            .get(&url)
+            .bearer_auth("invalid-token")
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+        let foreign_audience =
+            gents::identity::defradb_bearer_authorization(identity.did(), "other.invalid").unwrap();
+        let response = client
+            .get(&url)
+            .header(header::AUTHORIZATION, foreign_audience)
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+        let endpoint =
+            GraphqlEndpoint::as_principal(format!("http://{addr}/api/v0/graphql"), identity.did());
+        let response = endpoint
+            .authorize(client.get(&url))
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["error"],
+            "The runtime is still starting. Try again shortly."
+        );
+        server.abort();
+    }
+
     #[test]
     fn activation_observation_requires_one_successful_exact_tuple() {
         let observed = RuntimeActivationObservation {
@@ -985,9 +1056,12 @@ mod tests {
             let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .expect("status body");
-            serde_json::from_slice::<Value>(&body).expect("status json")
-                [gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD]
-                .clone()
+            let body = serde_json::from_slice::<Value>(&body).expect("status json");
+            assert_eq!(
+                body[gents::plugin::approval::workspace::STATUS_SUPPORT_FIELD],
+                json!(gents::plugin::approval::workspace::support()),
+            );
+            body[gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD].clone()
         }
         let mut state = state();
         state.graphql = GraphqlEndpoint::anonymous("http://127.0.0.1:9/api/v0/graphql");

@@ -205,6 +205,53 @@ pub async fn desktop_pack_plugin_bind(
     }
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PackWireRequest {
+    /// An installed plugin, as `namespace/name`.
+    pub plugin: String,
+    pub agent: String,
+    /// Installed packs whose AgentTargets the agent should reach.
+    #[serde(default)]
+    pub targets_from: Vec<String>,
+    #[serde(default)]
+    pub remove: bool,
+    /// Report what would be written, writing nothing.
+    #[serde(default)]
+    pub preview: bool,
+}
+
+#[tauri::command]
+pub async fn desktop_pack_wire(
+    request: PackWireRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<Value, BridgeError> {
+    {
+        let home = home(&state)?;
+        run(move || {
+            packs::wire(
+                home,
+                request.plugin,
+                request.agent,
+                request.targets_from,
+                request.remove,
+                request.preview,
+            )
+        })
+        .await
+    }
+}
+
+#[tauri::command]
+pub async fn desktop_pack_wire_sources(
+    state: State<'_, DesktopAppState>,
+) -> Result<Value, BridgeError> {
+    {
+        let home = home(&state)?;
+        run(move || packs::wire_sources(home)).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

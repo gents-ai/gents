@@ -36,6 +36,17 @@ theorem hook_owned_child_refused (selected admitted : Bool) :
     childAdmissible selected .hookOwned admitted = false := by
   simp [childAdmissible, supported]
 
+/-- Job-bound tool names are hook-owned: the hook adopts the call (flip, pin,
+effects) before any finite invocation could own it. Rust's
+`tool_calls::supported` consults the hook's job-tool set, because an
+operator-chosen name cannot be in the static table. -/
+def routeOf (staticHookOwned jobBound : Bool) : DispatchRoute :=
+  if staticHookOwned || jobBound then .hookOwned else .ordinary
+
+theorem job_tool_not_composable (selected staticHookOwned admitted : Bool) :
+    childAdmissible selected (routeOf staticHookOwned true) admitted = false := by
+  simpa [routeOf] using hook_owned_child_refused selected admitted
+
 def reserve (used : Nat) : Option Nat :=
   if used < maxEffects then some (used + 1) else none
 

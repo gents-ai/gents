@@ -749,7 +749,8 @@ impl NativeCanonicalExecution {
                 }
                 gents_protocol::rendered_request::CaptureScopeKind::Compaction
                 | gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
-                | gents_protocol::rendered_request::CaptureScopeKind::Title => {
+                | gents_protocol::rendered_request::CaptureScopeKind::Title
+                | gents_protocol::rendered_request::CaptureScopeKind::AccessReview => {
                     LeanCanonicalSource::Auxiliary {
                         auxiliary_kind: match scope.kind {
                             gents_protocol::rendered_request::CaptureScopeKind::Compaction => {
@@ -760,6 +761,9 @@ impl NativeCanonicalExecution {
                             }
                             gents_protocol::rendered_request::CaptureScopeKind::Title => {
                                 LeanAuxiliaryKind::Title
+                            }
+                            gents_protocol::rendered_request::CaptureScopeKind::AccessReview => {
+                                LeanAuxiliaryKind::AccessReview
                             }
                             _ => anyhow::bail!("native provider scope is not modeled"),
                         },
@@ -1136,7 +1140,7 @@ impl NativeCanonicalExecution {
             ).await?;
             let parent: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
                 .context("title parent disappeared")?;
-            crate::request_admission::verify_historical_title_receipt(&row, &parent)?;
+            crate::request_admission::verify_historical_auxiliary_receipt(&row, &parent)?;
             anyhow::ensure!(
                 parent.lifecycle_state == Some(RequestLifecycleState::Completed),
                 "title execution changed its terminal parent"
@@ -1346,13 +1350,14 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     );
                     None
                 }
-                LeanRequestPurpose::TitleAudit => {
+                LeanRequestPurpose::TitleAudit | LeanRequestPurpose::AccessReview => {
                     let binding = seed
                         .title_binding
                         .as_ref()
                         .context("title seed has no binding")?;
                     anyhow::ensure!(
                         binding.authenticated
+                            && binding.purpose == seed.purpose
                             && binding.physical_request == seed.request_id
                             && binding.node == seed.node_did
                             && binding.session == seed.session_id
@@ -1451,7 +1456,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         ..Default::default()
                     }),
                     ..crate::lifecycle::RequestSpec::new(
-                        gents_protocol::request_admission::RequestPurpose::TitleAudit,
+                        seed.purpose.into(),
                         request_identity(request_id.clone()),
                         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
                             &node_did, &parent.request_id,
@@ -1488,7 +1493,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     )
                     .await
                 }
-                LeanRequestPurpose::TitleAudit => {
+                LeanRequestPurpose::TitleAudit | LeanRequestPurpose::AccessReview => {
                     crate::request_admission::AgentRequestAdmissionVerifier::new(
                         node.clone(),
                         identity.clone(),
@@ -1527,8 +1532,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             if let Some(parent) = &parent {
                 anyhow::ensure!(
-                    claimed.purpose
-                        == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
+                    claimed.purpose == Some(seed.purpose.into())
                         && claimed.caused_by_parent_request_id.as_deref()
                             == Some(parent.request_id.as_str())
                         && claimed.caused_by_parent_request_doc_id.as_deref()
@@ -1884,7 +1888,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             if error
                                 .downcast_ref::<crate::lifecycle::ToolAccountingRejection>()
                                 .is_some()
-                                || owner_error_is(&error, "title source has no unique closure") =>
+                                || owner_error_is(
+                                    &error,
+                                    "auxiliary source has no unique closure",
+                                ) =>
                         {
                             return native.observe(false).await;
                         }
@@ -2660,6 +2667,9 @@ impl NativeCanonicalExecution {
                     }
                     LeanAuxiliaryKind::Title => {
                         gents_protocol::rendered_request::CaptureScopeKind::Title
+                    }
+                    LeanAuxiliaryKind::AccessReview => {
+                        gents_protocol::rendered_request::CaptureScopeKind::AccessReview
                     }
                 },
                 *scope,

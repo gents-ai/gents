@@ -908,6 +908,32 @@ Denies the desktop_interrupt_request command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-job-control`
+
+</td>
+<td>
+
+Enables the desktop_job_control command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-job-control`
+
+</td>
+<td>
+
+Denies the desktop_job_control command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-list-backends-with-health`
 
 </td>
@@ -1766,6 +1792,58 @@ Denies the desktop_pack_whoami command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-pack-wire`
+
+</td>
+<td>
+
+Enables the desktop_pack_wire command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-wire`
+
+</td>
+<td>
+
+Denies the desktop_pack_wire command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-wire-sources`
+
+</td>
+<td>
+
+Enables the desktop_pack_wire_sources command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-wire-sources`
+
+</td>
+<td>
+
+Denies the desktop_pack_wire_sources command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-peer-enroll-status`
 
 </td>
@@ -1863,6 +1941,32 @@ Enables the desktop_peer_status_fetch command without any pre-configured scope.
 <td>
 
 Denies the desktop_peer_status_fetch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pending-message-steer`
+
+</td>
+<td>
+
+Enables the desktop_pending_message_steer command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pending-message-steer`
+
+</td>
+<td>
+
+Denies the desktop_pending_message_steer command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2383,6 +2487,32 @@ Enables the desktop_schedule_save command without any pre-configured scope.
 <td>
 
 Denies the desktop_schedule_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-session-fork-before-message`
+
+</td>
+<td>
+
+Enables the desktop_session_fork_before_message command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-fork-before-message`
+
+</td>
+<td>
+
+Denies the desktop_session_fork_before_message command without any pre-configured scope.
 
 </td>
 </tr>
@@ -3123,7 +3253,7 @@ Tool-surface explain (config family)
 </td>
 <td>
 
-Chat send and rename
+Chat submission, branching, and rename
 
 </td>
 </tr>
@@ -3214,7 +3344,7 @@ Open a web link in the person's own browser
 </td>
 <td>
 
-Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model
+Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired
 
 </td>
 </tr>
@@ -3253,7 +3383,7 @@ A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its 
 </td>
 <td>
 
-Install, update and remove packs, bind a plugin to an inference profile, and sign in to the registry
+Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry
 
 </td>
 </tr>

@@ -436,6 +436,7 @@ describe("first-run local node startup", () => {
         client: { deployments: [deployment] },
       })),
       listProviderAccounts: vi.fn(async () => []),
+      listPackWireSources: vi.fn(async () => ({ plugins: [], target_packs: [] })),
       getInferenceSetupCatalog: vi.fn(async () => ({
         contractVersion: 1,
         defaultsVersion: "test",

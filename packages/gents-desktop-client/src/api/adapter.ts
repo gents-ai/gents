@@ -85,6 +85,7 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop("desktop_chat_send", { request }),
+    steerPendingMessage: (request) => invokeDesktop("desktop_pending_message_steer", { request }),
     editPendingQueue: (request) =>
       invokeDesktop("desktop_pending_queue_edit", {
         request,
@@ -98,6 +99,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_mailbox_dismiss", {
         request: { itemId },
       }),
+    forkSessionBeforeMessage: (request) =>
+      invokeDesktop("desktop_session_fork_before_message", { request }),
     renameSession: (request) =>
       invokeDesktop("desktop_session_rename", { request }),
     resendRequest: (requestId, nodeDid) =>
@@ -263,5 +266,7 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_interrupt_request", {
         request,
       }),
+    jobControl: (request) =>
+      invokeDesktop("desktop_job_control", { request }),
   };
 }

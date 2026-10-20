@@ -4,6 +4,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import {
   ENGINEER_AGENT_TAG,
   ENGINEER_PROMPT,
+  engineerAgentOf,
   engineerPatches,
 } from "../src/ui/lib/engineer";
 
@@ -92,5 +93,21 @@ describe("engineer setup patches", () => {
     expect(patches).not.toContainEqual(
       expect.objectContaining({ collection: "Agent", id: "ops" }),
     );
+  });
+
+  it("engineerAgentOf picks the agent engineerPatches patches", () => {
+    const tagged = {
+      ...deployment,
+      node: { ...deployment.node, defaultAgentId: "ops" },
+      agents: deployment.agents.map((agent) => ({
+        ...agent,
+        isDefault: agent.agentId === "ops",
+        tags: agent.agentId === "default" ? [ENGINEER_AGENT_TAG] : [],
+      })),
+    };
+    for (const node of [tagged, deployment]) {
+      expect(engineerAgentOf(node)?.agentId).toBe(engineerPatches(node)[0].id);
+    }
+    expect(engineerAgentOf(tagged)?.agentId).toBe("default");
   });
 });

@@ -11,12 +11,14 @@ mod schema;
 mod store;
 mod sync_projection;
 
+pub(crate) use query::load_inference_configuration;
+
 pub use collection_resolver::CollectionResolver;
 pub use core::{
     ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
-    ClientRouteStatus, ClientSyncStateSnapshot, EnrollmentRequestResult, P2PHealth,
-    P2PHealthStatus, PairingCollectionStatus, RefreshedRequestProjection, RuntimeSchemaObservation,
-    STUCK_THRESHOLD_ATTEMPTS,
+    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentRequestResult,
+    P2PHealth, P2PHealthStatus, PairingCollectionStatus, RefreshedRequestProjection,
+    RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
@@ -42,7 +44,7 @@ pub use query::{
 };
 pub use schema::subscribed_collection_names;
 pub use store::{
-    folded_requests, queued_behind_turn, request_answer_owner, session_turn_request, ClientStore,
-    ClientStoreRows, TaskRecentRuns, TranscriptView,
+    folded_requests, queued_behind_turn, request_answer_owner, session_turn_request,
+    source_matches_node, ClientStore, ClientStoreRows, TaskRecentRuns, TranscriptView,
 };
 pub use sync_projection::{project_sync_health, SyncHealth, SyncHealthState};

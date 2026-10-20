@@ -53,7 +53,7 @@ impl ClientCore {
 
     async fn start_reporting_stages(
         paths: DesktopPaths,
-        options: ClientCoreOptions,
+        mut options: ClientCoreOptions,
         completed_stage: Option<watch::Sender<&'static str>>,
     ) -> Result<Self> {
         let started = Instant::now();
@@ -72,9 +72,8 @@ impl ClientCore {
         paths.ensure_root_dirs().await?;
         gents::storage_backend::reject_legacy_store(paths.node_data_dir())?;
         let store_lock = gents::home::lock_store(paths.root(), paths.node_data_dir())?;
-        let store_key =
-            open_or_create_client_store_key(&paths, options.store_key_custody, &mut checkpoint)
-                .await?;
+        let store_key = open_or_create_client_store_key(&paths, &options, &mut checkpoint).await?;
+        options.store_key_provider = None;
 
         let node_identity = PrincipalIdentity::load_or_create(&paths).await?;
         checkpoint("paths_and_identity");
@@ -129,8 +128,13 @@ impl ClientCore {
             let observation_scope = super::observation_scope::ObservationScope::new();
 
             let initial_snapshot = {
-                load_full_snapshot_with_peer_records(node.as_ref(), &records, node_identity.did())
-                    .await?
+                load_full_snapshot_with_peer_records(
+                    node.as_ref(),
+                    &records,
+                    node_identity.did(),
+                    options.operator_identity_interaction,
+                )
+                .await?
             };
             let (store, _store_updates) = ObservedStore::new(initial_snapshot);
             checkpoint("initial_snapshot");
@@ -148,6 +152,7 @@ impl ClientCore {
                 Arc::clone(&node),
                 Arc::clone(&p2p),
                 Arc::new(node_identity.clone()),
+                options.operator_identity_interaction,
             ));
 
             let (peer_statuses, bootstrap_errors) = bootstrap_saved_peers(
@@ -183,6 +188,7 @@ impl ClientCore {
                 node_identity.did().to_string(),
                 observer_subscription,
                 observation_scope.subscribe(),
+                options.operator_identity_interaction,
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
             let p2p_supervisor = spawn_p2p_supervisor_task(
@@ -476,10 +482,11 @@ pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a 
 // stores are promoted offline while the client store lock is held.
 async fn open_or_create_client_store_key(
     paths: &DesktopPaths,
-    choice: gents::store_key::StoreKeyCustodyChoice,
+    options: &ClientCoreOptions,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<gents::store_key::StoreKey> {
     use gents::store_key::{upgrade, StoreEncryption};
+    let choice = options.store_key_custody;
     let record_path = paths.store_encryption_path();
     let record = match std::fs::read(record_path) {
         Ok(bytes) => Some(
@@ -511,10 +518,13 @@ async fn open_or_create_client_store_key(
                 record
             }
         };
-        let key = record.initialize(
+        let key = client_store_key(
+            options,
+            &record,
             paths.store_key_path(),
             &upgrade::key_store_path(paths.node_data_dir())?,
-        )?;
+        )
+        .await?;
         upgrade::encrypt_existing_with_progress(paths.node_data_dir(), &record, &key, progress)
             .await?;
         write_client_store_record(paths, &record)?;
@@ -529,7 +539,26 @@ async fn open_or_create_client_store_key(
             record
         }
     };
-    record.initialize(paths.store_key_path(), paths.node_data_dir())
+    client_store_key(
+        options,
+        &record,
+        paths.store_key_path(),
+        paths.node_data_dir(),
+    )
+    .await
+}
+
+async fn client_store_key(
+    options: &ClientCoreOptions,
+    record: &gents::store_key::StoreEncryption,
+    key_file: &std::path::Path,
+    data_path: &std::path::Path,
+) -> Result<gents::store_key::StoreKey> {
+    if let Some(provider) = &options.store_key_provider {
+        provider.load(record, key_file, data_path).await
+    } else {
+        record.initialize(key_file, data_path)
+    }
 }
 
 fn write_client_store_record(

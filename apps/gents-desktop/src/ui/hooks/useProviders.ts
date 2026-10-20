@@ -29,13 +29,13 @@ export function useAccounts(nodeDid: string) {
   return { accounts, reload };
 }
 
-export function useProviderUsage(nodeDid: string) {
+export function useProviderUsage(nodeDid: string, backendId?: string) {
   const { stores, actions } = useApp();
   const { loadProviderUsage, refreshProviderUsage } = actions;
   const usage = useStore(stores.providers, (state) => state.usage[nodeDid] ?? NO_USAGE);
   useEffect(() => {
     void loadProviderUsage(nodeDid);
-  }, [loadProviderUsage, nodeDid]);
+  }, [loadProviderUsage, nodeDid, backendId]);
   const refresh = useCallback(
     async (provider: string | null) => {
       await refreshProviderUsage(nodeDid, provider);

@@ -507,14 +507,14 @@ async fn terminalize_execution_in_txn(
             }} }}"#)).await?;
     let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
         .context("execution request disappeared")?;
-    let title = row.purpose.context("execution request purpose missing")?
-        == gents_protocol::request_admission::RequestPurpose::TitleAudit;
-    if title {
+    let purpose = row.purpose.context("execution request purpose missing")?;
+    let auxiliary = purpose.is_auxiliary();
+    if auxiliary {
         anyhow::ensure!(
             selection
                 .as_ref()
                 .is_none_or(|selected| *selected == TerminalOutput::NoMessage),
-            "title execution cannot select a transcript message"
+            "auxiliary execution cannot select a transcript message"
         );
     }
     let owner = row
@@ -603,7 +603,7 @@ async fn terminalize_execution_in_txn(
         request_doc_id,
     )
     .await?;
-    if title && matches!(authority, TerminalAuthority::Owner(_)) {
+    if auxiliary && matches!(authority, TerminalAuthority::Owner(_)) {
         let records = super::recovery::request_segments(
             txn,
             request_doc_id,
@@ -612,7 +612,7 @@ async fn terminalize_execution_in_txn(
             row.requester_did.as_deref(),
         )
         .await?;
-        validate_title_sources_decided(request_doc_id, &records)?;
+        validate_auxiliary_sources_decided(request_doc_id, &records, purpose)?;
     }
     let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
     reader.observe_headers(&headers);
@@ -656,8 +656,8 @@ async fn terminalize_execution_in_txn(
         }
     };
     anyhow::ensure!(
-        !title || *selection == TerminalOutput::NoMessage,
-        "title execution cannot select a transcript message"
+        !auxiliary || *selection == TerminalOutput::NoMessage,
+        "auxiliary execution cannot select a transcript message"
     );
     match selection {
         TerminalOutput::Message { message_doc_id } => {
@@ -735,7 +735,7 @@ async fn terminalize_execution_in_txn(
     {
         return Ok(TerminalizeResult::Lost);
     }
-    if !title {
+    if !auxiliary {
         super::terminal_tools::account_tools_in_txn(
             txn,
             &mut reader,
@@ -769,18 +769,18 @@ async fn terminalize_execution_in_txn(
     Ok(TerminalizeResult::Won)
 }
 
-pub(super) fn validate_title_sources_decided(
+pub(super) fn validate_auxiliary_sources_decided(
     request_doc_id: &str,
     records: &[crate::session::canonical_rows::OutputSegmentRow],
+    purpose: gents_protocol::request_admission::RequestPurpose,
 ) -> Result<()> {
     use gents_protocol::output::reconstruction::ObservedSegment;
     use gents_protocol::output::{OutputSource, SourceClose};
-    use gents_protocol::rendered_request::CaptureScopeKind;
     let mut sources = Vec::new();
     for record in records {
         if record.segment.request_doc_id == request_doc_id
             && matches!(&record.segment.source, OutputSource::ProviderTurn { scope, .. }
-                if scope.kind == CaptureScopeKind::Title)
+                if scope.kind.request_purpose() == purpose)
             && !sources.contains(&record.segment.source)
         {
             sources.push(record.segment.source.clone());
@@ -806,7 +806,7 @@ pub(super) fn validate_title_sources_decided(
                 .into(),
             );
         }
-        anyhow::ensure!(closing.len() == 1, "title source has no unique closure");
+        anyhow::ensure!(closing.len() == 1, "auxiliary source has no unique closure");
         let closing = closing[0];
         let close = closing.segment.close.as_ref().expect("closing checked");
         match close {
@@ -838,7 +838,7 @@ pub(super) fn validate_title_sources_decided(
                 {
                     return Err(
                         gents_protocol::output::ReconstructionError::InvalidStructure {
-                            detail: "title retraction carries a data flush".to_owned(),
+                            detail: "auxiliary retraction carries a data flush".to_owned(),
                         }
                         .into(),
                     );

@@ -570,9 +570,9 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 dependency_denials,
             );
             let (
-                reconstructed,
-                reconstruction_state,
-                reconstruction_error,
+                mut reconstructed,
+                mut reconstruction_state,
+                mut reconstruction_error,
                 denied_dependency_doc_id,
             ) = match projection {
                 CanonicalMessageProjection::Ready(message) => {
@@ -594,6 +594,37 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                     None,
                 ),
             };
+            let captured_context = match reconstructed
+                .as_ref()
+                .map(gents_protocol::request_input::CapturedContext::from_message)
+                .transpose()
+            {
+                Ok(context) => context.unwrap_or_default(),
+                Err(error) => {
+                    reconstructed = None;
+                    reconstruction_state = ReconstructionState::Invalid;
+                    reconstruction_error = Some(error.to_string());
+                    Vec::new()
+                }
+            };
+            let runtime_context = gents_protocol::output::origin::resolve_origin(
+                &observed_messages,
+                denied_headers,
+                &row.doc_id,
+                &row.message.node_did,
+                row.message.requester_did.as_deref(),
+            )
+            .ok()
+            .is_some_and(|origin| {
+                origin.message.role == gents_protocol::output::MessageRole::User
+                    && origin
+                        .message
+                        .request_doc_id
+                        .as_deref()
+                        .is_some_and(|doc_id| {
+                            origin.message.message_key == format!("authored:{doc_id}:context")
+                        })
+            });
             let presentation = reconstructed.as_ref().map(present_message);
             let input_text = match reconstructed.as_ref() {
                 Some(gents_protocol::message::Message::User { content }) => {
@@ -638,6 +669,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 display_content: presentation.as_ref().and_then(|presentation| {
                     normalize_optional(Some(presentation.body_markdown.as_str()))
                 }),
+                captured_context: (!captured_context.is_empty()).then_some(captured_context),
                 reasoning: presentation.as_ref().and_then(|presentation| {
                     presentation
                         .reasoning_markdown
@@ -653,13 +685,18 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 reconstruction_state,
                 reconstruction_error,
                 denied_dependency_doc_id,
-                runtime_control: message_is_runtime_control(row, &requests_by_doc_id),
+                runtime_control: runtime_context
+                    || message_is_runtime_control(row, &requests_by_doc_id),
                 input_request_id: row.message.request_doc_id.as_ref().and_then(|doc| {
                     input_owners
                         .get(&(doc.clone(), row.message.message_key.clone()))
                         .map(|id| (*id).to_owned())
                 }),
-                origin: message_origin(store, row, &requests_by_doc_id),
+                origin: if runtime_context {
+                    None
+                } else {
+                    message_origin(store, row, &requests_by_doc_id)
+                },
                 input_text,
                 timestamp: Some(row.message.created_at.clone()),
             }
@@ -719,6 +756,22 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                     };
                     derive_tool_call_cause(&req_evidence, &tool_evidence)
                 };
+            let (job_progress, job_handle, job_state) = match row.job_pin.as_ref() {
+                Some(pin) => (
+                    row.job_progress.clone(),
+                    Some(pin.handle.clone()),
+                    row.lifecycle_state
+                        .as_deref()
+                        .and_then(gents::tool_call_lifecycle::ToolCallState::from_persisted)
+                        .map(|lifecycle| {
+                            gents::plugin::job_calls::job_state(
+                                lifecycle,
+                                row.job_progress.as_ref(),
+                            )
+                        }),
+                ),
+                None => (None, None, None),
+            };
             ToolCallView {
                 tool_call_key: row.tool_call_key.clone(),
                 request_id: normalize_optional(row.request_id.as_deref()),
@@ -737,6 +790,11 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 completed_at: normalize_optional(row.completed_at.as_deref()),
                 denial: command_denial_from_row(&row),
                 cancel_cause,
+                job_progress,
+                job_handle,
+                job_state,
+                job_outcome: None,
+                job_next_calls: Vec::new(),
             }
         })
         .collect::<Vec<_>>();
@@ -873,9 +931,9 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         node_did: resolved_node_did,
         agent_id: resolved_agent_id,
         title: session_row.and_then(|row| {
-            row.title
-                .as_ref()
-                .and_then(|title| normalize_optional(Some(&title.text)))
+            row.title.as_ref().and_then(|title| {
+                normalize_optional(Some(&gents::session::display_session_title(title)))
+            })
         }),
         preview_text: session_row.and_then(|row| {
             row.observation

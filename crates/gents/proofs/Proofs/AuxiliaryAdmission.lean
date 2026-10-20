@@ -1,7 +1,7 @@
 import Proofs.Enrollment.RequestAdmission
 import Proofs.CanonicalOutput.Execution.SessionComposition
 
-namespace TitleAdmission
+namespace AuxiliaryAdmission
 
 open CanonicalOutput.Execution
 
@@ -13,7 +13,7 @@ structure Identities where
 theorem Identities.exact_equality (ids : Identities) (left right : String) :
     ids.encode left = ids.encode right ↔ left = right := ids.injective.eq_iff
 
-/-- Authoritative observation of the title's own physical row, not a requested document label. -/
+/-- Authoritative observation of the auxiliary request's own physical row, not a requested document label. -/
 structure RequestRowEvidence where
   physicalRequest : String
   logicalRequest : String
@@ -39,15 +39,16 @@ def activation? (ids : Identities) (available : Bool) (enrollment : Enrollment.S
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
     (agent : String) (row : RequestRowEvidence) (generation : Generation)
-    (duration deadline : Time) : Option Handover.TitleActivation :=
-  if request.purpose = .titleAudit ∧ rowBound row request admission ∧
-      Enrollment.titlePendingDisposition available enrollment request admission evidence
+    (duration deadline : Time) : Option Handover.AuxiliaryActivation :=
+  if request.purpose.isAuxiliary = true ∧ rowBound row request admission ∧
+      Enrollment.auxiliaryPendingDisposition available enrollment request admission evidence
         agent row.branchFieldsExact row.pendingDeadlineAbsent row.maxRequestHop = .admit then
-    match evidence.bind (·.titleParent) with
+    match evidence.bind (·.auxiliaryParent) with
     | none => none
     | some parent => some
         { binding :=
-            { physicalRequest := ids.encode row.physicalRequest
+            { purpose := request.purpose
+            , physicalRequest := ids.encode row.physicalRequest
             , logicalRequest := ids.encode request.requestId
             , parentPhysical := ids.encode parent.link.documentId
             , parentLogical := ids.encode parent.link.requestId
@@ -63,11 +64,11 @@ theorem activation_requires_admitted_observation
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
     (agent : String) (row : RequestRowEvidence) (generation : Generation)
-    (duration deadline : Time) (activation : Handover.TitleActivation)
+    (duration deadline : Time) (activation : Handover.AuxiliaryActivation)
     (h : activation? ids available enrollment request admission evidence agent
       row generation duration deadline = some activation) :
-    request.purpose = .titleAudit ∧ rowBound row request admission ∧
-      Enrollment.titlePendingDisposition available enrollment request admission evidence
+    request.purpose.isAuxiliary = true ∧ rowBound row request admission ∧
+      Enrollment.auxiliaryPendingDisposition available enrollment request admission evidence
         agent row.branchFieldsExact row.pendingDeadlineAbsent row.maxRequestHop = .admit := by
   unfold activation? at h
   split at h
@@ -80,7 +81,7 @@ theorem activation_binds_own_physical_and_logical_request
     (admission : Enrollment.AgentRequestAdmission)
     (evidence : Option Enrollment.RuntimeInternalEvidence)
     (agent : String) (row : RequestRowEvidence) (generation : Generation)
-    (duration deadline : Time) (activation : Handover.TitleActivation)
+    (duration deadline : Time) (activation : Handover.AuxiliaryActivation)
     (h : activation? ids available enrollment request admission evidence agent
       row generation duration deadline = some activation) :
     activation.binding.physicalRequest = ids.encode row.physicalRequest ∧
@@ -101,7 +102,7 @@ theorem unbound_row_cannot_activate
       row generation duration deadline = none := by
   simp [activation?, h]
 
-/-- Authenticated parent binding must precede claiming the title's own lease. -/
+/-- Authenticated parent binding must precede claiming the auxiliary request's own lease. -/
 def activate? (world : World) (actor : Gate.Actor) (now : Time)
     (ids : Identities) (available : Bool) (enrollment : Enrollment.State)
     (request : Enrollment.AgentRequestSemantics)
@@ -112,7 +113,7 @@ def activate? (world : World) (actor : Gate.Actor) (now : Time)
     (retryDeadline : Option Time) : Option World := do
   let activation ← activation? ids available enrollment request admission evidence
     agent row generation duration deadline
-  SessionComposition.activateTitle world actor now activation scope budget retryDeadline
+  SessionComposition.activateAuxiliary world actor now activation scope budget retryDeadline
 
 theorem successful_activation_is_existing_claim
     (before after : World) (actor : Gate.Actor) (now : Time)
@@ -128,7 +129,7 @@ theorem successful_activation_is_existing_claim
     ∃ activation,
       activation? ids available enrollment request admission evidence agent
         row generation duration deadline = some activation ∧
-      SessionComposition.activateTitle before actor now activation scope budget retryDeadline =
+      SessionComposition.activateAuxiliary before actor now activation scope budget retryDeadline =
         some after := by
   unfold activate? at h
   cases ha : activation? ids available enrollment request admission evidence agent
@@ -151,6 +152,6 @@ theorem successful_activation_has_application_trace
   obtain ⟨activation, _, hclaim⟩ := successful_activation_is_existing_claim before after
     actor now ids available enrollment request admission evidence agent row
     generation duration deadline scope budget retryDeadline h
-  exact .activateTitle actor now activation scope budget retryDeadline hclaim
+  exact .activateAuxiliary actor now activation scope budget retryDeadline hclaim
 
-end TitleAdmission
+end AuxiliaryAdmission

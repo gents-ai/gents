@@ -159,14 +159,30 @@ async fn tools_in_flight(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value>
     Ok(json!({"items": tools, "truncated": rows.len() > STATUS_LIMIT}))
 }
 
+/// Persisted AgentRequest inputs omit the field entirely when they equal
+/// `RequestInput::default()` (canonical writer), so storage represents them as
+/// absent or null; `AgentRequestRow` decodes that through `Option`. A present
+/// value must still satisfy the strict input contract and fails loudly.
+///
+/// Errors are constructed fresh from the request id only: the serde cause can
+/// embed raw persisted values, so it is never chained into the error.
+fn decode_queued_input(row: &Value) -> Result<gents_protocol::request_input::RequestInput> {
+    let input: Option<gents_protocol::request_input::RequestInput> =
+        serde_json::from_value(row["input"].clone()).map_err(|_| {
+            anyhow::anyhow!(
+                "decoding queued session input for request {}",
+                row["request_id"]
+            )
+        })?;
+    Ok(input.unwrap_or_default())
+}
+
 async fn queued_steering(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value> {
     let response = txn.execute(&format!("{{AgentRequest(filter: {{{scope}, purpose: {{_eq: \"normal\"}}, lifecycle_state: {{_eq: \"pending\"}}}}, order: [{{created_at: ASC}}, {{request_id: ASC}}], limit: {}) {{request_id input created_at}}}}", STATUS_LIMIT + 1)).await?;
     let pending = rows(&response, "AgentRequest")?;
     let mut queued = Vec::new();
     for row in pending.iter().take(STATUS_LIMIT) {
-        let input: gents_protocol::request_input::RequestInput =
-            serde_json::from_value(row["input"].clone())
-                .context("decoding queued session input")?;
+        let input = decode_queued_input(row)?;
         if let Some(queue) = input
             .queue
             .filter(|queue| queue.source == gents_protocol::request_input::QueueSource::Steering)
@@ -470,6 +486,48 @@ mod tests {
         assert!(query.contains(r#"_docID: {_in: ["tool-1","tool\"2"]}"#));
         assert!(query.contains(r#"requester_did: {_eq: null}"#));
         assert!(tool_call_batch_query("scope", &[]).is_none());
+    }
+
+    #[test]
+    fn queued_input_decode_accepts_canonical_default_and_fails_malformed() {
+        let request_id = "pending-request";
+        // Canonical writer omits `input` when it equals the default.
+        let absent = json!({"request_id": request_id, "input": Value::Null});
+        let decoded = decode_queued_input(&absent).unwrap();
+        assert!(decoded.queue.is_none());
+        let missing = json!({"request_id": request_id});
+        assert!(decode_queued_input(&missing).unwrap().queue.is_none());
+        // Canonical steering input still round-trips.
+        let steering = json!({"request_id": request_id, "input": {"queue": {
+            "source": "steering", "policy": "append", "delivery": "steer",
+            "queued_after_request_id": "active-request"}}});
+        let decoded = decode_queued_input(&steering).unwrap();
+        assert_eq!(
+            decoded.queue.expect("steering queue").source,
+            gents_protocol::request_input::QueueSource::Steering
+        );
+        // A present value that violates the strict input contract stays an
+        // error naming the request; it must not decode silently, and the
+        // error must be payload-free on every rendering: the serde cause can
+        // embed raw persisted values, so no rendering may leak them.
+        let secret = "sentinel-secret-payload";
+        for malformed_input in [
+            json!({"unmodeled": secret}),
+            json!(format!("string where a struct was required: {secret}")),
+        ] {
+            let row = json!({"request_id": request_id, "input": malformed_input});
+            let error = decode_queued_input(&row).unwrap_err();
+            for rendered in [
+                error.to_string(),
+                format!("{error:#}"),
+                format!("{error:?}"),
+            ] {
+                assert!(rendered.contains(request_id), "{rendered}");
+                assert!(!rendered.contains(secret), "{rendered}");
+                assert!(!rendered.contains("unmodeled"), "{rendered}");
+                assert!(!rendered.contains("invalid type"), "{rendered}");
+            }
+        }
     }
 
     #[tokio::test]

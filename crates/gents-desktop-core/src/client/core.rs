@@ -68,6 +68,23 @@ pub struct ClientCoreOptions {
     pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
+    pub store_key_provider: Option<Arc<dyn ClientStoreKeyProvider>>,
+    /// Headless observation must not open platform credential dialogs. Explicit
+    /// user commands retain their existing operator authority requirements.
+    pub operator_identity_interaction: crate::local_runtime::OperatorIdentityInteraction,
+}
+
+/// Only a trusted native host may supply store keys. It must bind its lookup
+/// to this exact custody record. Native custody remains the durable owner;
+/// a host cache must never be the only copy. Keys never enter product messages or logs.
+#[async_trait::async_trait]
+pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
+    async fn load(
+        &self,
+        record: &gents::store_key::StoreEncryption,
+        key_file: &std::path::Path,
+        data_path: &std::path::Path,
+    ) -> Result<gents::store_key::StoreKey>;
 }
 
 impl Default for ClientCoreOptions {
@@ -86,6 +103,8 @@ impl Default for ClientCoreOptions {
             max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
             install_replicators_on_bootstrap: true,
             store_key_custody: gents::store_key::StoreKeyCustodyChoice::default(),
+            store_key_provider: None,
+            operator_identity_interaction: Default::default(),
         }
     }
 }
@@ -503,6 +522,7 @@ impl ClientCore {
                     did,
                     &records,
                     self.node_identity.did(),
+                    self.options.operator_identity_interaction,
                 )
                 .await?
             }
@@ -511,6 +531,7 @@ impl ClientCore {
                     self.node.as_ref(),
                     &records,
                     self.node_identity.did(),
+                    self.options.operator_identity_interaction,
                 )
                 .await?
             }
@@ -546,6 +567,7 @@ impl ClientCore {
             node_did,
             &records,
             self.node_identity.did(),
+            self.options.operator_identity_interaction,
         )
         .await
         {

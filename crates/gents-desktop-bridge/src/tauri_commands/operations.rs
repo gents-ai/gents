@@ -8,6 +8,7 @@ use gents::backend_registry::{list_all_backends, lookup_backend_observation};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
+use gents_protocol::job::JobControlOutcome;
 use tauri::State;
 
 use crate::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
@@ -16,8 +17,8 @@ use crate::snapshot::operations_snapshot::{
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    BackendHealthView, DesktopInterruptRequest, DesktopOperationsSnapshot,
-    DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
+    BackendHealthView, DesktopInterruptRequest, DesktopJobControlRequest,
+    DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
     DesktopSessionProvenanceRequest, InferenceCallSummaryView, InterruptRequestResult,
     MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView, RuntimeLivenessView,
     SessionProvenanceView,
@@ -130,6 +131,10 @@ async fn fetch_background_tool_calls(
                 .get("started_at")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            completed_at: row
+                .get("completed_at")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             deadline_at: row
                 .get("deadline_at")
                 .and_then(|v| v.as_str())
@@ -142,6 +147,7 @@ async fn fetch_background_tool_calls(
                 .get("stuck_since")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            job: row.get("job_pin").is_some_and(|pin| !pin.is_null()),
         })
         .collect())
 }
@@ -166,13 +172,28 @@ fn background_tool_calls_query(node_did: &str) -> String {
                 lifecycle_state
                 status
                 started_at
+                completed_at
                 deadline_at
                 await_mode
                 stuck_since
+                job_pin
             }}
         }}
     "#
     )
+}
+
+#[cfg(test)]
+mod background_tool_query_tests {
+    use super::*;
+
+    #[test]
+    fn background_query_selects_job_pin() {
+        let query = background_tool_calls_query("did:key:z6Mk");
+
+        assert!(query.contains("job_pin"));
+        assert!(!query.contains("job_step_state"));
+    }
 }
 
 #[tauri::command]
@@ -216,6 +237,40 @@ pub async fn desktop_interrupt_request(
             node_did = %request.node_did.as_deref().unwrap_or(""),
             error,
             "desktop interrupt action failed"
+        ),
+    }
+    result.map_err(BridgeError::untyped)
+}
+
+#[tauri::command]
+pub async fn desktop_job_control(
+    state: State<'_, DesktopAppState>,
+    request: DesktopJobControlRequest,
+) -> Result<JobControlOutcome, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    tracing::info!(
+        target: "gents_desktop::job_control",
+        session_id = %request.session_id,
+        tool_call_id = %request.tool_call_id,
+        action = ?request.action,
+        "desktop job control received"
+    );
+    let result = crate::job_control::job_control(&core, &request).await;
+    match &result {
+        Ok(outcome) => tracing::info!(
+            target: "gents_desktop::job_control",
+            session_id = %request.session_id,
+            tool_call_id = %request.tool_call_id,
+            outcome = ?outcome,
+            "desktop job control completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "gents_desktop::job_control",
+            session_id = %request.session_id,
+            tool_call_id = %request.tool_call_id,
+            error,
+            "desktop job control failed"
         ),
     }
     result.map_err(BridgeError::untyped)

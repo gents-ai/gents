@@ -349,6 +349,14 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub plugin_execution_receipt: Option<crate::plugin::PluginExecutionReceipt>,
     #[serde(default)]
+    pub job_pin: Option<crate::job::JobPin>,
+    #[serde(default)]
+    pub job_progress: Option<crate::job::JobProgress>,
+    /// Host-only: the last step's execution evidence and validated resume
+    /// block, never shown to the guest.
+    #[serde(default)]
+    pub job_step_state: Option<serde_json::Value>,
+    #[serde(default)]
     pub tool_failure_class: Option<String>,
     #[serde(default)]
     pub denial_reason: Option<String>,

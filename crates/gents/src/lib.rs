@@ -14,7 +14,7 @@ pub mod backend_provider;
 pub mod backend_registry;
 pub mod background_completion;
 mod background_completion_diagnostics;
-pub(crate) mod background_tools;
+pub mod background_tools;
 pub mod blocked_turn;
 pub(crate) mod callback;
 pub mod chatgpt_codex;
@@ -65,6 +65,7 @@ pub mod pack_registry;
 pub mod pack_resolve;
 pub mod pack_store;
 pub mod plugin;
+pub mod plugin_job;
 pub mod provider_http;
 pub(crate) mod provider_input;
 pub mod ux_data;
@@ -403,6 +404,7 @@ pub mod watcher;
 pub mod workspace;
 
 pub use background_tools::load_caused_request_terminal;
+pub use background_tools::status_projection::OutputEvidence;
 pub use callback::reject_secret_bearing_callback_fields;
 pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use eth::{

@@ -40,6 +40,7 @@ async fn scoped_missing_document_reload_preserves_other_owner_survivors() {
         "did:test:requester".to_owned(),
         subscription,
         selection,
+        Default::default(),
     );
     // Publishing both invalidations before this executor yields makes one
     // mixed batch, independent of native commit notification timing.

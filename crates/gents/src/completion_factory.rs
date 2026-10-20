@@ -69,7 +69,8 @@ pub(crate) fn loop_config(
                 agent_config.backend_provider_kind,
                 agent_config.openai_wire_api,
                 agent_config.model_name.clone(),
-            ),
+            )
+            .with_service_tier(agent_config.service_tier),
         ),
         preamble: Some(preamble),
         context_message: None,
@@ -99,7 +100,15 @@ pub(crate) fn loop_config(
                         &agent_config.backend_endpoint,
                     ),
                 ),
-                agent_config.sampling.additional_params(),
+                merge_optional_params(
+                    agent_config.sampling.additional_params(),
+                    agent_config
+                        .service_tier
+                        .filter(|_| {
+                            agent_config.openai_wire_api == crate::OpenAiWireApi::ChatCompletions
+                        })
+                        .map(|tier| serde_json::json!({"service_tier":tier.wire_value()})),
+                ),
             ),
             agent_config.backend_provider_kind,
             agent_config.resolved_reasoning_efforts.as_deref(),
@@ -191,17 +200,28 @@ pub(crate) fn parse_aggregate_token_limit(
 }
 
 /// Mint the single monotone provider-usage ledger for one durable request,
-/// rehydrated from durable `InferenceCall` rows for this physical
-/// `request_doc_id` so crash redrive and process restart cannot mint a fresh
-/// allowance.
+/// rehydrated from its signed physical scope and authenticated auxiliary
+/// children so crash redrive cannot mint another allowance.
 pub(crate) async fn aggregate_token_budget_for_request(
     node: &EmbeddedNode,
     request: &AgentRequest,
 ) -> anyhow::Result<Option<AggregateTokenBudget>> {
+    use gents_protocol::request_admission::RequestPurpose;
+
+    anyhow::ensure!(
+        request.purpose != RequestPurpose::AccessReview,
+        "access review must borrow its caller's token ledger"
+    );
     let Some(limit) = parse_aggregate_token_limit(request.max_total_tokens)? else {
         return Ok(None);
     };
-    let used = load_prior_charged_tokens(node, &request.doc_id).await?;
+    let used = match request.purpose {
+        RequestPurpose::Normal => {
+            crate::toolset::load_parent_inclusive_budget_usage(node, request).await?
+        }
+        RequestPurpose::TitleAudit => load_prior_charged_tokens(node, &request.doc_id).await?,
+        RequestPurpose::AccessReview => unreachable!("review cannot mint a ledger"),
+    };
     if used == 0 {
         return Ok(Some(AggregateTokenBudget::new(limit)));
     }
@@ -463,6 +483,7 @@ pub(crate) async fn build_compaction_engine(
     summary.backend_endpoint = backend.backend_endpoint;
     summary.backend_auth = backend.backend_auth;
     summary.model_name = inference.profile.model_name.clone();
+    summary.service_tier = inference.profile.service_tier;
     summary.resolved_reasoning_efforts = inference.resolved_reasoning_efforts();
     summary.context_window = inference.context_window()?;
     summary.max_output_tokens = inference.max_output_tokens()?;

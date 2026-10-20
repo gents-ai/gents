@@ -23,7 +23,10 @@ impl ClientCore {
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
         gents::goal::load_session_goal_observation(
-            &self.session_queue_access(node_did),
+            &self
+                .operator_observation_graphql(node_did)
+                .map(gents::config_client::ConfigAccess::Graphql)
+                .unwrap_or_else(|| gents::config_client::ConfigAccess::local(self.node_arc())),
             &self.node_identity,
             node_did,
             session_id,
@@ -47,6 +50,7 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        crate::local_runtime::ensure_captured_input_supported(peer.as_ref(), &input).await?;
         let (signer, admission, requester_did) =
             self.request_authority(node_did, peer.as_ref()).await?;
         let command_id = uuid::Uuid::new_v4().to_string();

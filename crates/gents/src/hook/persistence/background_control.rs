@@ -47,7 +47,11 @@ impl DefraSessionHook {
             let lifecycle = self
                 .load_authorized_background_tool(caller, tool_call_id)
                 .await?;
-            if lifecycle.is_session_message() {
+            if matches!(
+                lifecycle.kind(),
+                crate::tool_call_lifecycle::ToolRowKind::SessionMessage
+                    | crate::tool_call_lifecycle::ToolRowKind::PluginJob
+            ) {
                 anyhow::bail!(
                     "{tool_call_id} is a {} call; its result arrives only as a completion message, so wait_process does not wait on it",
                     lifecycle.tool_name()
@@ -160,6 +164,17 @@ impl DefraSessionHook {
             .await?;
             crate::tool_call_lifecycle::query::render_tool_result(&message)?
         };
+        let now = chrono::Utc::now();
+        let started_at = lifecycle
+            .started_at()
+            .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
+        let projection = gents_protocol::wait_status::WaitStatusProjection::from_parts(
+            Some(lifecycle.state().as_str()),
+            started_at.as_deref(),
+            None,
+            now,
+        );
+        let evidence = crate::background_tools::OutputEvidence::from_text(&result);
         let status = lifecycle.state().as_str();
         let error = if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed {
             serde_json::Value::Null
@@ -176,6 +191,12 @@ impl DefraSessionHook {
                 "tool_name": lifecycle.tool_name(),
                 "await_mode": "background",
                 "status": status,
+                "started_at": projection.started_at.map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)),
+                "elapsed_seconds": projection.running_elapsed_seconds,
+                "available_bytes": evidence.total_bytes,
+                "preview": evidence.preview,
+                "preview_truncated": evidence.preview_truncated,
+                "read_at": now.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
                 "result": serde_json::Value::Null,
                 "error": error
             }),

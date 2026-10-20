@@ -6,6 +6,7 @@ use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
+use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
     BackendUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
@@ -151,6 +152,7 @@ fn contract_source_paths() -> Vec<PathBuf> {
     let mut paths = vec![
         source_root.join("contract.rs"),
         source_root.join("host/protocol.rs"),
+        source_root.join("inference_setup.rs"),
         source_root.join("../../gents-desktop-core/src/error.rs"),
         source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
@@ -192,6 +194,9 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::host::speech::SpeechToolReference,
         crate::host::speech::SpeechRecognizeRequest,
         crate::host::speech::SpeechSynthesizeRequest,
+        crate::host::permissions::WorkspacePermissionsRequest,
+        crate::host::permissions::WorkspacePermissionsSaveRequest,
+        crate::host::permissions::WorkspacePermissionsState,
         crate::host::protocol::ClientMessage,
         crate::host::protocol::ClientCommand,
         crate::host::protocol::HostMessage,
@@ -205,6 +210,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ChatSendRequest,
         PendingMessageEditRequest,
         PendingQueueEditRequest,
+        PendingMessageSteerRequest,
         PendingQueueEditResult,
         SessionGoalView,
         GoalControlView,
@@ -214,6 +220,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         PendingQueueEntryView,
         MailboxItemRequest,
         gents_protocol::mailbox_question::MailboxQuestion,
+        SessionForkBeforeRequest,
+        SessionForkResult,
         SessionRenameRequest,
         NodeConfigSaveRequest,
         DefaultAgentSetRequest,
@@ -247,9 +255,12 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopOperationsSnapshotRequest,
         DesktopSessionProvenanceRequest,
         DesktopInterruptRequest,
+        DesktopJobControlRequest,
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
         InferenceDiscoveryRequest,
+        InferenceSetupState,
+        AgentModelSelectionRequest,
         InferenceRecommendationRequest,
         InferenceBackendRecommendationRequest,
         CodexLoginRequest,
@@ -323,6 +334,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::tauri_commands::ux_plugins::UxDataCallRequest,
         crate::tauri_commands::ux_plugins::UxDataSurfacesRequest,
         crate::tauri_commands::packs::PluginBindRequest,
+        crate::tauri_commands::packs::PackWireRequest,
         gents_server::packs::EditedDocuments,
         RequestTimelineView,
         ToolSurfaceExplanationView,
@@ -343,12 +355,33 @@ fn export_all(dir: &Path) -> Result<(), String> {
         SignInView,
         BackendUsageView,
         UsageWindowView,
+        gents_protocol::job::JobProgress,
+        gents_protocol::job::CatalogEntry,
+        gents_protocol::job::JobView,
+        gents_protocol::job::JobControlKind,
+        gents_protocol::job::JobControlOutcome,
+        gents_protocol::job::JobReadError,
+        gents_protocol::job::JobState,
+        gents_protocol::job::JobChildState,
+        gents_protocol::job::JobPauseReason,
+        gents_protocol::job::JobPhaseState,
+        gents_protocol::job::JobOrigin,
+        gents_protocol::job::JobPhase,
+        gents_protocol::job::JobActiveChild,
+        gents_protocol::job::JobBudget,
+        gents_protocol::job::JobScope,
+        gents_protocol::job::JobOutcome,
+        gents_protocol::job::JobPinSummary,
+        gents_protocol::job::JobChildRow,
+        gents_protocol::job::JobUsage,
+        gents_protocol::job::CatalogSource,
     );
 
     commands::export(dir)?;
     let protocol = format!(
-        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\nexport const CLIENT_HOST_COMMANDS = {} as const;\n",
+        "// Generated from gents-desktop-bridge::host::protocol. Do not edit.\n\nexport const CLIENT_HOST_VERSION = {};\nexport const EDITOR_STORE_BOOTSTRAP_VERSION = {};\nexport const CLIENT_HOST_MAX_FRAME_BYTES = {};\nexport const CLIENT_HOST_MAX_PENDING_CALLS = {};\nexport const CLIENT_HOST_COMMANDS = {} as const;\n",
         crate::host::protocol::PROTOCOL_VERSION,
+        crate::host::protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
         crate::host::protocol::MAX_FRAME_BYTES,
         crate::host::protocol::MAX_PENDING_CALLS,
         serde_json::to_string(crate::host::protocol::ClientCommand::NAMES)

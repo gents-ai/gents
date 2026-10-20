@@ -92,7 +92,7 @@ pub(super) const NODE_READINESS_FIELDS: &str = "node_did snapshot_json updated_a
 pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id purpose node_did requester_did agent_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request superseded_by_request superseded_by_request_doc_id content max_total_tokens input lifecycle_state backend_id execution_origin execution_generation execution_lease_secs execution_lease_expires_at caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id failure_reason terminalized_at terminal_output stopped_before_running terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until request_hop workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash";
 pub(super) const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_id created_at closed_at title tags provenance observation";
 pub(super) const GOAL_FIELDS: &str = "goal_id session_id node_did creation_key objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
-pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "_docID tool_call_key node_did session_id request_id request_doc_id requester_did message_sequence tool_name tool_call_id status lifecycle_state await_mode deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms";
+pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "_docID tool_call_key node_did session_id request_id request_doc_id requester_did message_sequence tool_name tool_call_id status lifecycle_state await_mode deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms job_pin job_progress";
 pub(super) const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at";
 pub(super) const TASK_FIELDS: &str = "task_id node_did display_name description agent_id prompt_template emit_outcome goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
 pub(super) const SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
@@ -108,7 +108,7 @@ pub(super) const COMPACTION_CONFIG_FIELDS: &str = "compaction_id node_did displa
 pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id node_did name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 pub(super) const INFERENCE_BACKEND_OBSERVATION_FIELDS: &str =
     "backend_id catalogs last_probe probe_status";
-pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id node_did display_name description backend_id model_name reasoning_effort context_window max_output_tokens sampling_id execution_id tags";
+pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id node_did display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 pub(super) const INFERENCE_SAMPLING_FIELDS: &str = "sampling_id node_did display_name temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty tags";
 pub(super) const INFERENCE_EXECUTION_FIELDS: &str = "execution_id node_did display_name max_turns max_total_tokens stream_batch_ms stream_liveness_timeout_secs provider_idle_timeout_secs deadline_duration_secs retry_policy_id tags";
 pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id node_did display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_node_did enabled tags";
@@ -296,6 +296,8 @@ struct SelectedRequestLookup {
 }
 
 impl SelectedRequestLookup {
+    /// Session metadata can replicate before its physical request; an empty
+    /// lookup cannot establish a broken canonical reference.
     fn decode(
         self,
         data: &Value,
@@ -318,16 +320,20 @@ impl SelectedRequestLookup {
             }),
             "selected request query returned a row outside its exact node/session/requester scope"
         );
+        if selected.is_empty() {
+            // A signed client request can arrive after its independently created session.
+            return Err(crate::error::BridgeError::new(
+                crate::error::BridgeErrorCode::ProjectionPending,
+                "selected request has not reached the session owner yet",
+            )
+            .into());
+        }
         if let Some(expected_request_id) = self.expected_request_id.as_deref() {
             anyhow::ensure!(
                 selected.len() == 1 && selected[0].request_id == expected_request_id,
                 "canonical session head did not resolve to its exact physical request"
             );
         }
-        anyhow::ensure!(
-            !selected.is_empty(),
-            "selected request refresh found no physical request for the canonical session owner"
-        );
         Ok(selected)
     }
 }

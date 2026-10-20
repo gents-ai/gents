@@ -19,6 +19,8 @@ mod native_runner;
 pub use native_runner::enable_self_runner;
 pub(crate) mod session_history;
 mod title_audit_usage;
+pub(crate) use title_audit_usage::load_parent_inclusive_budget_usage;
+pub(crate) use title_audit_usage::load_session_goal_usage;
 pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod shared;
 pub(crate) use shared::is_secret_env_name;
@@ -46,6 +48,16 @@ pub(crate) fn read_only_bash_for_test(
         ToolContext::new(root.to_path_buf(), false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
         allowlist,
+    ))
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn write_capable_bash_for_test(
+    root: &std::path::Path,
+) -> Box<dyn crate::llm::tool::ToolDyn> {
+    Box::new(UnrestrictedBashTool::new(
+        ToolContext::new(root.to_path_buf(), false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
     ))
 }
 
@@ -82,6 +94,9 @@ pub use session_history::{
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;
+#[cfg(test)]
+pub(crate) use shared::run_command_for_test;
+pub(crate) use shared::shell_join;
 #[cfg(test)]
 pub(crate) use shared::validate_command_policy;
 pub(crate) use shared::ToolContext;
@@ -646,7 +661,7 @@ pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
         .build_native_tools()
 }
 
-pub(crate) fn is_session_message_tool(tool_name: &str) -> bool {
+pub fn is_session_message_tool(tool_name: &str) -> bool {
     tool_name == AGENT_NEW_TOOL_NAME || tool_name == AGENT_MESSAGE_TOOL_NAME
 }
 

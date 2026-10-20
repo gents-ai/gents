@@ -4,13 +4,17 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingQueueEditRequest,
-    SessionRenameRequest,
+    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingMessageSteerRequest,
+    PendingQueueEditRequest, SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// Typed captures require a host that preserves their submitted snapshots.
+pub const PROTOCOL_VERSION: u32 = 4;
+/// The private store-key channel completes before ordinary host framing begins.
+/// Its failures use the canonical bridge error contract and never raw causes.
+pub const EDITOR_STORE_BOOTSTRAP_VERSION: u32 = 2;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PENDING_CALLS: usize = 32;
 
@@ -35,8 +39,34 @@ pub enum ClientCommand {
     BackendAuthenticationSave {
         request: crate::accounts::BackendAuthenticationSaveRequest,
     },
+    #[serde(rename = "client_runtime_is_local")]
+    RuntimeIsLocal {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
     #[serde(rename = "client_inference_setup_catalog")]
     InferenceCatalog {},
+    #[serde(rename = "client_inference_setup_state")]
+    InferenceSetupState {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
+    #[serde(rename = "client_inference_models_discover")]
+    InferenceModelsDiscover {
+        request: crate::inference_setup::InferenceDiscoveryRequest,
+    },
+    #[serde(rename = "client_inference_model_recommendation")]
+    InferenceModelRecommendation {
+        request: crate::inference_setup::InferenceRecommendationRequest,
+    },
+    #[serde(rename = "client_agent_model_select")]
+    AgentModelSelect {
+        request: crate::types::AgentModelSelectionRequest,
+    },
+    #[serde(rename = "client_config_apply")]
+    ConfigApply {
+        request: crate::types::ConfigComponentsApplyRequest,
+    },
     #[serde(rename = "client_provider_accounts_list")]
     AccountsList {
         request: crate::accounts::ProviderAccountsRequest,
@@ -138,6 +168,14 @@ pub enum ClientCommand {
         #[serde(rename = "nodeHome")]
         node_home: Option<String>,
     },
+    #[serde(rename = "client_workspace_permissions")]
+    WorkspacePermissions {
+        request: super::permissions::WorkspacePermissionsRequest,
+    },
+    #[serde(rename = "client_workspace_permissions_save")]
+    WorkspacePermissionsSave {
+        request: super::permissions::WorkspacePermissionsSaveRequest,
+    },
     #[serde(rename = "client_plugin_approval_subscribe")]
     ApprovalSubscribe {
         #[serde(rename = "nodeDid")]
@@ -178,6 +216,12 @@ pub enum ClientCommand {
     Send { request: ChatSendRequest },
     #[serde(rename = "desktop_pending_queue_edit")]
     EditPending { request: PendingQueueEditRequest },
+    #[serde(rename = "desktop_pending_message_steer")]
+    SteerPending { request: PendingMessageSteerRequest },
+    #[serde(rename = "desktop_session_fork_before_message")]
+    ForkBeforeMessage {
+        request: crate::types::SessionForkBeforeRequest,
+    },
     #[serde(rename = "desktop_session_rename")]
     Rename { request: SessionRenameRequest },
     #[serde(rename = "desktop_interrupt_request")]
@@ -188,7 +232,13 @@ impl ClientCommand {
     pub const NAMES: &'static [&'static str] = &[
         "client_backend_authentication",
         "client_backend_authentication_save",
+        "client_runtime_is_local",
         "client_inference_setup_catalog",
+        "client_inference_setup_state",
+        "client_agent_model_select",
+        "client_inference_models_discover",
+        "client_inference_model_recommendation",
+        "client_config_apply",
         "client_provider_accounts_list",
         "client_provider_account_sign_in",
         "client_provider_account_disconnect",
@@ -207,6 +257,8 @@ impl ClientCommand {
         "client_speech_recognize",
         "client_speech_synthesize",
         "client_connect_local",
+        "client_workspace_permissions",
+        "client_workspace_permissions_save",
         "client_plugin_approval_subscribe",
         "client_plugin_approval_unsubscribe",
         "client_plugin_approval_pending",
@@ -219,6 +271,8 @@ impl ClientCommand {
         "desktop_goal_control",
         "desktop_chat_send",
         "desktop_pending_queue_edit",
+        "desktop_pending_message_steer",
+        "desktop_session_fork_before_message",
         "desktop_session_rename",
         "desktop_interrupt_request",
     ];
@@ -229,6 +283,10 @@ impl ClientCommand {
             Self::Snapshot {}
                 | Self::BackendAuthentication { .. }
                 | Self::InferenceCatalog {}
+                | Self::InferenceSetupState { .. }
+                | Self::RuntimeIsLocal { .. }
+                | Self::InferenceModelsDiscover { .. }
+                | Self::InferenceModelRecommendation { .. }
                 | Self::AccountsList { .. }
                 | Self::ConfigCatalog { .. }
                 | Self::ConfigRead { .. }
@@ -238,6 +296,7 @@ impl ClientCommand {
                 | Self::SpeechTools { .. }
                 | Self::SpeechRecognize { .. }
                 | Self::SpeechSynthesize { .. }
+                | Self::WorkspacePermissions { .. }
                 | Self::ApprovalPending { .. }
                 | Self::SessionSnapshot(_)
                 | Self::SessionLiveDelta(_)

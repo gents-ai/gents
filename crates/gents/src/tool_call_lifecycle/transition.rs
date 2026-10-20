@@ -3,7 +3,7 @@ use anyhow::{anyhow, Context, Result};
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::toolset::CommandPolicyDenial;
 
-use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
+use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IllegalToolCallTransition {
@@ -23,6 +23,8 @@ pub enum IllegalToolCallTransition {
     ParentLinkageIncoherent,
     #[error("foreground rejected: an agent_new/agent_message row is background-only")]
     SessionMessageIsBackgroundOnly,
+    #[error("foreground rejected: a plugin job row is background-only")]
+    PluginJobIsBackgroundOnly,
 }
 
 impl ToolCallLifecycle {
@@ -117,3 +119,8 @@ mod session_message;
 pub use session_message::CausedRequestTerminal;
 mod mode_policy;
 mod native;
+mod plugin_job;
+pub(crate) use plugin_job::PluginJobTerminal;
+
+#[cfg(test)]
+mod tests;

@@ -69,6 +69,8 @@ export type {
   GrokLoginResult,
   GrokLoginRequest,
   GrokLoginUrl,
+  SessionForkBeforeRequest,
+  SessionForkResult,
   SessionRenameRequest,
   DesktopInitRequest,
   TriggerSaveRequest,
@@ -112,6 +114,7 @@ export type {
   MessageView,
   PendingTurnView,
   PendingQueueEditRequest,
+  PendingMessageSteerRequest,
   PendingQueueEditResult,
   PendingQueueEntryView,
   RenderedTimelineItem,
@@ -156,6 +159,10 @@ export type {
   PackInstallRequest,
   PackPluginSlot,
   PackSlotProfile,
+  PackWireRequest,
+  PackWireResult,
+  PackWireSources,
+  WireReport,
 } from "./types/packs.js";
 export type {
   AllowedFolder,
@@ -187,6 +194,7 @@ export type { ProviderAccountRemoveRequest } from "./generated/ProviderAccountRe
 export type { ProviderUsageReadRequest } from "./generated/ProviderUsageReadRequest.js";
 export type { BackendUsageView } from "./generated/BackendUsageView.js";
 export type { UsageWindowView } from "./generated/UsageWindowView.js";
+export type { InferenceSetupState } from "./generated/InferenceSetupState.js";
 export type { InferenceSetupCatalog } from "./generated/InferenceSetupCatalog.js";
 export type { InferenceProviderOption } from "./generated/InferenceProviderOption.js";
 export type { InferenceAuthOption } from "./generated/InferenceAuthOption.js";

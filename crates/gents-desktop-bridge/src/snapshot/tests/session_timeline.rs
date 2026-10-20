@@ -153,6 +153,7 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
             input_request_id: None,
             sequence: Some(index),
             content: Some(format!("row {index}")),
+            captured_context: None,
             timestamp: None,
             reconstruction: ready(),
         })
@@ -194,6 +195,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
             input_request_id: None,
             sequence: Some(index),
             content: Some(format!("row {index}")),
+            captured_context: None,
             timestamp: None,
             reconstruction: ready(),
         })
@@ -422,14 +424,8 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
     let snapshot =
         build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
             .expect("snapshot");
-    assert!(matches!(
-        snapshot.timeline_items.as_slice(),
-        [RenderedTimelineItem::AutomatedInput {
-            origin: crate::types::RequestOriginView::BackgroundCompletion,
-            content,
-            ..
-        }] if content.as_deref() == Some("wake")
-    ));
+    assert!(snapshot.messages[0].runtime_control);
+    assert!(snapshot.timeline_items.is_empty());
 }
 
 #[test]
@@ -573,7 +569,7 @@ fn message_request_id_is_never_the_request_doc_id() {
 }
 
 #[test]
-fn only_the_authored_prompt_row_owns_the_request_turn() {
+fn runtime_context_stays_out_of_the_conversation_and_only_the_prompt_owns_the_turn() {
     let mut rows = ClientStoreRows {
         sessions: vec![timeline_session()],
         requests: vec![AgentRequestRow {
@@ -583,7 +579,7 @@ fn only_the_authored_prompt_row_owns_the_request_turn() {
             node_did: Some("did:test:amy".into()),
             session_id: Some("sess-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Processing),
-            content: Some("inspect the repository".into()),
+            content: Some("<context>\ninspect the repository\n</context>".into()),
             ..Default::default()
         }],
         ..ClientStoreRows::default()
@@ -604,25 +600,23 @@ fn only_the_authored_prompt_row_owns_the_request_turn() {
         Some("bae-doc-1"),
         2,
         MessageRole::User,
-        "inspect the repository",
+        "<context>\ninspect the repository\n</context>",
     );
     let snapshot =
         build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
             .expect("snapshot");
+    assert!(snapshot.messages[0].runtime_control);
+    assert!(!snapshot.messages[1].runtime_control);
     assert!(matches!(
         &snapshot.timeline_items[..],
         [
             RenderedTimelineItem::UserMessage {
-                owns_turn: false,
-                request_id: Some(context_request),
-                ..
-            },
-            RenderedTimelineItem::UserMessage {
                 owns_turn: true,
                 request_id: Some(prompt_request),
+                content: Some(content),
                 ..
             },
-        ] if context_request == "req-1" && prompt_request == "req-1"
+        ] if prompt_request == "req-1" && content == "<context>\ninspect the repository\n</context>"
     ));
 }
 
@@ -966,6 +960,7 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
             item_key: "pending-interrupted".into(),
             request_id: "interrupted".into(),
             content: "keep this input".into(),
+            captured_context: None,
             selected_skill_ids: vec![],
             lifecycle_state: Some("interrupted".into()),
             folded_into_request_id: None,
@@ -1003,6 +998,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
             item_key: format!("pending-{index}"),
             request_id: format!("request-{index}"),
             content: format!("input {index}"),
+            captured_context: None,
             selected_skill_ids: vec![],
             lifecycle_state: Some("interrupted".into()),
             folded_into_request_id: None,
@@ -1036,6 +1032,7 @@ fn local_pending_history_pages_with_durable_anchor_cursor() {
         item_key: "pending-old".into(),
         request_id: "old".into(),
         content: "interrupted input".into(),
+        captured_context: None,
         selected_skill_ids: vec![],
         lifecycle_state: Some("interrupted".into()),
         folded_into_request_id: None,
@@ -1071,6 +1068,7 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
             item_key: "pending-current".into(),
             request_id: "current".into(),
             content: "current input".into(),
+            captured_context: None,
             selected_skill_ids: vec![],
             lifecycle_state: Some("interrupted".into()),
             folded_into_request_id: None,

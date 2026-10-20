@@ -1,0 +1,66 @@
+{
+  "manifest_version": 1,
+  "name": "plugin_documents_fixture",
+  "version": "1.0.0",
+  "description": "Documents pack that also ships one plugin: three inference slots, one task, one schema. Used by pack install and removal tests that need a plugin without a graph.",
+  "namespace": "fixture",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "fixture"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agents/fixture_coordinator/system_prompt.md",
+    "agents/fixture_verifier/system_prompt.md",
+    "agents/fixture_worker/system_prompt.md",
+    "pack_config.json",
+    "plugins/echo_fixture.afb",
+    "schemas/fixture_job.graphql",
+    "tasks/fixture_worker_task/prompt.md"
+  ],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "plugins": [
+    {
+      "name": "echo_fixture",
+      "description": "Returns an empty JSON object. Exists so a documents pack has a plugin to install and remove.",
+      "artifact": "plugins/echo_fixture.afb",
+      "source": "plugins/echo_fixture",
+      "language": "rust",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    }
+  ],
+  "schemas": [
+    "schemas/fixture_job.graphql"
+  ],
+  "inference_slots": [
+    {
+      "name": "coordinator",
+      "description": "The fixture's coordinating slot.",
+      "agents": [
+        "fixture-coordinator"
+      ]
+    },
+    {
+      "name": "worker",
+      "description": "Executes the fixture's one task.",
+      "agents": [
+        "fixture-worker"
+      ]
+    },
+    {
+      "name": "verifier",
+      "description": "The fixture's verifying slot.",
+      "agents": [
+        "fixture-verifier"
+      ]
+    }
+  ]
+}

@@ -322,6 +322,10 @@ pub(crate) struct ProjectionEngine {
     bound: BoundModelContext,
     sequencer: Arc<ProjectionSequencer>,
     channel: SessionUpdateChannel,
+    /// Tool-call ids of the job runs this connection holds a live frame for,
+    /// by observed session.
+    delivered_job_runs:
+        std::sync::Mutex<std::collections::BTreeMap<String, std::collections::BTreeSet<String>>>,
 }
 
 impl ProjectionEngine {
@@ -333,7 +337,25 @@ impl ProjectionEngine {
             background_executions: Default::default(),
             channel: SessionUpdateChannel::new(sequencer.clone()),
             sequencer,
+            delivered_job_runs: Default::default(),
         }
+    }
+
+    pub(super) fn record_job_runs(&self, session: &str, runs: &std::collections::BTreeSet<String>) {
+        self.delivered_job_runs
+            .lock()
+            .unwrap()
+            .insert(session.to_owned(), runs.clone());
+    }
+
+    pub(super) fn delivered_job_runs(&self) -> std::collections::BTreeSet<String> {
+        self.delivered_job_runs
+            .lock()
+            .unwrap()
+            .values()
+            .flatten()
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn session_updates(&self) -> &SessionUpdateChannel {
@@ -568,6 +590,7 @@ impl ProjectionEngine {
             request,
             parent_prompt_id,
             self.bound.effective_context_window(),
+            &self.delivered_job_runs(),
         )
         .await?;
         for (index, update) in subagents.updates.iter().enumerate() {
@@ -1716,6 +1739,7 @@ mod tests {
             Some("did:test:grok-shim"),
             "test-child",
             parent_request_doc_id,
+            None,
         )
         .await;
         let mutation = format!(

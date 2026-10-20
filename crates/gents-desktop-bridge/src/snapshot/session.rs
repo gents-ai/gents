@@ -1,10 +1,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
+use gents::config_client::ConfigAccess;
+use gents::plugin_job::view::{load_job_view, JobKey};
 use gents::session::canonical_rows::TranscriptMessageRow;
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
 };
+use gents_protocol::job::{JobOutcome, JobProgress, JobState};
 use gents_protocol::message::Message;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
@@ -14,10 +17,10 @@ use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, To
 use super::super::types::{
     is_live_turn_state, normalize_optional, turn_state_label, CommandDenialView,
     DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageReconstructionView,
-    MessageView, PendingTurnView, ReconstructionState, RequestOriginView, RequestOutcomeView,
-    RetryEligibilityView, SessionCompactionView, SessionContextView, SessionHydrationView,
-    SessionLiveDeltaView, SessionLiveTextPatchView, SessionProjectionRevisionView,
-    SessionTimelinePageView, ToolCallView,
+    MessageView, PendingTurnView, ReconstructionState, RenderedTimelineItem, RequestOriginView,
+    RequestOutcomeView, RetryEligibilityView, SessionCompactionView, SessionContextView,
+    SessionHydrationView, SessionLiveDeltaView, SessionLiveTextPatchView,
+    SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
 };
 use super::timeline::build_rendered_timeline;
 use super::{request_matches_node, source_matches_node};
@@ -289,7 +292,10 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                                 request_doc_id: entry.request_doc_id,
                                 request_id: entry.request_id,
                                 content: entry.content,
+                                captured_context: (!entry.captured_context.is_empty())
+                                    .then_some(entry.captured_context),
                                 editable: entry.editable,
+                                steerable: entry.steerable,
                                 edit_group: entry.edit_group,
                             })
                             .collect(),
@@ -365,6 +371,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             });
     }
     if let Some(snapshot) = snapshot.as_mut() {
+        fill_job_outcomes(core, snapshot).await;
         match loaded_context {
             Some(context) => attach_last_request_context(
                 snapshot,
@@ -386,6 +393,104 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         }
     }
     snapshot
+}
+
+/// The sync builder holds no `ConfigAccess`, so a failed or timed-out job
+/// row's outcome (`load_job_view`) and every job row's next calls are filled
+/// here, once per tool call, on both the flat rows and the rendered groups.
+async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnapshot) {
+    let ended =
+        |state: Option<JobState>| matches!(state, Some(JobState::Failed | JobState::TimedOut));
+    let mut call_ids = snapshot
+        .tool_calls
+        .iter()
+        .filter(|tool| ended(tool.job_state))
+        .filter_map(|tool| tool.tool_call_id.clone())
+        .collect::<Vec<_>>();
+    for item in &snapshot.timeline_items {
+        if let RenderedTimelineItem::ToolGroup { tools, .. } = item {
+            call_ids.extend(
+                tools
+                    .iter()
+                    .filter(|tool| ended(tool.job_state))
+                    .filter_map(|tool| tool.tool_call_id.clone()),
+            );
+        }
+    }
+    call_ids.sort();
+    call_ids.dedup();
+    let access = ConfigAccess::local(core.node_arc());
+    let mut outcomes = HashMap::new();
+    for tool_call_id in call_ids {
+        let key = JobKey::Address {
+            session_id: snapshot.session_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+        };
+        match load_job_view(&access, None, key).await {
+            Ok(view) => {
+                if let Some(outcome) = view.outcome {
+                    outcomes.insert(tool_call_id, outcome);
+                }
+            }
+            Err(error) => tracing::warn!(
+                session_id = %snapshot.session_id,
+                tool_call_id,
+                error = %error,
+                "job outcome unavailable"
+            ),
+        }
+    }
+    let session_id = snapshot.session_id.as_str();
+    for tool in &mut snapshot.tool_calls {
+        if let Some((outcome, next_calls)) = job_row_fill(
+            session_id,
+            tool.tool_call_id.as_deref(),
+            tool.job_state,
+            tool.job_progress.as_ref(),
+            tool.job_handle.as_deref(),
+            &outcomes,
+        ) {
+            tool.job_outcome = outcome;
+            tool.job_next_calls = next_calls;
+        }
+    }
+    for item in &mut snapshot.timeline_items {
+        if let RenderedTimelineItem::ToolGroup { tools, .. } = item {
+            for tool in tools {
+                if let Some((outcome, next_calls)) = job_row_fill(
+                    session_id,
+                    tool.tool_call_id.as_deref(),
+                    tool.job_state,
+                    tool.job_progress.as_ref(),
+                    tool.job_handle.as_deref(),
+                    &outcomes,
+                ) {
+                    tool.job_outcome = outcome;
+                    tool.job_next_calls = next_calls;
+                }
+            }
+        }
+    }
+}
+
+fn job_row_fill(
+    session_id: &str,
+    tool_call_id: Option<&str>,
+    state: Option<JobState>,
+    progress: Option<&JobProgress>,
+    handle: Option<&str>,
+    outcomes: &HashMap<String, JobOutcome>,
+) -> Option<(Option<JobOutcome>, Vec<String>)> {
+    let (state, tool_call_id) = (state?, tool_call_id?);
+    let outcome = outcomes.get(tool_call_id).cloned();
+    let next_calls = gents_server::jobs::next_calls(
+        state,
+        progress.and_then(|progress| progress.pause_reason),
+        outcome.as_ref().map(|outcome| outcome.code.as_str()),
+        &format!("{session_id}:{tool_call_id}"),
+        handle.unwrap_or(tool_call_id),
+    );
+    Some((outcome, next_calls))
 }
 
 pub(super) fn order_queued_turns(snapshot: &mut DesktopSessionSnapshot, arrivals: &[String]) {
@@ -477,6 +582,9 @@ mod hydration_only_tests {
     }
 }
 
+#[cfg(test)]
+#[path = "session/tests/job_rows.rs"]
+mod job_rows_tests;
 #[cfg(test)]
 #[path = "session/tests/request_context.rs"]
 mod request_context_tests;

@@ -547,6 +547,11 @@ mod tests {
             completed_at: None,
             denial: None,
             cancel_cause: None,
+            job_progress: None,
+            job_handle: None,
+            job_state: None,
+            job_outcome: None,
+            job_next_calls: Vec::new(),
         }
     }
 

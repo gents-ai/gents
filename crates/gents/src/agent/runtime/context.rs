@@ -28,6 +28,8 @@ pub(super) struct RuntimeContext {
     pub(super) startup_readiness: crate::startup_readiness::StartupReadinessOptions,
     pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
     pub(super) operator_tool_root: Option<PathBuf>,
+    /// The runtime's single job driver, created once in `run_agent_owned`.
+    pub(super) job_driver: Arc<crate::plugin_job::driver::JobDriver>,
     pub(super) enrollment_authority: crate::agent::p2p_reconcile::EnrollmentAuthorityHandle,
 }
 
@@ -180,6 +182,7 @@ impl RuntimeContext {
                 loop_tools.clone(),
                 background_tool_registry,
                 tool_surface.remote_tools().cloned(),
+                tool_surface.job_tools(),
                 tool_surface.output_obligations(),
                 tool_surface.root_execution_guard().cloned(),
                 client,
@@ -202,6 +205,7 @@ impl RuntimeContext {
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
         remote_tools: Option<crate::document_config::RemoteTools>,
+        job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
         output_obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
         root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
         client: C,
@@ -244,7 +248,14 @@ impl RuntimeContext {
             request_admission,
         )?
         .with_replay_issuer(replay_issuer)
+        .with_approval_home(
+            self.tool_runtime
+                .plugin_home()
+                .map(std::path::Path::to_path_buf),
+        )
         .with_remote_tools(remote_tools)
+        .with_job_tools(job_tools)
+        .with_job_driver(self.job_driver.clone())
         .with_output_obligations(output_obligations)
         .with_tool_surface_runtime_policy(root_execution_guard, self.operator_tool_root.clone());
         if let Some((compactor, provider_family)) = summary_compactor {

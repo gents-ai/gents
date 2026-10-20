@@ -4,6 +4,7 @@ import type {
   RequestOriginView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
+import { CapturedContextItems } from "./CapturedContextItems.js";
 import { requestProgressPresentation } from "../../chat-shell.js";
 
 import { CancelCauseBadge, CancelCauseDetails } from "../cancelUx/index.js";
@@ -71,8 +72,10 @@ function originLabel(origin: RequestOriginView): string {
 
 export function UserMessageItem({
   item,
+  onEdit,
 }: {
   item: UserMessage | AutomatedInput;
+  onEdit?: (item: UserMessage) => void;
 }) {
   const content = normalizeTranscriptText(item.content);
   return (
@@ -81,6 +84,30 @@ export function UserMessageItem({
         <div className="message-role">
           {item.kind === "automatedInput" ? originLabel(item.origin) : "user"}
           <MessageTime value={item.timestamp} />
+          {item.kind === "userMessage" &&
+          item.reconstruction.state === "ready" &&
+          (content || item.capturedContext?.length) &&
+          onEdit ? (
+            <button
+              type="button"
+              className="message-edit"
+              aria-label="Edit message"
+              title="Edit message"
+              onClick={() => onEdit(item)}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                aria-hidden="true"
+              >
+                <path d="m16 3 5 5M3 21l1-6L16 3a3.5 3.5 0 0 1 5 5L9 20l-6 1Z" />
+              </svg>
+            </button>
+          ) : null}
           {item.reconstruction.state === "ready" && content ? (
             <CopyButton className="message-copy" getText={() => content} />
           ) : null}
@@ -88,7 +115,12 @@ export function UserMessageItem({
         <div className="message-content">
           <MessageAvailability reconstruction={item.reconstruction} />
           {item.reconstruction.state === "ready" ? (
-            <MarkdownContent value={content} />
+            <>
+              {content && <MarkdownContent value={content} />}
+              {item.kind === "userMessage" && (
+                <CapturedContextItems contexts={item.capturedContext ?? []} />
+              )}
+            </>
           ) : null}
         </div>
       </article>
@@ -149,7 +181,10 @@ export function PendingUserTurnItem({ item }: { item: PendingUserTurn }) {
           ) : null}
         </div>
         <div className="message-content">
-          <MarkdownContent value={normalizeTranscriptText(item.content)} />
+          {item.content && (
+            <MarkdownContent value={normalizeTranscriptText(item.content)} />
+          )}
+          <CapturedContextItems contexts={item.capturedContext ?? []} />
         </div>
       </article>
     </div>
@@ -183,9 +218,26 @@ export function LiveAssistantItem({ item }: { item: LiveAssistant }) {
 
 export function AssistantCancelCauseTurn({
   cause,
+  compact = false,
 }: {
   cause: DerivedCancelCauseView;
+  compact?: boolean;
 }) {
+  if (compact)
+    return (
+      <details className="turn-stop">
+        <summary>
+          {cause.cause === "userCancelled"
+            ? "Stopped by you"
+            : cause.cause === "deadline"
+              ? "Time limit reached"
+              : cause.cause === "interrupted"
+                ? "Interrupted"
+                : "Stopped"}
+        </summary>
+        <CancelCauseDetails cause={cause} />
+      </details>
+    );
   return (
     <div className="turn-block">
       <article className="message-card">

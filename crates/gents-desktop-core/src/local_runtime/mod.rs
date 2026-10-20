@@ -1,5 +1,10 @@
 mod http;
 mod identity;
+mod request_input;
+mod workspace_permissions;
+
+pub(crate) use request_input::ensure_captured_input_supported;
+pub use workspace_permissions::workspace_permission_support;
 
 #[cfg(test)]
 mod tests;
@@ -25,6 +30,25 @@ const LOCAL_STANDARD_SOURCE: &str = "local-standard";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVE_READY_POLL: Duration = Duration::from_millis(500);
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum OperatorIdentityInteraction {
+    #[default]
+    Allow,
+    Prevent,
+}
+
+impl OperatorIdentityInteraction {
+    pub(crate) fn endpoint(
+        self,
+        record: &crate::client::PeerRecord,
+    ) -> Option<gents::config_client::GraphqlEndpoint> {
+        match self {
+            Self::Allow => operator_endpoint(record),
+            Self::Prevent => cached_operator_endpoint(record),
+        }
+    }
+}
 
 async fn runtime_http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
@@ -92,8 +116,8 @@ struct StoredInitConfig {
 /// The runtime's node access control admits operator writes only from its own
 /// node DID. The desktop is that node's same-user host, so it loads the key
 /// from the recorded runtime home. When the key cannot be loaded the endpoint
-/// is anonymous: reads still work and writes fail with the node's
-/// authorization error.
+/// is anonymous: DefraDB applies its configured read policy, and operator
+/// writes fail with the node's authorization error.
 pub fn operator_endpoint(
     record: &crate::client::PeerRecord,
 ) -> Option<gents::config_client::GraphqlEndpoint> {
@@ -109,6 +133,24 @@ pub fn operator_endpoint(
             gents::config_client::GraphqlEndpoint::anonymous(url)
         }
     })
+}
+
+/// Background observation must not unlock a runtime identity. Cached authority
+/// remains bound to the endpoint served by that identity's recorded home;
+/// otherwise DefraDB receives an anonymous request and enforces its read policy.
+pub fn cached_operator_endpoint(
+    record: &crate::client::PeerRecord,
+) -> Option<gents::config_client::GraphqlEndpoint> {
+    let url = record.operator_graphql()?;
+    Some(
+        if gents::identity::can_mint_defradb_bearer(&record.node_did)
+            && hosted_runtime_home(record).is_ok()
+        {
+            gents::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
+        } else {
+            gents::config_client::GraphqlEndpoint::anonymous(url)
+        },
+    )
 }
 
 /// Only a record for a runtime this desktop hosts qualifies, and only when

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "approval/scoped_contract_cases.rs"]
+mod scoped;
+
 #[derive(Deserialize)]
 struct Contracts {
     plugin_approval_cases: Vec<Case>,
@@ -11,6 +14,17 @@ struct Case {
     write: bool,
     initial: State,
     steps: Vec<Step>,
+    scoped: Option<scoped::Case>,
+}
+
+fn answer(value: &str) -> Answer {
+    match value {
+        "once" => Answer::Once,
+        "file" => Answer::AlwaysPath,
+        "always" => Answer::AlwaysFolder,
+        "deny" => Answer::Deny,
+        other => panic!("unknown modeled answer {other}"),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,11 +61,11 @@ fn access(write: bool) -> BindAccess {
 
 fn assert_state(home: &Path, target: &Path, folder: &Path, expected: &State, context: &str) {
     assert_eq!(
-        request_file(home, "q1").exists(),
+        Queue::Unscoped.request_file(home, "q1").exists(),
         expected.present,
         "{context}"
     );
-    let decision = std::fs::read(decision_file(home, "q1"))
+    let decision = std::fs::read(Queue::Unscoped.decision_file(home, "q1"))
         .ok()
         .map(|bytes| serde_json::from_slice::<Decision>(&bytes).unwrap().allow);
     assert_eq!(decision, expected.decision, "{context}");
@@ -76,8 +90,12 @@ fn assert_state(home: &Path, target: &Path, folder: &Path, expected: &State, con
 #[test]
 fn generated_approval_traces_drive_native_queue_and_grants() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.plugin_approval_cases.len(), 1188);
+    assert_eq!(contracts.plugin_approval_cases.len(), 2178);
     for (index, case) in contracts.plugin_approval_cases.into_iter().enumerate() {
+        if let Some(scoped) = &case.scoped {
+            scoped::run(index, &case, scoped);
+            continue;
+        }
         let home = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let folder = outside.path().canonicalize().unwrap();
@@ -96,7 +114,7 @@ fn generated_approval_traces_drive_native_queue_and_grants() {
         request.created_at_ms = 10;
         request.expires_at_ms = 20;
         write_atomic(
-            &request_file(home.path(), "q1"),
+            &Queue::Unscoped.request_file(home.path(), "q1"),
             &serde_json::to_vec(&request).unwrap(),
         )
         .unwrap();
@@ -125,15 +143,8 @@ fn generated_approval_traces_drive_native_queue_and_grants() {
                     accepted,
                     expected,
                 } => {
-                    let answer = match answer.as_str() {
-                        "once" => Answer::Once,
-                        "file" => Answer::AlwaysPath,
-                        "always" => Answer::AlwaysFolder,
-                        "deny" => Answer::Deny,
-                        other => panic!("unknown modeled answer {other}"),
-                    };
                     assert_eq!(
-                        decide_with_clock(home.path(), &id, answer, || now).is_ok(),
+                        decide_with_clock(home.path(), &id, self::answer(&answer), || now).is_ok(),
                         accepted,
                         "{context}"
                     );
@@ -144,6 +155,7 @@ fn generated_approval_traces_drive_native_queue_and_grants() {
                     drop(Cleanup {
                         home: home.path(),
                         id: "q1",
+                        queue: Queue::Unscoped,
                     });
                     expected
                 }

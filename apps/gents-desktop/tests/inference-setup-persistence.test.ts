@@ -303,3 +303,45 @@ describe("inference setup persistence", () => {
     ]);
   });
 });
+
+it("binds the chosen model to the default agent without changing other agents", () => {
+  const deployment = structuredClone(fixtureDeployment);
+  deployment.inferenceBackends[0]!.apiKeyConfigured = true;
+  deployment.agentConfigs.push({
+    ...deployment.agentConfigs[0]!,
+    agent_id: "unconfigured-other",
+    inference_profile_id: "",
+  });
+  const original = structuredClone(deployment);
+  const plan = buildInferenceSetupPlan({
+    deployment,
+    purpose: "select-model",
+    provider: "local",
+    apiKey: "",
+    oauth: false,
+    discovery,
+    model: "chosen-model",
+    recommendation,
+    settings: {
+      contextWindow: "",
+      maxOutputTokens: "",
+      temperature: "1",
+      topP: "0.95",
+      reasoningEffort: "",
+      maxConcurrent: "1",
+    },
+  });
+  expect(
+    plan.document.agents?.find(
+      (agent) => agent.agent_id === deployment.node.defaultAgentId,
+    )?.inference_profile_id,
+  ).toBe(plan.profileId);
+  const others = deployment.agentConfigs.filter(
+    (agent) => agent.agent_id !== deployment.node.defaultAgentId,
+  );
+  for (const other of others)
+    expect(
+      plan.document.agents?.some((agent) => agent.agent_id === other.agent_id),
+    ).toBe(false);
+  expect(deployment).toEqual(original);
+});

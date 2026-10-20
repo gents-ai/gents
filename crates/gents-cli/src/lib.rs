@@ -10,6 +10,10 @@ use serde::de::DeserializeOwned;
 pub mod accounts {
     pub use crate::commands::accounts::{remove_account, request_usage_reads, UsageReads};
 }
+/// The job next-call rules the desktop shares with `gents job`.
+pub mod jobs {
+    pub use crate::commands::job::next_calls;
+}
 pub mod enrollment {
     pub use crate::http::enrollment::{
         ensure_enrollment_network, EnrollmentOfferIssuer, EnrollmentOfferStatus,
@@ -456,6 +460,7 @@ async fn async_main() -> Result<()> {
         Command::Response { command } => commands::response::dispatch(command).await,
         Command::Session { command } => commands::session::dispatch(command).await,
         Command::Goal { command } => commands::goal::dispatch(command).await,
+        Command::Job { command } => commands::job::dispatch(command).await,
         Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
         Command::Eval { command } => commands::eval::dispatch(command).await,

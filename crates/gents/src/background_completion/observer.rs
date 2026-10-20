@@ -4,10 +4,16 @@ pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
     local_did: String,
     background_executions: crate::hook::BackgroundExecutionRegistry,
+    job_driver: Arc<crate::plugin_job::driver::JobDriver>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut observer =
-        BackgroundCompletionObserver::new(node, local_did, background_executions, cancel)?;
+    let mut observer = BackgroundCompletionObserver::new(
+        node,
+        local_did,
+        background_executions,
+        job_driver,
+        cancel,
+    )?;
     observer.run().await
 }
 
@@ -15,6 +21,7 @@ struct BackgroundCompletionObserver {
     node: Arc<EmbeddedNode>,
     local_did: String,
     background_executions: crate::hook::BackgroundExecutionRegistry,
+    job_driver: Arc<crate::plugin_job::driver::JobDriver>,
     cancel: CancellationToken,
     subscription: events::DocumentChangeSubscription,
     mailbox_cursor: Option<String>,
@@ -25,6 +32,7 @@ impl BackgroundCompletionObserver {
         node: Arc<EmbeddedNode>,
         local_did: String,
         background_executions: crate::hook::BackgroundExecutionRegistry,
+        job_driver: Arc<crate::plugin_job::driver::JobDriver>,
         cancel: CancellationToken,
     ) -> Result<Self> {
         let subscription = crate::subscribe_collections(&node, [AGENT_REQUEST_COLLECTION])?;
@@ -32,6 +40,7 @@ impl BackgroundCompletionObserver {
             node,
             local_did,
             background_executions,
+            job_driver,
             cancel,
             subscription,
             mailbox_cursor: None,
@@ -85,6 +94,20 @@ impl BackgroundCompletionObserver {
                         "session-message settlement from a request update failed; the periodic scan retries"
                     );
                 }
+
+                if let Err(error) = crate::plugin_job::recovery::wake_jobs_after_request_update(
+                    &crate::config_client::ConfigAccess::local(self.node.clone()),
+                    &self.job_driver,
+                    &change.doc_id,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        request_doc_id = %change.doc_id,
+                        error = %format!("{error:#}"),
+                        "job wake from a request update failed"
+                    );
+                }
             }
         }
     }
@@ -129,6 +152,13 @@ impl BackgroundCompletionObserver {
                     outcome = ?run.outcome,
                     "periodic recovery sweep applied"
                 );
+            }
+        }
+        match crate::plugin_job::recovery::redrive_running_jobs(&self.job_driver).await {
+            Ok(0) => {}
+            Ok(ticked) => tracing::debug!(ticked, "plugin job recovery sweep ticked running jobs"),
+            Err(error) => {
+                tracing::warn!(error = %format!("{error:#}"), "plugin job recovery sweep failed; will retry");
             }
         }
         let wake_redrive =

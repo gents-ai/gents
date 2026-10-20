@@ -2,7 +2,8 @@ use gents::agent::p2p_reconcile::session_commands::run_session_command_reconcile
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{
-    pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
+    pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
+    PendingMessageEdit, PendingQueueEdit,
 };
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -64,6 +65,15 @@ async fn submit_edit(
     session_id: &str,
     edit: PendingQueueEdit,
 ) -> anyhow::Result<SessionInputEditReceipt> {
+    submit_edit_inner(db, session_id, edit, None).await
+}
+
+async fn submit_edit_inner(
+    db: &TestDb,
+    session_id: &str,
+    edit: PendingQueueEdit,
+    steer: Option<&str>,
+) -> anyhow::Result<SessionInputEditReceipt> {
     let did = db.node_identity.did();
     let existing = ConfigAccess::local(db.node.clone())
         .execute(&format!(
@@ -90,16 +100,34 @@ async fn submit_edit(
         db.node_identity.clone(),
         cancel.clone(),
     ));
-    let result = submit_pending_user_edit(
-        &ConfigAccess::local(db.node.clone()),
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
-        None,
-        did,
-        session_id,
-        edit,
-    )
-    .await;
+    let access = ConfigAccess::local(db.node.clone());
+    let result = match steer {
+        Some(selected) => {
+            submit_pending_user_steer(
+                &access,
+                db.node_identity.as_ref(),
+                AgentRequestAdmissionRecord::local_self(did),
+                None,
+                did,
+                session_id,
+                edit,
+                selected,
+            )
+            .await
+        }
+        None => {
+            submit_pending_user_edit(
+                &access,
+                db.node_identity.as_ref(),
+                AgentRequestAdmissionRecord::local_self(did),
+                None,
+                did,
+                session_id,
+                edit,
+            )
+            .await
+        }
+    };
     cancel.cancel();
     worker.await??;
     result
@@ -398,4 +426,77 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
     }
     gents::verify_request_receipt_signature(signed)
         .expect("tampering clones must not change the persisted signed replacement");
+}
+
+#[tokio::test]
+async fn explicit_steering_prioritizes_one_message_without_losing_other_queued_input() {
+    let db = test_db("explicit-pending-steer").await;
+    let did = db.node_identity.did();
+    let session = "explicit-pending-steer-session";
+    let mut originals = Vec::new();
+    for (id, content) in [
+        ("first", "Keep first queued"),
+        ("second", "Keep second queued"),
+        ("selected", "Steer this message"),
+    ] {
+        originals.push(enqueue(&db, "general", session, id, content, QueueDelivery::Queue).await);
+    }
+    let access = ConfigAccess::local(db.node.clone());
+    let snapshot = pending_user_queue(&access, did, session, did)
+        .await
+        .unwrap();
+    let target = originals[2].clone();
+    let edit = pending_steer_edit(&snapshot, originals.clone(), &target).unwrap();
+    let original_rows = futures::future::join_all(originals.iter().map(|id| row(&db, id))).await;
+    let receipt = submit_edit_inner(&db, session, edit.clone(), Some(&target))
+        .await
+        .unwrap();
+    let pending = pending_user_queue(&access, did, session, did)
+        .await
+        .unwrap();
+    assert_eq!(
+        pending
+            .entries
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Steer this message",
+            "Keep first queued",
+            "Keep second queued"
+        ]
+    );
+    assert_eq!(
+        pending
+            .entries
+            .iter()
+            .map(|entry| entry.steerable)
+            .collect::<Vec<_>>(),
+        [false, true, true]
+    );
+    assert_eq!(
+        pending
+            .entries
+            .iter()
+            .map(|entry| &entry.request_doc_id)
+            .collect::<Vec<_>>(),
+        receipt.request_doc_ids.iter().collect::<Vec<_>>()
+    );
+    for (id, original) in originals.iter().zip(&original_rows) {
+        let current = row(&db, id).await;
+        assert_eq!(current["lifecycle_state"], "superseded");
+        for key in ["content", "input", "admission_signature"] {
+            assert_eq!(current[key], original[key]);
+        }
+    }
+    assert!(submit_edit_inner(&db, session, edit, Some(&target))
+        .await
+        .is_err());
+    let after_retry = pending_user_queue(&access, did, session, did)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(after_retry).unwrap(),
+        serde_json::to_value(pending).unwrap()
+    );
 }

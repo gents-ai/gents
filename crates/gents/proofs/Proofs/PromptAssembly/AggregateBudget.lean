@@ -135,6 +135,28 @@ def chargeReported (ledger : Ledger) (usage : Option Usage) : ChargeResult :=
         else
           .within next
 
+/-- Auxiliary calls borrow the caller's ledger. An unreported call invalidates
+that shared allowance, so another holder cannot continue from an old balance. -/
+def sharedCharge (ledger : Option Ledger) (usage : Option Usage) : Option Ledger :=
+  ledger.bind fun current =>
+    match chargeReported current usage with
+    | .missing => none
+    | .within next | .exhausted next | .overrun next => some next
+
+/-- Cancelling or timing out an auxiliary call can lose its final usage report.
+No estimated charge can make that remaining allowance enforceable. -/
+def abandonShared (_ : Option Ledger) : Option Ledger := none
+
+theorem unavailable_shared_ledger_cannot_reopen (usage : Option Usage) :
+    sharedCharge none usage = none := by rfl
+
+theorem missing_shared_usage_invalidates (ledger : Ledger) :
+    sharedCharge (some ledger) none = none := by rfl
+
+theorem abandoned_shared_ledger_cannot_reopen
+    (ledger : Option Ledger) (usage : Option Usage) :
+    sharedCharge (abandonShared ledger) usage = none := by rfl
+
 theorem charged_total_eq_persisted_components (usage : Usage) :
     usage.chargedTotal = usage.inputTokens + usage.outputTokens := by
   rfl

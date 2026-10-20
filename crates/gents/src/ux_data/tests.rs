@@ -152,6 +152,8 @@ fn install_board(home: &std::path::Path, data: Vec<UxDataSurface>) {
             kind: PackKind::Plugins,
             assets: assets.to_string_lossy().into_owned(),
             plugins: vec![],
+            dependency_assets: Vec::new(),
+            installed_via: None,
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux: vec![PackUxPlugin {
                 name: "board".into(),

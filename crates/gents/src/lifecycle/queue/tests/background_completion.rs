@@ -2,6 +2,57 @@ use super::*;
 use crate::lifecycle::RequestTerminalOutcome;
 use crate::session;
 
+#[tokio::test]
+async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
+    let db = test_db("continuation-project-directory").await;
+    let project = db._tempdir.path().join("project with spaces 工具");
+    std::fs::create_dir(&project).unwrap();
+    let cwd = project
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let mut fixture = canonical_background_fixture_with_input(
+        &db,
+        "project-session",
+        &RequestInput {
+            cwd: Some(cwd.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let enqueued = fixture
+        .persist_notification(
+            "background command finished",
+            "background-completion-notification:project:tool",
+            "review results",
+            background_hints(&fixture.parent),
+            None,
+        )
+        .await
+        .unwrap();
+    let wake = crate::request_binding::load_agent_request_by_doc_id(
+        &db.node,
+        &enqueued.request.unwrap().doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(wake.input.cwd.as_deref(), Some(cwd.as_str()));
+    let goal = prepare_goal_continuation(
+        &wake,
+        TEST_AGENT_ID.into(),
+        "goal",
+        "continue",
+        1,
+        false,
+        "2030-01-01T00:00:01Z",
+        wake.request_hop,
+    )
+    .unwrap();
+    assert_eq!(goal.input.cwd.as_deref(), Some(cwd.as_str()));
+}
+
 async fn desktop_owned_session(
     db: &TestDb,
     session_id: &str,

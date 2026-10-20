@@ -1,7 +1,7 @@
 use gents::session_origin::SessionScope;
 
 use crate::provenance::session_provenance;
-use crate::tests::support::{seed_provenance_fixture, OPERATOR};
+use crate::tests::support::{create_request, create_tool_call, seed_provenance_fixture, OPERATOR};
 use crate::types::LinkedSessionView;
 
 fn scope(session_id: &str) -> SessionScope {
@@ -27,6 +27,7 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
 
     assert_eq!(view.session_id, "sess_parent");
     assert!(view.started_by.is_none() && view.received.is_empty());
+    assert!(view.opening_request_id.is_none());
     assert_eq!(
         sessions(&view.started),
         ["sess_child", "sess_peer"],
@@ -111,6 +112,7 @@ async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
         Some("sess_parent")
     );
     assert!(view.started.is_empty() && view.sent.is_empty() && view.calls.is_empty());
+    assert_eq!(view.opening_request_id.as_deref(), Some("req_child"));
     let mut senders: Vec<_> = view
         .senders
         .iter()
@@ -169,4 +171,87 @@ async fn a_replicated_session_message_keeps_the_call_that_sent_it() {
         .expect("the causing agent-message call remains visible");
     assert_eq!(call.caused.request_id, "req_child_2");
     assert_eq!(sender.sender.session_id, "sess_parent");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_session_message_call_lists_each_caused_request() {
+    let (core, _tmp, parent) = seed_provenance_fixture().await;
+    let call_doc = create_tool_call(&core, "tc_other", "run_workflow").await;
+    for (request_id, session_id, created_at) in [
+        ("req_other_a", "sess_other_a", "2026-05-20T00:05:00Z"),
+        ("req_other_b", "sess_other_b", "2026-05-20T00:05:30Z"),
+    ] {
+        create_request(
+            &core,
+            request_id,
+            OPERATOR,
+            session_id,
+            "processing",
+            created_at,
+            Some((&parent, "tc_other", &call_doc)),
+        )
+        .await;
+    }
+    let view = session_provenance(&core, scope("sess_parent"))
+        .await
+        .expect("provenance");
+
+    let mut caused: Vec<_> = view
+        .calls
+        .iter()
+        .filter(|call| call.tool_call_id == "tc_other")
+        .map(|call| {
+            (
+                call.request_id.as_str(),
+                call.caused.request_id.as_str(),
+                call.caused.session_id.as_str(),
+            )
+        })
+        .collect();
+    caused.sort_unstable();
+    assert_eq!(
+        caused,
+        [
+            ("req_parent", "req_other_a", "sess_other_a"),
+            ("req_parent", "req_other_b", "sess_other_b"),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_message_calls_keep_one_view_each() {
+    let (core, _tmp, parent) = seed_provenance_fixture().await;
+    let call_doc = create_tool_call(&core, "tc_dup", "agent_new").await;
+    for (request_id, session_id, created_at) in [
+        ("req_dup_a", "sess_dup_a", "2026-05-20T00:07:00Z"),
+        ("req_dup_b", "sess_dup_b", "2026-05-20T00:07:30Z"),
+    ] {
+        create_request(
+            &core,
+            request_id,
+            OPERATOR,
+            session_id,
+            "processing",
+            created_at,
+            Some((&parent, "tc_dup", &call_doc)),
+        )
+        .await;
+    }
+    let view = session_provenance(&core, scope("sess_parent"))
+        .await
+        .expect("provenance");
+    for call in ["tc_start", "tc_message", "tc_peer", "tc_existing"] {
+        assert_eq!(
+            view.calls
+                .iter()
+                .filter(|view| view.tool_call_id == call)
+                .count(),
+            1,
+            "{call}"
+        );
+    }
+    assert!(
+        view.calls.iter().all(|view| view.tool_call_id != "tc_dup"),
+        "a session-message call that caused several requests is ambiguous and shows none"
+    );
 }

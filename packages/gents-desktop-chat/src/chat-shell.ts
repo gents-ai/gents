@@ -157,8 +157,8 @@ export function reconcileProjectedWorkflow(
     projectedWorkflow.kind === "turnInProgress" &&
     localWorkflow.nodeDid === projectedWorkflow.nodeDid &&
     localWorkflow.sessionId === projectedWorkflow.sessionId &&
-    localWorkflow.requestId === projectedWorkflow.requestId &&
-    localWorkflow.turnState !== projectedWorkflow.turnState
+    (localWorkflow.requestId !== projectedWorkflow.requestId ||
+      localWorkflow.turnState !== projectedWorkflow.turnState)
   ) {
     return projectedWorkflow;
   }
@@ -309,8 +309,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     (input.session?.foldedInputs ?? []).map((folded) => folded.requestId),
   );
   const trackedRequestId =
-    (input.localWorkflow.kind === "awaitingObservation" ||
-      input.localWorkflow.kind === "turnInProgress") &&
+    input.localWorkflow.kind === "awaitingObservation" &&
     input.localWorkflow.nodeDid === input.selectedNodeDid &&
     (input.selectedSessionId === input.localWorkflow.sessionId ||
       input.session?.sessionId === input.localWorkflow.sessionId) &&
@@ -376,23 +375,17 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
 
     if (!selectedMatches) {
       workflow = { kind: "ready" };
-    } else if (
-      observedTurnState &&
-      activeRequestId === (input.localWorkflow.requestId ?? activeRequestId)
-    ) {
+    } else if (observedTurnState) {
       workflow = isTerminalTurnState(observedTurnState)
         ? { kind: "ready" }
         : {
             kind: "turnInProgress",
             nodeDid: input.localWorkflow.nodeDid,
             sessionId: input.localWorkflow.sessionId,
-            requestId: input.localWorkflow.requestId,
+            requestId: activeRequestId,
             turnState: observedTurnState,
           };
-    } else if (
-      !observedTurnState &&
-      activeRequestId === input.localWorkflow.requestId
-    ) {
+    } else if (activeRequestId) {
       workflow = blocked("inconsistentTurnObservation");
     }
   } else if (input.localWorkflow.kind !== "submittingRequest") {

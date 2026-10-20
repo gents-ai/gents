@@ -71,6 +71,8 @@ struct RunningToolCallRow {
     await_mode: Option<String>,
     #[serde(default)]
     cancel_cause: Option<String>,
+    #[serde(default)]
+    job_pin: Option<gents_protocol::job::JobPin>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -500,11 +502,12 @@ impl super::ToolCallLifecycle {
             };
             // A session-message completion returns its result to this session
             // (Lean `CausalHop.return_keeps_caller_hop`).
-            let wake = if crate::toolset::is_session_message_tool(&row.tool_name) {
-                crate::lifecycle::RequestHopCause::Return
-            } else {
-                crate::lifecycle::RequestHopCause::Continuation
-            };
+            let wake =
+                if super::ToolRowKind::of(&row.tool_name) == super::ToolRowKind::SessionMessage {
+                    crate::lifecycle::RequestHopCause::Return
+                } else {
+                    crate::lifecycle::RequestHopCause::Continuation
+                };
             let appended = crate::background_completion::append_background_tool_completion(
                 node,
                 session_id,
@@ -618,7 +621,9 @@ mod tests {
             ) {
                 continue;
             }
-            if case.await_mode != "background" || case.session_message {
+            if case.await_mode != "background"
+                || case.kind != crate::lean_vocab_test::LeanRestartRowKind::Native
+            {
                 continue;
             }
             let outcome = classify_orphaned_background_tool(
@@ -672,6 +677,50 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 12, "only {checked} generated native witnesses");
+    }
+
+    /// The persisted `completionPending:<reason>` suffix is the replay
+    /// authority for the completed arm: a session-message settlement's
+    /// assignment handoff survives a crash-before-notice redrive
+    /// byte-identically, while a bare native `completionPending` stays
+    /// reasonless. The source snapshot cannot change on replay because the
+    /// projection reads only the persisted suffix, never live state.
+    #[test]
+    fn projection_completed_arm_replays_the_persisted_reason() {
+        // The real private row shape; no test-only re-encoding is exposed.
+        let row = |status: &str| TerminalBackgroundToolRow {
+            doc_id: "tool-doc".into(),
+            request_id: None,
+            request_doc_id: None,
+            node_did: None,
+            requester_did: None,
+            session_id: None,
+            tool_call_id: None,
+            tool_name: crate::toolset::AGENT_NEW_TOOL_NAME.into(),
+            status: status.into(),
+            lifecycle_state: Some("completed".into()),
+            cancel_cause: None,
+        };
+        assert_eq!(
+            background_completion_projection(&row("completionPending")),
+            Some(("completed", None)),
+            "a native completion keeps the reasonless success form"
+        );
+        assert_eq!(
+            background_completion_projection(&row("completionPending:assignment_active")),
+            Some(("completed", Some("assignment_active"))),
+            "a session-message handoff re-renders its persisted reason"
+        );
+        assert_eq!(
+            background_completion_projection(&row("completionPending:assignment_absent")),
+            Some(("completed", Some("assignment_absent"))),
+            "a no-goal handoff is distinguished from assignment success on replay"
+        );
+        assert_eq!(
+            background_completion_projection(&row("completionPending:assignment_unknown")),
+            Some(("completed", Some("assignment_unknown"))),
+            "an unreadable assignment never reads as success on replay"
+        );
     }
 
     #[test]
@@ -852,6 +901,7 @@ async fn load_running_tool_call_rows_with_filter(
             deadline_at
             await_mode
             cancel_cause
+            job_pin
         }}
     }}"#
     );
@@ -949,9 +999,16 @@ async fn load_pending_background_completion_rows(
 fn background_completion_projection(
     row: &TerminalBackgroundToolRow,
 ) -> Option<(&str, Option<&str>)> {
+    // The persisted `completionPending:<reason>` suffix is the authoritative
+    // snapshot of the notification reason: a redrive re-renders it instead of
+    // re-observing live state, so the first notice and a crash-before-notice
+    // replay render byte-identically. Session-message settlement persists the
+    // assignment handoff there (Lean
+    // `Recovery.sessionMessageHandoffReason`); native completions persist the
+    // bare status and keep the reasonless success form.
     let persisted_reason = row.status.strip_prefix("completionPending:");
     match row.lifecycle_state.as_deref()? {
-        "completed" => Some(("completed", None)),
+        "completed" => Some(("completed", persisted_reason)),
         "timedOut" => Some((
             "failed",
             Some(persisted_reason.unwrap_or("deadline_exceeded")),
@@ -1254,8 +1311,8 @@ fn await_mode(row: &RunningToolCallRow) -> AwaitMode {
 }
 
 fn is_background_tool_row(row: &RunningToolCallRow) -> bool {
-    await_mode(row) == AwaitMode::Background
-        && !crate::toolset::is_session_message_tool(&row.tool_name)
+    super::ToolRowKind::of_row(&row.tool_name, row.job_pin.is_some())
+        .in_orphan_sweep_scope(await_mode(row))
 }
 
 impl RecoveryOutcome {

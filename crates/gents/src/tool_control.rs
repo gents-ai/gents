@@ -2,9 +2,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
+use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
+use crate::background_tools::ProcessControlScope;
+use crate::config_client::ConfigAccess;
 use crate::hook::BackgroundExecutionRegistry;
-use crate::tool_call_lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle};
+use crate::plugin_job::control::control;
+use crate::tool_call_lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle, ToolRowKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelBackgroundToolCallOutcome {
@@ -38,7 +42,7 @@ pub async fn cancel_session_background_process(
         lifecycle.session_id(),
         lifecycle.node_did(),
         lifecycle.requester_did(),
-    ) || lifecycle.is_session_message()
+    ) || lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::SessionMessage
     {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     }
@@ -66,7 +70,41 @@ pub async fn cancel_background_tool_call(
         });
     }
 
-    if lifecycle.is_session_message() {
+    if lifecycle.kind() == ToolRowKind::PluginJob {
+        // The operator holds the node, so the job's own scope authorizes it.
+        let scope = ProcessControlScope {
+            request_id: String::new(),
+            session_id: session_id.into(),
+            node_did: lifecycle.node_did().into(),
+            requester_did: lifecycle.requester_did().map(str::to_owned),
+        };
+        let access = ConfigAccess::local(node.clone());
+        return Ok(
+            match control(&access, &scope, tool_call_id, JobControlKind::Stop).await {
+                Ok(JobControlOutcome::Applied { .. }) => {
+                    CancelBackgroundToolCallOutcome::Cancelled {
+                        live_execution_cancelled: false,
+                    }
+                }
+                Ok(JobControlOutcome::AlreadyTerminal { .. }) => {
+                    match ToolCallLifecycle::load(node, session_id, tool_call_id).await? {
+                        Some(reloaded) => CancelBackgroundToolCallOutcome::AlreadyTerminal {
+                            state: reloaded.state().as_str().to_string(),
+                        },
+                        None => CancelBackgroundToolCallOutcome::NotFound,
+                    }
+                }
+                Err(
+                    JobReadError::NotAJob
+                    | JobReadError::NotAuthorized
+                    | JobReadError::NotYetObservable,
+                ) => CancelBackgroundToolCallOutcome::NotFound,
+                Err(error) => return Err(anyhow::Error::new(error)),
+            },
+        );
+    }
+
+    if lifecycle.kind() == crate::tool_call_lifecycle::ToolRowKind::SessionMessage {
         return Ok(
             match crate::session_message::kill(&node, &mut lifecycle).await? {
                 crate::session_message::KillOutcome::Settled => {

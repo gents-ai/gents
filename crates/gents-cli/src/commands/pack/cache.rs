@@ -1,75 +1,15 @@
-use std::fs::File;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::json;
 
 use gents::file_lock::FileLock;
+use gents::pack::materialize::{
+    cache_root, cache_root_disposition, lock_exclusive, prune_stale_asset_cache, CacheRelease,
+};
 use gents::pack::{HomePackInstall, PackKind};
 
 use crate::cli::PackPruneArgs;
-
-const CACHE_MARKER: &str = ".gents-pack-cache-v1";
-const CACHE_LOCK: &str = ".cache.lock";
-
-#[cfg(test)]
-pub(super) fn write_cache_marker(root: &Path) -> Result<()> {
-    let marker = root.join(CACHE_MARKER);
-    if marker.exists() {
-        return Ok(());
-    }
-    let staged = tempfile::NamedTempFile::new_in(root)?;
-    super::set_distribution_permissions(staged.as_file())?;
-    match staged.persist_noclobber(&marker) {
-        Ok(_) => Ok(()),
-        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(error.error.into()),
-    }
-}
-
-pub(super) fn cache_lock(parent: &Path) -> Result<File> {
-    std::fs::create_dir_all(parent)?;
-    Ok(std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(parent.join(CACHE_LOCK))?)
-}
-
-fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<String>> {
-    let mut removed = Vec::new();
-    for entry in std::fs::read_dir(parent)? {
-        let entry = entry?;
-        let root = entry.path();
-        if root == current || !root.is_dir() {
-            continue;
-        }
-        let Some(name) = root.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.len() != 64 || !name.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            continue;
-        }
-        // The caller holds the exclusive per-pack lock, so no scenario can
-        // acquire or use any sibling cache root while the probe and removal
-        // occur.
-        if let CacheRelease::Removed = release_cache_root(&root, || Ok(()))? {
-            removed.push(name.to_owned());
-        }
-    }
-    removed.sort();
-    Ok(removed)
-}
-
-pub(super) fn asset_cache_root_for(
-    home: &Path,
-    namespace: &str,
-    name: &str,
-    digest: &str,
-) -> Result<std::path::PathBuf> {
-    gents::pack::materialize::cache_root(home, namespace, name, digest)
-}
 
 pub(super) struct PreparedCacheRelease {
     root: std::path::PathBuf,
@@ -100,7 +40,7 @@ pub(super) fn prepare_recorded_cache(
         "pack receipt coordinate mismatch"
     );
     let (namespace, name) = super::split_namespace(coordinate);
-    let expected = asset_cache_root_for(Path::new(""), namespace, name, &record.digest)?;
+    let expected = cache_root(Path::new(""), namespace, name, &record.digest)?;
     let recorded = Path::new(&record.assets);
     let unscoped = Path::new(gents::home::PACKS_DIR_NAME)
         .join(name)
@@ -145,52 +85,6 @@ pub(super) fn prepare_recorded_cache(
     })
 }
 
-pub(super) fn lock_exclusive(parent: &Path) -> Result<FileLock> {
-    match FileLock::try_exclusive(cache_lock(parent)?) {
-        Ok(lock) => Ok(lock),
-        Err(std::fs::TryLockError::WouldBlock) => {
-            anyhow::bail!("pack cache is in use; stop active pack operations and retry")
-        }
-        Err(std::fs::TryLockError::Error(error)) => Err(error).context("locking pack cache"),
-    }
-}
-
-pub(super) enum CacheRelease {
-    Removed,
-    Retained(&'static str),
-}
-
-fn release_cache_root(
-    root: &Path,
-    check_owner: impl FnOnce() -> Result<()>,
-) -> Result<CacheRelease> {
-    match cache_root_disposition(root, check_owner)? {
-        CacheRelease::Removed => {
-            std::fs::remove_dir_all(root)
-                .with_context(|| format!("removing {}", root.display()))?;
-            Ok(CacheRelease::Removed)
-        }
-        retained => Ok(retained),
-    }
-}
-
-fn cache_root_disposition(
-    root: &Path,
-    check_owner: impl FnOnce() -> Result<()>,
-) -> Result<CacheRelease> {
-    if !root.is_dir() {
-        return Ok(CacheRelease::Retained("already absent"));
-    }
-    if !root.join(CACHE_MARKER).is_file() {
-        return Ok(CacheRelease::Retained("not created by gents"));
-    }
-    if root.join("runs").exists() {
-        return Ok(CacheRelease::Retained("holds run history"));
-    }
-    check_owner()?;
-    Ok(CacheRelease::Removed)
-}
-
 pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let pack = super::resolve_pack_source(&args.package, None, &home).await?;
@@ -227,6 +121,7 @@ pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
 mod tests {
     use super::super::test_support::{assets_pack_dir, local_pack_source};
     use super::*;
+    use gents::pack::materialize::{cache_lock, write_cache_marker};
 
     #[tokio::test]
     async fn pruning_keeps_other_namespaces_and_recorded_unscoped_assets() {
@@ -279,38 +174,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cache_pruning_removes_only_owned_versions_without_runs() {
-        let parent = tempfile::tempdir().unwrap();
-        let current = parent.path().join("a".repeat(64));
-        let stale = parent.path().join("b".repeat(64));
-        let active = parent.path().join("c".repeat(64));
-        let unowned = parent.path().join("d".repeat(64));
-        for root in [&current, &stale, &active, &unowned] {
-            std::fs::create_dir_all(root).unwrap();
-        }
-        write_cache_marker(&current).unwrap();
-        write_cache_marker(&stale).unwrap();
-        write_cache_marker(&active).unwrap();
-        std::fs::create_dir(active.join("runs")).unwrap();
-
-        prune_stale_asset_cache(parent.path(), &current).unwrap();
-
-        assert!(current.exists());
-        assert!(!stale.exists());
-        assert!(active.exists(), "run artifacts retain their source version");
-        assert!(
-            unowned.exists(),
-            "directories without our marker are not ours"
-        );
-    }
-
     #[tokio::test]
-    async fn graph_pack_prune_rejects_without_creating_a_cache_tree() {
+    async fn pack_prune_rejects_without_creating_a_cache_tree() {
         let home = tempfile::tempdir().unwrap();
-        let _ = super::super::test_support::fixture_pack_source("review_graph", home.path());
+        let _ = super::super::test_support::fixture_pack_source("slot_fixture", home.path());
         let error = prune(PackPruneArgs {
-            package: "fixture/review_graph".to_owned(),
+            package: "fixture/slot_fixture".to_owned(),
             home: Some(home.path().to_path_buf()),
         })
         .await

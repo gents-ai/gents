@@ -76,7 +76,7 @@ def r6BudgetCase (name : String) (preLiveCount : Nat) :
 def r6RestartCase : R6BackgroundingCase :=
   let row : Recovery.RestartRow :=
     { awaitMode := .background
-    , sessionMessage := false
+    , kind := .native
     , parent := .live
     , deadlineExpired := false
     , process := .stopped
@@ -400,6 +400,11 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       "foreground"
       { r6NativeToolFixture with operation := .sessionMessage }
       .foreground
+  , r6NativeStepCase
+      "plugin_job_row_refuses_foreground"
+      "foreground"
+      { r6NativeToolFixture with operation := .pluginJob }
+      .foreground
   , r6RestartCase
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
@@ -529,6 +534,8 @@ theorem r6BackgroundingCases_pinned :
       , ("native_background_row_foregrounds", true, "foreground",
           "running", none, none)
       , ("session_message_row_refuses_foreground", false, "background",
+          "rejected", none, none)
+      , ("plugin_job_row_refuses_foreground", false, "background",
           "rejected", none, none)
       , ("background_recovery_running_live_parent_to_cancelled", true,
           "background", "cancelled", some "background_completion",

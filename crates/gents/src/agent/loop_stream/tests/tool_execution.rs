@@ -559,6 +559,7 @@ fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
             input_fields: Vec::new(),
+            job: None,
         },
         None,
     )
@@ -1333,6 +1334,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
             input_fields: Vec::new(),
+            job: None,
         },
         None,
     )

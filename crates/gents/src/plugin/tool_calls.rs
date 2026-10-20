@@ -14,8 +14,8 @@ pub(super) fn available(granted: bool, live_dispatcher: bool) -> bool {
     granted && live_dispatcher
 }
 
-pub(crate) fn supported(name: &str) -> bool {
-    crate::hook::persistence::HookOwnedTool::of(name).is_none()
+pub fn supported(name: &str, job_tools: &BTreeSet<String>) -> bool {
+    crate::hook::persistence::HookOwnedTool::of(name).is_none() && !job_tools.contains(name)
 }
 
 pub(super) fn composition_note() -> String {
@@ -153,6 +153,19 @@ mod tests {
     use crate::plugin::{rounds, PluginBudget, PluginOutcome, PluginVerdict};
     use std::sync::Mutex;
 
+    #[test]
+    fn supported_refuses_names_in_the_job_tool_set() {
+        let job_tools = BTreeSet::from(["workflow_run".to_owned()]);
+        assert!(!supported("workflow_run", &job_tools));
+        assert!(supported("bash", &job_tools));
+        assert!(supported("workflow_run", &BTreeSet::new()));
+        assert!(!supported(crate::goal::GET_GOAL_TOOL_NAME, &job_tools));
+        assert!(!supported(
+            crate::goal::GET_GOAL_TOOL_NAME,
+            &BTreeSet::new()
+        ));
+    }
+
     #[derive(Default)]
     struct Tools(Mutex<Vec<(u32, String, Value)>>);
 
@@ -212,7 +225,7 @@ mod tests {
                 };
                 Ok(PluginOutcome { verdict: PluginVerdict::Success, output, diagnostics: String::new(), fuel_used: 1, wall_ms: 0 })
             });
-            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session) },
+            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session), data: None, jobs: None },
                 json!({"state":"forged", "tool_results":{"table":{"result":"forged"}}}), PluginBudget::default(), round).await.unwrap();
             assert_eq!(result.output, json!({"alt":"Sales by day","rendered":true}));
             assert_eq!(result.fuel_used, 3);
@@ -244,6 +257,7 @@ mod tests {
                 plugin: "team/plugin".into(),
                 digest: None,
                 input_fields: vec![],
+                job: None,
                 tool_calls: granted,
             };
             let plugin =
@@ -278,6 +292,7 @@ mod tests {
                 plugin: "team/plugin".into(),
                 digest: None,
                 input_fields: vec![],
+                job: None,
                 tool_calls: granted,
             };
             let plugin =
@@ -342,7 +357,7 @@ mod tests {
                     output: json!({"tool_calls":{"requests":[{"id":"x","tool_name":"query","arguments":{}}]}}),
                     diagnostics: String::new(), fuel_used: 1, wall_ms: 0 })
             });
-            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session) },
+            let result = rounds::drive(rounds::HostCalls { model: None, http: None, tools: Some(session), data: None, jobs: None },
                 json!({}), PluginBudget::default(), round).await.unwrap();
             assert_ne!(result.verdict, PluginVerdict::Success);
             assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -364,7 +379,7 @@ mod tests {
                 route => panic!("unknown route {route}"),
             };
             for name in names {
-                assert_eq!(supported(name), expected, "{case} {name}");
+                assert_eq!(supported(name, &BTreeSet::new()), expected, "{case} {name}");
             }
         }
         for case in cases["availability"].as_array().unwrap() {
@@ -486,6 +501,8 @@ mod tests {
                     model: None,
                     http: None,
                     tools: Some(session),
+                    data: None,
+                    jobs: None,
                 },
                 json!({}),
                 budget,
@@ -595,6 +612,8 @@ mod tests {
                         model: None,
                         http: None,
                         tools: Some(session),
+                        data: None,
+                        jobs: None,
                     },
                     json!({}),
                     budget,

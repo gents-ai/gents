@@ -1,0 +1,182 @@
+name: Notarize staged signed macOS artifact (CI control)
+
+# Notarizes an already Developer-ID-signed macOS .app that an operator staged
+# as <inbox>/<sha256>.zip on the studio-1 runner host. No build, no re-signing,
+# no release/tag write. Verification runs without credentials; submission is
+# guarded by a durable host-state intent keyed by the full artifact SHA-256
+# (plus Apple history as a secondary check); the receipt is uploaded before
+# waiting; acceptance requires Apple's log to bind the job to the full SHA-256.
+# Ambiguous outcomes are continued with mode=resume, never by resubmitting. Dispatch is trusted
+# only from the default branch of gents-ai/gents. See
+# docs/notarize-staged-artifact.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_sha256:
+        description: SHA-256 (lowercase hex) of the staged zip; file must be <inbox>/<sha256>.zip.
+        required: true
+        type: string
+      artifact_kind:
+        description: app (zip of one signed .app; stapled) or cli (zip of one signed executable; ticket checked, not stapleable).
+        required: true
+        type: choice
+        default: app
+        options:
+          - app
+          - cli
+      mode:
+        description: submit (new submission, duplicate-guarded) or resume (continue an existing submission id).
+        required: true
+        type: choice
+        default: submit
+        options:
+          - submit
+          - resume
+      submission_id:
+        description: Existing notary submission UUID (resume mode only; leave empty for submit).
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: notarize-staged-artifact
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GENTS_REPO: gents-ai/gents
+  NOTARY_INBOX_DIR: /Users/admin/gents-notary-inbox
+  EXPECTED_TEAM_ID: NXJ753WW5X
+  EXPECTED_BUNDLE_ID: com.source-inc.gents
+  EXPECTED_CLI_NAME: gents
+  # The authentic 039e2299 candidate CLI is signed with Identifier=gents
+  # (checked with codesign -dv). release-macos.yml signs CLIs as
+  # com.source-inc.gents.cli; this workflow pins the candidate's actual
+  # identifier rather than re-signing it to match.
+  EXPECTED_CLI_IDENTIFIER: gents
+  # SHA-256 of the existing "Developer ID Application: John Zampolin
+  # (NXJ753WW5X)" leaf certificate (SHA-1 4855F05BB34BFB227F828F9856DA05D2D02E7D0F).
+  EXPECTED_LEAF_CERT_SHA256: ffe161226e3ba89575fbb2fa4e0ffc2f7b0a7c99de8fc2f696a24fb8d74f1baf
+  # Host-local, durable duplicate-guard authority (single fixed runner host).
+  NOTARY_STATE_DIR: /Users/admin/gents-notary-state
+
+jobs:
+  notarize:
+    name: Verify, notarize and staple staged artifact
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    timeout-minutes: 150
+    steps:
+      # Runs BEFORE checkout so no untrusted ref executes repository code on
+      # the self-hosted runner.
+      - name: Job-level trusted context guard (pre-checkout)
+        env:
+          TRUSTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "::error::Only workflow_dispatch events are accepted."
+            exit 1
+          fi
+          if [[ "${GITHUB_REPOSITORY}" != "${GENTS_REPO}" ]]; then
+            echo "::error::Expected repository ${GENTS_REPO}, got ${GITHUB_REPOSITORY}."
+            exit 1
+          fi
+          if [[ -z "${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Default branch was empty; refusing to proceed."
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != "refs/heads/${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Only 'refs/heads/${TRUSTED_DEFAULT_BRANCH}' is trusted, got '${GITHUB_REF}'."
+            exit 1
+          fi
+          if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+            echo "::error::Head ref '${GITHUB_HEAD_REF}' present; refusing."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (peeled commit)
+        with:
+          persist-credentials: false
+
+      - name: Preflight runtime tools
+        run: |
+          set -euo pipefail
+          for tool in python3 shasum ditto codesign xcrun spctl lipo; do
+            command -v "${tool}" >/dev/null 2>&1 || {
+              echo "::error::required tool '${tool}' not found on runner"
+              exit 1
+            }
+          done
+          bash -n .github/scripts/notarize-staged-artifact.sh
+          python3 -m py_compile .github/scripts/notary_json.py
+
+      # Secret-free: no notary credentials in this step's environment.
+      - name: Verify staged artifact (no credentials)
+        id: verify
+        env:
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          NOTARY_MODE: ${{ inputs.mode }}
+          ARTIFACT_KIND: ${{ inputs.artifact_kind }}
+          SUBMISSION_ID: ${{ inputs.submission_id }}
+          RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash .github/scripts/notarize-staged-artifact.sh verify
+
+      - name: Submit (duplicate-guarded) or resume preflight
+        id: submit
+        env:
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          NOTARY_MODE: ${{ inputs.mode }}
+          ARTIFACT_KIND: ${{ inputs.artifact_kind }}
+          SUBMISSION_ID: ${{ inputs.submission_id }}
+          RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
+          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+        run: bash .github/scripts/notarize-staged-artifact.sh submit
+
+      # Upload the intent/receipt BEFORE the long wait so it survives runner
+      # loss. Runs even if submit failed after recording an uncertain intent.
+      - name: Upload submission receipt
+        if: always() && steps.verify.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (peeled commit)
+        with:
+          name: notarize-staged-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}/out
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Wait, verify Apple log, staple and validate
+        id: complete
+        env:
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          NOTARY_MODE: ${{ inputs.mode }}
+          ARTIFACT_KIND: ${{ inputs.artifact_kind }}
+          SUBMISSION_ID: ${{ inputs.submission_id }}
+          RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
+          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+        run: bash .github/scripts/notarize-staged-artifact.sh complete
+
+      # The credential directories are separate per step and never under out/.
+      - name: Upload receipt, Apple info/log and notarized outputs
+        if: always() && steps.verify.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (peeled commit)
+        with:
+          name: notarize-staged-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}/out
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Remove run work directory
+        if: always()
+        env:
+          RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
+        run: rm -rf "${RUN_DIR}"

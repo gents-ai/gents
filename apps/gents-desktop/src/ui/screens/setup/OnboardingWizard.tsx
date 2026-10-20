@@ -26,6 +26,7 @@ import { useBootstrap, useStartup } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
 import { Field, Frame, Nav, Option, Title } from "./parts";
+import { WorkflowsOffer } from "./WorkflowsOffer";
 import { InferenceSetup } from "./InferenceSetup";
 import { nodeSetUp } from "@/lib/firstRun";
 import type { NodeView } from "../../../hooks/fleetStore";
@@ -186,6 +187,7 @@ export function OnboardingWizard({
     bootstrap?.initToolRoot ?? undefined,
   );
   const [authorityError, setAuthorityError] = useState<string | null>(null);
+  const [provisioned, setProvisioned] = useState<NodeView | null>(null);
   const managedWait = stores.localServer.use.wait();
   const readSuggestedRoot = () =>
     actions.refreshLocalServer().then((status) => {
@@ -231,6 +233,7 @@ export function OnboardingWizard({
   ) => {
     const next = await actions.readSnapshot();
     const nextDeployment = setUp(next);
+    setProvisioned(nextDeployment ?? null);
     const engineer = nextDeployment ? engineerPatches(nextDeployment) : [];
     if (engineer.length && nextDeployment) {
       await changeConfig("patchConfigComponents", {
@@ -539,6 +542,7 @@ export function OnboardingWizard({
             </Button>
           }
         />
+        {done && provisioned && <WorkflowsOffer deployment={provisioned} />}
       </Frame>
     );
   }

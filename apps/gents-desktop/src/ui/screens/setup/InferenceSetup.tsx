@@ -182,8 +182,8 @@ export function InferenceSetup({
     dispatch({ type: "opStarted", op: "signIn" });
     let nodeDid: string | undefined;
     try {
-      const snapshot = await actions.readSnapshot();
-      nodeDid = setupNodeDid ?? snapshot.client?.deployments[0]?.nodeDid;
+      nodeDid =
+        setupNodeDid ?? (await actions.readSnapshot()).client?.deployments[0]?.nodeDid;
       if (!nodeDid) throw new Error("No node to sign in");
       const result = await actions.signInToProvider(nodeDid, oauthProvider, {
         label: label || null,
@@ -211,8 +211,8 @@ export function InferenceSetup({
       });
       invalidateDiscovery();
     } catch (cause) {
+      dispatch({ type: "authUrl", url: null });
       if (nodeDid && bridgeErrorCode(cause) === CREDENTIAL_NOT_SAVED) {
-        dispatch({ type: "authUrl", url: null });
         void observeAccounts(nodeDid);
       }
       dispatch({ type: "failed", error: setupErrorMessage(cause) });
@@ -269,7 +269,12 @@ export function InferenceSetup({
 
   const cancelSignIn = () => {
     const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
-    if (oauthProvider) void actions.cancelProviderSignIn(oauthProvider);
+    if (oauthProvider)
+      void actions
+        .cancelProviderSignIn(oauthProvider)
+        .catch((cause: unknown) =>
+          dispatch({ type: "failed", error: setupErrorMessage(cause) }),
+        );
   };
 
   const invalidateDiscovery = () => {
@@ -537,6 +542,18 @@ export function InferenceSetup({
           signIn: () => void signIn(),
           cancelSignIn,
           useAnotherAccount,
+          useSavedAccount: (account) => {
+            dispatch({
+              type: "connected",
+              provider,
+              account: {
+                credentialId: account.credentialId,
+                accountRef: account.accountRef,
+              },
+            });
+            dispatch({ type: "hint", hint: null });
+            invalidateDiscovery();
+          },
           retrySave: () => void retrySaveSignIn(),
           discover: () => void discoverModels(),
         }}

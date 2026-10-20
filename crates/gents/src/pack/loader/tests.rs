@@ -152,9 +152,9 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
 }
 
 #[test]
-fn graph_fixture_loads_slot_authoring_and_literal_prompt_assets() {
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packs/review_graph");
+fn plugin_documents_fixture_loads_slot_authoring_and_literal_prompt_assets() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packs/plugin_documents_fixture");
     let manifest: PackManifest =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
     let config = load_pack_config(

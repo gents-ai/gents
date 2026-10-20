@@ -4676,6 +4676,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rig-core",
  "rmcp",
+ "same-file",
  "schema",
  "schemars 1.2.1",
  "security-framework 3.7.0",
@@ -4828,6 +4829,7 @@ name = "gents-client-host"
 version = "0.21.0-rc0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "bytes",
  "clap",
@@ -4839,6 +4841,7 @@ dependencies = [
  "gents-protocol",
  "libc",
  "portable-pty",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -4892,6 +4895,7 @@ dependencies = [
  "gents-protocol",
  "heck 0.5.0",
  "hostname",
+ "identity",
  "libc",
  "notify",
  "reqwest 0.12.28",

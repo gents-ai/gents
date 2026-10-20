@@ -171,15 +171,15 @@ theorem Trace.toolProjectionCoherent {before after : World} (trace : Trace befor
       cases h
       rw [Handover.successful_claim_frame before world actor now activation hc]
       exact coherent
-  | activateTitle actor now activation scope budget deadline h =>
+  | activateAuxiliary actor now activation scope budget deadline h =>
     rename_i before after
-    unfold SessionComposition.activateTitle at h
-    cases hc : Handover.claimTitle before actor now activation with
+    unfold SessionComposition.activateAuxiliary at h
+    cases hc : Handover.claimAuxiliary before actor now activation with
     | none => simp [hc] at h
     | some world =>
       simp [hc] at h
       cases h
-      rw [Handover.successful_title_claim_frame before world actor now activation hc]
+      rw [Handover.successful_auxiliary_claim_frame before world actor now activation hc]
       exact coherent
   | finish actor acknowledged h =>
     rename_i before after

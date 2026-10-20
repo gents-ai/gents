@@ -15,7 +15,7 @@ default = [
     "defra-node/wasmtime-runtime",
 ]
 agent-memory = []
-typescript = ["dep:ts-rs", "gents-loop/typescript"]
+typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript"]
 # Gates the optional live-inference collection out of default builds.
 live-e2e = []
 
@@ -80,6 +80,7 @@ regolith = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "0.1"
+same-file = "1.0.6"
 serde_yaml.workspace = true
 regex = "1"
 schemars = "1"

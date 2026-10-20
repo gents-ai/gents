@@ -396,6 +396,23 @@
     opacity: 0;
   }
 
+  .message-edit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    opacity: 0;
+  }
+
+  .message-card:hover .message-edit,
+  .message-card:focus-within .message-edit {
+    opacity: 1;
+  }
+
   .message-time + .message-copy {
     margin-left: 0;
   }
@@ -530,5 +547,85 @@
     background: transparent;
     border-color: transparent;
     box-shadow: none;
+  }
+}
+
+@layer transcript {
+  .message-contexts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+  }
+  .message-contexts li {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .message-contexts button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 5px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+  .message-contexts button:hover {
+    background: var(--color-surface-deep);
+  }
+  .message-contexts button:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .message-contexts svg {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .message-contexts span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .captured-context-dialog {
+    width: min(560px, calc(100vw - 24px));
+  }
+  .captured-context-dialog h2 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .captured-context-body {
+    min-height: 0;
+    padding: 12px 16px 16px;
+    overflow: auto;
+  }
+  .captured-context-source,
+  .captured-context-uri {
+    margin: 0 0 8px;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+  }
+  .captured-context-uri {
+    overflow-wrap: anywhere;
+  }
+  .captured-context-body pre {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
   }
 }

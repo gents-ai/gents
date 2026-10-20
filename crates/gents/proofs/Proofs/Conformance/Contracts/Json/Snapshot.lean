@@ -1,4 +1,7 @@
 import Proofs.Conformance.RequestPatchPublicationCases
+import Proofs.Conformance.AccessReview
+import Proofs.Conformance.OperatorPaths
+import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientObservationScope
 import Proofs.Conformance.ClientSettings
@@ -8,6 +11,7 @@ import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.EnrollmentPendingRequests
+import Proofs.Conformance.ClientObservationAdmission
 import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
@@ -16,6 +20,7 @@ import Proofs.Conformance.SchemaArgumentRepair
 import Proofs.Conformance.RepeatedToolFailure
 import Proofs.Conformance.ToolTimeouts
 import Proofs.Conformance.PluginResources
+import Proofs.Conformance.PluginJob
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxHandoff
@@ -46,6 +51,7 @@ import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
 import Proofs.Conformance.TitleUsage
 import Proofs.Conformance.TitleAdmission
+import Proofs.Conformance.TitleText
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
@@ -125,6 +131,12 @@ def snapshotJson : String :=
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
+    ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
+    ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
+    ++ "\"workspace_command_root_cases\":" ++ Conformance.WorkspaceCommandRoot.casesJson.compress ++ ","
+    ++ "\"operator_path_cases\":" ++ Conformance.OperatorPaths.casesJson.compress ++ ","
+    ++ "\"access_review_cases\":" ++ Conformance.AccessReview.casesJson.compress ++ ","
+    ++ "\"access_review_task_cases\":" ++ Conformance.AccessReview.taskCasesJson.compress ++ ","
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
     ++ "\"goal_objective_whitespace_codepoints\":"
       ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
@@ -237,6 +249,8 @@ def snapshotJson : String :=
       ++ enrollmentDurableProjectionCasesJson ++ ","
     ++ "\"enrollment_pending_request_cases\":"
       ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
+    ++ "\"client_observation_admission_cases\":"
+      ++ Conformance.ClientObservationAdmission.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
@@ -253,6 +267,7 @@ def snapshotJson : String :=
       ++ titleRequestAdmissionCasesJson ++ ","
     ++ "\"title_request_purpose_wire_cases\":"
       ++ titlePurposeWireCasesJson ++ ","
+    ++ "\"title_text_cases\":" ++ Conformance.TitleText.casesJson ++ ","
     ++ "\"title_usage_cases\":"
       ++ Conformance.TitleUsage.casesJson ++ ","
     ++ "\"title_admission_join_cases\":"
@@ -460,6 +475,16 @@ def snapshotJson : String :=
       ++ Conformance.RepeatedToolFailureContracts.casesJson ++ ","
     ++ "\"plugin_resource_cases\":"
       ++ Conformance.PluginResources.casesJson ++ ","
+    ++ "\"plugin_data_cases\":" ++ Conformance.PluginResources.dataCasesJson ++ ","
+    ++ "\"plugin_calls_route_cases\":" ++ Conformance.PluginResources.routeCasesJson ++ ","
+    ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
+    ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
+    ++ "\"plugin_job_key_cases\":" ++ Conformance.PluginJob.keyCasesJson ++ ","
+    ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
+    ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
+    ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","
+    ++ "\"plugin_job_lineage_cases\":" ++ Conformance.PluginJob.lineageCasesJson ++ ","
+    ++ "\"plugin_job_recovery_cases\":" ++ Conformance.PluginJob.recoveryCasesJson ++ ","
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
     ++ "\"scope_collection_rules\":{"
@@ -502,6 +527,8 @@ def snapshotJson : String :=
     ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
       promptAssemblyClaudeWireStartCasesJson ++ ","
     ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
+    ++ "\"prompt_assembly_service_tier_cases\":" ++
+      promptAssemblyServiceTierCasesJson ++ ","
     ++ "\"prompt_assembly_responses_storage_cases\":" ++
       promptAssemblyResponsesStorageCasesJson ++ ","
     ++ "\"prompt_assembly_responses_effort_cases\":" ++

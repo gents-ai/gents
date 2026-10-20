@@ -18,6 +18,7 @@ inductive AuxiliaryKind where
   | compaction
   | compactionFallback
   | title
+  | accessReview
   deriving DecidableEq, Repr
 
 inductive Source where

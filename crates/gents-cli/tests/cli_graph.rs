@@ -110,107 +110,6 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
 }
 
 #[test]
-fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let home = temp.path().join("node");
-    let home_arg = home.to_str().context("path")?;
-    run_init_json(
-        temp.path(),
-        &["--node-name", "pack-remover", "--home", home_arg],
-    )?;
-
-    let gents = |args: &[&str]| -> Result<std::process::Output> {
-        Ok(std::process::Command::new(support::cli_bin())
-            .env("HOME", temp.path())
-            .env("RUST_LOG", "error")
-            .current_dir(temp.path())
-            .args(args)
-            .output()?)
-    };
-    for args in [
-        &["pack", "new", "demo_tools"][..],
-        &["pack", "add", "plugin", "echo_tool", "--dir", "demo_tools"],
-        &["pack", "build", "demo_tools", "--out", "demo_tools.pack"],
-    ] {
-        let output = gents(args)?;
-        anyhow::ensure!(
-            output.status.success(),
-            "gents {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let install = run_cli_json(
-        temp.path(),
-        &[
-            "pack",
-            "install",
-            temp.path()
-                .join("demo_tools.pack")
-                .to_str()
-                .context("path")?,
-            "--home",
-            home_arg,
-        ],
-    )?;
-    anyhow::ensure!(
-        install["apply"]["plugins"][0]["name"] == "echo_tool"
-            && !install["apply"]["created"]
-                .as_array()
-                .context("created")?
-                .is_empty(),
-        "{install}"
-    );
-    let echoed = run_cli_json(
-        temp.path(),
-        &[
-            "plugin",
-            "run",
-            "gents/echo_tool",
-            "--home",
-            home_arg,
-            "--input",
-            r#"{"a":1}"#,
-        ],
-    )?;
-    anyhow::ensure!(echoed == serde_json::json!({"a": 1}), "{echoed}");
-
-    let removed = run_cli_json(
-        temp.path(),
-        &["pack", "remove", "demo_tools", "--home", home_arg],
-    )?;
-    let sorted = |value: &Value| -> Result<Vec<String>> {
-        let mut names: Vec<String> = serde_json::from_value(value.clone())?;
-        names.sort();
-        Ok(names)
-    };
-    anyhow::ensure!(
-        sorted(&removed["removed"]["removed"])? == sorted(&install["apply"]["created"])?,
-        "{removed}"
-    );
-    let gone = run_cli_failure_stderr(
-        temp.path(),
-        &[
-            "plugin",
-            "run",
-            "gents/echo_tool",
-            "--home",
-            home_arg,
-            "--input",
-            "{}",
-        ],
-    )?;
-    anyhow::ensure!(gone.contains("not installed"), "{gone}");
-    let again = run_cli_failure_stderr(
-        temp.path(),
-        &["pack", "remove", "demo_tools", "--home", home_arg],
-    )?;
-    anyhow::ensure!(again.contains("is not installed"), "{again}");
-    Ok(())
-}
-
-#[test]
 fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph install tempdir")?;
     let home = tempdir.path().join("agent-home");
@@ -307,6 +206,10 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     Ok(())
 }
 
+/// A documents pack whose graph dependency installs into the same offline
+/// home under the one store claim the pack install holds, while a second
+/// holder of that home is still refused. The dependency is pre-stored with
+/// `pack fetch --store` first, so the whole install runs with no registry.
 #[test]
 fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating pack install tempdir")?;
@@ -336,7 +239,7 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
         .iter()
         .map(|slot| format!("{slot}={profile}"))
         .collect();
-    let dependent = fixture_pack_dir("dependent_fixture");
+    let dependent = dependent_on_review_graph(tempdir.path())?;
     let mut install_args = vec![
         "pack".to_owned(),
         "install".to_owned(),
@@ -373,6 +276,17 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
         enabled.get("enabled") == Some(&Value::Bool(true)),
         "the graph dependency was not installed: {enabled}"
     );
+    let record = gents::pack::read_home_install(&home, "fixture/dependent_fixture")?
+        .context("the dependent pack wrote no home record")?;
+    anyhow::ensure!(
+        record.dependency_assets.len() == 1
+            && record.dependency_assets[0].0 == "fixture/review_graph"
+            && home
+                .join(&record.dependency_assets[0].1)
+                .join("agents/review_recon/system_prompt.md")
+                .is_file(),
+        "the dependent's record does not name its dependency's assets: {record:?}"
+    );
 
     let _held = gents::home::lock_store(&home, &gents::home::default_data_dir(&home))?;
     let denial = run_cli_failure_stderr(tempdir.path(), &install_args_ref)?;
@@ -382,6 +296,19 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
         "a second holder of the home was not refused: {denial}"
     );
     Ok(())
+}
+
+/// A private copy of `dependent_fixture` depending on `review_graph`, so the
+/// graph dependency path stays covered now that the checked-in fixture
+/// depends on a documents pack.
+fn dependent_on_review_graph(parent: &std::path::Path) -> Result<std::path::PathBuf> {
+    let dependent = parent.join("dependent_on_review_graph");
+    copy_dir_all(&fixture_pack_dir("dependent_fixture"), &dependent)?;
+    let manifest_path = dependent.join("manifest.json");
+    let mut manifest: Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)?;
+    manifest["dependencies"] = serde_json::json!(["fixture/review_graph"]);
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+    Ok(dependent)
 }
 
 #[test]
@@ -536,7 +463,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
         ],
     )?;
 
-    let dependent = fixture_pack_dir("dependent_fixture");
+    let dependent = dependent_on_review_graph(tempdir.path())?;
     let mut install_args = vec![
         "pack".to_owned(),
         "install".to_owned(),

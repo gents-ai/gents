@@ -402,6 +402,7 @@ mod tests {
             limits: None,
             model_slot: None,
             service: None,
+            ..Default::default()
         };
         gents::plugin::PluginRunner::compile(&bytes, &plugin).unwrap_or_else(|error| {
             panic!("a compiled python bundle runs under every bound a call applies: {error:#}")

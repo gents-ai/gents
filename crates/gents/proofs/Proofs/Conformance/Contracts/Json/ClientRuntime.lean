@@ -67,7 +67,8 @@ private def sourceJson : CanonicalOutput.Source → String
       (",\"auxiliary_kind\":" ++ jsonString (match kind with
         | .compaction => "compaction"
         | .compactionFallback => "compaction_fallback"
-        | .title => "title") ++
+        | .title => "title"
+          | .accessReview => "access_review") ++
        ",\"scope\":" ++ toString scope ++ ",\"turn\":" ++ toString turn ++
        ",\"attempt\":" ++ toString attempt)
   | .toolEffectArguments call => tagged "tool_effect_arguments" (",\"call\":" ++ toString call)
@@ -458,7 +459,13 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"rust_function\":" ++ jsonString witness.rustFunction ++ ","
     ++ "\"await_mode\":" ++ jsonString witness.awaitMode ++ ","
-    ++ "\"session_message\":" ++ boolString witness.sessionMessage ++ ","
+    ++ "\"session_message\":"
+      ++ boolString (witness.kind == .sessionMessage) ++ ","
+    ++ "\"kind\":"
+      ++ jsonString (match witness.kind with
+        | .native => "native"
+        | .sessionMessage => "sessionMessage"
+        | .pluginJob => "pluginJob") ++ ","
     ++ "\"parent_observation\":"
       ++ jsonString witness.parentObservation ++ ","
     ++ "\"deadline_expired\":" ++ boolString witness.deadlineExpired ++ ","

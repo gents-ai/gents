@@ -87,6 +87,40 @@ pub(crate) fn content_hash(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+/// Language-server resource edits can name binary files; snapshot checks
+/// must keep memory bounded.
+pub(crate) fn file_content_hash(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the mutation target is not a regular file",
+        ));
+    }
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let read = match file.read(&mut buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
+    Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
 /// Per-path serialization for file mutators (edit_file read → hash-check →
 /// match → write; write_file hash-check → overwrite): without it a concurrent
 /// in-process mutation can land inside the validated window and be silently
@@ -599,8 +633,23 @@ impl Tool for WriteFileTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         deny_workspace_file_writes()?;
         let path = self.context.resolve_path_allow_create(&args.path)?;
+        let consent = crate::plugin::approval::workspace::authorize_file_mutation(
+            Self::NAME,
+            &self.context.root(),
+            &path,
+            &args,
+        )
+        .await
+        .map_err(|error| {
+            ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+        })?;
         let lock = file_mutation_lock_for(&path);
         let _guard = lock.lock().await;
+        if let Some(consent) = consent {
+            consent.validate().map_err(|error| {
+                ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+            })?;
+        }
         let created = !path.exists();
         guard_existing_file_overwrite(
             &path,
@@ -740,9 +789,28 @@ impl Tool for EditFileTool {
             deny_workspace_file_writes()?;
         }
         let path = self.context.resolve_existing_file(&args.path)?;
+        let consent = if args.dry_run {
+            None
+        } else {
+            crate::plugin::approval::workspace::authorize_file_mutation(
+                Self::NAME,
+                &self.context.root(),
+                &path,
+                &args,
+            )
+            .await
+            .map_err(|error| {
+                ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+            })?
+        };
         let display = self.context.display_path(&path);
         let lock = file_mutation_lock_for(&path);
         let _guard = lock.lock().await;
+        if let Some(consent) = consent {
+            consent.validate().map_err(|error| {
+                ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
+            })?;
+        }
         let raw = tokio::fs::read(&path).await?;
         let pre_edit_hash = content_hash(&raw);
 

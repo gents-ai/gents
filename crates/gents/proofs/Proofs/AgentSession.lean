@@ -32,6 +32,12 @@ structure Provenance where
   task : Option Nat := none
   graphRun : Option Nat := none
   parentRequestDoc : Option Nat := none
+  /-- The request whose claim or refusal created this session through a
+      calling tool call. It is written once, with `parentRequestDoc`, and
+      never rewritten (`advance`, `rename` and `setClosed` keep
+      `provenance`). `DurableLineage.openingRequest` opens the session at
+      it; a session created before it was recorded has none. -/
+  openingRequestDoc : Option Nat := none
   fork : Option ForkOrigin := none
   deriving DecidableEq, Repr
 structure RequestObservation where

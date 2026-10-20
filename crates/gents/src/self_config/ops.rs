@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::job::PluginJobSettings;
 use identity::Did;
 use serde_json::{json, Map, Value};
 
@@ -14,7 +16,7 @@ use crate::config_client::{
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::document_config::{BackendAuth, SelfConfigTools, Tools};
+use crate::document_config::{BackendAuth, IntegrationTools, SelfConfigTools, Tools};
 use crate::tool_surface::SelfConfigProcessCeiling;
 use crate::toolset::CommandNetworkMode;
 
@@ -779,6 +781,9 @@ pub fn guard_tools_keep_control(
 pub struct OperatorGrants {
     /// `self_config.enable_pack_install`.
     pub pack_install: bool,
+    /// `integrations.plugins[].job` by plugin coordinate. A plugin with no
+    /// entry has the empty ceiling.
+    pub plugin_jobs: BTreeMap<String, PluginJobSettings>,
 }
 
 impl OperatorGrants {
@@ -788,15 +793,68 @@ impl OperatorGrants {
             Some(group) => serde_json::from_value::<SelfConfigTools>(group.clone())
                 .context("Tools.self_config does not decode; its operator grants cannot be read")?,
         };
+        let integrations = match tools.get("integrations") {
+            None | Some(Value::Null) => IntegrationTools::default(),
+            Some(group) => serde_json::from_value::<IntegrationTools>(group.clone()).context(
+                "Tools.integrations does not decode; its operator grants cannot be read",
+            )?,
+        };
+        let mut plugin_jobs = BTreeMap::new();
+        for plugin in integrations.plugins.into_iter().flatten() {
+            let Some(job) = plugin.job else { continue };
+            anyhow::ensure!(
+                plugin_jobs.insert(plugin.plugin.clone(), job).is_none(),
+                "Tools.integrations.plugins names {:?} twice; its job grant cannot be read",
+                plugin.plugin
+            );
+        }
         Ok(Self {
             pack_install: config.enable_pack_install.unwrap_or(false),
+            plugin_jobs,
         })
     }
 
-    /// Lean `Grants.boundedBy`: pack installation is held-bounded: carried by
-    /// `stored` or held by `held`.
+    /// Lean `Grants.boundedBy` and `keepsJobGrants`: pack installation is
+    /// held-bounded: carried by `stored` or held by `held`. Job blocks are
+    /// bounded by `stored` alone ([`Self::job_refusal`]).
     pub fn bounded_by(&self, stored: &Self, held: &Self) -> bool {
-        !self.pack_install || stored.pack_install || held.pack_install
+        (!self.pack_install || stored.pack_install || held.pack_install)
+            && self.job_refusal(stored).is_none()
+    }
+
+    /// Lean `JobGrant.narrows` over every job block `self` carries: the first
+    /// block that adds to, widens or edits the policy of the block `stored`
+    /// carries for the same plugin, as a refusal naming the field. An absent
+    /// block is the empty ceiling, so a block with no stored counterpart is
+    /// an addition.
+    fn job_refusal(&self, stored: &Self) -> Option<String> {
+        self.plugin_jobs.iter().find_map(|(plugin, job)| {
+            let Some(base) = stored.plugin_jobs.get(plugin) else {
+                return Some(format!(
+                    "integrations.plugins[{plugin}].job is not in the stored Tools; only the operator may add a job block"
+                ));
+            };
+            let field = if !job.agent_targets.iter().all(|t| base.agent_targets.contains(t)) {
+                "agent_targets"
+            } else if job.max_live > base.max_live {
+                "max_live"
+            } else if job.max_spawns > base.max_spawns {
+                "max_spawns"
+            } else if job.max_messages_per_slot > base.max_messages_per_slot {
+                "max_messages_per_slot"
+            } else if job.result_bytes > base.result_bytes {
+                "result_bytes"
+            } else if job.max_wall_secs > base.max_wall_secs {
+                "max_wall_secs"
+            } else if job.policy != base.policy {
+                "policy"
+            } else {
+                return None;
+            };
+            Some(format!(
+                "integrations.plugins[{plugin}].job.{field} differs from the stored block beyond narrowing; only the operator may widen a job grant or edit its policy"
+            ))
+        })
     }
 }
 
@@ -813,6 +871,9 @@ pub fn guard_tools_keep_grants(
         .map(OperatorGrants::from_tools_json)
         .transpose()?
         .unwrap_or_default();
+    if let Some(refusal) = candidate.job_refusal(&stored) {
+        bail!(refusal);
+    }
     anyhow::ensure!(
         candidate.bounded_by(&stored, held),
         "pack installation is operator-managed and cannot be self-granted"

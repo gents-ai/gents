@@ -1443,6 +1443,7 @@ mod tests {
             member_peer: "peer-1".into(),
             member_ticket: "ticket-1".into(),
             owner_node: "did:key:agent-1".into(),
+            profile: crate::agent::p2p_reconcile::templates::CLIENT_TEMPLATE.into(),
             request_digest: "digest-1".into(),
             authorization_sequence: 1,
             authorization_expires_at: "2099-09-29T00:00:00Z".into(),

@@ -9,6 +9,8 @@ on:
       - .cargo/**
       - crates/**
       - .github/workflows/editor-windows.yml
+      - .github/scripts/editor-native-tests.py
+      - .github/scripts/test-editor-native-tests.py
   push:
     branches: [main]
     paths:
@@ -18,6 +20,8 @@ on:
       - .cargo/**
       - crates/**
       - .github/workflows/editor-windows.yml
+      - .github/scripts/editor-native-tests.py
+      - .github/scripts/test-editor-native-tests.py
   workflow_dispatch:
 
 permissions:
@@ -28,13 +32,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  driver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: python3 .github/scripts/test-editor-native-tests.py
+
   named-pipes:
+    needs: driver
     runs-on: windows-2025
-    timeout-minutes: 180
+    timeout-minutes: 120
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: "0"
       RUST_MIN_STACK: 16777216
+      RUST_TEST_THREADS: "2"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -56,10 +71,10 @@ jobs:
           cache-on-failure: "true"
           cache-workspace-crates: "false"
           cache-bin: "false"
-      - name: Check the native client and desktop adapters
-        run: cargo check --locked -p gents-client-host -p gents-desktop-tauri
+      - name: Compile transport tests in one feature graph
+        run: python .github/scripts/editor-native-tests.py compile --manifest "$env:RUNNER_TEMP/editor-native-tests.json"
       - name: Build the native client and runtime
-        run: cargo build --locked --profile test -p gents-cli -p gents-client-host --bins
+        run: cargo build --locked --profile test --target-dir target -p gents-cli -p gents-client-host --bins
       - name: Check the native protocol descriptor
         run: |
           $hostInfo = & .\target\debug\gents-client-host.exe --describe | ConvertFrom-Json
@@ -68,8 +83,45 @@ jobs:
             throw "The native host did not advertise its Windows transport."
           }
       - name: Exercise private pipe ownership and attachment lifecycle
-        run: cargo test --locked -p gents-desktop-bridge --no-default-features --lib host::local::windows
-      - name: Exercise native metadata, shared ownership and stdio teardown
-        run: cargo test --locked -p gents-client-host
-      - name: Exercise signed runtime input, goals and console shutdown
-        run: cargo test --locked -p gents-client-host --features runtime-e2e --test runtime
+        timeout-minutes: 20
+        run: python .github/scripts/editor-native-tests.py bridge --manifest "$env:RUNNER_TEMP/editor-native-tests.json"
+      - name: Exercise metadata, ownership, runtime input and console shutdown
+        timeout-minutes: 25
+        run: python .github/scripts/editor-native-tests.py host --manifest "$env:RUNNER_TEMP/editor-native-tests.json"
+      - name: Retain native compiler timing report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-windows-build-timings
+          path: target/cargo-timings/
+          if-no-files-found: ignore
+
+  adapters:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.1"
+          cache: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install --no-self-update
+      - name: Install migration fixture target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Install protobuf compiler
+        run: choco install protoc --yes --no-progress
+      - name: Restore Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: editor-windows-adapters
+          cache-on-failure: "true"
+          cache-workspace-crates: "false"
+          cache-bin: "false"
+      - name: Check the native client and desktop adapters
+        run: cargo check --locked -p gents-client-host -p gents-desktop-tauri

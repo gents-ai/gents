@@ -11,6 +11,10 @@ pub use input::can_hold_canonical_count;
 pub(crate) use input::parameters as field_parameters;
 pub(crate) use input::validate_input as validate_field_input;
 
+pub(crate) fn field_literal(schema: &str, value: &Value) -> Result<String> {
+    input::literal(schema, value)
+}
+
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
 #[derive(Debug)]

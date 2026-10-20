@@ -3,24 +3,34 @@ import type {
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
 import { useListWindow } from "@source-inc/gents-desktop-ui";
-import { memo, useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
-import { TimelineItem } from "./transcript/TimelineItem.js";
+import { TimelineItem, timelineKey } from "./transcript/TimelineItem.js";
+import { coalesceToolGroups } from "./transcript/CompactToolGroup.js";
 
 export const MessageList = memo(function MessageList({
   timelineItems,
   timelineIdentity,
   requestCancelCause,
   scrollElement,
+  compactTools = false,
+  onEditUserMessage,
 }: {
   timelineItems: RenderedTimelineItem[];
   timelineIdentity?: string | null;
   requestCancelCause?: DerivedCancelCauseView | null;
   scrollElement?: HTMLElement | null;
+  compactTools?: boolean;
+  onEditUserMessage?: (
+    item: Extract<RenderedTimelineItem, { kind: "userMessage" }>,
+  ) => void;
 }) {
+  const displayItems = useMemo(() => {
+    return compactTools ? coalesceToolGroups(timelineItems) : timelineItems;
+  }, [compactTools, timelineItems]);
   const window = useListWindow(
-    timelineItems,
+    displayItems,
     scrollElement ?? null,
     timelineKey,
     estimateItemSize,
@@ -31,7 +41,7 @@ export const MessageList = memo(function MessageList({
     itemKey: string;
     kind: RenderedTimelineItem["kind"];
   } | null>(null);
-  const tail = timelineItems[timelineItems.length - 1] ?? null;
+  const tail = displayItems[displayItems.length - 1] ?? null;
   const [revealAssistantItemKey, setRevealAssistantItemKey] = useState<
     string | null
   >(null);
@@ -59,11 +69,13 @@ export const MessageList = memo(function MessageList({
         aria-label="Messages"
       >
         {window.items.map(({ index, start }) => {
-          const item = timelineItems[index]!;
+          const item = displayItems[index]!;
           return (
             <li key={timelineKey(item)} {...window.attributes(index, start)}>
               <TimelineItem
                 item={item}
+                onEditUserMessage={onEditUserMessage}
+                compactTools={compactTools}
                 animateAssistantReveal={item.itemKey === revealAssistantItemKey}
               />
             </li>
@@ -71,15 +83,14 @@ export const MessageList = memo(function MessageList({
         })}
       </ul>
       {requestCancelCause ? (
-        <AssistantCancelCauseTurn cause={requestCancelCause} />
+        <AssistantCancelCauseTurn
+          cause={requestCancelCause}
+          compact={compactTools}
+        />
       ) : null}
     </>
   );
 });
-
-function timelineKey(item: RenderedTimelineItem) {
-  return `${item.kind}-${item.itemKey}`;
-}
 
 function estimateItemSize() {
   return 120;

@@ -91,11 +91,16 @@ describe("the providers' owner", () => {
         .mockResolvedValueOnce([account("c1")])
         .mockRejectedValueOnce(new Error("runtime down")),
     };
-    const { providers } = owner(api);
+    const { providers, store } = owner(api);
 
     await expect(providers.loadProviderAccounts(AGENT)).resolves.toEqual([
       account("c1"),
     ]);
     await expect(providers.loadProviderAccounts(AGENT)).resolves.toBeNull();
+    expect(store.getState().accounts[AGENT]).toEqual([account("c1")]);
+
+    api.listProviderAccounts.mockResolvedValueOnce([]);
+    await providers.loadProviderAccounts(AGENT);
+    expect(store.getState().accounts[AGENT]).toEqual([]);
   });
 });

@@ -215,24 +215,51 @@ export function WorkerStep({
   const p = tool.presentation;
   if (p.kind === "process") {
     const bg = workers.background(tool);
-    const running = tool.statusKind === "running";
+    const ws = bg?.waitStatus ?? null;
+    // Panel scope (accepted F2): this is the ACTIVE-worker panel. Terminal
+    // rows are excluded upstream (bridge projection filters lifecycle
+    // terminal + superseded from backgroundedTools), so terminal elapsed
+    // rendering here is unreachable today; the shared protocol projection
+    // and model tools (list_processes / wait_process envelopes) are the
+    // consumers of stable terminal elapsed. Do not broaden this panel into
+    // history without reworking the bridge filter.
+    // Truthful lifecycle from the shared projection: unknown stays unknown;
+    // pending is never relabeled running.
+    const active = ws
+      ? ws.lifecycle === "running" || ws.lifecycle === "pending"
+      : tool.statusKind === "running";
+    const pending = ws?.lifecycle === "pending";
+    const terminal = ws?.lifecycle ?? null;
+    const stableElapsed =
+      ws?.terminalElapsedSeconds != null ? `${ws.terminalElapsedSeconds}s` : null;
+    const runningAge =
+      ws?.runningElapsedSeconds != null ? `${ws.runningElapsedSeconds}s` : null;
     const overdue = bg?.deadlineExpired
       ? `past its deadline by ${since(bg.deadlineAt) ?? "?"}`
       : null;
-    const tone: Tone = running
+    // Tone and text answer different questions: tone tracks the rendered
+    // tool stream (running/failed/done), while "state unknown" text must
+    // survive even under a failed tone — an unparseable lifecycle stays
+    // unknown regardless of stream error state.
+    const tone: Tone = active
       ? "running"
       : tool.statusKind === "error"
         ? "failed"
-        : "done";
+        : terminal === "unknown"
+          ? "unknown"
+          : "done";
     return (
       <Row
         tone={tone}
         verb="In the background"
         name={p.target ?? tool.toolName}
         state={
-          running
-            ? (overdue ?? `running${bg ? ` · ${since(bg.startedAt)}` : ""}`)
-            : tool.statusKind
+          active
+            ? (overdue ??
+              `${pending ? "pending" : "running"}${runningAge ? ` · ${runningAge}` : since(bg?.startedAt ?? null) ? ` · ${since(bg?.startedAt ?? null)}` : ""}`)
+            : terminal === "unknown"
+              ? "state unknown"
+              : (stableElapsed ?? tool.statusKind)
         }
         detail={bg?.nativeExecutor ? `pid ${bg.nativeExecutor.pid}` : null}
         sessionId={null}

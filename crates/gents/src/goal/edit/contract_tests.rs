@@ -10,6 +10,7 @@ struct Contracts {
 #[derive(Deserialize)]
 struct Case {
     name: String,
+    origin: GoalEditOrigin,
     observed: Assignment,
     current: Assignment,
     fields: GoalEdit,
@@ -40,7 +41,7 @@ async fn durable_rows(node: &EmbeddedNode) -> Value {
 #[tokio::test]
 async fn generated_goal_edit_cases_drive_real_transactions() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_edit_cases.len(), 24);
+    assert_eq!(contracts.goal_edit_cases.len(), 62);
     for case in contracts.goal_edit_cases {
         let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
@@ -79,7 +80,25 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             case.name
         );
         let before = durable_rows(&node).await;
-        let result = match edit_active_goal(&node, &observed, &case.fields).await {
+        let edit = match case.origin {
+            GoalEditOrigin::Agent => edit_active_goal(&node, &observed, &case.fields).await,
+            GoalEditOrigin::Client => {
+                let observed = &observed;
+                let fields = &case.fields;
+                crate::ConfigAccess::transact_local_write(
+                    &node,
+                    None,
+                    "test.goal_client_edit",
+                    |txn| {
+                        Box::pin(async move {
+                            stage_goal_edit(txn, observed, fields, GoalEditOrigin::Client).await
+                        })
+                    },
+                )
+                .await
+            }
+        };
+        let result = match edit {
             Ok(result) => result,
             Err(error) => {
                 assert!(case.fields.validate().is_err(), "{}: {error:#}", case.name);

@@ -86,6 +86,7 @@ pub(crate) enum LeanAuxiliaryKind {
     Compaction,
     CompactionFallback,
     Title,
+    AccessReview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

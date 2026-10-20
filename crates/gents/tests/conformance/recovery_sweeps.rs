@@ -1,15 +1,19 @@
 use super::*;
+use crate::lean_vocab_test::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
+use gents::plugin_job::admit::{is_stalled, Refusal};
+use gents::plugin_job::recovery::{tick_action, RecoveryFacts, TickAction};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const RECOVERY_CREATED_AT: &str = "2026-03-23T00:00:00Z";
+const PLUGIN_JOB_SWEEP_ID: &str = "tool_call_lifecycle_recover_plugin_job_rows";
 
 pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        32,
+        43,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -20,6 +24,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         "tool_call_lifecycle_reconcile_background_completion_side_effects",
         "tool_call_lifecycle_reconcile_terminal_parent_owned_tools",
         "tool_call_lifecycle_recover_session_message_rows",
+        PLUGIN_JOB_SWEEP_ID,
         "inference_call_recover_all_stale_calls",
         "task_hook_recover_interrupted_cleanup",
     ]
@@ -35,9 +40,91 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     );
     assert_periodic_recovery_registry_matches_lean(cases);
 
-    for case in cases {
+    // Plugin-job rows keep running when a tick re-drives them; their own
+    // consumer drives and checks them.
+    for case in cases
+        .iter()
+        .filter(|case| case.sweep_id != PLUGIN_JOB_SWEEP_ID)
+    {
         assert_recovery_case_metadata(case);
         drive_recovery_sweep_case(case).await;
+    }
+}
+
+/// One tick of the row: the owner's `tick_action` is the first application of
+/// Lean's `pluginJobRecover`; a `Step` receives every terminal, and the stall
+/// rule over that step's output (`is_stalled`, the admission owner) is the
+/// second. Returns whether the tick touched the row, and the row after it.
+fn tick_row(row: LeanPluginJobRecoveryRow) -> (bool, LeanPluginJobRecoveryRow) {
+    let facts = RecoveryFacts {
+        terminal_children: row.terminal_children,
+        observed: row.observed,
+        live: row.live,
+        step_new: row.step_new,
+        deadline_expired: row.deadline_expired,
+        available: if row.available {
+            Ok(())
+        } else {
+            Err(Refusal::NotAvailable)
+        },
+    };
+    match tick_action(&facts) {
+        TickAction::Untouched => (false, row),
+        TickAction::Kill(_) => (
+            true,
+            LeanPluginJobRecoveryRow {
+                running: false,
+                ..row
+            },
+        ),
+        TickAction::Step => {
+            let observed = row.terminal_children;
+            let stalled = is_stalled(row.live, observed, row.terminal_children, row.step_new);
+            (
+                true,
+                LeanPluginJobRecoveryRow {
+                    running: !stalled,
+                    observed,
+                    ..row
+                },
+            )
+        }
+    }
+}
+
+/// Lean `pluginJobRecoverySweep` ticks (`pluginJobStale`, then
+/// `pluginJobRecover ∘ pluginJobRecover`) through the owner's first-application
+/// decision `plugin_job::recovery::tick_action`, which
+/// `redrive_running_jobs` applies to each running job row: a stale row is
+/// killed or re-driven one step, and a row that is not stale is untouched.
+/// Lean's measures stay with its own `recovery_regressions`.
+#[tokio::test]
+async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
+    let cases = lean_plugin_job_recovery_cases();
+    assert_eq!(cases.len(), 7, "Lean should emit the plugin-job tick rows");
+    let sweep_cases = lean_recovery_sweep_cases()
+        .iter()
+        .filter(|case| case.sweep_id == PLUGIN_JOB_SWEEP_ID)
+        .map(|case| case.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sweep_cases,
+        cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<Vec<_>>(),
+        "the registered sweep's witnesses are the plugin-job tick rows"
+    );
+    for case in cases {
+        let name = case.name.as_str();
+        assert_eq!(case.sweep_id, PLUGIN_JOB_SWEEP_ID, "{name}");
+        assert_eq!(
+            case.rust_function, "plugin_job::recovery::redrive_running_jobs",
+            "{name}"
+        );
+        let (stale, after) = tick_row(case.row);
+        assert_eq!(stale, case.stale, "{name}: stale flag");
+        assert_eq!(after, case.expected_row, "{name}: row after one tick");
     }
 }
 

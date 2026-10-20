@@ -7,6 +7,7 @@ pub mod event_delivery;
 pub mod goal;
 pub mod goal_control;
 pub mod graphql;
+pub mod job;
 pub mod mailbox_question;
 pub mod message;
 pub mod network_token;
@@ -28,6 +29,7 @@ pub mod timeline;
 pub mod tool_service_health;
 pub mod transcript;
 pub mod trigger_delivery;
+pub mod wait_status;
 
 pub const ENGINEER_PROMPT: &str = include_str!("../prompts/engineer.md");
 

@@ -82,6 +82,9 @@ pub struct ChatSendRequest {
     pub content: String,
     #[serde(default)]
     #[ts(optional = nullable)]
+    pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
     pub delivery: Option<gents_protocol::request_input::QueueDelivery>,
     #[serde(default)]
     #[ts(optional = nullable)]
@@ -98,6 +101,21 @@ pub struct ChatSendRequest {
 #[serde(rename_all = "camelCase")]
 pub struct MailboxItemRequest {
     pub item_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionForkBeforeRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub message_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionForkResult {
+    pub node_did: String,
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -333,6 +351,15 @@ pub struct DesktopInterruptRequest {
     pub cause: String,
 }
 
+/// Stops or pauses exactly the job row at `session_id:tool_call_id`.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopJobControlRequest {
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub action: gents_protocol::job::JobControlKind,
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopProbeMcpServiceRequest {
@@ -538,9 +565,29 @@ pub struct PendingQueueEditRequest {
     pub messages: Vec<PendingMessageEditRequest>,
 }
 
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PendingMessageSteerRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub expected_request_doc_ids: Vec<String>,
+    pub request_doc_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingQueueEditResult {
     pub request_doc_ids: Vec<String>,
     pub request_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentModelSelectionRequest {
+    pub node_did: String,
+    pub agent_id: String,
+    pub backend_id: String,
+    pub model_name: String,
+    pub reasoning_effort: Option<gents::config::ReasoningEffort>,
+    pub service_tier: Option<gents::config::ServiceTier>,
 }

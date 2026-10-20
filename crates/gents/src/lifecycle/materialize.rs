@@ -418,7 +418,8 @@ pub(crate) fn build_request(
             gents_protocol::request_admission::RequestPurpose::Normal => {
                 i64::from(DEFAULT_REQUEST_MAX_RETRIES)
             }
-            gents_protocol::request_admission::RequestPurpose::TitleAudit => 0,
+            gents_protocol::request_admission::RequestPurpose::TitleAudit
+            | gents_protocol::request_admission::RequestPurpose::AccessReview => 0,
         },
         |link| link.max_retries,
     );
@@ -455,15 +456,23 @@ pub async fn build_signed_request(
     Ok(create)
 }
 
-pub(crate) async fn write_pending_title_request(
+/// A review exists only while its caller is waiting. Its finite validity lets
+/// the preclaim owner settle abandoned work without replaying provider calls.
+pub(crate) async fn write_pending_auxiliary_request(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
+    purpose: gents_protocol::request_admission::RequestPurpose,
     content: String,
+    valid_until: Option<String>,
 ) -> Result<AgentRequest> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     anyhow::ensure!(
-        parent.purpose == RequestPurpose::Normal,
-        "a title audit request cannot recursively create title work"
+        parent.purpose == RequestPurpose::Normal && purpose.is_auxiliary(),
+        "auxiliary requests require an ordinary parent"
+    );
+    anyhow::ensure!(
+        purpose != RequestPurpose::AccessReview || valid_until.is_some(),
+        "access review requires finite validity"
     );
     let identity = RequestIdentity {
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -478,12 +487,13 @@ pub(crate) async fn write_pending_title_request(
     let admission =
         AgentRequestAdmissionRecord::runtime_local_control(&parent.node_did, &parent.request_id);
     let spec = RequestSpec {
+        valid_until,
         parent: Some(ParentLink {
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),
             ..Default::default()
         }),
-        ..RequestSpec::new(RequestPurpose::TitleAudit, identity, admission)
+        ..RequestSpec::new(purpose, identity, admission)
     };
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     let mutation = create
@@ -491,12 +501,12 @@ pub(crate) async fn write_pending_title_request(
         .map_err(anyhow::Error::msg)?;
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
-        "lifecycle.materialize_title_audit",
+        "lifecycle.materialize_auxiliary",
         &mutation,
     )
     .await?;
     crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
-        .context("title request creation omitted its exact durable request")
+        .context("auxiliary request creation omitted its exact durable request")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -546,6 +556,7 @@ pub(crate) async fn build_session_message_request(
     retry_key: Option<String>,
     hop: u32,
     queue: Option<gents_protocol::request_input::RequestQueue>,
+    cwd: Option<String>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     anyhow::ensure!(
@@ -581,6 +592,7 @@ pub(crate) async fn build_session_message_request(
                 source: gents_protocol::session::SessionTitleSource::Task,
             }),
         queue,
+        cwd,
         ..Default::default()
     };
     let spec = RequestSpec {
@@ -919,6 +931,27 @@ async fn labeled_session_rows_in_txn(
     })
 }
 
+/// The provenance a request records on the session its claim or refusal
+/// creates: its calling request and, when it names a calling tool call, the
+/// request itself as the session's opening request (Lean
+/// `AgentSession.Provenance.openingRequestDoc`, read by
+/// `DurableLineage.openingRequest`). `ensure_session_in_txn` keeps an
+/// existing session's provenance, so only the request that creates the
+/// session writes it.
+pub(crate) fn created_session_provenance(
+    request: &AgentRequest,
+) -> Option<gents_protocol::session::SessionProvenance> {
+    let parent = request.caused_by_parent_request_doc_id.clone()?;
+    Some(gents_protocol::session::SessionProvenance {
+        parent_request_doc_id: Some(parent),
+        opening_request_doc_id: request
+            .caused_by_parent_tool_call_doc_id
+            .as_ref()
+            .map(|_| request.doc_id.clone()),
+        ..Default::default()
+    })
+}
+
 pub(super) async fn apply_request_session_projection(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
@@ -960,13 +993,7 @@ pub(super) async fn apply_request_session_projection(
         &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
-        request
-            .caused_by_parent_request_doc_id
-            .as_ref()
-            .map(|parent| gents_protocol::session::SessionProvenance {
-                parent_request_doc_id: Some(parent.clone()),
-                ..Default::default()
-            }),
+        created_session_provenance(request),
         now,
     )
     .await?;
@@ -1050,13 +1077,7 @@ async fn project_refused_request_onto_session_in_txn(
         &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
-        request
-            .caused_by_parent_request_doc_id
-            .as_ref()
-            .map(|parent| gents_protocol::session::SessionProvenance {
-                parent_request_doc_id: Some(parent.clone()),
-                ..Default::default()
-            }),
+        created_session_provenance(request),
         now,
     )
     .await?;
@@ -1097,6 +1118,41 @@ async fn project_refused_request_onto_session_in_txn(
     session::advance_refused_request_observation_in_txn(txn, &incoming, &request.content, now)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod session_message_tests {
+    use super::*;
+    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+
+    #[tokio::test]
+    async fn session_message_request_carries_the_cwd() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let _identity = pin_fixed_signing_identity(tempdir.path());
+        let cause = SessionMessageCause {
+            caller_node_did: PIN_FIXED_DID.to_owned(),
+            caller_request_id: "caller-request".to_owned(),
+            caller_request_doc_id: "caller-request-doc".to_owned(),
+            caller_hop: 0,
+            tool_call_id: "tool-call".to_owned(),
+            tool_call_doc_id: "tool-call-doc".to_owned(),
+            correlation: None,
+        };
+        let target = SessionMessageTarget {
+            node_did: PIN_FIXED_DID.to_owned(),
+            agent_id: "agent-1".to_owned(),
+            session_id: "session-1".to_owned(),
+        };
+        let build = |cwd: Option<String>| {
+            build_session_message_request(
+                &cause, &target, "hello", None, "req-cwd", None, 1, None, cwd,
+            )
+        };
+        let carried = build(Some("/work/tree".to_owned())).await.unwrap();
+        assert_eq!(carried.input.cwd.as_deref(), Some("/work/tree"));
+        let unset = build(None).await.unwrap();
+        assert_eq!(unset.input.cwd, None);
+    }
 }
 
 pub fn task_fire_key(identity: &gents_protocol::trigger_delivery::FireIdentity) -> String {

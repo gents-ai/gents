@@ -153,6 +153,16 @@ private def optionalBoolJson : Option Bool → String
   | none => "null"
   | some b => agentBool b
 
+private def jobGuardCaseJson (r : JobGuardRow) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString r.name ++ ","
+    ++ "\"writer\":" ++ jsonString (if r.operator then "operator" else "model") ++ ","
+    ++ "\"selected_before\":" ++ agentBool r.selectedBefore ++ ","
+    ++ "\"stored_integrations\":" ++ r.stored.getD "null" ++ ","
+    ++ "\"candidate_integrations\":" ++ r.candidate ++ ","
+    ++ "\"accepted\":" ++ agentBool r.accepted
+  ++ "}"
+
 def selfConfigSelectionCasesJson : String :=
   let bools := [false, true]
   let toolFlags := Id.run do
@@ -175,6 +185,7 @@ def selfConfigSelectionCasesJson : String :=
             ++ "}"]
     return rows
   "{\"tool_flag_cases\":" ++ jsonArray toolFlags ++ ","
-    ++ "\"graph_presentation_cases\":" ++ jsonArray presentation ++ "}"
+    ++ "\"graph_presentation_cases\":" ++ jsonArray presentation
+    ++ ",\"job_guard_cases\":" ++ jsonArray (jobGuardRows.map jobGuardCaseJson) ++ "}"
 
 end Conformance.Contracts

@@ -72,7 +72,7 @@ export function InferencePanel({
   };
   const { accounts, reload } = useAccounts(deployment.nodeDid);
   const [acting, setActing] = useState<AccountAction | null>(null);
-  const providerUsage = useProviderUsage(deployment.nodeDid);
+  const providerUsage = useProviderUsage(deployment.nodeDid, item);
   const usageOf = (backendId: string) =>
     providerUsage.usage.find((u) => u.backendId === backendId);
   const catalog = useSetupCatalog();
@@ -240,7 +240,18 @@ export function InferencePanel({
                 className="size-4 opacity-70 dark:invert"
               />
             ),
-            badge: "Not set up",
+            badge: accounts.some(
+              (account) =>
+                account.enabled &&
+                !account.pendingSave &&
+                Object.values(SUBSCRIPTION).some(
+                  (subscription) =>
+                    subscription.providerId === p.id &&
+                    subscription.provider === account.provider,
+                ),
+            )
+              ? "Signed in · finish setup"
+              : "Not set up",
             onOpen: () => setAdding(p.id),
           })),
         ]}

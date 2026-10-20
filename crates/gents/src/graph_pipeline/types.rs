@@ -4,30 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const COMPILER_VERSION: &str = "graph-intent-v4";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum PortCardinality {
-    One,
-    Many,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct PortSpec {
-    pub name: String,
-    /// Existing DefraDB collection carried on this port.
-    pub collection: String,
-    /// Stable schema reference used for compile-time compatibility checks.
-    pub schema: String,
-    /// Source field used by event-trigger correlation and fan-in.
-    pub correlation_field: String,
-    pub cardinality: PortCardinality,
-    #[serde(default)]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional))]
-    pub required: bool,
-}
+pub use crate::document_config::{PortCardinality, PortSpec};
 
 /// What runs a graph node: an agent turn, or a plugin with no model.
 #[derive(

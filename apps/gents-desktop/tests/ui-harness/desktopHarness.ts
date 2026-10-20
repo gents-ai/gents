@@ -36,6 +36,7 @@ import type {
   SessionProvenance,
   TriggerView,
 } from "@source-inc/gents-desktop-client";
+import type { JobControlOutcome } from "@source-inc/gents-desktop-client/generated/JobControlOutcome";
 import type { RequestOutcomeView } from "@source-inc/gents-desktop-client/generated/RequestOutcomeView";
 import type { MessageReconstructionView } from "@source-inc/gents-desktop-client/generated/MessageReconstructionView";
 import type { SessionContextView } from "@source-inc/gents-desktop-client/generated/SessionContextView";
@@ -833,8 +834,14 @@ export function createDesktopUiHarness(
     async controlGoal() {
       throw new Error("Goal controls are unavailable in this fixture.");
     },
+    async steerPendingMessage() {
+      throw new Error("Steering is unavailable in this fixture.");
+    },
     async editPendingQueue() {
       throw new Error("Pending queue edits are unavailable in this fixture.");
+    },
+    async forkSessionBeforeMessage() {
+      throw new Error("Message editing is unavailable in this fixture.");
     },
     async fetchDesktopSnapshot() {
       if (scenario === "bridge-unavailable") {
@@ -898,6 +905,18 @@ export function createDesktopUiHarness(
     async updatePack() {},
     async removePack() {},
     async bindPackPlugin() {},
+    async wirePack(request) {
+      return {
+        plugin: request.plugin,
+        agent: request.agent,
+        preview: request.preview,
+        authority: null,
+        report: { changed: [], job: null, warnings: [], next_call: null },
+      };
+    },
+    async listPackWireSources() {
+      return { plugins: [], target_packs: [] };
+    },
     async signInToPackRegistry() {},
     async signOutOfPackRegistry() {},
     async listAllowedFolders() {
@@ -2543,6 +2562,12 @@ export function createDesktopUiHarness(
         alreadyInterrupted: false,
       };
       return result;
+    },
+    async jobControl() {
+      const outcome: JobControlOutcome = {
+        AlreadyTerminal: { state: "completed" },
+      };
+      return outcome;
     },
   };
 

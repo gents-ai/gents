@@ -142,7 +142,8 @@ pub use query::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     render_tool_result, CanonicalToolCallPresentation,
 };
-mod plugin_receipt;
+pub(crate) mod plugin_receipt;
+pub use plugin_receipt::ReceiptDecision;
 mod recovery;
 pub(crate) mod runtime;
 mod transition;
@@ -177,6 +178,53 @@ pub use recovery::{
 };
 pub use transition::CausedRequestTerminal;
 pub use transition::IllegalToolCallTransition;
+pub(crate) use transition::PluginJobTerminal;
+
+/// Which owner terminates a tool-call row. A [`Self::SessionMessage`] row
+/// (Lean `ToolOperation.sessionMessage`) has no host process: its terminal
+/// is the terminal output of the request it caused. A [`Self::PluginJob`] row
+/// (Lean `ToolOperation.pluginJob`) is the row whose `job_pin` is present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRowKind {
+    Native,
+    /// An `agent_new`/`agent_message` row. It has no deadline (Lean
+    /// `session_message_row_left_running`): the stored `deadline_at` is the
+    /// accepted dispatch deadline, never a terminal cause, so the caused
+    /// request's result always reaches the calling session.
+    SessionMessage,
+    /// A plugin job: a background row pinned by `job_pin`. The restart sweep
+    /// leaves it running and it never returns to the foreground.
+    PluginJob,
+}
+
+impl ToolRowKind {
+    pub(crate) fn of(tool_name: &str) -> Self {
+        if crate::toolset::is_session_message_tool(tool_name) {
+            Self::SessionMessage
+        } else {
+            Self::Native
+        }
+    }
+
+    /// The kind of a stored row: pluginJob exactly when `job_pin` is present.
+    pub(crate) fn of_row(tool_name: &str, has_job_pin: bool) -> Self {
+        if has_job_pin {
+            Self::PluginJob
+        } else {
+            Self::of(tool_name)
+        }
+    }
+
+    /// Whether the orphan sweep may settle a row of this kind and await mode.
+    pub fn in_orphan_sweep_scope(self, await_mode: AwaitMode) -> bool {
+        await_mode == AwaitMode::Background && self == Self::Native
+    }
+
+    /// Whether a running background row of this kind may flip to foreground.
+    pub fn may_foreground(self) -> bool {
+        !matches!(self, Self::SessionMessage | Self::PluginJob)
+    }
+}
 
 #[derive(Clone)]
 pub struct ToolCallLifecycle {
@@ -192,11 +240,15 @@ pub struct ToolCallLifecycle {
     call_id: Option<String>,
     message_sequence: u32,
     tool_name: String,
+    kind: ToolRowKind,
     /// Exact accepted assistant header that introduced this physical call.
     accepted_header_doc_id: Option<String>,
     arguments: Option<gents_protocol::output::PayloadRef>,
     execution_generation: Option<String>,
     plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
+    /// Data writes a plugin tool returned beside its output; committed with a
+    /// Completed terminal and discarded by any other.
+    plugin_writes: Option<delivery::PluginToolWrites>,
     /// Immutable physical provenance for dispatch, recovery, and completion routing.
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_effect: Option<PluginEffectBinding>,
@@ -286,11 +338,13 @@ impl ToolCallLifecycle {
             tool_call_id: accepted.id,
             call_id: accepted.call_id,
             message_sequence: accepted.message_sequence,
+            kind: ToolRowKind::of(&accepted.tool_name),
             tool_name: accepted.tool_name,
             accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
             arguments: Some(accepted.arguments),
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
+            plugin_writes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: Some(accepted.tool_call_doc_id),
@@ -310,6 +364,18 @@ impl ToolCallLifecycle {
     ) {
         if receipt.is_some() {
             self.plugin_receipt = receipt;
+        }
+    }
+
+    pub(crate) fn stage_plugin_writes(
+        &mut self,
+        writes: Option<gents_loop::live_output::DeferredToolWrites>,
+    ) {
+        if let Some(writes) = writes
+            .as_ref()
+            .and_then(|writes| writes.downcast_ref::<delivery::PluginToolWrites>())
+        {
+            self.plugin_writes = Some(writes.clone());
         }
     }
 
@@ -339,11 +405,13 @@ impl ToolCallLifecycle {
             tool_call_id,
             call_id: None,
             message_sequence,
+            kind: ToolRowKind::of(&tool_name),
             tool_name,
             accepted_header_doc_id: None,
             arguments: None,
             execution_generation: None,
             plugin_receipt: None,
+            plugin_writes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: None,
@@ -405,11 +473,13 @@ impl ToolCallLifecycle {
             tool_call_id,
             call_id: None,
             message_sequence,
+            kind: ToolRowKind::of(&tool_name),
             tool_name,
             accepted_header_doc_id: None,
             arguments: None,
             execution_generation: None,
             plugin_receipt: None,
+            plugin_writes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: None,
@@ -428,8 +498,9 @@ impl ToolCallLifecycle {
         self.deadline_at <= now
     }
 
-    pub(crate) fn is_session_message(&self) -> bool {
-        crate::toolset::is_session_message_tool(&self.tool_name)
+    /// The owner that terminates this row; see [`ToolRowKind`].
+    pub(crate) fn kind(&self) -> ToolRowKind {
+        self.kind
     }
 
     pub(crate) fn interrupt_disposition(&self) -> InterruptDisposition {
@@ -460,6 +531,10 @@ impl ToolCallLifecycle {
 
     pub(crate) fn await_mode(&self) -> AwaitMode {
         self.await_mode
+    }
+
+    pub(crate) fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.started_at
     }
 
     pub(crate) fn state(&self) -> ToolCallState {
@@ -569,6 +644,36 @@ impl ToolCallLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
+        let kind_of = |tool_name: &str| {
+            ToolCallLifecycle::new(
+                node.clone(),
+                "request".into(),
+                "session".into(),
+                "did:test:owner".into(),
+                "call".into(),
+                0,
+                tool_name.into(),
+                "{}".into(),
+                deadline,
+            )
+            .kind()
+        };
+        assert_eq!(
+            kind_of(crate::toolset::AGENT_NEW_TOOL_NAME),
+            ToolRowKind::SessionMessage
+        );
+        assert_eq!(
+            kind_of(crate::toolset::AGENT_MESSAGE_TOOL_NAME),
+            ToolRowKind::SessionMessage
+        );
+        assert_eq!(kind_of("tool"), ToolRowKind::Native);
+        node.shutdown().await;
+    }
 
     use crate::lean_vocab_test::{
         assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,

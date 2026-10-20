@@ -41,6 +41,11 @@ pub(crate) fn is_classified_transaction_conflict(error: &anyhow::Error) -> bool 
     retry::classified_transaction_conflict(error).is_some()
 }
 
+#[cfg(test)]
+pub(crate) fn classified_conflict_for_test() -> anyhow::Error {
+    retry::transaction_conflict(write_telemetry::ConflictSource::StructuredCode)
+}
+
 pub mod patch;
 
 pub use agent_behavior::write_agent_document;

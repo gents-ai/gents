@@ -4,6 +4,17 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
+use crate::file_lock::FileLock;
+use crate::pack_archive::PackArchive;
+
+/// Who installed a pack: the operator through the CLI, or the model through
+/// self-configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstalledVia {
+    Operator,
+    SelfConfig,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HomePackInstall {
@@ -12,6 +23,12 @@ pub struct HomePackInstall {
     pub digest: String,
     pub kind: PackKind,
     pub assets: String,
+    /// The materialized asset directories of the dependencies this install ran,
+    /// as `(coordinate, assets)` with `assets` spelled as [`Self::assets`].
+    /// Dependencies are graph packs and write no record of their own, so the
+    /// dependent's record is where their assets are found. Empty when none.
+    #[serde(default)]
+    pub dependency_assets: Vec<(String, String)>,
     pub plugins: Vec<InstalledPackPlugin>,
     pub installed_at: String,
     /// The UX plugins the pack declared, kept verbatim so the desktop can
@@ -19,6 +36,87 @@ pub struct HomePackInstall {
     /// written before the field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ux: Vec<crate::pack::PackUxPlugin>,
+    /// Absent on records written before provenance was recorded; read through
+    /// [`recorded_provenance`].
+    #[serde(default)]
+    pub installed_via: Option<InstalledVia>,
+}
+
+/// Lean `provenanceOf`. `record` is `None` without a record, `Some(None)` for
+/// a record without `installed_via`. The CLI was the only writer of legacy
+/// assets and plugins records, so those read `Operator`; documents never had
+/// one, and a missing record fails closed. A graph pack writes no record and
+/// reads as documents do.
+pub fn recorded_provenance(kind: PackKind, record: Option<Option<InstalledVia>>) -> InstalledVia {
+    match (record, kind) {
+        (Some(Some(via)), _) => via,
+        (Some(None), PackKind::Assets | PackKind::Plugins) => InstalledVia::Operator,
+        _ => InstalledVia::SelfConfig,
+    }
+}
+
+/// Lean `recordAfterInstall`: the value the record is written with. An
+/// explicit install writes `via`; a dependency install never lowers an
+/// `Operator` record.
+pub fn record_after_install_via(
+    prior: Option<Option<InstalledVia>>,
+    kind: PackKind,
+    explicit: bool,
+    via: InstalledVia,
+) -> InstalledVia {
+    if !explicit && recorded_provenance(kind, prior) == InstalledVia::Operator {
+        InstalledVia::Operator
+    } else {
+        via
+    }
+}
+
+/// Writes `record` with the provenance [`record_after_install_via`] decides,
+/// replacing any prior record. A graph pack writes no record.
+pub fn record_after_install(
+    home: &Path,
+    mut record: HomePackInstall,
+    installed_via: InstalledVia,
+    explicit: bool,
+) -> Result<()> {
+    if record.kind == PackKind::Graph {
+        return Ok(());
+    }
+    let prior = read_home_install(home, &record.coordinate)?.map(|stored| stored.installed_via);
+    record.installed_via = Some(record_after_install_via(
+        prior,
+        record.kind.clone(),
+        explicit,
+        installed_via,
+    ));
+    write_home_install(home, &record)
+}
+
+/// Materializes `pack` into the home's asset cache when it ships an asset
+/// class (a distributable asset under a top-level snake_case directory),
+/// whatever plugins are installed. Returns the cache directory relative to
+/// `home`, as [`HomePackInstall::assets`] spells it, with the lease the caller
+/// holds until the install record is written; `None` for a pack with no asset
+/// class.
+pub fn materialize_asset_pack(
+    home: &Path,
+    pack: &PackArchive,
+) -> Result<Option<(String, FileLock)>> {
+    let ships_class = pack.manifest().metadata.assets.iter().any(|path| {
+        path.split_once('/').is_some_and(|(class, _)| {
+            super::asset_path::is_snake_case_name(class) && super::is_distributable_asset_path(path)
+        })
+    });
+    if !ships_class {
+        return Ok(None);
+    }
+    let (root, lease) = super::materialize::cached(home, pack)?;
+    let assets = root
+        .strip_prefix(home)
+        .unwrap_or(root.as_path())
+        .to_string_lossy()
+        .into_owned();
+    Ok(Some((assets, lease)))
 }
 
 fn checked_coordinate(coordinate: &str) -> Result<(&str, &str)> {
@@ -165,10 +263,25 @@ mod tests {
             digest: format!("sha256:{}", "a".repeat(64)),
             kind: PackKind::Assets,
             assets: "packs/subject_pack/aaaa".into(),
+            dependency_assets: vec![],
             plugins: vec![],
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux: vec![],
+            installed_via: None,
         }
+    }
+
+    fn sample_of(coordinate: &str, kind: PackKind) -> HomePackInstall {
+        HomePackInstall {
+            kind,
+            ..sample(coordinate)
+        }
+    }
+
+    fn read_via(home: &Path, coordinate: &str) -> Option<Option<InstalledVia>> {
+        read_home_install(home, coordinate)
+            .unwrap()
+            .map(|record| record.installed_via)
     }
 
     #[test]
@@ -202,5 +315,181 @@ mod tests {
             write_home_install(home.path(), &sample(coordinate))
                 .expect_err(&format!("{coordinate:?} must be refused"));
         }
+    }
+
+    #[test]
+    fn legacy_record_without_installed_via_reads_operator() {
+        let home = tempfile::tempdir().unwrap();
+        write_home_install(home.path(), &sample("gents/mailbox")).unwrap();
+        let path = record_path(home.path(), "gents/mailbox").unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("installed_via");
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let record = read_home_install(home.path(), "gents/mailbox")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.installed_via, None);
+        assert_eq!(
+            recorded_provenance(record.kind, Some(record.installed_via)),
+            InstalledVia::Operator
+        );
+    }
+
+    #[test]
+    fn record_without_dependency_assets_reads_empty() {
+        let home = tempfile::tempdir().unwrap();
+        let mut record = sample("gents/mailbox");
+        record.dependency_assets =
+            vec![("gents/dep".into(), "packs/.materialized/gents/dep/a".into())];
+        write_home_install(home.path(), &record).unwrap();
+        let path = record_path(home.path(), "gents/mailbox").unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("dependency_assets");
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let record = read_home_install(home.path(), "gents/mailbox")
+            .unwrap()
+            .unwrap();
+        assert!(record.dependency_assets.is_empty());
+    }
+
+    #[test]
+    fn missing_documents_record_reads_self_config() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(read_home_install(home.path(), "gents/docs")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            recorded_provenance(PackKind::Documents, None),
+            InstalledVia::SelfConfig
+        );
+    }
+
+    #[test]
+    fn dependency_never_lowers_provenance() {
+        let home = tempfile::tempdir().unwrap();
+        record_after_install(
+            home.path(),
+            sample("gents/mailbox"),
+            InstalledVia::Operator,
+            true,
+        )
+        .unwrap();
+        record_after_install(
+            home.path(),
+            sample("gents/mailbox"),
+            InstalledVia::SelfConfig,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            read_via(home.path(), "gents/mailbox"),
+            Some(Some(InstalledVia::Operator))
+        );
+    }
+
+    #[test]
+    fn explicit_self_config_install_lowers_the_record() {
+        let home = tempfile::tempdir().unwrap();
+        record_after_install(
+            home.path(),
+            sample("gents/mailbox"),
+            InstalledVia::Operator,
+            true,
+        )
+        .unwrap();
+        record_after_install(
+            home.path(),
+            sample("gents/mailbox"),
+            InstalledVia::SelfConfig,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            read_via(home.path(), "gents/mailbox"),
+            Some(Some(InstalledVia::SelfConfig))
+        );
+    }
+
+    #[test]
+    fn graph_install_writes_no_home_record() {
+        let home = tempfile::tempdir().unwrap();
+        record_after_install(
+            home.path(),
+            sample_of("gents/flow", PackKind::Graph),
+            InstalledVia::Operator,
+            true,
+        )
+        .unwrap();
+        assert!(read_home_install(home.path(), "gents/flow")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn recorded_provenance_is_lean_provenance_of() {
+        use InstalledVia::{Operator, SelfConfig};
+        for kind in [
+            PackKind::Graph,
+            PackKind::Documents,
+            PackKind::Assets,
+            PackKind::Plugins,
+        ] {
+            for via in [Operator, SelfConfig] {
+                assert_eq!(recorded_provenance(kind.clone(), Some(Some(via))), via);
+            }
+            assert_eq!(recorded_provenance(kind, None), SelfConfig);
+        }
+        assert_eq!(recorded_provenance(PackKind::Assets, Some(None)), Operator);
+        assert_eq!(recorded_provenance(PackKind::Plugins, Some(None)), Operator);
+        assert_eq!(
+            recorded_provenance(PackKind::Documents, Some(None)),
+            SelfConfig
+        );
+    }
+
+    #[test]
+    fn record_after_install_via_is_lean_record_after_install() {
+        use InstalledVia::{Operator, SelfConfig};
+        for via in [Operator, SelfConfig] {
+            for prior in [
+                None,
+                Some(None),
+                Some(Some(Operator)),
+                Some(Some(SelfConfig)),
+            ] {
+                for kind in [PackKind::Documents, PackKind::Assets, PackKind::Plugins] {
+                    assert_eq!(
+                        record_after_install_via(prior, kind, true, via),
+                        via,
+                        "an explicit install writes its own provenance"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            record_after_install_via(Some(Some(Operator)), PackKind::Documents, false, SelfConfig),
+            Operator
+        );
+        assert_eq!(
+            record_after_install_via(Some(None), PackKind::Assets, false, SelfConfig),
+            Operator,
+            "a legacy assets record reads operator"
+        );
+        assert_eq!(
+            record_after_install_via(Some(None), PackKind::Documents, false, SelfConfig),
+            SelfConfig
+        );
+        assert_eq!(
+            record_after_install_via(None, PackKind::Plugins, false, SelfConfig),
+            SelfConfig
+        );
+        assert_eq!(
+            record_after_install_via(Some(Some(SelfConfig)), PackKind::Assets, false, Operator),
+            Operator
+        );
     }
 }

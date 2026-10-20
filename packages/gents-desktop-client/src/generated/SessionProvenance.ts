@@ -21,4 +21,13 @@ graph_run_id?: string | null,
  * provenance only: no hierarchy, cascade or authority follows from it.
  * Further tool-call/trigger lineage remains on the existing request owners.
  */
-parent_request_doc_id?: string | null, fork?: SessionFork | null, };
+parent_request_doc_id?: string | null,
+/**
+ * The request whose claim or refusal created this session through a
+ * calling tool call, recorded once with `parent_request_doc_id` and
+ * never rewritten (Lean `AgentSession.Provenance.openingRequestDoc`).
+ * Readers open a caused session at it (Lean
+ * `DurableLineage.openingRequest`); a session created before it was
+ * recorded has none and falls back to `(created_at, _docID)`.
+ */
+opening_request_doc_id?: string | null, fork?: SessionFork | null, };

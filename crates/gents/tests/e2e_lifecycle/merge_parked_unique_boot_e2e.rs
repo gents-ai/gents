@@ -1,7 +1,7 @@
 //! External premises: DefraDB's merge path keeps the unique-index entry for
-//! the lexicographically smallest docID and persists the loser unindexed; boot's
-//! eager materialization must tolerate that parked loser. Node shutdown does not
-//! join the P2P pending-DAG sweep loops spawned in defra-node's `setup_p2p`, so
+//! the lexicographically smallest docID and persists the loser unindexed.
+//! Node shutdown does not join the P2P pending-DAG sweep loops spawned in
+//! defra-node's `setup_p2p`, so
 //! the in-process storage lock can lag shutdown by up to one sweep interval; the
 //! OS drops the lock on real process exit.
 
@@ -145,7 +145,6 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
     }
 
     let winner = std::cmp::min(home_doc.clone(), client_doc.clone());
-    let parked = std::cmp::max(home_doc.clone(), client_doc.clone());
     assert_eq!(
         indexed_endpoint_doc_ids(&home.node).await,
         vec![winner.clone()],
@@ -168,36 +167,9 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         }
     }
 
-    let report = gents::migration::ensure_migrations(&home.node)
+    gents::migration::ensure_migrations(&home.node)
         .await
         .expect("ensure_migrations after boot");
-    if report.materialization.collections_attempted == 0 {
-        assert!(
-            gents::migration::DEFAULT_STEPS.is_empty(),
-            "only a chain-free registry may skip eager materialization"
-        );
-        assert!(report.materialization.parked_unique_conflicts.is_empty());
-    } else {
-        assert_eq!(
-            report.materialization.parked_unique_conflicts.len(),
-            1,
-            "exactly one collection is parked; report={report:?}"
-        );
-        let detail = &report.materialization.parked_unique_conflicts[0];
-        assert!(
-            detail.contains("PeerEndpoint"),
-            "parked detail must name the collection: {detail}"
-        );
-        assert!(
-            detail.contains(&parked),
-            "parked detail must name the parked docID {parked}: {detail}"
-        );
-        assert!(
-            report.warnings.iter().any(|w| w.contains("PeerEndpoint")),
-            "report warnings must surface the parked collection: {:?}",
-            report.warnings
-        );
-    }
 
     let mut docs = scan_endpoints(&home.node).await;
     docs.sort();

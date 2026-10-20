@@ -1133,7 +1133,7 @@ async fn read_api_key_without_a_source_is_not_reported() {
 const REFRESH_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 
 #[tokio::test]
-async fn read_guard_recent_read_is_skipped() {
+async fn read_guard_recent_open_is_skipped_but_refresh_reads_again() {
     let node = node().await;
     let now = Utc::now();
     let (url, handle) = test_support::one_shot_token_server(429, "{}").await;
@@ -1166,14 +1166,29 @@ async fn read_guard_recent_read_is_skipped() {
             &node,
             A,
             &openrouter,
-            UsageTrigger::Refresh,
+            UsageTrigger::Open,
             &UsageEndpoints::default(),
             now + Duration::minutes(1)
         )
         .await,
         UsageRead::SkippedRecent
     );
-    never_called(handle).await;
+    assert_eq!(
+        read(
+            &node,
+            A,
+            &openrouter,
+            UsageTrigger::Refresh,
+            &UsageEndpoints::default(),
+            now + Duration::minutes(1)
+        )
+        .await,
+        UsageRead::Read
+    );
+    assert_eq!(
+        first_line(&handle.await.unwrap()),
+        "GET /api/v1/key HTTP/1.1"
+    );
 
     let did = "did:key:z6MkUsageReadRecent";
     sign_in(&node, did, CODEX, now - Duration::hours(1), None).await;

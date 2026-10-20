@@ -66,10 +66,36 @@ pub(crate) struct ListBackgroundToolsEntry {
     pub(crate) tool_name: String,
     pub(crate) deployment_id: String,
     pub(crate) await_mode: String,
+    /// Parsed lifecycle token, or "unknown" when absent/unparseable.
     pub(crate) status: String,
-    pub(crate) created_at: DateTime<Utc>,
-    pub(crate) last_update: DateTime<Utc>,
+    /// Verbatim persisted lifecycle_state token (may be Some("garbage")).
+    pub(crate) lifecycle_state_raw: Option<String>,
+    pub(crate) started_at: Option<DateTime<Utc>>,
+    pub(crate) completed_at: Option<DateTime<Utc>>,
+    /// Active age; None when terminal/unknown or timestamps unusable.
+    pub(crate) elapsed_seconds: Option<i64>,
+    /// Stable terminal duration; None unless both endpoints parse and are
+    /// ordered.
+    pub(crate) terminal_elapsed_seconds: Option<i64>,
+    /// Total volume of the combined canonical output. This is a truthful
+    /// count of combined bytes only; it is NOT stdout accounting.
+    pub(crate) available_bytes: u64,
+    /// Trailing preview of the combined canonical output, char-boundary
+    /// safe. Binds only what is embedded in this response: the full
+    /// canonical output is fetched server-side before truncation, so a
+    /// bounded preview does NOT imply a bounded fetch. Bounded retrieval
+    /// drilldown remains read_process.
+    pub(crate) preview: Option<String>,
+    pub(crate) preview_truncated: bool,
+    /// DEPRECATED COMBINED LEGACY — KNOWN SEMANTIC BUG, PRE-EXISTING AND
+    /// UNFIXED HERE: this field has always carried the combined
+    /// stdout+stderr canonical volume (never stdout-only), and
+    /// `stderr_bytes` has always been hard-coded 0. Kept only for wire
+    /// compatibility, value unchanged (== available_bytes). It is not
+    /// truthful stdout accounting, and this commit does not fix the split.
     pub(crate) stdout_bytes: u64,
+    /// DEPRECATED COMBINED LEGACY: always 0; stderr was never tracked. See
+    /// `stdout_bytes` for the open pre-existing semantic bug.
     pub(crate) stderr_bytes: u64,
 }
 

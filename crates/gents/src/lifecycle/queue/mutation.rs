@@ -3,7 +3,7 @@ use super::*;
 use crate::lifecycle::materialize::{
     build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
 };
-use crate::lifecycle::TriggerLineage;
+use crate::lifecycle::{TriggerLineage, WorkspaceLineage};
 
 #[cfg(test)]
 pub(super) async fn session_request_create_mutation(
@@ -62,6 +62,12 @@ pub(super) async fn session_request_create_mutation_at_hop(
         created_at: created_at.to_string(),
     };
     let spec = RequestSpec {
+        workspace: Some(WorkspaceLineage {
+            workspace_id: parent.workspace_id.clone(),
+            workspace_owner_node_did: parent.workspace_owner_node_did.clone(),
+            workspace_authority: parent.workspace_authority.clone(),
+            workspace_seal_hash: parent.workspace_seal_hash.clone(),
+        }),
         trigger_lineage: TriggerLineage {
             correlation: parent.caused_by_correlation.clone(),
             trigger_context: parent.caused_by_trigger_context.clone(),

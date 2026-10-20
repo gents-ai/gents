@@ -46,9 +46,10 @@ pub async fn send_chat_message(
         bail!("node_did is required");
     }
 
+    let captured_context = request.captured_context.unwrap_or_default();
     let content = match &request.answer {
         Some(answer) => {
-            if !request.content.trim().is_empty() {
+            if !request.content.trim().is_empty() || !captured_context.is_empty() {
                 bail!("an answer renders its own content; send empty content");
             }
             super::mailbox::question_reply_content(
@@ -61,7 +62,7 @@ pub async fn send_chat_message(
         }
         None => request.content.trim().to_string(),
     };
-    if content.is_empty() {
+    if content.is_empty() && captured_context.is_empty() {
         bail!("content is required");
     }
 
@@ -87,6 +88,7 @@ pub async fn send_chat_message(
             &session_id,
             gents_protocol::request_input::RequestInput {
                 cwd: chat_folder(request.cwd.as_deref())?,
+                captured_context,
                 ..Default::default()
             },
             request
@@ -121,6 +123,19 @@ pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
         bail!("The chat folder must be an existing folder on this computer.");
     }
     Ok(Some(raw.to_string()))
+}
+
+pub async fn fork_session_before_message(
+    core: &ClientCore,
+    request: crate::types::SessionForkBeforeRequest,
+) -> Result<crate::types::SessionForkResult> {
+    let outcome = core
+        .fork_session_before_message(&request.node_did, &request.session_id, &request.message_key)
+        .await?;
+    Ok(crate::types::SessionForkResult {
+        node_did: request.node_did.trim().to_owned(),
+        session_id: outcome.session_id,
+    })
 }
 
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
@@ -180,6 +195,24 @@ pub async fn edit_pending_queue(
                     })
                     .collect(),
             },
+        )
+        .await?;
+    Ok(super::super::types::PendingQueueEditResult {
+        request_doc_ids: result.request_doc_ids,
+        request_ids: result.request_ids,
+    })
+}
+
+pub async fn steer_pending_message(
+    core: &ClientCore,
+    request: super::super::types::PendingMessageSteerRequest,
+) -> Result<super::super::types::PendingQueueEditResult> {
+    let result = core
+        .steer_pending_message(
+            &request.node_did,
+            &request.session_id,
+            request.expected_request_doc_ids,
+            &request.request_doc_id,
         )
         .await?;
     Ok(super::super::types::PendingQueueEditResult {

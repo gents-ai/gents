@@ -101,6 +101,8 @@ pub(crate) struct AcpServiceConfig {
     pub(crate) agent_id: Arc<str>,
     pub(crate) current_model: BoundModel,
     pub(crate) grok_home: Option<std::path::PathBuf>,
+    /// Gents home the plugin catalogs of `x.ai/workflows/list` are read under.
+    pub(crate) plugin_home: std::path::PathBuf,
 }
 
 impl AcpServiceConfig {
@@ -442,6 +444,16 @@ impl AcpService {
                     result,
                 })
             }
+            "x.ai/workflows/list" => Ok(RequestOutcome {
+                notifications: Vec::new(),
+                result: super::workflow_catalog::list(
+                    &self.config.node,
+                    &self.config.node_did,
+                    &self.config.agent_id,
+                    &self.config.plugin_home,
+                )
+                .await?,
+            }),
             "x.ai/sessions/list" => Ok(RequestOutcome {
                 notifications: Vec::new(),
                 result: super::sessions::roster(
@@ -893,10 +905,11 @@ impl AcpService {
                     .as_ref()
                     .is_none_or(|meta| meta.as_object().is_some_and(|meta| meta.is_empty()))
             {
-                if let Some(command) = super::goals::GoalCommand::parse(&block.text)
+                let goal = super::goals::GoalCommand::parse(&block.text)
                     .map_err(|error| invalid_params(error.to_string()))?
-                    .filter(|command| !matches!(command, super::goals::GoalCommand::Create { .. }))
-                {
+                    .filter(|command| !matches!(command, super::goals::GoalCommand::Create { .. }));
+                let workflow = super::workflow_command::WorkflowCommand::parse(&block.text);
+                if goal.is_some() || workflow.is_some() {
                     super::sessions::load(
                         &self.config.node,
                         &self.config.node_did,
@@ -904,9 +917,27 @@ impl AcpService {
                         &parsed.session_id,
                     )
                     .await?;
-                    let reply = command
-                        .execute(&self.config.node, &self.config.node_did, &parsed.session_id)
-                        .await?;
+                    let reply = match (goal, workflow) {
+                        (Some(command), _) => {
+                            command
+                                .execute(
+                                    &self.config.node,
+                                    &self.config.node_did,
+                                    &parsed.session_id,
+                                )
+                                .await?
+                        }
+                        (None, Some(command)) => {
+                            command
+                                .execute(
+                                    &self.config.node,
+                                    &self.config.node_did,
+                                    &parsed.session_id,
+                                )
+                                .await?
+                        }
+                        (None, None) => unreachable!("a host command matched above"),
+                    };
                     for (kind, text) in [
                         ("user_message_chunk", block.text.as_str()),
                         ("agent_message_chunk", reply.as_str()),
@@ -1273,7 +1304,7 @@ mod tests {
     use crate::commands::grok_shim::projection::tools::PAGER_WAIT_FOR_EXIT_MESSAGE;
     use crate::commands::grok_shim::test_fixtures::seed_canonical_assistant_message;
     use crate::commands::grok_shim::test_fixtures::{
-        configure_runtime_agent,
+        configure_runtime_agent, seed_job_row,
         streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
     };
     use crate::commands::grok_shim::turn::PromptBlock;
@@ -1298,6 +1329,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
+        let plugin_home = tempdir.path().join("home");
         (
             tempdir,
             AcpServiceConfig {
@@ -1306,16 +1338,26 @@ mod tests {
                 agent_id: Arc::from("did:test:grok-shim:default"),
                 current_model: bound_model(),
                 grok_home: None,
+                plugin_home,
             },
         )
     }
 
     async fn test_service() -> (tempfile::TempDir, AcpService) {
-        let (staging, config) = config().await;
+        service_over(false).await
+    }
+
+    /// `signing_node`: the node DID is the registered test signing identity,
+    /// for owners that author documents as the node (job control's kill).
+    async fn service_over(signing_node: bool) -> (tempfile::TempDir, AcpService) {
+        let (staging, mut config) = config().await;
         let identity = gents::KeyIdentity::load_or_create(staging.path().join("actor.key"), None)
             .expect("test signing identity");
         let actor = ::identity::Did::new(gents::NodeIdentity::did(&identity).to_owned())
             .expect("fixture creator DID");
+        if signing_node {
+            config.node_did = Arc::from(gents::NodeIdentity::did(&identity));
+        }
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
             .expect("runtime schemas");
@@ -1414,6 +1456,278 @@ mod tests {
             .get("error")
             .is_some());
         service.turns.handle_disconnect().await.unwrap();
+    }
+
+    async fn workflow_session(session: &str) -> (tempfile::TempDir, AcpService) {
+        let (dir, service) = service_over(true).await;
+        let new = service
+            .handle_acp_payload(&request_payload(
+                "session/new",
+                json!({"_meta":{"sessionId":session}}),
+            ))
+            .await;
+        assert!(parse_response(new.response.as_deref().unwrap())
+            .get("error")
+            .is_none());
+        (dir, service)
+    }
+
+    async fn host_reply(service: &AcpService, session: &str, text: &str) -> String {
+        let dispatch = service
+            .handle_acp_payload(&request_payload(
+                "session/prompt",
+                json!({"sessionId":session, "prompt":[{"type":"text", "text":text, "meta":{}}]}),
+            ))
+            .await;
+        let response = parse_response(dispatch.response.as_deref().unwrap());
+        assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+        dispatch
+            .notifications
+            .iter()
+            .map(|line| parse_response(line))
+            .find(|update| {
+                update["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
+                    && update["params"]["update"]["_meta"]["hostTurn"] == true
+            })
+            .map(|update| {
+                update["params"]["update"]["content"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .unwrap_or_else(|| panic!("{text} produced no host turn"))
+    }
+
+    async fn no_requests_were_submitted(service: &AcpService) {
+        let requests = service
+            .config
+            .node
+            .execute(r#"{AgentRequest(filter: {request_id: {_nlike: "request-call-%"}}) {_docID}}"#)
+            .await;
+        ensure_no_errors(&requests, "workflow controls do not infer").unwrap();
+        assert!(requests.data.as_ref().unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_runs_overview() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-runs").await;
+        let node = &service.config.node;
+        let did = &*service.config.node_did;
+        seed_job_row(
+            node,
+            did,
+            "wf-runs",
+            "call-a",
+            "alpha",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        seed_job_row(
+            node,
+            did,
+            "wf-runs",
+            "call-b",
+            "beta",
+            "completed",
+            JobState::Completed,
+        )
+        .await;
+        for text in ["/workflow", "/workflow runs"] {
+            let reply = host_reply(&service, "wf-runs", text).await;
+            assert!(reply.contains("alpha"), "{reply}");
+            assert!(reply.contains("wf-runs:call-a"), "{reply}");
+            assert!(reply.contains("running"), "{reply}");
+            assert!(!reply.contains("beta"), "{reply}");
+        }
+        no_requests_were_submitted(&service).await;
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_or_pause_without_a_handle_lists_the_handles() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-list").await;
+        let node = &service.config.node;
+        let did = &*service.config.node_did;
+        seed_job_row(
+            node,
+            did,
+            "wf-list",
+            "call-a",
+            "alpha",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        for text in ["/workflow stop", "/workflow pause"] {
+            let reply = host_reply(&service, "wf-list", text).await;
+            assert!(reply.contains("alpha"), "{reply}");
+            assert!(reply.contains("wf-list:call-a"), "{reply}");
+        }
+        no_requests_were_submitted(&service).await;
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unknown_handle_replies_c9_code() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-unknown").await;
+        let node = &service.config.node;
+        let did = &*service.config.node_did;
+        seed_job_row(
+            node,
+            did,
+            "wf-other",
+            "call-x",
+            "elsewhere",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        for text in [
+            "/workflow stop nope",
+            "/workflow pause nope",
+            "/workflow stop elsewhere",
+            "/workflow stop wf-other:call-x",
+        ] {
+            let reply = host_reply(&service, "wf-unknown", text).await;
+            assert!(
+                reply.contains("workflow_control_unknown_run"),
+                "{text}: {reply}"
+            );
+            assert!(reply.contains("/workflow runs"), "{text}: {reply}");
+        }
+        no_requests_were_submitted(&service).await;
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    async fn job_state(
+        service: &AcpService,
+        session: &str,
+        call: &str,
+    ) -> gents_protocol::job::JobState {
+        gents::plugin_job::view::load_job_view(
+            &ConfigAccess::local(service.config.node.clone()),
+            None,
+            gents::plugin_job::view::JobKey::Address {
+                session_id: session.into(),
+                tool_call_id: call.into(),
+            },
+        )
+        .await
+        .unwrap()
+        .state
+    }
+
+    #[tokio::test]
+    async fn ended_row_replies_not_applicable() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-ended").await;
+        seed_job_row(
+            &service.config.node,
+            &service.config.node_did,
+            "wf-ended",
+            "call-b",
+            "beta",
+            "completed",
+            JobState::Completed,
+        )
+        .await;
+        for text in ["/workflow stop beta", "/workflow pause beta"] {
+            let reply = host_reply(&service, "wf-ended", text).await;
+            assert!(
+                reply.contains("workflow_control_not_applicable"),
+                "{text}: {reply}"
+            );
+            assert!(
+                reply.contains("gents job show wf-ended:call-b"),
+                "{text}: {reply}"
+            );
+        }
+        assert_eq!(
+            job_state(&service, "wf-ended", "call-b").await,
+            JobState::Completed
+        );
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workflow_stop_replies_host_turn() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-stop").await;
+        seed_job_row(
+            &service.config.node,
+            &service.config.node_did,
+            "wf-stop",
+            "call-a",
+            "alpha",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        let reply = host_reply(&service, "wf-stop", "/workflow stop alpha").await;
+        assert!(reply.contains("alpha"), "{reply}");
+        assert!(reply.contains('0'), "{reply}");
+        assert_eq!(
+            job_state(&service, "wf-stop", "call-a").await,
+            JobState::Cancelled
+        );
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workflow_pause_replies_host_turn() {
+        use gents_protocol::job::JobState;
+        let (_dir, service) = workflow_session("wf-pause").await;
+        seed_job_row(
+            &service.config.node,
+            &service.config.node_did,
+            "wf-pause",
+            "call-a",
+            "alpha",
+            "running",
+            JobState::Running,
+        )
+        .await;
+        let reply = host_reply(&service, "wf-pause", "/workflow pause alpha").await;
+        assert!(reply.contains("alpha"), "{reply}");
+        assert!(reply.contains("/workflow resume alpha"), "{reply}");
+        assert_eq!(
+            job_state(&service, "wf-pause", "call-a").await,
+            JobState::Paused
+        );
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[test]
+    fn forwarded_verbs_reach_prompt_text() {
+        use super::super::workflow_command::WorkflowCommand;
+        for text in [
+            "/workflow research the topic",
+            "/workflow resume alpha",
+            "/workflow answer alpha yes",
+            "/workflow save alpha",
+        ] {
+            assert_eq!(WorkflowCommand::parse(text), None, "{text}");
+            let request = crate::commands::grok_shim::turn::PromptRequest {
+                session_id: "s".to_owned(),
+                prompt: vec![PromptBlock {
+                    kind: "text".to_owned(),
+                    text: text.to_owned(),
+                    meta: Some(json!({})),
+                }],
+                prompt_id: None,
+                screen_mode: None,
+                send_now: false,
+                id: None,
+            };
+            assert_eq!(super::super::turn::prompt_text(&request), text);
+        }
     }
 
     #[tokio::test]
@@ -2100,6 +2414,7 @@ mod tests {
             agent_id: Arc::from(agent_id.as_str()),
             current_model: bound_model(),
             grok_home: None,
+            plugin_home: std::path::PathBuf::new(),
         };
         let turns = Arc::new(TurnManager::new(
             node.clone(),
@@ -2297,6 +2612,7 @@ mod tests {
             agent_id: Arc::from(agent_id.as_str()),
             current_model: bound_model(),
             grok_home: None,
+            plugin_home: std::path::PathBuf::new(),
         };
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
@@ -2646,6 +2962,38 @@ mod tests {
             response["result"]["result"],
             json!({"config":null,"on_demand_enabled":false})
         );
+    }
+
+    #[tokio::test]
+    async fn workflows_list_is_routed() {
+        let (_staging, service) = service_over(true).await;
+        let config = &service.config;
+        super::super::seed_test_agent_configuration(
+            &config.node,
+            &config.node_did,
+            &config.agent_id,
+            &config.agent_id,
+            "grok-workflows-model",
+            true,
+        )
+        .await;
+        let dispatch = service
+            .handle_acp_payload(&request_payload("x.ai/workflows/list", json!({})))
+            .await;
+        let response = parse_response(dispatch.response.as_deref().expect("response line"));
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(response["result"], json!({"workflows": []}));
+    }
+
+    #[tokio::test]
+    async fn workflows_list_failure_is_a_shaped_internal_error() {
+        let (_staging, service) = test_service().await;
+        let dispatch = service
+            .handle_acp_payload(&request_payload("x.ai/workflows/list", json!({})))
+            .await;
+        let response = parse_response(dispatch.response.as_deref().expect("response line"));
+        assert_eq!(response["error"]["code"], -32603, "{response}");
+        assert!(!response["error"]["message"].as_str().unwrap().is_empty());
     }
 
     #[tokio::test]

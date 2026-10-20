@@ -7,3 +7,6 @@ import Proofs.ToolPolicy.Cases
 import Proofs.ToolPolicy.WriteInput
 import Proofs.ToolPolicy.PluginCalls
 import Proofs.ToolPolicy.PluginApproval
+import Proofs.ToolPolicy.PluginData
+
+import Proofs.ToolPolicy.WorkspacePermissions

@@ -43,6 +43,26 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             .collect(),
     );
     let coordinate = format!("{namespace}/{name}");
+    let record = gents::pack::HomePackInstall {
+        coordinate: coordinate.clone(),
+        version: manifest.version.clone(),
+        digest: pack.digest.clone(),
+        kind: manifest.metadata.kind.clone(),
+        assets: gents::pack::materialize::cache_root(
+            std::path::Path::new(""),
+            namespace,
+            name,
+            &pack.digest,
+        )?
+        .to_string_lossy()
+        .into_owned(),
+        dependency_assets: Vec::new(),
+        plugins: identity.plugins.clone(),
+        ux: manifest.metadata.ux.clone(),
+        installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        installed_via: Some(gents::pack::InstalledVia::Operator),
+    };
+    gents::pack::record_after_install(&home, record, gents::pack::InstalledVia::Operator, true)?;
     crate::commands::pack::record_plugin_store_change(&home, &coordinate, Some(&identity))
         .await
         .context("the plugins were installed locally, but their node notification was not confirmed; retry to reconcile")?;
@@ -166,6 +186,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plugin_install_writes_an_operator_home_record() {
+        let (bytes, digest) = echo_pack();
+        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let (namespace, version) = (
+            archive.manifest().metadata.namespace.clone(),
+            archive.manifest().version.clone(),
+        );
+        let (base_url, _state) = serve_fake_pack("echo", &version, bytes, digest).await;
+        let home = tempfile::tempdir().unwrap();
+
+        install(args(&format!("{namespace}/echo"), base_url, home.path()))
+            .await
+            .unwrap();
+
+        let record = gents::pack::read_home_install(home.path(), &format!("{namespace}/echo"))
+            .unwrap()
+            .expect("a plugin install records itself in the home");
+        assert_eq!(record.kind, gents::pack::PackKind::Plugins);
+        assert_eq!(record.version, version);
+        assert_eq!(record.plugins.len(), 1);
+        assert_eq!(
+            record.installed_via,
+            Some(gents::pack::InstalledVia::Operator)
+        );
+    }
+
+    #[tokio::test]
     async fn a_digest_mismatch_is_refused_and_nothing_is_installed() {
         let (bytes, _) = echo_pack();
         let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
@@ -277,6 +324,7 @@ mod instruction_tests {
                 plugin: "team/echo".into(),
                 digest: None,
                 input_fields: Vec::new(),
+                job: None,
             },
             None,
         )

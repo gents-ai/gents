@@ -7,24 +7,39 @@ const NODE_DID: &str = "did:test:inference-recovery-cas";
 async fn fixture(initial_state: &str) -> (std::sync::Arc<EmbeddedNode>, StaleInferenceCallRow) {
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    let snapshot = seed_call(&node, initial_state, NODE_DID, "recovery-cas-request-doc").await;
+    (node, snapshot)
+}
+
+async fn seed_call(
+    node: &std::sync::Arc<EmbeddedNode>,
+    initial_state: &str,
+    node_did: &str,
+    request_doc_id: &str,
+) -> StaleInferenceCallRow {
     let state = escape_graphql_string(initial_state);
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ add_InferenceCall(input: {{
+    let owner = escape_graphql_string(node_did);
+    let request_doc = escape_graphql_string(request_doc_id);
+    crate::config_client::ConfigAccess::local(node.clone())
+        .write(
+            "test.recovery_call",
+            &format!(
+                r#"mutation {{ add_InferenceCall(input: {{
             call_id: "recovery-cas-call", runtime_instance_id: "recovery-cas-runtime",
-            request_id: "recovery-cas-request", request_doc_id: "recovery-cas-request-doc", call_seq: 1,
-            backend_id: "recovery-cas-backend", agent_id: "test", node_did: "{NODE_DID}",
+            request_id: "recovery-cas-request", request_doc_id: "{request_doc}", call_seq: 1,
+            backend_id: "recovery-cas-backend", agent_id: "test", node_did: "{owner}",
             call_kind: "inference", attempt: 1, call_state: "{state}",
             queued_at: "2026-09-01T00:00:00Z", priority: 0,
             queue_depth_at_enqueue: 0, controller_generation: 0,
             backend_config_fingerprint: "test"
         }}) {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let mut snapshots = load_stale_inference_calls(&node, NODE_DID).await.unwrap();
+            ),
+        )
+        .await
+        .unwrap();
+    let mut snapshots = load_stale_inference_calls(node, node_did).await.unwrap();
     assert_eq!(snapshots.len(), 1);
-    (node, snapshots.remove(0))
+    snapshots.remove(0)
 }
 
 async fn stored_call(node: &EmbeddedNode) -> Value {
@@ -453,16 +468,67 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
 /// late_usage_preserves_terminal_projection / late_usage_is_recorded.
 #[tokio::test]
 async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
-    let (node, snapshot) = fixture("running").await;
+    use crate::identity::NodeIdentity;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    let keys = tempfile::tempdir().unwrap();
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(keys.path().join("node.key"), None).unwrap();
+    crate::test_support::install_test_agent(&node, identity.did(), "test").await;
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "recovery-cas-request",
+        identity.did(),
+        identity.did(),
+        "test",
+        "recovery-cas-session",
+        "Resume the request",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::local_self(identity.did()),
+    );
+    crate::sign_agent_request_create(&identity, &mut create)
+        .await
+        .unwrap();
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let response = access
+        .write("test.recovery_parent", &create.graphql_mutation().unwrap())
+        .await
+        .unwrap();
+    let parent_doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let parent = crate::request_admission::load_request_for_admission_test(&node, &parent_doc_id)
+        .await
+        .unwrap();
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "test",
+        identity.did(),
+        parent,
+        120,
+        crate::lifecycle::ExecutionOrigin::Interactive,
+        "recovery-cas-backend",
+    );
+    lifecycle.set_configured_max_total_tokens(Some(100));
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    let request = lifecycle.request().clone();
+    let snapshot = seed_call(&node, "running", identity.did(), &request.doc_id).await;
     assert!(
         recover_inference_call_row(&node, &snapshot, InferenceRecoveryOutcome::Failed)
             .await
             .unwrap()
     );
     let terminal = stored_call(&node).await;
-    let call = super::super::controller::InferenceCallRecord::without_controller(pending_call(
-        "recovery-cas-call",
-    ));
+    let mut metadata = pending_call("recovery-cas-call");
+    metadata.request_doc_id = request.doc_id.clone();
+    metadata.node_did = request.node_did.clone();
+    let call = super::super::controller::InferenceCallRecord::without_controller(metadata);
     let usage = super::super::ProviderCallUsage {
         input_tokens: 17,
         output_tokens: 9,
@@ -488,9 +554,6 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     }
     assert_eq!(stored["prompt_tokens"], 17);
     assert_eq!(stored["completion_tokens"], 9);
-    let mut request = super::super::tests::request("recovery-cas-request");
-    request.doc_id = "recovery-cas-request-doc".into();
-    request.max_total_tokens = Some(100);
     let budget = crate::completion_factory::aggregate_token_budget_for_request(&node, &request)
         .await
         .unwrap()

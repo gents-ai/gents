@@ -296,6 +296,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "plugin-jobs"
+    , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
+    , deferred := []
+    }
   ]
 
 def vocabularyCoverage : List CoverageEntry :=
@@ -747,6 +751,11 @@ def caseCoverage : List CoverageEntry :=
       "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean")
       "authenticated-enrollment" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_observation_admission_cases"
+      "ClientObservationAdmission"
+      "agent::p2p_reconcile::enrollment_reconcile::tests::generated_client_observation_admission_matches_lean")
+      "authenticated-enrollment" [Surface.runtimeInternal, Surface.operatorUi]
+  , tagged (consumerCoverage
       "pending_user_turn_cases"
       "PendingUserTurnCases"
       "conformance::live_overlay::pending_user_turn_cases_match_lean_table")
@@ -1047,10 +1056,11 @@ def caseCoverage : List CoverageEntry :=
       "InferenceRegistryCases"
       "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits")
       "inference-call" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "title_usage_cases"
       "TitleUsageCases"
-      "Model-derived physical-call and historical title-claim inputs cover normal-public versus parent-inclusive totals, late usage after parent terminal, duplicate-call idempotence, conflicting catalog rejection, missing facts, invalid self-binding, and valid foreign-parent exclusion. Native request-purpose, claim provenance and inference-row joins are not bound; no native accounting consumer is claimed.")
+      "toolset::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage"
+      "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports, duplicate-call accounting and goal charges that include reviews while excluding titles. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
@@ -1243,7 +1253,7 @@ def caseCoverage : List CoverageEntry :=
       "queue_management_cases"
       "QueueManagementCases"
       "lifecycle::queue::tests::management::generated_pending_management_cases_bind_to_signed_replacement_owner"
-      "Nine representable replacement cases exercise signed native replacement, rejection, immutable originals and physical slot order. Reused request IDs and caller-chosen slot mutations remain executable model cases: the replacement API generates both internally, so these cases are not claimed as native management coverage. Intake cases are modeled here and bound through the composed steering publication and loop consumers.")
+      "Fifteen representable replacement cases exercise signed native replacement, rejection, immutable originals and physical slot order. Reused request IDs and caller-chosen slot mutations remain executable model cases: the replacement API generates both internally, so these cases are not claimed as native management coverage. Intake cases are modeled here and bound through the composed steering publication and loop consumers.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "queue_management_cases"
@@ -1400,6 +1410,102 @@ def caseCoverage : List CoverageEntry :=
       "PluginToolCallCases"
       "plugin::tool_calls::tests::generated_tool_call_bounds_and_grants")
       "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_job_admission_cases"
+      "PluginJobAdmissionCases"
+      "conformance::plugin_job::generated_plugin_job_admission_cases_drive_admit_step")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_adoption_cases"
+      "PluginJobAdoptionCases"
+      "conformance::plugin_job::generated_plugin_job_adoption_cases_drive_adopt")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_control_cases"
+      "PluginJobControlCases"
+      "conformance::plugin_job::generated_plugin_job_control_cases_drive_control_owners")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_job_key_cases"
+      "PluginJobKeyCases"
+      "conformance::plugin_job::generated_plugin_job_key_cases_match_protocol_encoders")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_authority_cases"
+      "PluginJobAuthorityCases"
+      "conformance::plugin_job::generated_plugin_job_authority_cases_drive_origin_and_provenance")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_wire_cases"
+      "PluginJobWireCases"
+      "conformance::plugin_job::generated_plugin_job_wire_cases_round_trip_protocol_types")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_wire_cases"
+      "PluginJobWireCases"
+      "conformance::plugin_job::plugin_job_protocol_field_names_are_secret_free")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "plugin_job_lineage_cases"
+      "PluginJobLineageCases"
+      "conformance::plugin_job::generated_plugin_job_lineage_cases_decode_strictly"
+      "Rows decode strictly against DurableLineage.openingRequest. The client consumers that drive the native opening-request owner are pending.")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_lineage_cases"
+      "PluginJobLineageCases"
+      "caused_sessions::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers")
+      "plugin-jobs" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "plugin_job_lineage_cases"
+      "PluginJobLineageCases"
+      "gents_desktop_bridge::provenance::tests::generated_plugin_job_lineage_cases_drive_desktop_opening_request")
+      "plugin-jobs" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "plugin_job_recovery_cases"
+      "PluginJobRecoveryCases"
+      "conformance::recovery_sweeps::generated_plugin_job_recovery_cases_drive_redrive_owner")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "conformance::background::generated_plugin_job_restart_and_foreground_rows_match_owners")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "conformance::background::generated_plugin_job_restart_and_foreground_rows_match_owners")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_data_cases"
+      "PluginDataCases"
+      "conformance::tool_policy::generated_plugin_data_cases_drive_admit_write")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginAssetMountCases"
+      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginProjectTierCases"
+      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginScratchCases"
+      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_calls_route_cases"
+      "PluginCallsRouteCases"
+      "conformance::tool_policy::generated_plugin_calls_route_cases_drive_supported")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "self_config_cases"
+      "SelfConfigCases"
+      "conformance::self_config::generated_self_config_job_guard_cases_drive_native_guard")
+      "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "tool_timeout_cases"
       "ToolTimeoutCases"
@@ -1731,6 +1837,11 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalDispatchObservationCases"
       "agent::loop_stream::tests::policy_rejection_settles_pending_call_without_dispatch_election")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "title_text_cases"
+      "TitleTextCases"
+      "session::title_text::tests::generated_title_text_cases_bind_native_presentation")
+      "canonical-output" [Surface.operatorUi, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "title_admission_join_cases"
       "TitleAdmissionJoinCases"
@@ -1815,6 +1926,53 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyClaudeWireStartCases"
       "claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser"
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "workspace_permission_write_cases"
+      "WorkspacePermissionWriteCases"
+      "tool_policy::workspace_permissions::tests::generated_workspace_permission_write_cases")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_permission_write_cases"
+      "WorkspacePermissionWriteCases"
+      "plugin::approval::workspace::tests::generated_workspace_permission_writes_preserve_selected_policy_versions"
+      "Generated transitions drive persisted selections with policy fingerprints on one Task ID, stale revisions, missing reviewers, retained references, no-op writes and exhausted revisions. Concurrent locking and filesystem failure handling need adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "access_review_cases"
+      "AccessReviewCases"
+      "tool_policy::access_review::tests::generated_access_review_cases_drive_native_reply_and_routing"
+      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "access_review_task_cases"
+      "AccessReviewTaskCases"
+      "agent::daemon::title::review::task::tests::generated_task_policies_bind_the_configured_task_fields"
+      "Generated Task documents bind node, task, agent, operator-selected policy text, eligibility and excluded execution effects. Store lookup, template evaluation, policy fingerprint integrity, concurrent edits and provider behavior remain native adapter boundaries.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_command_root_cases"
+      "WorkspaceCommandRootCases"
+      "plugin::approval::workspace::command::tests::generated_workspace_command_roots_preserve_the_tool_ceiling"
+      "Canonical host paths drive the production writable-root selection. A macOS execution regression checks real writes inside the project, rejection in its sibling and Full access restoring the configured root; other platforms retain the existing sandbox-unavailable barrier.")
+      "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "operator_path_cases"
+      "OperatorPathCases"
+      "plugin::allowed::tests::generated_operator_path_cases_protect_names_and_file_aliases"
+      "Generated decisions drive the shared path guard with real files, hard links, nested approval queues, missing targets and failed filesystem inspection. File-tool regressions verify that both reads and writes reject operator aliases before touching contents. Filesystem handle identity and concurrent external namespace changes remain native premises.")
+      "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_permission_cases"
+      "WorkspacePermissionCases"
+      "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases"
+      "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_service_tier_cases"
+      "PromptAssemblyServiceTierCases"
+      "completion_factory::tests::generated_service_tier_cases_drive_loop_config"
+      "Generated decisions cover every provider family with unset, Standard and Fast selections. Native validation rejects unsupported carriers; supported cases compare the actual provider request body. Provider account/model eligibility and delivered speed are external.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_responses_storage_cases"
@@ -2117,10 +2275,19 @@ def caseCoverage : List CoverageEntry :=
       "conformance::request_input::lean_request_inputs_decode_without_losing_explicit_issuance_facts"
       "Canonical input serde only. Signed canonical_input_fields/bytes, context whitelist, title materialization and verified goal receipt checks need the migrated admission/signing owners.")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "request_input_cases" "RequestInputCases"
+      "conformance::request_input::runtime_continuation_inputs_match_the_lean_owner")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "session_document_cases" "SessionDocumentCases"
       "lean_vocab_test::support::session_documents::tests::generated_pending_timeline_cases_preserve_request_identities_and_order"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")
       "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases"
+      "session::fork::tests::generated_edit_anchors_select_exact_canonical_user_messages")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases"
+      "session::tests::editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "session_document_cases" "SessionDocumentCases"
       "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]

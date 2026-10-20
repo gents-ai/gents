@@ -84,6 +84,10 @@ impl ToolRuntimeContext {
         self
     }
 
+    pub(crate) fn plugin_home(&self) -> Option<&std::path::Path> {
+        self.plugins.home()
+    }
+
     pub fn node(&self) -> &Arc<EmbeddedNode> {
         &self.node
     }

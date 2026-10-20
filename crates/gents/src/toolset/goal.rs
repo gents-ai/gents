@@ -62,7 +62,7 @@ impl Tool for CreateGoalTool {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": i64::MAX,
-                        "description": "Optional positive aggregate token budget for the goal."
+                        "description": "Optional positive aggregate token budget for the goal. Omit it to create an uncapped goal with no aggregate limit; there is no default cap."
                     }
                 },
                 "required": ["objective"]
@@ -129,7 +129,7 @@ impl Tool for UpdateGoalTool {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": i64::MAX,
-                        "description": "Positive aggregate goal budget. Omit to keep it."
+                        "description": "Positive aggregate goal budget. Omit to keep the goal's existing budget unchanged (an omitted budget never clears or resets an explicit cap). Budget changes apply to the active goal only; a budget_limited goal cannot be reactivated here."
                     }
                 }
             }),
@@ -192,5 +192,81 @@ mod tests {
         )
         .unwrap();
         assert_eq!(maximum.token_budget, Some(i64::MAX));
+    }
+
+    #[tokio::test]
+    async fn create_goal_help_states_omitted_budget_is_uncapped_with_no_default_cap() {
+        let tools = build_goal_tools(true);
+        let create = tools
+            .iter()
+            .find(|tool| tool.name() == CREATE_GOAL_TOOL_NAME)
+            .expect("create_goal is advertised when creation is enabled");
+        let definition = create.definition(String::new()).await;
+        let budget = &definition.parameters["properties"]["token_budget"];
+        let description = budget["description"].as_str().expect("budget description");
+        assert!(
+            description.contains("uncapped") && description.contains("no default cap"),
+            "create_goal budget help must say an omitted budget is uncapped with no default cap, got: {description}"
+        );
+        assert_eq!(
+            budget["required"],
+            serde_json::Value::Null,
+            "token_budget must stay optional in the create_goal schema"
+        );
+        assert!(
+            budget.get("default").is_none(),
+            "create_goal must not advertise a default budget value on the token_budget property"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_goal_help_states_omission_preserves_cap_and_no_reactivation() {
+        let tools = build_goal_tools(false);
+        let update = tools
+            .iter()
+            .find(|tool| tool.name() == UPDATE_GOAL_TOOL_NAME)
+            .expect("update_goal is always advertised");
+        let definition = update.definition(String::new()).await;
+        let description = definition.parameters["properties"]["token_budget"]["description"]
+            .as_str()
+            .expect("budget description");
+        assert!(
+            description.contains("Omit to keep the goal's existing budget unchanged"),
+            "update_goal budget help must say an omitted budget preserves the existing cap, got: {description}"
+        );
+        assert!(
+            description.contains("budget_limited goal cannot be reactivated"),
+            "update_goal budget help must say a budget_limited goal cannot be reactivated, got: {description}"
+        );
+        assert_eq!(
+            definition.parameters["properties"]["status"]["enum"],
+            serde_json::json!(["active", "complete", "blocked"]),
+            "update_goal must only offer active/complete/blocked; budget_limited is never a target"
+        );
+    }
+
+    #[test]
+    fn update_goal_cannot_resume_from_budget_limited() {
+        use crate::goal::{GoalAction, GoalState, GoalStatus};
+
+        // The state machine itself must have no Resume edge out of
+        // budget_limited, independent of any help text.
+        let budget_limited = GoalState {
+            status: GoalStatus::BudgetLimited,
+            blocked_audits: 0,
+            wrapup_requested: true,
+            wrapup_completed: false,
+        };
+        assert_eq!(
+            budget_limited.step(GoalAction::Resume),
+            None,
+            "Resume from budget_limited must be an illegal transition"
+        );
+        // And the operator transition helper must reject it too.
+        assert!(
+            crate::goal::apply_operator_status_transition(budget_limited, GoalStatus::Active)
+                .is_err(),
+            "update_goal to active from budget_limited must be rejected"
+        );
     }
 }

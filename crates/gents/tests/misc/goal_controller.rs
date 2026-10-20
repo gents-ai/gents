@@ -2,14 +2,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents::defra_node::{EmbeddedNode, HttpConfig};
 use gents::goal::{
     claim_continuation, claim_retry_continuation, create_goal_for_session,
     delete_goals_for_session, load_canonical_goal, load_goals_for_session, session_token_usage,
     set_goal, set_goal_from_access, update_goal_fields_if_status, CreateGoalForSessionError,
     CreateGoalForSessionOutcome, GoalStatus,
 };
+use gents::graphql::escape_graphql_string;
 use gents::{
-    ActiveRuntimeSnapshot, ConfigAccess, GoalSource, TriggerSource, UpdateSubscriptionSource,
+    ActiveRuntimeSnapshot, ConfigAccess, GoalSource, NodeIdentity, TriggerSource,
+    UpdateSubscriptionSource,
 };
 use serde::Deserialize;
 use tokio::sync::watch;
@@ -1526,6 +1529,321 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
     ));
 }
 
+#[tokio::test]
+async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_spend() {
+    let db = test_db("goal-baseline-prior-usage").await;
+    seed_completed_request(&db, "parent-baseline").await;
+    seed_usage(
+        &db.node,
+        db.node_identity.did(),
+        "parent-baseline",
+        "baseline-call",
+        1000,
+        50,
+    )
+    .await;
+
+    // The fresh create must snapshot the session's usage at creation time so
+    // pre-goal spend is never charged against the new goal.
+    let created = create_goal_for_session(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        "Baseline prior usage",
+        Some(10_000),
+    )
+    .await
+    .expect("create goal");
+    let goal = match created {
+        CreateGoalForSessionOutcome::Created(goal) => goal,
+        outcome => panic!("expected fresh create, got {outcome:?}"),
+    };
+    assert_eq!(goal.token_usage_baseline, Some(1050));
+    assert_eq!(goal.tokens_used, Some(0));
+
+    // Only spend arriving after creation is charged.
+    seed_usage(
+        &db.node,
+        db.node_identity.did(),
+        "parent-baseline",
+        "post-goal-call",
+        400,
+        50,
+    )
+    .await;
+    let refreshed = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    assert_eq!(refreshed.token_usage_baseline, Some(1050));
+    assert_eq!(refreshed.tokens_used, Some(0));
+    let tokens = gents::goal::refresh_goal_usage(&db.node, &refreshed)
+        .await
+        .expect("refresh usage");
+    assert_eq!(tokens, 450);
+    let charged = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    assert_eq!(charged.token_usage_baseline, Some(1050));
+    assert_eq!(charged.tokens_used, Some(450));
+}
+
+#[tokio::test]
+async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
+    let db = test_db("goal-baseline-idempotent").await;
+    seed_completed_request(&db, "parent-idempotent").await;
+    seed_usage(
+        &db.node,
+        db.node_identity.did(),
+        "parent-idempotent",
+        "first-call",
+        1000,
+        50,
+    )
+    .await;
+    let created = create_goal_for_session(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        "Baseline prior usage",
+        Some(10_000),
+    )
+    .await
+    .expect("create goal");
+    let goal = match created {
+        CreateGoalForSessionOutcome::Created(goal) => goal,
+        outcome => panic!("expected fresh create, got {outcome:?}"),
+    };
+    assert_eq!(goal.token_usage_baseline, Some(1050));
+
+    // More spend arrives, then the same create replays. The idempotent path
+    // must return the existing row untouched: baseline stays at the creation
+    // snapshot even though session usage has moved on.
+    seed_usage(
+        &db.node,
+        db.node_identity.did(),
+        "parent-idempotent",
+        "second-call",
+        400,
+        50,
+    )
+    .await;
+    let duplicate = create_goal_for_session(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        " Baseline prior usage ",
+        Some(10_000),
+    )
+    .await
+    .expect("idempotent replay");
+    let goal = match duplicate {
+        CreateGoalForSessionOutcome::Idempotent(goal) => goal,
+        outcome => panic!("expected idempotent replay, got {outcome:?}"),
+    };
+    assert_eq!(goal.token_usage_baseline, Some(1050));
+    assert_eq!(goal.tokens_used, Some(0));
+
+    // An owner-level set_goal replay is also idempotent and must not reset the
+    // baseline after post-goal spend.
+    let replayed = set_goal(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        Some("Baseline prior usage"),
+        Some(GoalStatus::Active),
+        Some(Some(10_000)),
+    )
+    .await
+    .expect("set_goal replay");
+    assert_eq!(replayed.token_usage_baseline, Some(1050));
+    assert_eq!(replayed.tokens_used, Some(0));
+    assert_eq!(
+        load_goals_for_session(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .expect("load goals")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
+    let db = test_db("goal-baseline-zero").await;
+    seed_completed_request(&db, "parent-zero").await;
+    let created = create_goal_for_session(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        "Zero prior usage",
+        Some(10_000),
+    )
+    .await
+    .expect("create goal");
+    let goal = match created {
+        CreateGoalForSessionOutcome::Created(goal) => goal,
+        outcome => panic!("expected fresh create, got {outcome:?}"),
+    };
+    assert_eq!(goal.token_usage_baseline, Some(0));
+    assert_eq!(goal.tokens_used, Some(0));
+    seed_usage(
+        &db.node,
+        db.node_identity.did(),
+        "parent-zero",
+        "only-call",
+        400,
+        50,
+    )
+    .await;
+    let refreshed = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    let tokens = gents::goal::refresh_goal_usage(&db.node, &refreshed)
+        .await
+        .expect("refresh usage");
+    assert_eq!(tokens, 450);
+    let charged = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("load goal")
+        .expect("goal exists");
+    assert_eq!(charged.token_usage_baseline, Some(0));
+    assert_eq!(charged.tokens_used, Some(450));
+}
+
+#[tokio::test]
+async fn set_goal_over_http_transactions_computes_the_same_baseline() {
+    // C1 regression: set_goal_from_access and stage_goal_backed_request can
+    // run over an HTTP ConfigAccess; the baseline helper must not require
+    // embedded-only native responses inside the transaction.
+    let address = free_address();
+    let home = tempfile::tempdir().expect("temp dir");
+    let identity = gents::KeyIdentity::load_or_create(home.path().join("principal.key"), None)
+        .expect("key identity");
+    let did = identity.did().to_string();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(home.path().join("data"))
+            .with_http(HttpConfig::with_addr(address))
+            .with_node_identity_did(&did)
+            .build()
+            .await
+            .expect("served node"),
+    );
+    // Canonical runtime schema bootstrap (AgentRequest, InferenceCall, Goal,
+    // migrations): raw served nodes have an empty schema, matching
+    // EmbeddedHome::open_with_identity's initialize_schemas path.
+    gents::schema::ensure_runtime_schemas(&node)
+        .await
+        .expect("runtime schemas");
+    let endpoint = format!("http://{address}/api/v0/graphql");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !gents_protocol::graphql::graphql_endpoint_available(
+            &endpoint,
+            gents_protocol::graphql::GraphqlRequestOptions {
+                timeout: Duration::from_secs(1),
+                max_attempts: 1,
+                retry_backoff: Duration::ZERO,
+            },
+        )
+        .await
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("HTTP listener");
+    let access = ConfigAccess::graphql_as(endpoint.clone(), did.clone());
+
+    create_request_for_agent_with_signed_fields(
+        node.as_ref(),
+        &did,
+        "http-baseline-request",
+        SESSION,
+        "completed",
+        "2026-07-15T00:00:00Z",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    seed_usage(
+        &node,
+        &did,
+        "http-baseline-request",
+        "http-baseline-call",
+        1000,
+        50,
+    )
+    .await;
+
+    let goal = set_goal_from_access(
+        &access,
+        &did,
+        SESSION,
+        Some("HTTP baseline"),
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("set goal over HTTP");
+    assert_eq!(goal.token_usage_baseline, Some(1050));
+    assert_eq!(goal.tokens_used, Some(0));
+}
+
+fn free_address() -> std::net::SocketAddr {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    listener.local_addr().expect("ephemeral address")
+}
+
+async fn seed_usage(
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+    node_did: &str,
+    request_id: &str,
+    call_id: &str,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+) {
+    let request_doc_id = escape_graphql_string(
+        &crate::support::exact_request_doc_id(node.as_ref(), request_id).await,
+    );
+    let node_did = escape_graphql_string(node_did);
+    let request_id = escape_graphql_string(request_id);
+    let call_id = escape_graphql_string(call_id);
+    let usage = format!(
+        r#"mutation {{
+            add_InferenceCall(input: {{
+                call_id: "{call_id}",
+                runtime_instance_id: "goal-baseline-test",
+                request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
+                call_seq: 1,
+                backend_id: "backend-test",
+                agent_id: "test",
+                node_did: "{node_did}",
+                call_kind: "inference",
+                attempt: 1,
+                call_state: "completed",
+                queued_at: "2026-07-15T00:00:00Z",
+                started_at: "2026-07-15T00:00:00Z",
+                ended_at: "2026-07-15T00:00:01Z",
+                priority: 0,
+                queue_depth_at_enqueue: 0,
+                controller_generation: 1,
+                backend_config_fingerprint: "goal-baseline-test",
+                prompt_tokens: {prompt_tokens},
+                completion_tokens: {completion_tokens},
+                cached_input_tokens: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&usage).await;
+    assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
+}
+
 async fn signed_goal_backed_request(
     db: &TestDb,
     request_id: &str,
@@ -1896,6 +2214,8 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             r#"mutation {{ add_InferenceCall(input: {{
                 call_id: "over-budget-failed-call",
                 request_id: "{parent}",
+                request_doc_id: "{}",
+                backend_id: "backend-test",
                 node_did: "{}",
                 call_seq: 1,
                 attempt: 1,
@@ -1904,6 +2224,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
                 prompt_tokens: 100,
                 completion_tokens: 5
             }}) {{ _docID }} }}"#,
+            escape_graphql_string(&parent_doc),
             gents::graphql::escape_graphql_string(db.node_identity.did()),
         );
         let response = db.node.execute(&usage).await;
@@ -2112,12 +2433,26 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     let db = test_db("goal-budget-wrapup").await;
     seed_completed_request(&db, "parent-budget").await;
+    set_goal(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        Some("Stop at the durable budget"),
+        Some(GoalStatus::Active),
+        Some(Some(10)),
+    )
+    .await
+    .expect("set goal");
+    let usage_request_doc = escape_graphql_string(
+        &crate::support::exact_request_doc_id(db.node.as_ref(), "parent-budget").await,
+    );
     let usage = format!(
         r#"mutation {{
         local_usage: add_InferenceCall(input: {{
             call_id: "goal-budget-call",
             runtime_instance_id: "goal-test",
             request_id: "parent-budget",
+            request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
             agent_id: "test",
@@ -2140,6 +2475,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             call_id: "goal-budget-call-foreign",
             runtime_instance_id: "goal-test-foreign",
             request_id: "parent-budget",
+            request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
             agent_id: "test",
@@ -2163,7 +2499,11 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
     let response = db.node.execute(&usage).await;
     assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
-    set_goal(
+
+    // The goal already existed when the usage was seeded: an idempotent
+    // set_goal replay must leave the creation-time baseline and the charged
+    // tokens untouched instead of resetting or re-deriving them.
+    let replayed = set_goal(
         &db.node,
         db.node_identity.did(),
         SESSION,
@@ -2172,7 +2512,16 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         Some(Some(10)),
     )
     .await
-    .expect("set goal");
+    .expect("idempotent set goal replay");
+    assert_eq!(replayed.token_usage_baseline, Some(0));
+    assert_eq!(replayed.tokens_used, Some(0));
+    assert_eq!(
+        load_goals_for_session(&db.node, db.node_identity.did(), SESSION)
+            .await
+            .expect("load goals")
+            .len(),
+        1
+    );
 
     let (mut source, _snapshot_tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
@@ -2265,12 +2614,16 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
 async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
     let db = test_db("goal-cached-input").await;
     seed_completed_request(&db, "parent-cached").await;
+    let usage_request_doc = escape_graphql_string(
+        &crate::support::exact_request_doc_id(db.node.as_ref(), "parent-cached").await,
+    );
     let usage = format!(
         r#"mutation {{
         add_InferenceCall(input: {{
             call_id: "goal-cached-call",
             runtime_instance_id: "goal-test",
             request_id: "parent-cached",
+            request_doc_id: "{usage_request_doc}",
             call_seq: 1,
             backend_id: "backend-test",
             agent_id: "test",
@@ -2733,13 +3086,18 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     )
     .await
     .expect("set goal");
+    let usage_request_doc = escape_graphql_string(
+        &crate::support::exact_request_doc_id(db.node.as_ref(), "parent-wrapup-retry").await,
+    );
     let response = db
         .node
         .execute(&format!(
             r#"mutation {{
                 add_InferenceCall(input: {{
                     call_id: "wrapup-budget-call",
+                    backend_id: "backend-test",
                     request_id: "parent-wrapup-retry",
+                    request_doc_id: "{usage_request_doc}",
                     node_did: "{}",
                     call_seq: 1,
                     attempt: 1,

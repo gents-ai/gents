@@ -53,6 +53,7 @@ export function createBridgeHttpAdapter(
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),
+    steerPendingMessage: unsupported("steerPendingMessage"),
     controlGoal: unsupported("controlGoal"),
     explainToolSurface: unsupported("explainToolSurface"),
     fetchNetworkStatus: unsupported("fetchNetworkStatus"),
@@ -61,6 +62,7 @@ export function createBridgeHttpAdapter(
     dismissMailboxItem: unsupported("dismissMailboxItem"),
     resendRequest: unsupported("resendRequest"),
     retryRequest: unsupported("retryRequest"),
+    forkSessionBeforeMessage: unsupported("forkSessionBeforeMessage"),
     saveSkillConfig: unsupported("saveSkillConfig"),
     deleteSkillConfig: unsupported("deleteSkillConfig"),
     deleteTaskConfig: unsupported("deleteTaskConfig"),
@@ -84,6 +86,8 @@ export function createBridgeHttpAdapter(
     updatePack: unsupported("updatePack"),
     removePack: unsupported("removePack"),
     bindPackPlugin: unsupported("bindPackPlugin"),
+    wirePack: unsupported("wirePack"),
+    listPackWireSources: unsupported("listPackWireSources"),
     signInToPackRegistry: unsupported("signInToPackRegistry"),
     signOutOfPackRegistry: unsupported("signOutOfPackRegistry"),
     listAllowedFolders: unsupported("listAllowedFolders"),
@@ -243,6 +247,9 @@ export function createBridgeHttpAdapter(
       ),
     interruptRequest: async (request) =>
       client.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
+    jobControl: async () => {
+      throw new Error("desktop_job_control is not served by the live bridge runner");
+    },
   };
 }
 

@@ -725,6 +725,7 @@ async fn agent_list(
                     "backend_id": effective.pointer("/inference_profile/backend_id"),
                     "model_name": effective.pointer("/inference_profile/model_name"),
                     "reasoning_effort": effective.pointer("/inference_profile/reasoning_effort"),
+                    "service_tier": effective.pointer("/inference_profile/service_tier"),
                 })
             }
             Err(error) => json!({
@@ -1007,12 +1008,25 @@ impl PackInstaller {
                     crate::pack::local::open(&crate::pack::local::LocalName::Path(&path), home)?
                 }
             };
+            // Local built artifacts flow through the same canonical
+            // installers as registry-resolved packs: documents through
+            // prepare/install_prepared_document_pack, graphs through
+            // load_graph + install_loaded_graph_package, plugins-only through
+            // plugins_pack. Plugin authority is unchanged: preview reports
+            // installation_blockers and commit refuses them unless the
+            // operator grants authority, so a locally built pack (e.g. one
+            // declaring child_process or bind_dir capabilities) cannot
+            // silently authorize itself.
             anyhow::ensure!(
                 matches!(
                     archive.manifest().metadata.kind,
-                    crate::pack::PackKind::Plugins
+                    crate::pack::PackKind::Graph
+                        | crate::pack::PackKind::Documents
+                        | crate::pack::PackKind::Plugins
                 ),
-                "native local lifecycle currently accepts plugins-only artifacts"
+                "pack {:?} is {:?}; the model-facing installer supports document, graph and plugins-only packs",
+                archive.manifest().name,
+                archive.manifest().metadata.kind
             );
             return Ok(ConfigPackDistribution(
                 crate::pack_resolve::ResolvedNamedPack {
@@ -1200,6 +1214,11 @@ impl PackInstaller {
             inspected.push(preview);
         }
         if !commit && !missing_slots.is_empty() {
+            // Incomplete previews still must reject unauthorized supplied bindings.
+            // Complete previews and installs retain the prepared-binding fence below.
+            for preview in &inspected {
+                self.fence_bindings(&preview.bindings).await?;
+            }
             return Ok(serde_json::to_string_pretty(&json!({
                 "committed": false, "ready": false, "operation": operation,
                 "package": distribution.manifest().name, "version": distribution.manifest().version,
@@ -1234,9 +1253,23 @@ impl PackInstaller {
                 .iter()
                 .map(|d| &d.0.archive)
                 .collect::<Vec<_>>(),
+            crate::pack::InstalledVia::SelfConfig,
             &environment,
         )
         .await?;
+        // Inference slot bindings pick provider accounts exactly like the
+        // graph lifecycle: every selected profile must be account-free or on
+        // its provider's default account. Fence before the preview return or
+        // any installation side effect so a documents pack cannot publish
+        // records or plugins through a binding the graph path would refuse.
+        self.fence_bindings(&prepared.inference.bindings).await?;
+        for dependency in &prepared.dependencies {
+            let bindings = match dependency {
+                crate::pack::PreparedDependency::Graph(_, bindings) => &bindings.inference_slots,
+                crate::pack::PreparedDependency::Documents { inference, .. } => &inference.bindings,
+            };
+            self.fence_bindings(bindings).await?;
+        }
         let mut schemas = Vec::new();
         for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {
             let sdl = std::str::from_utf8(distribution.0.archive.asset(path)?)?;
@@ -1270,9 +1303,14 @@ impl PackInstaller {
             &access,
             owner,
             &distribution.0.archive,
+            &dependencies
+                .iter()
+                .map(|d| &d.0.archive)
+                .collect::<Vec<_>>(),
             &prepared,
             self.home.as_deref(),
             false,
+            crate::pack::InstalledVia::SelfConfig,
             crate::pack::DriftPolicy::Refuse,
         )
         .await?;
@@ -1453,8 +1491,8 @@ impl PackInstaller {
     /// Removes an installed graph package's `PackInstallation` record and
     /// everything it lists. Refused while any of its graphs has a run that
     /// has not reached a terminal status. Never resolves the package (no
-    /// store or registry lookup); releases no plugin bytes or archive; use
-    /// `gents pack remove` for that.
+    /// store or registry lookup); releases its home and plugin store records
+    /// but no plugin bytes or archive; use `gents pack remove` for that.
     async fn remove(&self, package: &str) -> anyhow::Result<String> {
         let args = PackInstallParams {
             package: package.to_owned(),
@@ -1472,7 +1510,9 @@ impl PackInstaller {
         );
         let coordinate = format!("{}/{}", spec.namespace, spec.name);
         if let Some(home) = self.home.as_deref() {
-            anyhow::ensure!(crate::pack::read_home_install(home, &coordinate)?.is_none(), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
+            if let Some(record) = crate::pack::read_home_install(home, &coordinate)? {
+                anyhow::ensure!(!matches!(record.kind, crate::pack::PackKind::Assets | crate::pack::PackKind::Plugins), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
+            }
         }
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let report = crate::pack::remove_pack(
@@ -1482,6 +1522,16 @@ impl PackInstaller {
             crate::pack::DriftPolicy::Refuse,
         )
         .await?;
+        if let Some(home) = self.home.as_deref() {
+            crate::pack::forget_home_install(home, &coordinate)?;
+            for removed in std::iter::once(&report).chain(&report.dependencies) {
+                crate::pack::plugin_lifecycle::release_plugin_records(
+                    home,
+                    &removed.pack,
+                    &removed.documents.plugins,
+                )?;
+            }
+        }
         ordered! {
             "pack": coordinate,
             "removed": report,
@@ -2253,6 +2303,7 @@ pub fn build_self_config_tools(
             .with_process_ceiling(config.process_ceiling.clone())
             .with_held_grants(OperatorGrants {
                 pack_install: config.enable_pack_install,
+                ..Default::default()
             }),
         Err(error) => {
             tracing::warn!(

@@ -17,6 +17,8 @@ mod query;
 mod request_output;
 mod rows;
 mod sessions;
+pub(crate) mod title_text;
+pub use title_text::display_session_title;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -33,7 +35,9 @@ pub(crate) use compaction_entries::{
     save_compaction_entry, save_compaction_entry_with_requester_did,
 };
 pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
-pub use fork::{fork, fork_via_http, is_user_turn, ForkError, ForkOutcome, ForkParams};
+pub use fork::{
+    fork, fork_on, fork_via_http, is_user_turn, ForkBoundary, ForkError, ForkOutcome, ForkParams,
+};
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
 pub use history::{load_history, sequence_message_key};

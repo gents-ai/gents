@@ -8,14 +8,17 @@ use gents::{
 };
 
 pub fn fixture_pack_names() -> Vec<String> {
-    const KNOWN: [&str; 7] = [
+    const KNOWN: [&str; 10] = [
         "review_graph",
         "prepared_graph",
         "assets_fixture",
         "documents_fixture",
         "slot_fixture",
         "dependent_fixture",
+        "dependee_fixture",
         "bind_plugin_fixture",
+        "job_plugin_fixture",
+        "plugin_documents_fixture",
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packs");
     let mut names = Vec::new();
@@ -101,6 +104,7 @@ pub fn test_agent_for_node(
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         backend_auth: gents::document_config::BackendAuth::Unauthenticated,
         model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
+        service_tier: None,
         resolved_reasoning_efforts: None,
         context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,

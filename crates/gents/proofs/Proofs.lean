@@ -9,7 +9,8 @@ import Proofs.Scheduling
 import Proofs.Request
 import Proofs.RequestExecutionLease
 import Proofs.InferenceCall
-import Proofs.TitleAdmission
+import Proofs.AuxiliaryAdmission
+import Proofs.TitleText
 import Proofs.CrossMachineComposed
 import Proofs.Fleet
 import Proofs.AgentSession
@@ -43,6 +44,7 @@ import Proofs.GoalAutomation.OperatorResume
 import Proofs.GoalAutomation.ClaimedPublication
 import Proofs.GoalAutomation.ResetResume
 import Proofs.GoalAutomation.RequestHead
+import Proofs.GoalAutomation.RequestAncestry
 import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Mailbox
 import Proofs.Client
@@ -115,3 +117,5 @@ import Proofs.TaskHooks
 import Proofs.Eval
 
 import Proofs.Optimization
+
+import Proofs.PluginJob

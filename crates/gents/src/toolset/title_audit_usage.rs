@@ -109,12 +109,10 @@ fn add_usage(total: &mut AuditUsageTokens, usage: AuditUsageTokens) -> Result<()
     Ok(())
 }
 
-fn project_catalog(
-    parent_doc_id: &str,
-    parent_id: &str,
+fn coherent_calls(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<ParentAuditUsage> {
+) -> Result<BTreeMap<String, CallRow>> {
     let mut by_call = BTreeMap::<String, CallRow>::new();
     let mut by_doc = BTreeMap::<String, String>::new();
     for call in calls {
@@ -145,6 +143,16 @@ fn project_catalog(
         }
     }
 
+    Ok(by_call)
+}
+
+fn project_catalog(
+    parent_doc_id: &str,
+    parent_id: &str,
+    request_ids: &BTreeMap<String, String>,
+    calls: Vec<CallRow>,
+) -> Result<ParentAuditUsage> {
+    let by_call = coherent_calls(request_ids, calls)?;
     let mut normal_public = AuditUsageTokens::default();
     let mut parent_inclusive_audit = AuditUsageTokens::default();
     for call in by_call.values() {
@@ -162,12 +170,169 @@ fn project_catalog(
     })
 }
 
-/// A title call enters the parent-inclusive total only through its
+fn project_budget_catalog(
+    request_ids: &BTreeMap<String, String>,
+    calls: Vec<CallRow>,
+) -> Result<u64> {
+    coherent_calls(request_ids, calls)?
+        .values()
+        .try_fold(0_u64, |used, call| {
+            anyhow::ensure!(
+                call.prompt_tokens.is_some() && call.completion_tokens.is_some(),
+                "budget restart requires reported provider usage for call {}",
+                call.call_id
+            );
+            let usage = totals_for_call(call)?;
+            let charged = usage
+                .prompt_tokens
+                .checked_add(usage.completion_tokens)
+                .context("budget restart usage overflow")?;
+            anyhow::ensure!(
+                charged > 0,
+                "budget restart requires reported provider usage for call {}",
+                call.call_id
+            );
+            used.checked_add(charged)
+                .context("budget restart usage overflow")
+        })
+}
+
+struct ParentUsageCatalog {
+    parent_doc_id: String,
+    parent_id: String,
+    max_total_tokens: Option<i64>,
+    request_ids: BTreeMap<String, String>,
+    calls: Vec<CallRow>,
+}
+
+fn project_goal_catalog(
+    request_ids: &BTreeMap<String, String>,
+    calls: Vec<CallRow>,
+) -> Result<crate::goal::SessionTokenUsage> {
+    let calls = coherent_calls(request_ids, calls)?;
+    let parts = || {
+        calls
+            .values()
+            .map(|call| (call.prompt_tokens, call.completion_tokens))
+    };
+    let total = crate::provider_usage::sum_charged_from_persisted_parts(parts())?;
+    let (input, output, _) = crate::provider_usage::sum_persisted_usage_columns(
+        parts().map(|(prompt, completion)| (prompt, completion, None)),
+    );
+    Ok(crate::goal::SessionTokenUsage {
+        input: input.unwrap_or_default(),
+        output: output.unwrap_or_default(),
+        total,
+    })
+}
+
+/// Review charges follow their signed physical parent in the same snapshot as
+/// the goal baseline. Title overhead is excluded from this product budget.
+pub(crate) async fn load_session_goal_usage(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<crate::goal::SessionTokenUsage> {
+    let response = txn.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _in: ["normal", "access-review"] }} }}) {{ {} }} }}"#,
+        escape_graphql_string(node_did), escape_graphql_string(session_id),
+        crate::request_admission::SIGNED_REQUEST_RECEIPT_FIELDS,
+    )).await?;
+    let requests: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .context("goal usage query omitted AgentRequest rows")?
+            .clone(),
+    )
+    .context("decoding goal usage AgentRequest rows")?;
+    let mut by_doc = BTreeMap::new();
+    for request in &requests {
+        let doc = nonempty(request.doc_id.as_deref(), "goal physical request")?;
+        anyhow::ensure!(
+            by_doc.insert(doc, request).is_none(),
+            "duplicate goal request physical identity"
+        );
+    }
+    let mut request_ids = BTreeMap::new();
+    for request in &requests {
+        if request.purpose == Some(RequestPurpose::AccessReview) {
+            let parent_doc = nonempty(
+                request.caused_by_parent_request_doc_id.as_deref(),
+                "review parent",
+            )?;
+            let parent = by_doc
+                .get(parent_doc)
+                .context("goal review has no same-session parent")?;
+            crate::request_admission::verify_historical_auxiliary_receipt(request, parent)?;
+        }
+        request_ids.insert(
+            nonempty(request.doc_id.as_deref(), "goal physical request")?.to_owned(),
+            request.request_id.clone(),
+        );
+    }
+    if request_ids.is_empty() {
+        return Ok(crate::goal::SessionTokenUsage {
+            input: 0,
+            output: 0,
+            total: 0,
+        });
+    }
+    let docs = request_ids
+        .keys()
+        .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let response = txn.execute(&format!(
+        r#"{{ InferenceCall(filter: {{ node_did: {{ _eq: "{}" }}, request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#,
+        escape_graphql_string(node_did),
+    )).await?;
+    let raw_calls = response
+        .pointer("/data/InferenceCall")
+        .and_then(serde_json::Value::as_array)
+        .context("goal usage query omitted InferenceCall rows")?;
+    project_goal_catalog(&request_ids, decode_calls_for_node(raw_calls, node_did)?)
+}
+
+/// An auxiliary call enters the parent-inclusive total only through its
 /// historically verified signed parent link.
 pub async fn load_parent_inclusive_audit_usage(
     node: &EmbeddedNode,
     exact_parent: &AgentRequestRow,
 ) -> Result<ParentAuditUsage> {
+    let catalog = load_parent_catalog(node, exact_parent).await?;
+    project_catalog(
+        &catalog.parent_doc_id,
+        &catalog.parent_id,
+        &catalog.request_ids,
+        catalog.calls,
+    )
+}
+
+pub(crate) async fn load_parent_inclusive_budget_usage(
+    node: &EmbeddedNode,
+    request: &crate::watcher::AgentRequest,
+) -> Result<u64> {
+    let scope = AgentRequestRow {
+        doc_id: Some(request.doc_id.clone()),
+        request_id: request.request_id.clone(),
+        node_did: Some(request.node_did.clone()),
+        requester_did: request.requester_did.clone(),
+        agent_id: Some(request.agent_id.clone()),
+        session_id: Some(request.session_id.clone()),
+        ..Default::default()
+    };
+    let catalog = load_parent_catalog(node, &scope).await?;
+    anyhow::ensure!(
+        catalog.max_total_tokens == request.max_total_tokens,
+        "budget restart disagrees with the execution owner's pinned limit"
+    );
+    project_budget_catalog(&catalog.request_ids, catalog.calls)
+}
+
+async fn load_parent_catalog(
+    node: &EmbeddedNode,
+    exact_parent: &AgentRequestRow,
+) -> Result<ParentUsageCatalog> {
     let parent_doc_id = nonempty(exact_parent.doc_id.as_deref(), "parent physical request")?;
     let parent_id = nonempty(Some(&exact_parent.request_id), "parent logical request")?;
     let agent = nonempty(exact_parent.node_did.as_deref(), "parent agent")?;
@@ -203,23 +368,23 @@ pub async fn load_parent_inclusive_audit_usage(
     let response = graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ AgentRequest(filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{parent_doc}" }}, purpose: {{ _eq: "title-audit" }} }}) {{ {} }} }}"#,
+            r#"{{ AgentRequest(filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{parent_doc}" }}, purpose: {{ _in: ["title-audit", "access-review"] }} }}) {{ {} }} }}"#,
             crate::request_admission::SIGNED_REQUEST_FIELDS
         ),
-        "load title audit usage receipts",
+        "load auxiliary audit usage receipts",
     )
     .await?;
-    let titles: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
+    let auxiliaries: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
     let mut request_ids = BTreeMap::new();
     request_ids.insert(parent_doc_id.to_owned(), parent_id.to_owned());
-    for title in &titles {
-        crate::request_admission::verify_historical_title_receipt(title, parent)?;
-        let title_doc = nonempty(title.doc_id.as_deref(), "title physical request")?;
+    for request in &auxiliaries {
+        crate::request_admission::verify_historical_auxiliary_receipt(request, parent)?;
+        let request_doc = nonempty(request.doc_id.as_deref(), "auxiliary physical request")?;
         anyhow::ensure!(
             request_ids
-                .insert(title_doc.to_owned(), title.request_id.clone())
+                .insert(request_doc.to_owned(), request.request_id.clone())
                 .is_none(),
-            "duplicate title request physical identity"
+            "duplicate auxiliary request physical identity"
         );
     }
 
@@ -233,7 +398,7 @@ pub async fn load_parent_inclusive_audit_usage(
         &format!(
             r#"{{ InferenceCall(filter: {{ request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#
         ),
-        "load exact parent and title inference usage",
+        "load exact parent and auxiliary inference usage",
     )
     .await?;
     let raw_calls = response
@@ -243,13 +408,19 @@ pub async fn load_parent_inclusive_audit_usage(
         .and_then(serde_json::Value::as_array)
         .context("audit usage query omitted InferenceCall rows")?;
     let calls = decode_calls_for_node(raw_calls, agent)?;
-    project_catalog(parent_doc_id, parent_id, &request_ids, calls)
+    Ok(ParentUsageCatalog {
+        parent_doc_id: parent_doc_id.to_owned(),
+        parent_id: parent_id.to_owned(),
+        max_total_tokens: parent.max_total_tokens,
+        request_ids,
+        calls,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::{LeanRequestPurpose, LeanTitleUsageCase, LeanTitleUsageResult};
+    use crate::lean_vocab_test::{LeanTitleUsageCase, LeanTitleUsageResult};
 
     #[test]
     fn request_index_rows_preserve_exact_node_usage_and_ignore_malformed_twins() {
@@ -298,7 +469,8 @@ mod tests {
             case.parent.logical.to_string(),
         );
         for fact in &case.signed_purposes {
-            if fact.purpose == LeanRequestPurpose::TitleAudit {
+            if gents_protocol::request_admission::RequestPurpose::from(fact.purpose).is_auxiliary()
+            {
                 request_ids.insert(
                     format!("request-{}", fact.physical),
                     case.title_bindings
@@ -386,11 +558,57 @@ mod tests {
         }
     }
 
+    fn assert_goal_usage_cases() {
+        use crate::lean_vocab_test::LeanUsageBudgetResult;
+
+        for name in [
+            "empty_budget_has_no_spend",
+            "normal_public_usage",
+            "title_audit_only",
+            "normal_plus_title_parent_inclusive",
+            "access_review_usage_is_parent_inclusive_audit_only",
+            "normal_review_and_title_have_separate_goal_charges",
+            "duplicate_review_call_has_one_goal_charge",
+            "access_review_late_usage_restores_budget_observation",
+            "failed_access_review_usage_still_reduces_budget",
+        ] {
+            let case = crate::lean_vocab_test::lean_title_usage_cases()
+                .iter()
+                .find(|case| case.name == name)
+                .unwrap();
+            for after in [false, true] {
+                let (mut ids, mut calls) = native_catalog(case, after);
+                let titles: Vec<_> = case
+                    .signed_purposes
+                    .iter()
+                    .filter(|fact| RequestPurpose::from(fact.purpose) == RequestPurpose::TitleAudit)
+                    .map(|fact| format!("request-{}", fact.physical))
+                    .collect();
+                ids.retain(|doc, _| !titles.contains(doc));
+                calls.retain(|call| ids.contains_key(&call.request_doc_id));
+                let expected = if after {
+                    &case.goal_after
+                } else {
+                    &case.goal_before
+                };
+                let LeanUsageBudgetResult::Ok { used } = expected else {
+                    panic!("unexpected model goal error for {name}: {expected:?}")
+                };
+                assert_eq!(
+                    project_goal_catalog(&ids, calls).unwrap().total,
+                    *used,
+                    "{name}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn generated_title_usage_cases_bind_native_catalog_and_late_usage() {
         let names = [
             "normal_public_usage",
             "title_audit_only",
+            "access_review_usage_is_parent_inclusive_audit_only",
             "normal_plus_title_parent_inclusive",
             "title_late_usage_after_parent_terminal",
             "exact_duplicate_call_counts_once",
@@ -404,6 +622,64 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing model usage case {name}"));
             assert_totals(case, false);
             assert_totals(case, true);
+        }
+    }
+
+    #[test]
+    fn generated_budget_recovery_cases_bind_signed_catalog_usage() {
+        use crate::lean_vocab_test::LeanUsageBudgetResult;
+
+        assert_goal_usage_cases();
+
+        let names = [
+            "empty_budget_has_no_spend",
+            "normal_public_usage",
+            "normal_plus_title_parent_inclusive",
+            "normal_missing_usage_blocks_budget_restart",
+            "access_review_usage_is_parent_inclusive_audit_only",
+            "access_review_missing_usage_blocks_budget_restart",
+            "access_review_zero_usage_blocks_budget_restart",
+            "access_review_late_usage_restores_budget_observation",
+            "failed_access_review_usage_still_reduces_budget",
+            "title_late_usage_after_parent_terminal",
+            "exact_duplicate_call_counts_once",
+            "conflicting_call_id_fails_closed",
+        ];
+        let cases = crate::lean_vocab_test::lean_title_usage_cases();
+        for name in names {
+            let case = cases.iter().find(|case| case.name == name).unwrap();
+            for after in [false, true] {
+                let (request_ids, calls) = native_catalog(case, after);
+                let result = project_budget_catalog(&request_ids, calls);
+                let expected = if after {
+                    &case.budget_after
+                } else {
+                    &case.budget_before
+                };
+                match expected {
+                    LeanUsageBudgetResult::Ok { used } => {
+                        assert_eq!(result.unwrap(), *used, "{name}");
+                    }
+                    LeanUsageBudgetResult::Error { error } => {
+                        let failure = result.unwrap_err();
+                        if error == "unreported_usage" {
+                            assert!(
+                                failure
+                                    .to_string()
+                                    .contains("requires reported provider usage"),
+                                "{name}: {failure}"
+                            );
+                        } else {
+                            assert_eq!(error, "conflicting_call_id");
+                            assert_eq!(
+                                failure.to_string(),
+                                "one call ID has conflicting persisted rows",
+                                "{name}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -118,6 +118,7 @@ fn source(value: &LeanCanonicalSource) -> Result<OutputSource> {
                     LeanAuxiliaryKind::Compaction => "compaction",
                     LeanAuxiliaryKind::CompactionFallback => "compaction_fallback",
                     LeanAuxiliaryKind::Title => "title",
+                    LeanAuxiliaryKind::AccessReview => "access_review",
                 },
                 scope
             )

@@ -25,16 +25,14 @@ const RETRY_CONTINUATION: &str = "Continue the failed request from the recorded 
 
 pub(super) fn request_entry(
     mut history: Vec<TaggedMessage>,
-    content: &str,
+    authored: &Message,
     resume: bool,
     context: Option<&Message>,
     wake_notifications: &[TaggedMessage],
 ) -> Result<(Vec<TaggedMessage>, TaggedMessage)> {
     if !resume {
         history = super::wake_input::project(history, wake_notifications);
-        history.push(TaggedMessage::unassociated(Message::user(
-            content.to_owned(),
-        )));
+        history.push(TaggedMessage::unassociated(authored.clone()));
     } else if let Some(context) = context {
         history.push(TaggedMessage::unassociated(context.clone()));
     } else if history
@@ -193,6 +191,20 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         let request_id = request.request_id.clone();
         let session_id = request.session_id.clone();
         let agent_id = self.agent_config.agent_id.clone();
+        let reviewer = self.workspace_reviewer(
+            request,
+            aggregate_token_budget.clone(),
+            request_token.clone(),
+            shutdown.clone(),
+        );
+        let approval_context = crate::plugin::approval::workspace::for_request(
+            self.approval_home.as_deref(),
+            &request.node_did,
+            request.requester_did.as_deref(),
+            &agent_id,
+            workspace.workspace_cwd.as_deref(),
+        )?
+        .map(|context| context.with_reviewer(reviewer.callback.clone()));
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.agent_config.model_name.clone();
         let inference = Box::pin(async {
@@ -212,6 +224,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     .with_background_execution_registry(self.background_execution_registry.clone())
                     .with_operator_tool_root(self.operator_tool_root.clone())
                     .with_remote_tools(self.remote_tools.clone())
+                    .with_job_tools(self.job_tools.clone())
                     .with_goal_tool_authority(
                         self.agent_config.tools.goal_tools_requested(),
                         self.agent_config.tools.goal_creation_requested(),
@@ -222,6 +235,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         self.request_admission.clone(),
                         lifecycle.natural_finish_allowed(),
                     );
+                    let hook = match &self.job_driver {
+                        Some(driver) => hook.with_job_driver(driver.clone()),
+                        None => hook,
+                    };
                     hook.set_active_request_binding(
                         Some(request.request_id.clone()),
                         Some(request.doc_id.clone()),
@@ -400,10 +417,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     loop_config.context_message = request_context_message.clone();
                     loop_config.resume_from_history = resume_from_history;
                     loop_config.folded_prompts = folded_prompts.clone();
+                    let authored_prompt = request.input.authored_message(&request.content)?;
                     let authored_input = |folded: Vec<crate::agent::loop_stream::FoldedPrompt>| {
                         crate::agent::loop_stream::AuthoredInput {
                             context: request_context_message.clone(),
-                            prompt: crate::llm::message::Message::user(request.content.clone()),
+                            prompt: authored_prompt.clone(),
                             folded,
                         }
                     };
@@ -469,7 +487,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             .collect();
                         let entry = request_entry(
                             history.to_vec(),
-                            &request.content,
+                            &authored_prompt,
                             resume_from_history,
                             loop_config.context_message.as_ref(),
                             wake_notifications,
@@ -603,7 +621,12 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                         }.into()),
                                     }
                                 }
-                                _ = interrupt_rx.changed() => {
+                                _ = async {
+                                    tokio::select! {
+                                        _ = request_token.cancelled() => {},
+                                        _ = interrupt_rx.changed() => {},
+                                    }
+                                } => {
                                     request_token.cancel();
                                     inference_token.cancel();
                                     drop(stream);
@@ -895,11 +918,16 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 false,
                 crate::plugin::approval::scope_interactive(
                     request.execution_origin.as_deref() == Some("interactive"),
-                    inference,
+                    crate::plugin::approval::workspace::scope(approval_context, inference),
                 ),
             ),
         )
-        .await?;
+        .await;
+
+        if let Some(error) = reviewer.take_failure() {
+            return Err(error);
+        }
+        let outcome = outcome?;
 
         Ok(outcome)
     }
@@ -1194,6 +1222,7 @@ pub(super) mod tests {
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
+            service_tier: None,
             resolved_reasoning_efforts: None,
             context_window: 8_192,
             max_output_tokens: 1_024,
@@ -1376,7 +1405,7 @@ pub(super) mod tests {
             let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
             let (mut actual, prompt) = super::request_entry(
                 history,
-                &case["authored"].to_string(),
+                &crate::llm::message::Message::user(case["authored"].to_string()),
                 case["resume"].as_bool().unwrap(),
                 context.as_ref(),
                 &[],
@@ -2010,6 +2039,7 @@ pub(super) mod tests {
                 member_peer: "peer-member".into(),
                 member_ticket: "ticket-member".into(),
                 owner_node: agent_config.node_did().to_string(),
+                profile: crate::agent::p2p_reconcile::templates::CLIENT_TEMPLATE.into(),
                 request_digest: format!("digest-{sequence}"),
                 authorization_sequence: sequence,
                 authorization_expires_at: "2099-01-01T00:00:00Z".into(),

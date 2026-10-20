@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import type { PluginApprovalRequest } from "@source-inc/gents-desktop-client";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -50,11 +51,19 @@ const show = () =>
     <PluginAccessPrompt />,
   );
 
-const question = {
+const question: PluginApprovalRequest = {
   id: "q1",
   prompt: "Allow team/ocr to read /data/x.pdf?",
-  folder: "/data",
-  isDir: false,
+  subject: {
+    kind: "filesystem",
+    path: "/data/x.pdf",
+    folder: "/data",
+    isDir: false,
+    access: "read",
+  },
+  answers: ["once", "file", "always", "deny"],
+  sessionId: null,
+  expiresAtMs: Date.now() + 600_000,
 };
 
 const announceQueueChange = () => {
@@ -86,6 +95,31 @@ describe("PluginAccessPrompt", () => {
     show();
     await waitFor(() => expect(pending).toHaveBeenCalled());
     expect(screen.queryByText("Allow once")).toBeNull();
+  });
+
+  it("offers only the native command answers without remembering a folder", async () => {
+    const command: PluginApprovalRequest = {
+      ...question,
+      prompt: "Run git status in /source/project?",
+      subject: {
+        kind: "command",
+        argv: ["git", "status"],
+        cwd: "/source/project",
+        root: "/source",
+        executionMode: "workspace_write",
+        networkMode: "inherit",
+      },
+      answers: ["once", "deny"],
+    };
+    pending
+      .mockResolvedValueOnce({ requests: [command] })
+      .mockResolvedValue({ requests: [] });
+    show();
+    expect(await screen.findByText(command.prompt)).toBeTruthy();
+    expect(screen.queryByText("Always allow this file")).toBeNull();
+    expect(screen.queryByText("Always allow this folder")).toBeNull();
+    fireEvent.click(screen.getByText("Allow once"));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith(command.id, "once"));
   });
 
   it("registers with native cryptography when randomUUID is unavailable", async () => {

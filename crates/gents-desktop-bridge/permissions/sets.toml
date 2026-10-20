@@ -49,11 +49,13 @@ permissions = ["allow-desktop-tool-surface-explain"]
 
 [[set]]
 identifier = "chat-write"
-description = "Chat send and rename"
+description = "Chat submission, branching, and rename"
 permissions = [
   "allow-desktop-chat-send",
   "allow-desktop-pending-queue-edit",
+  "allow-desktop-pending-message-steer",
   "allow-desktop-goal-control",
+  "allow-desktop-session-fork-before-message",
   "allow-desktop-session-rename",
 ]
 
@@ -98,8 +100,8 @@ permissions = ["allow-desktop-open-external-url"]
 
 [[set]]
 identifier = "packs-read"
-description = "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model"
-permissions = ["allow-desktop-pack-installed", "allow-desktop-pack-search", "allow-desktop-pack-info", "allow-desktop-pack-whoami", "allow-desktop-pack-plugin-slots"]
+description = "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired"
+permissions = ["allow-desktop-pack-installed", "allow-desktop-pack-search", "allow-desktop-pack-info", "allow-desktop-pack-whoami", "allow-desktop-pack-plugin-slots", "allow-desktop-pack-wire-sources"]
 
 [[set]]
 identifier = "ux-plugins-read"
@@ -117,8 +119,8 @@ permissions = ["allow-desktop-plugin-call", "allow-desktop-ux-data-call"]
 
 [[set]]
 identifier = "packs-admin"
-description = "Install, update and remove packs, bind a plugin to an inference profile, and sign in to the registry"
-permissions = ["allow-desktop-pack-install", "allow-desktop-pack-update", "allow-desktop-pack-remove", "allow-desktop-pack-login", "allow-desktop-pack-logout", "allow-desktop-pack-plugin-bind"]
+description = "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry"
+permissions = ["allow-desktop-pack-install", "allow-desktop-pack-update", "allow-desktop-pack-remove", "allow-desktop-pack-login", "allow-desktop-pack-logout", "allow-desktop-pack-plugin-bind", "allow-desktop-pack-wire"]
 
 [[set]]
 identifier = "allowed-dirs-read"
@@ -154,7 +156,10 @@ permissions = [
 [[set]]
 identifier = "interrupt-control"
 description = "Interrupt request execution"
-permissions = ["allow-desktop-interrupt-request"]
+permissions = [
+  "allow-desktop-interrupt-request",
+  "allow-desktop-job-control",
+]
 
 [[set]]
 identifier = "runtime-admin"

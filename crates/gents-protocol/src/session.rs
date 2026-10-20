@@ -92,6 +92,15 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub parent_request_doc_id: Option<String>,
+    /// The request whose claim or refusal created this session through a
+    /// calling tool call, recorded once with `parent_request_doc_id` and
+    /// never rewritten (Lean `AgentSession.Provenance.openingRequestDoc`).
+    /// Readers open a caused session at it (Lean
+    /// `DurableLineage.openingRequest`); a session created before it was
+    /// recorded has none and falls back to `(created_at, _docID)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub opening_request_doc_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub fork: Option<SessionFork>,
@@ -110,6 +119,7 @@ fn provenance_is_empty(value: &Option<SessionProvenance>) -> bool {
         value.task_id.is_none()
             && value.graph_run_id.is_none()
             && value.parent_request_doc_id.is_none()
+            && value.opening_request_doc_id.is_none()
             && value.fork.is_none()
     })
 }

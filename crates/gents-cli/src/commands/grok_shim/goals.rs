@@ -414,13 +414,31 @@ mod tests {
         assert_eq!(next["params"]["update"]["_meta"]["gents/goalId"], "owned");
         drop(lines);
 
-        for mutation in [
+        let access = gents::config_client::ConfigAccess::local(node.clone());
+        access.write(
+            "grok.goal.fixture.complete",
             r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"complete",tokens_used:12}) {_docID}}"#,
+        ).await.unwrap();
+        let request = access.write(
+            "grok.goal.fixture.request",
             r#"mutation {create_AgentRequest(input:{purpose: "normal", request_id:"usage-request",node_did:"principal",session_id:"session"}) {_docID}}"#,
-            r#"mutation {create_InferenceCall(input:{call_id:"usage-call",request_id:"usage-request",node_did:"principal",prompt_tokens:20,completion_tokens:3}) {_docID}}"#,
-        ] {
-            ensure_no_errors(&node.execute(mutation).await, "seed completed usage").unwrap();
-        }
+        ).await.unwrap();
+        let request_doc = gents::graphql::escape_graphql_string(
+            &gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest").unwrap(),
+        );
+        access
+            .write(
+                "grok.goal.fixture.usage",
+                &format!(
+                    r#"mutation {{create_InferenceCall(input:{{
+                call_id:"usage-call",request_id:"usage-request",request_doc_id:"{request_doc}",
+                node_did:"principal",backend_id:"fixture",call_state:"completed",
+                prompt_tokens:20,completion_tokens:3
+            }}) {{_docID}}}}"#
+                ),
+            )
+            .await
+            .unwrap();
         cursor
             .refresh(&node, "principal", "session", &sender, &projections)
             .await

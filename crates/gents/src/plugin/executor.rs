@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use gents_protocol::job::AssetMount;
 use gents_protocol::plugin::{
     PluginEnvironmentGrant, PluginExecutionAuthority, PluginExecutionLimits,
     PluginExecutionReceipt, PluginExecutionVerdict, PluginFilesystemGrant, PluginFilesystemScope,
@@ -10,7 +11,9 @@ use gents_protocol::plugin::{
 };
 use sha2::{Digest, Sha256};
 
+use super::data::{self, DataCaller};
 use super::http_calls;
+use super::job_calls::{self, JobCaller};
 use super::model_calls::{self, ModelResolver};
 use super::rounds::{self, HostCalls};
 use super::store::{self, InstalledPlugin};
@@ -125,16 +128,18 @@ pub(super) fn initial_receipt(
 fn authority(
     manifold: &Manifold,
     bound_field: Option<&str>,
+    mounted: Option<PluginFilesystemScope>,
     model: bool,
     http: Option<&http_calls::Session>,
     tools: bool,
 ) -> PluginExecutionAuthority {
     use afterburner_core::manifold::{EnvAccess, FsAccess, NetAccess};
-    let scope = |roots: &[PathBuf]| match bound_field {
-        Some(field) => PluginFilesystemScope::BoundInput {
+    let scope = |roots: &[PathBuf]| match (&mounted, bound_field) {
+        (Some(mounted), _) => mounted.clone(),
+        (None, Some(field)) => PluginFilesystemScope::BoundInput {
             field: field.to_owned(),
         },
-        None => PluginFilesystemScope::Installed {
+        (None, None) => PluginFilesystemScope::Installed {
             roots: roots.len() as u64,
         },
     };
@@ -305,25 +310,62 @@ impl PluginExecutor {
         let user_home = allowed::user_home();
         let resolved = allowed::resolve(requested, context.workdir, user_home.as_deref(), home)
             .map_err(refuse)?;
-        let scope = allowed::Scope::load(home, context.workdir, user_home.as_deref())
+        if resolved.is_dir {
+            allowed::ensure_mount_safe(&resolved.target)
+                .map_err(|error| refuse(format!("{error:#}")))?;
+        } else if allowed::is_protected(&resolved.target) {
+            return Err(refuse(
+                "Runtime permission files cannot be shared with a plugin.".into(),
+            ));
+        }
+        let scope = approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
             .map_err(|error| refuse(format!("{error:#}")))?;
         let access = binding.call_access(input);
         let granted = scope.granted(&resolved.target);
         let covered = granted.is_some_and(|granted| granted >= access);
-        if !covered {
-            let allowed = match approval::consent(context.interactive) {
-                approval::Consent::Deny => false,
-                approval::Consent::Ask => {
-                    let request = approval::Request::new(
-                        &plugin,
-                        &resolved,
-                        access,
+        let route = approval::workspace::binding_route(
+            home,
+            || {
+                Ok(approval::workspace::BindingAction::Plugin {
+                    plugin: plugin.clone(),
+                    artifact_digest: record.digest.clone(),
+                    input_digest: json_digest(input),
+                    path: resolved.target.clone(),
+                    is_dir: resolved.is_dir,
+                    access,
+                })
+            },
+            covered || approval::workspace::within_workspace(&resolved.target),
+            || Ok(input.clone()),
+        )
+        .map_err(|error| refuse(format!("{error:#}")))?;
+        let mut consent = None;
+        if route.is_some() || !covered {
+            let allowed = match route {
+                Some(decision) => {
+                    let binding = decision.binding.clone();
+                    let allowed = approval::workspace::consent_binding(
+                        home,
+                        decision,
+                        context.interactive,
                         context.session_id.map(str::to_owned),
-                    );
-                    approval::ask(home, &request, approval::WAIT)
-                        .await
-                        .map_err(|error| refuse(format!("{error:#}")))?
+                    )
+                    .await
+                    .map_err(|error| refuse(format!("{error:#}")))?;
+                    consent = Some(approval::workspace::action_consent(home, binding));
+                    allowed
                 }
+                None => match approval::consent(context.interactive) {
+                    approval::Consent::Deny => false,
+                    approval::Consent::Ask => {
+                        let session_id = context.session_id.map(str::to_owned);
+                        let request =
+                            approval::Request::new(&plugin, &resolved, access, session_id);
+                        approval::ask(home, &request, approval::WAIT)
+                            .await
+                            .map_err(|error| refuse(format!("{error:#}")))?
+                    }
+                },
             };
             if !allowed {
                 return Err(refuse(not_allowed(
@@ -335,11 +377,13 @@ impl PluginExecutor {
                 )));
             }
         }
-        let folder_allowed = allowed::Scope::load(home, context.workdir, user_home.as_deref())
-            .map_err(|error| refuse(format!("{error:#}")))?
-            .granted(resolved.folder())
-            .is_some();
+        let folder_allowed =
+            approval::workspace::allowed_scope(home, context.workdir, user_home.as_deref())
+                .map_err(|error| refuse(format!("{error:#}")))?
+                .granted(resolved.folder())
+                .is_some();
         allowed::bind(&resolved, access, folder_allowed)
+            .map(|bound| bound.with_consent(consent))
             .map(Some)
             .map_err(refuse)
     }
@@ -350,6 +394,35 @@ impl PluginExecutor {
         input: serde_json::Value,
         tool_root: Option<&Path>,
         tool_calls: bool,
+    ) -> Result<PluginCall> {
+        self.call_data_bound_for(record, input, tool_root, tool_calls, None)
+            .await
+    }
+
+    /// [`Self::call_data_bound`] offering `data_calls.query` as `data` when
+    /// the plugin declares data.
+    pub async fn call_data_bound_for(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+        data: Option<DataCaller>,
+    ) -> Result<PluginCall> {
+        self.call_data_bound_jobs(record, input, tool_root, tool_calls, data, None)
+            .await
+    }
+
+    /// [`Self::call_data_bound_for`] also offering `job_calls` as `jobs` when
+    /// the plugin declares `job`: the first call of a job tool.
+    pub async fn call_data_bound_jobs(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+        data: Option<DataCaller>,
+        jobs: Option<JobCaller>,
     ) -> Result<PluginCall> {
         let session = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let workdir = session
@@ -375,6 +448,8 @@ impl PluginExecutor {
             input,
             bound,
             super::tool_calls::Session::for_call(tool_calls),
+            data,
+            jobs,
         )
         .await
     }
@@ -386,17 +461,59 @@ impl PluginExecutor {
         tool_root: Option<&Path>,
         tool_calls: bool,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+        self.call_data_bound_with_receipt_for(record, input, tool_root, tool_calls, None)
+            .await
+    }
+
+    /// [`Self::call_data_bound_with_receipt`] offering `data_calls.query` as
+    /// `data` when the plugin declares data.
+    pub async fn call_data_bound_with_receipt_for(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+        data: Option<DataCaller>,
+    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
-            .call_data_bound(record, input, tool_root, tool_calls)
+            .call_data_bound_for(record, input, tool_root, tool_calls, data)
             .await;
-        let receipt = match &result {
-            Ok(call) => call.receipt.clone(),
-            Err(error) => error
-                .downcast_ref::<PluginAttemptError>()
-                .map(|error| error.receipt.clone())
-                .unwrap_or(refused),
-        };
+        let receipt = receipt_of(&result, refused);
+        (result, receipt)
+    }
+
+    /// [`Self::call_data_bound_jobs`] with the receipt of the attempt.
+    pub async fn call_data_bound_jobs_with_receipt(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        tool_root: Option<&Path>,
+        tool_calls: bool,
+        data: Option<DataCaller>,
+        jobs: Option<JobCaller>,
+    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+        let refused = initial_receipt(record, &input);
+        let result = self
+            .call_data_bound_jobs(record, input, tool_root, tool_calls, data, jobs)
+            .await;
+        let receipt = receipt_of(&result, refused);
+        (result, receipt)
+    }
+
+    /// One job step of `record`, with the receipt of the attempt. A step
+    /// never gets a tool dispatcher (Lean `job_step_has_no_dispatcher`), and
+    /// is offered `data_calls` and `job_calls` when the plugin declares them.
+    pub async fn call_job_step_with_receipt(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        data: Option<DataCaller>,
+        jobs: JobCaller,
+    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+        let refused = initial_receipt(record, &input);
+        let result = self.run(record, input, None, None, data, Some(jobs)).await;
+        let receipt = receipt_of(&result, refused);
         (result, receipt)
     }
 
@@ -423,7 +540,31 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None).await
+        self.run(record, input, None, None, None, None).await
+    }
+
+    /// [`Self::call`] offering `data_calls.query` as `caller` when the plugin
+    /// declares data.
+    pub async fn call_with_data(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        caller: DataCaller,
+    ) -> Result<PluginCall> {
+        self.run(record, input, None, None, Some(caller), None)
+            .await
+    }
+
+    /// [`Self::call`] offering `job_calls` as `caller` when the plugin
+    /// declares `job` and the invocation is offered the service.
+    pub async fn call_with_jobs(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        caller: JobCaller,
+    ) -> Result<PluginCall> {
+        self.run(record, input, None, None, None, Some(caller))
+            .await
     }
 
     pub async fn call_bound(
@@ -432,7 +573,19 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: BoundDir,
     ) -> Result<PluginCall> {
-        self.run(record, input, Some(bound), None).await
+        self.run(record, input, Some(bound), None, None, None).await
+    }
+
+    /// [`Self::call`] granting `bound` and offering `data_calls.query` as
+    /// `data`, each when given (a callback invocation).
+    pub async fn call_bound_data(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+        bound: Option<BoundDir>,
+        data: Option<DataCaller>,
+    ) -> Result<PluginCall> {
+        self.run(record, input, bound, None, data, None).await
     }
 
     async fn run(
@@ -441,6 +594,8 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: Option<BoundDir>,
         tools: Option<super::tool_calls::Session>,
+        data: Option<DataCaller>,
+        jobs: Option<JobCaller>,
     ) -> Result<PluginCall> {
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
@@ -451,6 +606,9 @@ impl PluginExecutor {
                 "plugin {coordinate} was reinstalled while this call was being authorized; call again"
             );
             let record = &current;
+            if let Some(bound) = &bound {
+                bound.validate_invocation(&coordinate, &record.digest, &json_digest(&input))?;
+            }
             let admitted = self.admit(record)?;
             let mut input = input.clone();
             if record.declaration.service.is_some() {
@@ -464,16 +622,24 @@ impl PluginExecutor {
                 model,
                 http: http_calls::Session::for_grant(&coordinate, &admitted.runner.manifold)?,
                 tools,
+                data: data::Session::for_call(record.declaration.data.as_ref(), data),
+                jobs: job_calls::Session::for_call(record.declaration.job.0, &coordinate, jobs),
             };
             let first_input = if calls.is_empty() {
                 input.clone()
             } else {
                 calls.prepare_input(input.clone())?
             };
-            let (effective_input, manifold) = match &bound {
-                Some(bound) => admitted.runner.prepare_bound(&first_input, bound)?,
-                None => (first_input, admitted.runner.manifold.clone()),
+            let mounts = match &self.home {
+                Some(home) if !record.declaration.asset_mounts.is_empty() => {
+                    super::mounts::resolve(home, record, None, None)?
+                }
+                _ => Vec::new(),
             };
+            let (effective_input, manifold, mounted) =
+                admitted
+                    .runner
+                    .prepare_mounted(&first_input, bound.as_ref(), &mounts)?;
             receipt.input_digest = json_digest(&effective_input);
             receipt.limits = Some(PluginExecutionLimits {
                 fuel: admitted.budget.fuel,
@@ -488,6 +654,7 @@ impl PluginExecutor {
             receipt.authority = Some(authority(
                 &manifold,
                 bound_field,
+                mounted,
                 calls.model.is_some(),
                 calls.http.as_ref(),
                 calls.tools.is_some(),
@@ -500,6 +667,7 @@ impl PluginExecutor {
                 input,
                 admitted.budget,
                 bound,
+                mounts,
             )
             .await
             .inspect_err(|error| {
@@ -610,6 +778,21 @@ pub async fn call_runner(
     drive(coordinate, runner, None, input, budget, bound, None).await
 }
 
+/// The receipt of a finished attempt: the call's own, the one its failure
+/// carries, or `refused` when it failed before running.
+fn receipt_of(
+    result: &Result<PluginCall>,
+    refused: PluginExecutionReceipt,
+) -> PluginExecutionReceipt {
+    match result {
+        Ok(call) => call.receipt.clone(),
+        Err(error) => error
+            .downcast_ref::<PluginAttemptError>()
+            .map(|error| error.receipt.clone())
+            .unwrap_or(refused),
+    }
+}
+
 async fn drive(
     coordinate: &str,
     runner: Arc<PluginRunner>,
@@ -623,8 +806,10 @@ async fn drive(
         model,
         http: http_calls::Session::for_grant(coordinate, &runner.manifold)?,
         tools,
+        data: None,
+        jobs: None,
     };
-    drive_with_calls(coordinate, runner, calls, input, budget, bound).await
+    drive_with_calls(coordinate, runner, calls, input, budget, bound, Vec::new()).await
 }
 
 async fn drive_with_calls(
@@ -634,10 +819,10 @@ async fn drive_with_calls(
     input: serde_json::Value,
     budget: PluginBudget,
     bound: Option<BoundDir>,
+    mounts: Vec<AssetMount>,
 ) -> Result<PluginOutcome> {
-    let round: rounds::Round = Arc::new(move |input, budget| match &bound {
-        Some(bound) => runner.call_bound(&input, &budget, bound),
-        None => runner.call(&input, &budget),
+    let round: rounds::Round = Arc::new(move |input, budget| {
+        runner.call_mounted(&input, &budget, bound.as_ref(), &mounts)
     });
     if calls.is_empty() {
         tokio::task::spawn_blocking(move || round(input, budget))

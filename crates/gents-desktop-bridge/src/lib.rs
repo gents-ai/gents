@@ -9,7 +9,10 @@ pub mod contract;
 pub mod error;
 pub mod host;
 pub mod host_browser;
+pub mod inference_setup;
 pub mod interrupt;
+pub mod job_control;
+mod local_pairing;
 pub mod logging;
 pub mod package_tools;
 #[cfg(feature = "tauri-host")]

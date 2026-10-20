@@ -142,6 +142,18 @@ pub async fn desktop_chat_send(
 }
 
 #[tauri::command]
+pub async fn desktop_session_fork_before_message(
+    request: crate::types::SessionForkBeforeRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::SessionForkResult, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::fork_session_before_message(&core, request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
 pub async fn desktop_session_rename(
     request: SessionRenameRequest,
     state: State<'_, DesktopAppState>,
@@ -237,6 +249,19 @@ pub async fn desktop_pending_queue_edit(
         return Err(BridgeError::untyped("desktop client is not running"));
     };
     crate::commands::edit_pending_queue(core.as_ref(), request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn desktop_pending_message_steer(
+    request: crate::types::PendingMessageSteerRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::PendingQueueEditResult, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+    crate::commands::steer_pending_message(core.as_ref(), request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }

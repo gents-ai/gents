@@ -1054,6 +1054,7 @@ async fn stage_goal_and_claim(
     }
 
     let status = initial_state.status;
+    let baseline = session_token_usage_in_txn(txn, node_did, session_id).await?;
     let active_started_field = optional_string_graphql_field(
         "active_started_at",
         status.accrues_active_time().then_some(now),
@@ -1063,7 +1064,7 @@ async fn stage_goal_and_claim(
             goal_id: "{}", creation_key: "{}",
             session_id: "{escaped_session}", node_did: "{escaped_did}",
             objective: "{}", status: "{}", {}
-            tokens_used: 0, active_time_seconds: 0, {active_started_field}
+            tokens_used: 0, token_usage_baseline: {baseline}, active_time_seconds: 0, {active_started_field}
             consecutive_blocked_audits: {}, continuation_sequence: 0,
             wrapup_requested: {}, wrapup_completed: {},
             infrastructure_retry_count: 0, created_at: "{}", updated_at: "{}"
@@ -1091,7 +1092,7 @@ async fn stage_goal_and_claim(
             status: status.as_str().to_string(),
             token_budget,
             tokens_used: Some(0),
-            token_usage_baseline: Some(0),
+            token_usage_baseline: Some(baseline),
             assignment_root_request_doc_id: None,
             active_time_seconds: Some(0),
             active_started_at: status.accrues_active_time().then(|| now.to_string()),
@@ -2319,6 +2320,7 @@ async fn set_goal_in_txn(
     let escaped_objective = escape_graphql_string(&objective);
     let escaped_now = escape_graphql_string(&now_string);
     let budget_field = optional_int_graphql_field("token_budget", budget);
+    let baseline = session_token_usage_in_txn(txn, node_did, session_id).await?;
     let active_started_field = optional_string_graphql_field(
         "active_started_at",
         status.accrues_active_time().then_some(now_string.as_str()),
@@ -2333,6 +2335,7 @@ async fn set_goal_in_txn(
                 status: "{status}",
                 {budget_field}
                 tokens_used: 0,
+                token_usage_baseline: {baseline},
                 active_time_seconds: 0,
                 {active_started_field}
                 consecutive_blocked_audits: {blocked_audits},
@@ -2571,6 +2574,16 @@ pub async fn claim_retry_continuation(
         .is_some_and(mutation_returned_rows))
 }
 
+/// Tokens charged against a session's budget. `input` and `output` are the
+/// durable `InferenceCall` prompt and completion columns; `total` is their
+/// charged sum (`crate::provider_usage::sum_charged_from_persisted_parts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionTokenUsage {
+    pub input: u64,
+    pub output: u64,
+    pub total: u64,
+}
+
 pub async fn session_token_usage(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -2590,56 +2603,18 @@ async fn session_token_usage_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
-    let node_did = escape_graphql_string(node_did);
-    let session_id = escape_graphql_string(session_id);
-    let request_query = format!(
-        r#"{{
-            AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
-        }}"#
-    );
-    let response = txn.execute_local_response(&request_query).await?;
-    let mut request_ids = rows::<serde_json::Value>(&response, "AgentRequest")?
-        .into_iter()
-        .filter_map(|row| {
-            row.get("request_id")
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned)
-        })
-        .collect::<Vec<_>>();
-    request_ids.sort();
-    request_ids.dedup();
-    if request_ids.is_empty() {
-        return Ok(0);
-    }
-    let request_ids = request_ids
-        .iter()
-        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let query = format!(
-        r#"{{
-            InferenceCall(
-                filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _in: [{request_ids}] }} }}
-            ) {{ prompt_tokens completion_tokens }}
-        }}"#
-    );
-    #[derive(Deserialize)]
-    struct UsageRow {
-        #[serde(default)]
-        prompt_tokens: Option<i64>,
-        #[serde(default)]
-        completion_tokens: Option<i64>,
-    }
-    let response = txn.execute_local_response(&query).await?;
-    let usage_rows: Vec<UsageRow> =
-        rows(&response, "InferenceCall").context("decoding goal inference usage")?;
-    let charged = crate::provider_usage::sum_charged_from_persisted_parts(
-        usage_rows
-            .into_iter()
-            .map(|row| (row.prompt_tokens, row.completion_tokens)),
-    )
-    .context("summing goal inference usage")?;
-    Ok(i64::try_from(charged).unwrap_or(i64::MAX))
+    let usage = session_token_usage_breakdown_in_txn(txn, node_did, session_id).await?;
+    Ok(i64::try_from(usage.total).unwrap_or(i64::MAX))
+}
+
+pub(crate) async fn session_token_usage_breakdown_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<SessionTokenUsage> {
+    crate::toolset::load_session_goal_usage(txn, node_did, session_id)
+        .await
+        .context("summing goal inference usage")
 }
 
 pub async fn refresh_goal_usage(
@@ -2700,6 +2675,73 @@ fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn session_token_usage_breakdown_sums_to_the_total() {
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        let owner = "did:key:z6MkTestOwner";
+        let request = format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "usage-request", purpose: "normal", node_did: "{owner}",
+                session_id: "usage-session", agent_id: "general", content: "test",
+                lifecycle_state: "completed", backend_id: "",
+                created_at: "2026-07-15T00:00:00Z", retry_count: 0, max_retries: 0
+            }}) {{ _docID }} }}"#
+        );
+        let response = node.execute(&request).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let request_doc_id =
+            crate::graphql::single_mutation_document(&response, "create_AgentRequest")
+                .unwrap()
+                .and_then(|document| document.get("_docID"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_owned();
+        for (seq, prompt, completion) in [(1, 1000, 50), (2, 200, 7)] {
+            let call = format!(
+                r#"mutation {{ add_InferenceCall(input: {{
+                    call_id: "usage-call-{seq}", runtime_instance_id: "goal-test",
+                    request_id: "usage-request", request_doc_id: "{request_doc_id}", call_seq: {seq}, backend_id: "backend-test",
+                    agent_id: "test", node_did: "{owner}", call_kind: "inference", attempt: 1,
+                    call_state: "completed", queued_at: "2026-07-15T00:00:00Z",
+                    started_at: "2026-07-15T00:00:00Z", ended_at: "2026-07-15T00:00:01Z",
+                    priority: 0, queue_depth_at_enqueue: 0, controller_generation: 1,
+                    backend_config_fingerprint: "goal-test",
+                    prompt_tokens: {prompt}, completion_tokens: {completion}
+                }}) {{ _docID }} }}"#
+            );
+            let response = node.execute(&call).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let usage = crate::config_client::ConfigAccess::transact_local_readonly(
+            &node,
+            None,
+            "goal.session_usage_breakdown_test",
+            |txn| {
+                Box::pin(async move {
+                    session_token_usage_breakdown_in_txn(txn, owner, "usage-session").await
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            usage,
+            SessionTokenUsage {
+                input: 1200,
+                output: 57,
+                total: 1257
+            }
+        );
+        assert_eq!(usage.input + usage.output, usage.total);
+        assert_eq!(
+            session_token_usage(&node, owner, "usage-session")
+                .await
+                .unwrap(),
+            1257
+        );
+    }
 
     #[tokio::test]
     async fn auto_resume_field_round_trips_through_the_live_schema() {

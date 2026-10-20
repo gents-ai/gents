@@ -4,8 +4,17 @@ import type {
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
-import { memo, useContext } from "react";
+import { memo, useContext, useState } from "react";
 import { TranscriptNavigationContext } from "./TranscriptNavigation.js";
+import {
+  actionCommand,
+  actionEntries,
+  actionKind,
+  actionItemKeys,
+  actionStatus,
+  actionTitle,
+  type ActionEntry,
+} from "./actionPresentation.js";
 
 import { CancelCauseBadge, CancelCauseDetails } from "../cancelUx/index.js";
 import { CommandDenialToolItem } from "../commandDenial/index.js";
@@ -22,17 +31,21 @@ function statusClass(statusKind: string) {
       return "tool-item-dot tool-item-dot-success";
     case "error":
       return "tool-item-dot tool-item-dot-error";
+    case "cancelled":
+      return "tool-item-dot tool-item-dot-cancelled";
     default:
       return "tool-item-dot tool-item-dot-running";
   }
 }
 
 function statusLabel(tool: RenderedToolCallView) {
-  switch (tool.statusKind.toLowerCase()) {
+  switch (actionStatus(tool)) {
     case "success":
       return "completed";
     case "error":
       return "failed";
+    case "cancelled":
+      return "stopped";
     case "unknown":
       return "unknown";
     default:
@@ -96,9 +109,16 @@ function ToolPayloadAvailability({ tool }: { tool: RenderedToolCallView }) {
     case "ready":
       return null;
     case "loading":
+      if (tool.partialOutputTail) return null;
       return (
-        <p role="status" data-testid={`tool-output-loading-${tool.itemKey}`}>
-          Loading tool output…
+        <p
+          className="tool-output-notice"
+          role="status"
+          data-testid={`tool-output-loading-${tool.itemKey}`}
+        >
+          {tool.statusKind.toLowerCase() === "running"
+            ? "Waiting for output"
+            : "Loading output"}
         </p>
       );
     case "denied":
@@ -123,7 +143,7 @@ function commonBadges(tool: RenderedToolCallView) {
         <span className="tool-item-mode">{tool.awaitMode}</span>
       ) : null}
       <span
-        className={`tool-item-status tool-item-status-${tool.statusKind.toLowerCase()}`}
+        className={`tool-item-status tool-item-status-${actionStatus(tool)}`}
       >
         {statusLabel(tool)}
       </span>
@@ -169,7 +189,7 @@ function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
   }
   const view = tool.presentation;
   if (view.kind === "command") {
-    const exit = commandExit(view);
+    const exit = actionStatus(tool) === "cancelled" ? null : commandExit(view);
     return (
       <>
         <span aria-hidden="true" className="tool-command-prompt mono">
@@ -275,16 +295,64 @@ function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
   );
 }
 
-function ToolBody({ tool }: { tool: RenderedToolCallView }) {
+function ExecutionDetails({ tool }: { tool: RenderedToolCallView }) {
+  const command =
+    tool.reconstruction.state === "ready" &&
+    tool.presentation.kind === "command"
+      ? tool.presentation
+      : null;
+  const fields = [
+    ["Tool", tool.toolName],
+    ["Status", statusLabel(tool)],
+    [
+      "Duration",
+      command?.durationMs != null ? formatDuration(command.durationMs) : null,
+    ],
+    ["Working directory", command?.cwd],
+    ["Exit code", command?.exitCode != null ? String(command.exitCode) : null],
+    ["Execution", tool.awaitMode],
+    ["Deadline", tool.deadlineAt],
+    ["Sandbox", command?.executionMode],
+    ["Network", command?.networkMode],
+  ].filter((field): field is [string, string] => Boolean(field[1]));
+  return (
+    <details className="tool-execution-details">
+      <summary>Execution details</summary>
+      <dl>
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
+function ToolBody({
+  tool,
+  compactDetails = false,
+  commandHint,
+}: {
+  tool: RenderedToolCallView;
+  compactDetails?: boolean;
+  commandHint?: string | null;
+}) {
   const navigation = useContext(TranscriptNavigationContext);
   const view = tool.presentation;
   const payloadReady = tool.reconstruction.state === "ready";
   return (
     <div className="tool-item-body">
+      {compactDetails &&
+      commandHint &&
+      (!payloadReady || view.kind !== "command") ? (
+        <Payload label="Command" value={commandHint} />
+      ) : null}
       {tool.cancelCause ? (
         <CancelCauseDetails cause={tool.cancelCause} />
       ) : null}
-      {tool.awaitMode || tool.deadlineAt ? (
+      {!compactDetails && (tool.awaitMode || tool.deadlineAt) ? (
         <div
           className="tool-meta muted small"
           data-testid={`tool-lifecycle-${tool.itemKey}`}
@@ -324,10 +392,14 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
         )}
       {payloadReady && view.kind === "command" ? (
         <>
-          {view.durationMs != null ||
-          view.cwd ||
-          view.executionMode ||
-          view.networkMode ? (
+          {compactDetails ? (
+            <Payload label="Command" value={view.command} />
+          ) : null}
+          {!compactDetails &&
+          (view.durationMs != null ||
+            view.cwd ||
+            view.executionMode ||
+            view.networkMode) ? (
             <div className="tool-meta muted small">
               {view.durationMs != null ? (
                 <span>{formatDuration(view.durationMs)}</span>
@@ -341,8 +413,14 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               ) : null}
             </div>
           ) : null}
-          <Payload label="stdout" value={view.stdout} />
-          <Payload label="stderr" value={view.stderr} />
+          <Payload
+            label={compactDetails ? "Output" : "stdout"}
+            value={view.stdout}
+          />
+          <Payload
+            label={compactDetails ? "Errors" : "stderr"}
+            value={view.stderr}
+          />
           <Payload label="output" value={view.fallbackOutput} />
         </>
       ) : null}
@@ -414,11 +492,23 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
         </>
       ) : null}
       <LiveOutput tool={tool} />
+      {compactDetails ? <ExecutionDetails tool={tool} /> : null}
     </div>
   );
 }
 
-function UnifiedToolItem({ tool }: { tool: RenderedToolCallView }) {
+function UnifiedToolItem({
+  tool,
+  launcher,
+  compactDetails = false,
+  initiallyExpanded = false,
+}: {
+  tool: RenderedToolCallView;
+  launcher?: RenderedToolCallView;
+  compactDetails?: boolean;
+  initiallyExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const live =
     tool.statusKind.toLowerCase() === "running" &&
     Boolean(tool.partialOutputTail);
@@ -426,39 +516,109 @@ function UnifiedToolItem({ tool }: { tool: RenderedToolCallView }) {
     <details
       className={`tool-item tool-item-${tool.presentation.kind}`}
       data-testid={`tool-${tool.itemKey}`}
-      open={live}
+      open={compactDetails ? expanded : live}
+      onToggle={
+        compactDetails
+          ? (event) => setExpanded(event.currentTarget.open)
+          : undefined
+      }
     >
       <summary className="tool-item-summary">
-        <span className={statusClass(tool.statusKind)} aria-hidden="true" />
+        <span className={statusClass(actionStatus(tool))} aria-hidden="true" />
         <span className="tool-item-summary-content">
-          <ToolSummary tool={tool} />
+          {compactDetails ? (
+            <ActionSummary tool={tool} launcher={launcher} />
+          ) : (
+            <ToolSummary tool={tool} />
+          )}
         </span>
         <span aria-hidden="true" className="tool-item-action">
-          ▸
+          <svg viewBox="0 0 16 16">
+            <path d="m6 4 4 4-4 4" />
+          </svg>
         </span>
       </summary>
-      <ToolBody tool={tool} />
+      {!compactDetails || expanded ? (
+        <ToolBody
+          tool={tool}
+          compactDetails={compactDetails}
+          commandHint={actionCommand({ tool, launcher })}
+        />
+      ) : null}
+      {launcher && expanded ? (
+        <details className="tool-launch-details">
+          <summary>Launch details</summary>
+          <ToolBody tool={launcher} compactDetails />
+        </details>
+      ) : null}
     </details>
   );
 }
 
-export function ToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
+export function ToolGroup({
+  tools,
+  compactDetails = false,
+  expandedItemKey,
+}: {
+  tools: RenderedToolCallView[];
+  compactDetails?: boolean;
+  expandedItemKey?: string;
+}) {
   return (
     <section className="tool-group">
-      {tools.map((tool) => {
+      {(compactDetails
+        ? actionEntries(tools)
+        : tools.map((tool) => ({ tool, launcher: undefined }))
+      ).map(({ tool, launcher }) => {
+        const itemKey =
+          expandedItemKey &&
+          actionItemKeys({ tool, launcher }).includes(expandedItemKey)
+            ? expandedItemKey
+            : tool.itemKey;
         const denial =
           tool.statusKind.toLowerCase() === "error" ? tool.denial : null;
         return denial ? (
-          <CommandDenialToolItem
-            denial={denial}
-            key={tool.itemKey}
-            tool={tool}
-          />
+          <CommandDenialToolItem denial={denial} key={itemKey} tool={tool} />
         ) : (
-          <UnifiedToolItem key={tool.itemKey} tool={tool} />
+          <UnifiedToolItem
+            key={itemKey}
+            tool={tool}
+            launcher={launcher}
+            compactDetails={compactDetails}
+            initiallyExpanded={itemKey === expandedItemKey}
+          />
         );
       })}
     </section>
+  );
+}
+
+function ActionSummary(entry: ActionEntry) {
+  const { tool } = entry;
+  const title = actionTitle(entry);
+  const kind = actionKind(entry);
+  const command = actionCommand(entry);
+  const status = actionStatus(tool);
+  return (
+    <>
+      {kind ? (
+        <span className="tool-kind">{kind === "command" ? "$" : kind}</span>
+      ) : null}
+      <span className={`tool-primary${command ? " mono" : ""}`} title={title}>
+        {title}
+      </span>
+      {status !== "success" ? (
+        <span className={`tool-action-status is-${status}`}>
+          {statusLabel(tool)}
+        </span>
+      ) : null}
+      {tool.cancelCause ? (
+        <CancelCauseBadge
+          cause={tool.cancelCause}
+          className="tool-item-cause-badge"
+        />
+      ) : null}
+    </>
   );
 }
 

@@ -48,6 +48,11 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         partial_output_tail: tool.partial_output_tail.clone(),
         denial: tool.denial.clone(),
         cancel_cause: tool.cancel_cause.clone(),
+        job_progress: tool.job_progress.clone(),
+        job_handle: tool.job_handle.clone(),
+        job_state: tool.job_state,
+        job_outcome: tool.job_outcome.clone(),
+        job_next_calls: tool.job_next_calls.clone(),
     }
 }
 
@@ -104,6 +109,7 @@ fn render_timeline_order(
                         item_key: format!("pending-{}", pending_turn.request_id),
                         request_id: pending_turn.request_id.clone(),
                         content: pending_turn.content.clone(),
+                        captured_context: pending_turn.captured_context.clone(),
                         selected_skill_ids: pending_turn.selected_skill_ids.clone(),
                         lifecycle_state: pending_turn.lifecycle_state.clone(),
                         folded_into_request_id: pending_turn.folded_into_request_id.clone(),
@@ -150,14 +156,18 @@ pub(super) fn build_rendered_timeline(
             .unwrap_or("assistant");
         let is_user = role.eq_ignore_ascii_case("user");
         let automated = message.origin.clone().filter(|_| is_user);
-        let is_background_control = is_user && message.runtime_control && automated.is_none();
+        let is_background_control = is_user && message.runtime_control;
         let unresolved = message.reconstruction_state != ReconstructionState::Ready;
         let keep = !is_background_control
             && (unresolved
                 || (!message.has_tool_results
                     && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
                         || !normalize_timeline_text(message.reasoning.as_deref()).is_empty()
-                        || message.has_tool_calls)));
+                        || message.has_tool_calls
+                        || message
+                            .captured_context
+                            .as_ref()
+                            .is_some_and(|contexts| !contexts.is_empty()))));
         if !keep {
             continue;
         }
@@ -183,7 +193,14 @@ pub(super) fn build_rendered_timeline(
                 }),
             )
         } else if is_user {
-            match (normalized_content.clone(), unresolved) {
+            match (
+                normalized_content.clone(),
+                unresolved
+                    || message
+                        .captured_context
+                        .as_ref()
+                        .is_some_and(|contexts| !contexts.is_empty()),
+            ) {
                 (Some(_), _) | (None, true) => (
                     true,
                     Some(RenderedTimelineItem::UserMessage {
@@ -193,6 +210,7 @@ pub(super) fn build_rendered_timeline(
                         input_request_id: message.input_request_id.clone(),
                         sequence: message.sequence,
                         content: normalized_content.clone(),
+                        captured_context: message.captured_context.clone(),
                         timestamp: normalize_optional(message.timestamp.as_deref()),
                         reconstruction,
                     }),
@@ -282,6 +300,7 @@ mod tests {
             role: Some("user".to_string()),
             display_role: Some("user".to_string()),
             display_content: Some(content.to_string()),
+            captured_context: None,
             reasoning: None,
             has_tool_calls: false,
             has_tool_results: false,
@@ -323,6 +342,11 @@ mod tests {
             completed_at: None,
             denial: None,
             cancel_cause: None,
+            job_progress: None,
+            job_handle: None,
+            job_state: None,
+            job_outcome: None,
+            job_next_calls: Vec::new(),
         };
         let rendered = render_tool_call(tool.clone());
 
@@ -371,6 +395,25 @@ mod tests {
     }
 
     #[test]
+    fn internal_completions_remain_hidden_when_their_origin_is_known() {
+        for text in [
+            "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"completed\"><result>finished</result></tool-completion>",
+            "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"failed\"><result>error: no bin target named `verad`</result><reason>tool_failed</reason></tool-completion>",
+            gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+        ] {
+            let message = MessageView {
+                runtime_control: true,
+                origin: Some(crate::types::RequestOriginView::BackgroundCompletion),
+                input_text: Some(text.into()),
+                ..user_message("internal-completion", 1, text)
+            };
+            assert!(build_rendered_timeline(&[message], &[], &[]).is_empty());
+            assert!(matches!(build_rendered_timeline(&[user_message("person", 1, text)], &[], &[]).as_slice(),
+                [RenderedTimelineItem::UserMessage { content: Some(content), .. }] if content == text));
+        }
+    }
+
+    #[test]
     fn user_text_that_looks_like_a_control_message_still_renders() {
         let content = gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         let messages = vec![user_message("literal-user-text", 1, content)];
@@ -384,5 +427,34 @@ mod tests {
                 ..
             } if rendered.as_deref() == Some(content)
         ));
+    }
+    #[test]
+    fn attachment_only_input_is_visible_without_exposing_runtime_controls() {
+        let capture = serde_json::from_value(serde_json::json!({
+            "kind":"file", "source":"editor", "capturedAt":"2026-10-20T00:00:00Z",
+            "uri":"file:///second/context.rs", "workspaceUri":"file:///second",
+            "terminalName":null, "version":41, "unsaved":true, "range":null,
+            "content":"captured buffer"
+        }))
+        .unwrap();
+        let visible = MessageView {
+            display_content: None,
+            captured_context: Some(vec![capture]),
+            ..user_message("captured-user-input", 1, "")
+        };
+        let hidden = MessageView {
+            runtime_control: true,
+            message_key: "runtime-control".into(),
+            ..visible.clone()
+        };
+        let timeline = build_rendered_timeline(&[visible.clone(), hidden], &[], &[]);
+        assert!(
+            matches!(timeline.as_slice(), [RenderedTimelineItem::UserMessage {content:None, captured_context:Some(contexts), ..}] if contexts.len()==1)
+        );
+        let empty = MessageView {
+            captured_context: Some(Vec::new()),
+            ..visible
+        };
+        assert!(build_rendered_timeline(&[empty], &[], &[]).is_empty());
     }
 }

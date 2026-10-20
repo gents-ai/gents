@@ -36,6 +36,7 @@ env:
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
+  RUST_TEST_THREADS: ${{ vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
   # The host service and clients normalize every registered checkout root.
   SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
@@ -85,8 +86,36 @@ jobs:
       - name: Run build attribution parser self-test
         run: scripts/measure-gents-build-attribution.sh self-test
 
+      - name: Check runner build-space reclamation
+        run: python3 .github/scripts/test-rust-build-space.py
+
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
+
+      - name: Check compiler-tool download recovery
+        run: |
+          bash -n .github/scripts/setup-afterburner-toolchains.sh
+          shellcheck .github/scripts/setup-afterburner-toolchains.sh
+          python3 .github/scripts/test-afterburner-downloads.py
+
+  publish-control-tests:
+    # Focused, network-free tests for the staged-prerelease publication
+    # control script (fake gh). No secrets; read-only token.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run publication control tests
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/publish-venv"
+          "${RUNNER_TEMP}/publish-venv/bin/pip" install --quiet pyyaml==6.0.2
+          "${RUNNER_TEMP}/publish-venv/bin/python" .github/scripts/test-publish-staged-prerelease.py
 
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
@@ -332,6 +361,11 @@ jobs:
         run: |
           cargo test -p gents --lib runtime_status::tests::
           cargo test -p gents --lib toolset::tests::read_only_bash
+          cargo test -p gents --lib managed_exec::
+          cargo test -p gents --lib artifact_
+          # Live-output byte evidence for background tools must fail the PR
+          # that breaks it, not the post-merge main run (#2686).
+          cargo test -p gents --lib hook::tests::r4c_list_background_tools::
           cargo test -p gents --lib callback::
           cargo test -p gents --test onboarding_evals
           cargo test -p gents --test eval_runner_canary
@@ -381,6 +415,7 @@ jobs:
         env:
           RUST_MIN_STACK: 16777216
         run: |
+          python3 .github/scripts/ensure-rust-build-space.py "$CARGO_TARGET_DIR"
           cargo build --profile test -p gents-cli -p gents-client-host -p gents-media-host --bins
           cargo test -p gents-client-host --features runtime-e2e --test runtime
 
@@ -685,3 +720,23 @@ jobs:
 
       - name: Run triage-hygiene tests
         run: npm run test:triage
+
+  notary-control-tests:
+    # Focused, network-free tests for the staged-artifact notarization control
+    # scripts. They need real macOS ditto/shasum, so they run on a hosted
+    # macOS runner with no secrets. Draft PRs run them too.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run notarization control tests
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/notary-venv"
+          "${RUNNER_TEMP}/notary-venv/bin/pip" install --quiet pyyaml==6.0.2
+          bash -n .github/scripts/notarize-staged-artifact.sh
+          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-notarize-staged-artifact.py
+          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-rc1-notary-auth.py

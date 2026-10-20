@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use defra_node::EmbeddedNode;
+use gents::config_client::ConfigAccess;
 use gents::defra_node::QueryRequest;
-use gents::graphql::single_mutation_document;
+use gents::graphql::{ensure_no_errors, single_mutation_document};
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -10,7 +13,7 @@ use gents_protocol::output::{
     OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, ReasoningPart, SegmentRun,
     SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
 };
-use std::sync::Arc;
+use serde_json::json;
 
 #[path = "../../../../gents/tests/support/streaming_backend.rs"]
 #[expect(
@@ -331,7 +334,7 @@ pub(super) async fn next_request_sequence(node: &EmbeddedNode, request_doc_id: &
 /// Seed one physical tool row through a matching canonical ToolCall admission
 /// and, for terminal lifecycle states, one exact ToolDelivery observation.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn seed_canonical_tool_call(
+pub(crate) async fn seed_canonical_tool_call(
     node: &Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequestRow,
     tool_call_id: &str,
@@ -602,6 +605,86 @@ pub(super) async fn seed_canonical_tool_call(
     tool_doc_id
 }
 
+/// Publish the background receipt an accepted background row carries before
+/// its terminal, in the shape `publish_background_receipt_in_txn` writes.
+pub(crate) async fn seed_background_receipt(
+    node: &EmbeddedNode,
+    request: &gents_protocol::row::AgentRequestRow,
+    tool_doc_id: &str,
+    tool_call_id: &str,
+) {
+    use gents_protocol::output::ToolResultPart;
+
+    let node_did = request.node_did.as_deref().expect("fixture owner");
+    let session_id = request.session_id.as_deref().expect("fixture session");
+    let request_doc_id = request.doc_id.as_deref().expect("fixture request doc");
+    let key = format!("{session_id}:background-receipt:{tool_doc_id}");
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let text = "started";
+    let segment = OutputSegment {
+        node_did: node_did.into(),
+        requester_did: request.requester_did.clone(),
+        session_id: session_id.into(),
+        request_doc_id: request_doc_id.into(),
+        source: OutputSource::Authored { key: key.clone() },
+        writer: OutputWriter::ToolExecution {
+            tool_call_doc_id: tool_doc_id.into(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: text.len() as u32,
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::ToolOutput,
+            }),
+        }],
+        payload: text.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![text.len() as u64],
+        }),
+        created_at: created_at.clone(),
+    };
+    let close_doc_id = insert_output_segment(node, &segment).await;
+    let sequence = next_request_sequence(node, request_doc_id).await;
+    insert_transcript_header(
+        node,
+        &TranscriptMessage {
+            message_key: key,
+            session_id: session_id.into(),
+            node_did: node_did.into(),
+            requester_did: request.requester_did.clone(),
+            request_doc_id: Some(request_doc_id.into()),
+            publication: MessagePublication::ToolDelivery {
+                tool_call_doc_id: tool_doc_id.into(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence,
+            role: MessageRole::User,
+            native_id: None,
+            blocks: vec![MessageBlock::ToolResult {
+                tool_call_doc_id: tool_doc_id.into(),
+                id: tool_call_id.into(),
+                call_id: None,
+                parts: vec![ToolResultPart::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id,
+                            stream: 0,
+                        },
+                        presentation: PayloadPresentation::Full,
+                    },
+                }],
+            }],
+            created_at,
+        },
+    )
+    .await;
+}
+
 /// Complete an already-admitted ordinary tool through its canonical output
 /// and ToolDelivery owners, then publish the terminal lifecycle marker.
 pub(super) async fn complete_canonical_tool_call(
@@ -806,8 +889,17 @@ pub(super) async fn seed_started_session(
     requester_did: Option<&str>,
     agent_id: &str,
     parent_request_doc_id: &str,
+    opening_request_doc_id: Option<&str>,
 ) {
     use gents::graphql::escape_graphql_string;
+    let opening = opening_request_doc_id
+        .map(|doc_id| {
+            format!(
+                r#", opening_request_doc_id: "{}""#,
+                escape_graphql_string(doc_id)
+            )
+        })
+        .unwrap_or_default();
     let requester = requester_did
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".to_owned());
@@ -832,7 +924,7 @@ pub(super) async fn seed_started_session(
         .execute(&format!(
             r#"mutation {{ create_AgentSession(input: {{
                 session_id: "{}", node_did: "{}", requester_did: {requester}, agent_id: "{}",
-                created_at: "2026-09-01T00:00:00Z", provenance: {{parent_request_doc_id: "{}"}}
+                created_at: "2026-09-01T00:00:00Z", provenance: {{parent_request_doc_id: "{}"{opening}}}
             }}) {{ _docID }} }}"#,
             escape_graphql_string(session_id),
             escape_graphql_string(node_did),
@@ -841,4 +933,109 @@ pub(super) async fn seed_started_session(
         ))
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
+}
+
+pub(crate) async fn seed_job_row(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    session: &str,
+    call: &str,
+    handle: &str,
+    lifecycle: &str,
+    state: gents_protocol::job::JobState,
+) -> gents_protocol::job::JobView {
+    use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress};
+    let mut pin = JobPin {
+        script_id: "fixture-script".into(),
+        source_digest: "sha256:source".into(),
+        origin: JobOrigin::Installed,
+        engine_digest: "sha256:engine".into(),
+        plugin_ref: "fixture/workflow".into(),
+        agent_budget: 4,
+        handle: handle.into(),
+        cwd: "/fixture/cwd".into(),
+        adopted_at: 1_780_000_000_000,
+        args_digest: "sha256:args".into(),
+        chain_root_doc_id: String::new(),
+        resume_of: None,
+        replayed_from: None,
+        ceiling_at_pin: JobCeiling {
+            targets: vec!["general".into()],
+            max_live: 2,
+            max_spawns: 8,
+            max_messages_per_slot: 4,
+            result_bytes: 65_536,
+            max_wall_secs: 600,
+        },
+    };
+    let progress = JobProgress {
+        title: format!("Job {call}"),
+        state,
+        pause_reason: None,
+        phases: Vec::new(),
+        active: Vec::new(),
+        spawned: 2,
+        budget: JobBudget {
+            total: 4,
+            spent: 2,
+            remaining: 2,
+        },
+        last_event: "seeded".into(),
+        last_event_at: None,
+        question: None,
+        observed_terminal_children: 0,
+        revision: 1,
+    };
+    let ended = if lifecycle == "running" {
+        ""
+    } else {
+        r#"completed_at: "2026-06-01T10:05:00Z","#
+    };
+    let created = node
+        .execute(&format!(
+            r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "request-{call}", session_id: "{session}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "test", content: "test", lifecycle_state: "pending", created_at: "2026-06-01T10:00:00Z"}}) {{ _docID }} }}"#
+        ))
+        .await;
+    ensure_no_errors(&created, "seed job request").unwrap();
+    let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({
+        "_docID": gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data": created.data}),
+            "AgentRequest",
+        )
+        .unwrap(),
+        "request_id": format!("request-{call}"), "session_id": session,
+        "node_did": node_did, "requester_did": node_did,
+    }))
+    .unwrap();
+    let doc_id = seed_canonical_tool_call(
+        node, &request, call, "workflow", lifecycle, "{}", None, None, None, None,
+    )
+    .await;
+    pin.chain_root_doc_id = doc_id.clone();
+    let mutation = format!(
+        r#"mutation($job_pin: JSON, $job_progress: JSON) {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{
+            await_mode: "background", status: "{lifecycle}", deadline_at: "2126-06-01T10:00:00Z", {ended}
+            job_pin: $job_pin, job_progress: $job_progress
+        }}) {{ _docID }} }}"#
+    );
+    let variables = json!({ "job_pin": pin, "job_progress": progress });
+    ConfigAccess::transact_local_write(node, None, "test.grok.workflow.job", |txn| {
+        let (mutation, variables) = (&mutation, &variables);
+        Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+    })
+    .await
+    .unwrap();
+    if lifecycle == "running" {
+        seed_background_receipt(node, &request, &doc_id, call).await;
+    }
+    gents::plugin_job::view::load_job_view(
+        &ConfigAccess::local(node.clone()),
+        None,
+        gents::plugin_job::view::JobKey::Address {
+            session_id: session.into(),
+            tool_call_id: call.into(),
+        },
+    )
+    .await
+    .unwrap()
 }

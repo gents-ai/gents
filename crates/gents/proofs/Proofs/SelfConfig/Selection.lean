@@ -1,4 +1,5 @@
 import Proofs.ToolPolicy.Meet
+import Proofs.SelfConfig.Cases
 
 /-!
 # Selection obligations for the agent sibling-tools operation
@@ -109,5 +110,48 @@ theorem graph_tools_without_configuration :
 
 theorem configuration_does_not_grant_graph_tools :
     graphToolPresented false true true = false := rfl
+
+/-! ## Job-guard selection rows -/
+
+/-- A self-config write of a Tools `integrations` text: `stored = none` is a
+Tools document without the field. -/
+structure JobGuardRow where
+  name : String
+  operator : Bool
+  selectedBefore : Bool
+  stored : Option FieldValue
+  candidate : FieldValue
+
+/-- A Tools document with self-config enabled and the given `integrations`. -/
+def jobGuardToolsDoc (integrations : Option FieldValue) : Doc :=
+  Doc.ofList (("self_config", "{\"enable_self_config\":true}") ::
+    integrations.toList.map (fun v => ("integrations", v)))
+
+/-- Operator writes do not pass through the guard (`keepsGrants`); a model
+write is judged by `keepsGrants` against the previously selected Tools, or by
+`reselectionKeepsGrants` when nothing was selected before. -/
+def JobGuardRow.accepted (r : JobGuardRow) : Bool :=
+  if r.operator then true
+  else if r.selectedBefore then
+    keepsGrants ContractCases.decodeGrants Grants.bot
+      (jobGuardToolsDoc r.stored) (jobGuardToolsDoc (some r.candidate))
+  else
+    reselectionKeepsGrants ContractCases.decodeGrants Grants.bot none
+      (some (jobGuardToolsDoc (some r.candidate)))
+
+def jobGuardRows : List JobGuardRow :=
+  let J := ContractCases.jobIntegrations
+  [ { name := "model_job_ceiling_narrowing", operator := false, selectedBefore := true
+    , stored := some (J 8 "check"), candidate := J 4 "check" }
+  , { name := "model_job_ceiling_widening", operator := false, selectedBefore := true
+    , stored := some (J 4 "check"), candidate := J 8 "check" }
+  , { name := "model_job_policy_edit", operator := false, selectedBefore := true
+    , stored := some (J 4 "check"), candidate := J 4 "off" }
+  , { name := "model_job_block_added", operator := false, selectedBefore := true
+    , stored := none, candidate := J 4 "check" }
+  , { name := "model_reselection_from_none_acquires_job", operator := false
+    , selectedBefore := false, stored := none, candidate := J 4 "check" }
+  , { name := "operator_job_ceiling_widening", operator := true, selectedBefore := true
+    , stored := some (J 4 "check"), candidate := J 8 "check" } ]
 
 end SelfConfig

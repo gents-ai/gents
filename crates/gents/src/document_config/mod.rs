@@ -37,7 +37,7 @@ pub use principal::{load_node, Node, DEFAULT_MAX_REQUEST_HOP};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
-    CallbackModule,
+    CallbackModule, PortCardinality, PortSpec,
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
@@ -84,7 +84,8 @@ pub(crate) use surface_tool::{
 pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
 };
-pub(crate) use tools::load_agent_tools_in_txn;
+pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
+pub use tools::{unwire_plugin, wire_plugin, WireReport};
 pub use tools::{
     AgentTools, BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools,
     IntegrationTools, LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools,

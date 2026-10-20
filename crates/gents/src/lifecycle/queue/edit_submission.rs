@@ -32,6 +32,80 @@ pub async fn submit_pending_user_edit(
         &edit,
     )
     .await?;
+    submit_prepared_edit(
+        access,
+        signer,
+        requester_peer_id,
+        node_did,
+        session_id,
+        edit,
+        replacements,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn submit_pending_user_steer(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    admission: AgentRequestAdmissionRecord,
+    requester_peer_id: Option<&str>,
+    node_did: &str,
+    session_id: &str,
+    edit: PendingQueueEdit,
+    request_doc_id: &str,
+) -> Result<SessionInputEditReceipt> {
+    anyhow::ensure!(
+        edit.messages
+            .first()
+            .is_some_and(|message| message.request_doc_id == request_doc_id),
+        "The steered message must lead its selected queue group."
+    );
+    let deliveries = edit
+        .messages
+        .iter()
+        .map(|message| {
+            if message.request_doc_id == request_doc_id {
+                gents_protocol::request_input::QueueDelivery::Steer
+            } else {
+                gents_protocol::request_input::QueueDelivery::Queue
+            }
+        })
+        .collect::<Vec<_>>();
+    let replacements = super::management::prepare_pending_user_edit_with_deliveries(
+        access,
+        signer,
+        admission,
+        node_did,
+        session_id,
+        signer.did(),
+        &edit,
+        Some(&deliveries),
+    )
+    .await?;
+    submit_prepared_edit(
+        access,
+        signer,
+        requester_peer_id,
+        node_did,
+        session_id,
+        edit,
+        replacements,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn submit_prepared_edit(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    requester_peer_id: Option<&str>,
+    node_did: &str,
+    session_id: &str,
+    edit: PendingQueueEdit,
+    replacements: Vec<gents_protocol::request_admission::AgentRequestCreate>,
+) -> Result<SessionInputEditReceipt> {
+    let requester_did = signer.did();
     let now = chrono::Utc::now();
     let mut command = SessionInputEdit {
         version: SESSION_INPUT_EDIT_VERSION,

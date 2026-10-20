@@ -34,6 +34,7 @@ fn identity(version: &str) -> PackIdentity {
             digest: format!("sha256:{}", "e".repeat(64)),
         }],
         dependencies: Vec::new(),
+        explicit: true,
     }
 }
 
@@ -72,6 +73,25 @@ async fn tools_ids(access: &ConfigAccess) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+#[tokio::test]
+async fn installed_pack_documents_lists_what_the_record_holds() {
+    let access = access().await;
+    install(&access, "1", &config(&[("t1", "T1")]), DriftPolicy::Refuse)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        installed_pack_documents(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        vec![(Collection::Tools, "t1".to_owned())]
+    );
+    assert!(installed_pack_documents(&access, OWNER, "acme/other")
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -145,6 +165,48 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
         remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
             .await
             .is_err()
+    );
+}
+
+async fn installation_explicit(access: &ConfigAccess) -> bool {
+    access
+        .execute("{ PackInstallation { explicit } }")
+        .await
+        .unwrap()["data"]["PackInstallation"][0]["explicit"]
+        .as_bool()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_non_explicit_documents_install_becomes_explicit_when_installed_explicitly() {
+    let access = access().await;
+    let config = config(&[("alpha", "Alpha")]);
+    let dependency = PackIdentity {
+        explicit: false,
+        ..identity("1")
+    };
+    super::super::install_pack_documents(&access, OWNER, &dependency, &config, DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert!(!installation_explicit(&access).await);
+
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &identity("1"),
+        &config,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    assert!(installation_explicit(&access).await);
+
+    super::super::install_pack_documents(&access, OWNER, &dependency, &config, DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert!(
+        installation_explicit(&access).await,
+        "an explicit install is sticky"
     );
 }
 
@@ -473,11 +535,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     );
 }
 
-async fn dependency_fixture() -> (
-    Arc<defra_node::EmbeddedNode>,
-    ConfigAccess,
-    crate::graph_package::GraphPackageInstallBindings,
-) {
+async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::document_config::ensure_node(&node, OWNER)
@@ -486,16 +544,65 @@ async fn dependency_fixture() -> (
     for profile in ["claude", "glm", "grok"] {
         crate::test_support::install_test_agent(&node, OWNER, profile).await;
     }
-    let options = crate::graph_package::GraphPackageInstallBindings {
+    let access = ConfigAccess::local(node.clone());
+    (node, access)
+}
+
+/// The slot bindings the graph dependency fixtures install under.
+fn graph_bindings() -> crate::graph_package::GraphPackageInstallBindings {
+    crate::graph_package::GraphPackageInstallBindings {
         node_did: OWNER.into(),
         inference_slots: std::collections::BTreeMap::from([
             ("coordinator".into(), "claude:inference".into()),
             ("worker".into(), "glm:inference".into()),
             ("verifier".into(), "grok:inference".into()),
         ]),
-    };
-    let access = ConfigAccess::local(node.clone());
-    (node, access, options)
+    }
+}
+
+/// Installs `dependee_fixture` the way a front-end installs a documents pack.
+async fn install_dependee(access: &ConfigAccess, explicit: bool) {
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap();
+    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let authored = crate::pack::load_pack_config(
+        archive.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let prepared = prepare_document_pack_install(
+        access,
+        OWNER,
+        archive.manifest(),
+        &authored,
+        &requested,
+        &[],
+        crate::pack::InstalledVia::Operator,
+        &|_| None,
+    )
+    .await
+    .unwrap();
+    super::super::install_pack_documents(
+        access,
+        OWNER,
+        &PackIdentity {
+            coordinate: "fixture/dependee_fixture".into(),
+            version: archive.manifest().version.clone(),
+            digest: archive.digest().to_owned(),
+            plugins: vec![],
+            dependencies: vec![],
+            explicit,
+        },
+        &prepared.config,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
 }
 
 fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
@@ -505,56 +612,45 @@ fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
         digest: format!("sha256:{}", "d".repeat(64)),
         plugins: vec![],
         dependencies,
+        explicit: true,
     }
-}
-
-async fn activate(access: &ConfigAccess, graph_id: &str, digest: &str) {
-    crate::graph_pipeline::activate_graph_revision_with_access(
-        access, OWNER, graph_id, digest, None,
-    )
-    .await
-    .unwrap();
 }
 
 #[tokio::test]
 async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
-    let (_node, access, options) = dependency_fixture().await;
-    let receipt = crate::test_support::install_test_graph_package_explicit(
-        &access,
-        OWNER,
-        "review_graph",
-        &options,
-        false,
-    )
-    .await
-    .unwrap();
-    activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
 
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["fixture/review_graph".into()]),
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
     .unwrap();
 
-    let error = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
-        .await
-        .unwrap_err();
+    let error = remove_pack(
+        &access,
+        OWNER,
+        "fixture/dependee_fixture",
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap_err();
     assert!(format!("{error:#}").contains("acme/demo"), "{error:#}");
 
     let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
     assert_eq!(report.dependencies.len(), 1);
-    assert_eq!(report.dependencies[0].pack, "fixture/review_graph");
+    assert_eq!(report.dependencies[0].pack, "fixture/dependee_fixture");
     assert!(report.dependencies[0]
         .documents
         .removed
         .iter()
-        .any(|name| name.starts_with("GraphDefinition/")));
+        .any(|name| name.starts_with("Agent/")));
 
     let remaining = access
         .execute("{ PackInstallation { coordinate } }")
@@ -565,17 +661,13 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
 
 #[tokio::test]
 async fn an_explicit_dependency_survives_its_dependent() {
-    let (_node, access, options) = dependency_fixture().await;
-    let receipt =
-        crate::test_support::install_test_graph_package(&access, OWNER, "review_graph", &options)
-            .await
-            .unwrap();
-    activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, true).await;
 
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["fixture/review_graph".into()]),
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -596,36 +688,32 @@ async fn an_explicit_dependency_survives_its_dependent() {
         .unwrap();
     let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["coordinate"], "fixture/review_graph");
+    assert_eq!(rows[0]["coordinate"], "fixture/dependee_fixture");
     assert_eq!(
         rows[0]["required_by"],
         Value::Null,
         "an explicit install is never auto-released"
     );
 
-    remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    remove_pack(
+        &access,
+        OWNER,
+        "fixture/dependee_fixture",
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
 async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
-    let (_node, access, options) = dependency_fixture().await;
-    let receipt = crate::test_support::install_test_graph_package_explicit(
-        &access,
-        OWNER,
-        "review_graph",
-        &options,
-        false,
-    )
-    .await
-    .unwrap();
-    activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
 
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["fixture/review_graph".into()]),
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -636,11 +724,11 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         .await
         .unwrap();
     let rows = after_first["data"]["PackInstallation"].as_array().unwrap();
-    let review_graph = rows
+    let dependee = rows
         .iter()
-        .find(|row| row["coordinate"] == "fixture/review_graph")
+        .find(|row| row["coordinate"] == "fixture/dependee_fixture")
         .unwrap();
-    assert_eq!(review_graph["required_by"], json!(["acme/demo"]));
+    assert_eq!(dependee["required_by"], json!(["acme/demo"]));
 
     super::super::install_pack_documents(
         &access,
@@ -662,24 +750,15 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
     assert!(
         !rows
             .iter()
-            .any(|row| row["coordinate"] == "fixture/review_graph"),
+            .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
         "the dropped, non-explicit dependency is released outright: {rows:?}"
     );
 }
 
 #[tokio::test]
 async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
-    let (_node, access, options) = dependency_fixture().await;
-    let receipt = crate::test_support::install_test_graph_package_explicit(
-        &access,
-        OWNER,
-        "review_graph",
-        &options,
-        false,
-    )
-    .await
-    .unwrap();
-    activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
 
     let doc_id = installation_doc_id(&access).await;
     corrupt_installation_field(&access, &doc_id, "explicit", Value::Null).await;
@@ -687,7 +766,7 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["fixture/review_graph".into()]),
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -704,8 +783,84 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
     assert!(
         rows.iter()
-            .any(|row| row["coordinate"] == "fixture/review_graph"),
+            .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
         "a legacy record with no explicit field must never be auto-released: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_explicitly_installed_documents_dependency_survives_its_dependent() {
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+
+    install_dependee(&access, true).await;
+
+    let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert!(
+        report.dependencies.is_empty(),
+        "an explicit install is sticky, so it is never auto-released"
+    );
+    let remaining = access
+        .execute("{ PackInstallation { coordinate required_by } }")
+        .await
+        .unwrap();
+    let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["coordinate"], "fixture/dependee_fixture");
+    assert_eq!(rows[0]["required_by"], Value::Null);
+}
+
+#[tokio::test]
+async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
+    let (_node, access) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
+    install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
+    let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
+    let before = agents["data"]["Agent"].as_array().unwrap().len();
+
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &PackIdentity {
+            coordinate: "fixture/dependent_fixture".into(),
+            version: "2".into(),
+            digest: format!("sha256:{}", "2".repeat(64)),
+            plugins: vec![],
+            dependencies: vec![],
+            explicit: true,
+        },
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+
+    let rows = access
+        .execute("{ PackInstallation { coordinate } }")
+        .await
+        .unwrap();
+    let rows = rows["data"]["PackInstallation"].as_array().unwrap();
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
+        "the dropped documents dependency is released outright: {rows:?}"
+    );
+    let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
+    assert!(
+        agents["data"]["Agent"].as_array().unwrap().len() < before,
+        "the released dependency's own documents are removed: {agents}"
     );
 }
 
@@ -791,9 +946,11 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
             digest: current.digest.clone(),
             kind: super::super::PackKind::Plugins,
             assets: "packs/.materialized/acme/demo/current".into(),
+            dependency_assets: Vec::new(),
             plugins: current.plugins.clone(),
             installed_at: "2026-01-01T00:00:00Z".into(),
             ux: Vec::new(),
+            installed_via: None,
         },
     )
     .unwrap();
@@ -827,4 +984,903 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         .await
         .unwrap();
     assert_eq!(response["data"]["PackInstallation"], json!([]));
+}
+
+const NOTE_SDL: &str = "type FixtureNote @index(fields: [\"text\", \"job_row_doc_id\"], unique: true) {\n  text: String\n  job_row_doc_id: String\n  chain_root_doc_id: String\n}\ntype Other { key: String @index(unique: true) }\n";
+
+/// Installs the job fixture pack's plugins into `home`, with its SDL and
+/// plugin declaration rewritten by the caller.
+fn install_fixture_plugins_into(
+    home: &Path,
+    sdl: &str,
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> Result<Vec<crate::plugin::store::InstalledPlugin>> {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("job_plugin_fixture", &json!({}));
+    std::fs::write(root.join("schemas/fixture_note.graphql"), sdl).unwrap();
+    let path = root.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    edit(&mut manifest["plugins"][0]);
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
+    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    crate::plugin::install::install_pack_plugins(
+        home,
+        archive.manifest(),
+        archive.digest(),
+        |path| archive.asset(path),
+        false,
+    )
+}
+
+/// Installs the job fixture pack's plugins into a fresh plugin home.
+fn install_fixture_plugins(
+    sdl: &str,
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> (
+    tempfile::TempDir,
+    Result<Vec<crate::plugin::store::InstalledPlugin>>,
+) {
+    let home = tempfile::tempdir().unwrap();
+    let installed = install_fixture_plugins_into(home.path(), sdl, edit);
+    (home, installed)
+}
+
+fn refusal(result: Result<Vec<crate::plugin::store::InstalledPlugin>>) -> String {
+    format!("{:#}", result.expect_err("the install must be refused"))
+}
+
+#[test]
+fn data_collection_missing_from_own_sdl_refuses_the_install() {
+    let (_home, installed) = install_fixture_plugins("type Other { key: String }", |_| {});
+    let message = refusal(installed);
+    assert!(message.contains("FixtureNote"), "{message}");
+    assert!(message.contains("schemas"), "{message}");
+}
+
+#[test]
+fn install_records_data_unique_keys() {
+    let (home, installed) = install_fixture_plugins(NOTE_SDL, |plugin| {
+        plugin["data"]["collections"] = json!(["FixtureNote", "Other"]);
+    });
+    installed.unwrap();
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "job_fixture").unwrap();
+    assert_eq!(
+        record.data_unique_keys,
+        std::collections::BTreeMap::from([
+            (
+                "FixtureNote".to_owned(),
+                vec![vec!["text".to_owned(), "job_row_doc_id".to_owned()]]
+            ),
+            ("Other".to_owned(), vec![vec!["key".to_owned()]]),
+        ])
+    );
+}
+
+#[test]
+fn install_records_data_collection_fields() {
+    let (home, installed) = install_fixture_plugins(NOTE_SDL, |plugin| {
+        plugin["data"]["collections"] = json!(["FixtureNote", "Other"]);
+    });
+    installed.unwrap();
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "job_fixture").unwrap();
+    assert_eq!(
+        record.data_collection_fields.keys().collect::<Vec<_>>(),
+        ["FixtureNote", "Other"]
+    );
+    let fields = &record.data_collection_fields;
+    for field in ["text", "job_row_doc_id", "chain_root_doc_id"] {
+        assert!(fields["FixtureNote"].iter().any(|f| f == field), "{field}");
+    }
+    assert!(fields["Other"].iter().any(|f| f == "key"));
+    assert_eq!(
+        record.data_unique_keys,
+        std::collections::BTreeMap::from([
+            (
+                "FixtureNote".to_owned(),
+                vec![vec!["text".to_owned(), "job_row_doc_id".to_owned()]]
+            ),
+            ("Other".to_owned(), vec![vec!["key".to_owned()]]),
+        ])
+    );
+}
+
+#[test]
+fn reinstall_with_changed_sdl_rewrites_both_maps() {
+    let home = tempfile::tempdir().unwrap();
+    let both = |plugin: &mut serde_json::Value| {
+        plugin["data"]["collections"] = json!(["FixtureNote", "Other"]);
+    };
+    install_fixture_plugins_into(home.path(), NOTE_SDL, both).unwrap();
+    let changed = NOTE_SDL
+        .replace(
+            "chain_root_doc_id: String",
+            "chain_root_doc_id: String\n  node_did: String",
+        )
+        .replace("[\"text\", \"job_row_doc_id\"]", "[\"text\"]");
+    install_fixture_plugins_into(home.path(), &changed, both).unwrap();
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "job_fixture").unwrap();
+    assert!(record.data_collection_fields["FixtureNote"]
+        .iter()
+        .any(|field| field == "node_did"));
+    assert_eq!(
+        record.data_unique_keys["FixtureNote"],
+        vec![vec!["text".to_owned()]]
+    );
+}
+
+#[test]
+fn stamped_key_outside_declared_collections_is_refused() {
+    let (_home, installed) = install_fixture_plugins(NOTE_SDL, |plugin| {
+        plugin["data"]["stamped"] = json!({"missing_field": "node_did"});
+    });
+    let message = refusal(installed);
+    assert!(message.contains("missing_field"), "{message}");
+    assert!(message.contains("data.stamped"), "{message}");
+}
+
+#[test]
+fn asset_mount_class_without_shipped_asset_is_refused() {
+    let (_home, installed) = install_fixture_plugins(NOTE_SDL, |plugin| {
+        plugin["asset_mounts"] = json!([{"class": "unshipped_assets"}]);
+    });
+    let message = refusal(installed);
+    assert!(message.contains("unshipped_assets"), "{message}");
+    assert!(message.contains("asset_mounts"), "{message}");
+}
+
+#[test]
+fn installed_plugin_record_without_data_unique_keys_decodes() {
+    let (home, installed) = install_fixture_plugins(NOTE_SDL, |_| {});
+    installed.unwrap();
+    let mut record = serde_json::to_value(
+        crate::plugin::store::read_record(home.path(), "fixture", "job_fixture").unwrap(),
+    )
+    .unwrap();
+    record.as_object_mut().unwrap().remove("data_unique_keys");
+    let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(record).unwrap();
+    assert!(record.data_unique_keys.is_empty());
+}
+
+fn documents_archive() -> crate::pack_archive::PackArchive {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let path = root.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("schemas");
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
+    crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+}
+
+fn prepared() -> PreparedDocumentPackInstall {
+    PreparedDocumentPackInstall {
+        config: config(&[("self-config-tools", "Self-config tools")]),
+        inference: crate::pack::PackInferenceBindingPreview {
+            slots: Vec::new(),
+            profiles: Vec::new(),
+            bindings: Default::default(),
+            automatic: true,
+        },
+        dependency_inference: BTreeMap::new(),
+        dependencies: Vec::new(),
+    }
+}
+
+fn operator_record(archive: &crate::pack_archive::PackArchive) -> crate::pack::HomePackInstall {
+    crate::pack::HomePackInstall {
+        coordinate: format!(
+            "{}/{}",
+            archive.manifest().metadata.namespace,
+            archive.manifest().name
+        ),
+        version: "0.9.0".into(),
+        digest: format!("sha256:{}", "0".repeat(64)),
+        kind: archive.manifest().metadata.kind.clone(),
+        assets: String::new(),
+        dependency_assets: Vec::new(),
+        plugins: Vec::new(),
+        ux: Vec::new(),
+        installed_at: "2026-01-01T00:00:00Z".into(),
+        installed_via: Some(crate::pack::InstalledVia::Operator),
+    }
+}
+
+async fn self_config_install(archive: &crate::pack_archive::PackArchive, home: Option<&Path>) {
+    install_prepared_document_pack(
+        &access().await,
+        OWNER,
+        archive,
+        &[],
+        &prepared(),
+        home,
+        false,
+        crate::pack::InstalledVia::SelfConfig,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn non_explicit_self_config_record_never_lowers_operator_provenance() {
+    let home = tempfile::tempdir().unwrap();
+    let archive = documents_archive();
+    let engine = operator_record(&archive);
+    crate::pack::write_home_install(home.path(), &engine).unwrap();
+    let identity = PackIdentity::new(archive.manifest(), archive.digest(), Vec::new());
+    documents::record_home_install(
+        home.path(),
+        archive.manifest(),
+        &identity,
+        String::new(),
+        Vec::new(),
+        crate::pack::InstalledVia::SelfConfig,
+        false,
+    )
+    .unwrap();
+    let stored = crate::pack::read_home_install(home.path(), &engine.coordinate)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.installed_via,
+        Some(crate::pack::InstalledVia::Operator)
+    );
+}
+
+#[tokio::test]
+async fn explicit_self_config_reinstall_lowers_the_pack_record() {
+    let home = tempfile::tempdir().unwrap();
+    let archive = documents_archive();
+    let prior = operator_record(&archive);
+    crate::pack::write_home_install(home.path(), &prior).unwrap();
+    self_config_install(&archive, Some(home.path())).await;
+    let stored = crate::pack::read_home_install(home.path(), &prior.coordinate)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.installed_via,
+        Some(crate::pack::InstalledVia::SelfConfig)
+    );
+    assert_eq!(stored.digest, archive.digest());
+}
+
+fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack_archive::PackArchive {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let path = root.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let object = manifest.as_object_mut().unwrap();
+    object.remove("schemas");
+    let mut assets = vec!["README.md".to_owned(), "pack_config.json".to_owned()];
+    for (asset, body) in files {
+        let target = root.join(asset);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, body).unwrap();
+        assets.push((*asset).to_owned());
+    }
+    object.insert("assets".into(), json!(assets));
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
+    crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+}
+
+fn recorded(
+    home: &Path,
+    archive: &crate::pack_archive::PackArchive,
+) -> crate::pack::HomePackInstall {
+    crate::pack::read_home_install(home, &operator_record(archive).coordinate)
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn documents_pack_shipping_workflows_is_materialized_with_no_plugin_installed() {
+    let home = tempfile::tempdir().unwrap();
+    let archive = documents_archive_shipping(&[("workflows/hello.rhai", "1")]);
+    assert!(archive.manifest().metadata.plugins.is_empty());
+    self_config_install(&archive, Some(home.path())).await;
+    let root = crate::pack::materialize::cache_root(
+        home.path(),
+        &archive.manifest().metadata.namespace,
+        &archive.manifest().name,
+        archive.digest(),
+    )
+    .unwrap();
+    let stored = recorded(home.path(), &archive);
+    assert_eq!(
+        Path::new(&stored.assets),
+        root.strip_prefix(home.path()).unwrap()
+    );
+    assert!(root.join("workflows/hello.rhai").is_file());
+}
+
+#[tokio::test]
+async fn dependency_install_materializes_the_same_way() {
+    let (_node, access) = dependency_fixture().await;
+    let options = graph_bindings();
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("review_graph", &json!({}));
+    let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap();
+    let dependency = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let package = crate::graph_package::load_archive_graph_package_with_environment(
+        &dependency,
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|name| (name == "GENTS_REVIEW_MODEL").then(|| "test-model".to_owned()),
+    )
+    .unwrap();
+    let mut prepared = prepared();
+    prepared.dependencies = vec![PreparedDependency::Graph(package, options)];
+    let home = tempfile::tempdir().unwrap();
+    let archive = documents_archive_shipping(&[]);
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &archive,
+        &[&dependency],
+        &prepared,
+        Some(home.path()),
+        false,
+        crate::pack::InstalledVia::SelfConfig,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let root = crate::pack::materialize::cache_root(
+        home.path(),
+        &dependency.manifest().metadata.namespace,
+        &dependency.manifest().name,
+        dependency.digest(),
+    )
+    .unwrap();
+    assert!(root.join("agents/review_recon/system_prompt.md").is_file());
+    let stored = recorded(home.path(), &archive);
+    assert_eq!(stored.assets, "");
+    assert_eq!(
+        stored.dependency_assets,
+        vec![(
+            "fixture/review_graph".to_owned(),
+            root.strip_prefix(home.path())
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn pack_with_no_asset_class_is_not_materialized() {
+    let home = tempfile::tempdir().unwrap();
+    let archive = documents_archive_shipping(&[]);
+    self_config_install(&archive, Some(home.path())).await;
+    let stored = recorded(home.path(), &archive);
+    assert_eq!(stored.assets, "");
+    assert!(stored.dependency_assets.is_empty());
+    assert!(!home.path().join("packs/.materialized").exists());
+}
+
+#[tokio::test]
+async fn self_config_install_succeeds_without_a_home() {
+    let archive = documents_archive();
+    self_config_install(&archive, None).await;
+}
+
+fn job_tools(job: serde_json::Value) -> crate::document_config::Tools {
+    serde_json::from_value(json!({
+        "tools_id": "engine-tools",
+        "node_did": OWNER,
+        "integrations": {"plugins": [{"plugin": "acme/runner", "job": job}]},
+    }))
+    .unwrap()
+}
+
+fn shipping(targets: &[&str]) -> PackConfig {
+    serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "agent_targets": targets
+            .iter()
+            .map(|id| json!({
+                "target_id": id, "node_did": OWNER, "target_node_did": OWNER,
+                "agent_id": id, "name": id,
+            }))
+            .collect::<Vec<_>>(),
+    }))
+    .unwrap()
+}
+
+fn engine_admission(job: serde_json::Value, via: crate::pack::InstalledVia) -> Result<()> {
+    let mut metadata = documents_archive().manifest().metadata.clone();
+    metadata.dependencies = vec!["acme/base".into()];
+    let own = shipping(&["wf-run"]);
+    let base = shipping(&["wf-read-only"]);
+    crate::plugin_job::settings::pack_job_block_admissible(
+        &job_tools(job),
+        &metadata,
+        "acme/engine",
+        &[("acme/engine".into(), &own), ("acme/base".into(), &base)],
+        via,
+    )
+}
+
+fn operator_refusal(job: serde_json::Value) {
+    let message = engine_admission(job, crate::pack::InstalledVia::Operator)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("job block this install cannot grant"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn pack_job_block_is_refused_on_a_self_config_install() {
+    let manifest: crate::pack::PackManifest = serde_json::from_value(json!({
+        "manifest_version": 1, "name": "engine", "version": "1", "description": "Engine",
+        "kind": "documents", "authors": ["Demo"],
+        "assets": ["README.md", "pack_config.json"], "config": "pack_config.json",
+    }))
+    .unwrap();
+    let mut config = config(&[]);
+    config.tools = vec![job_tools(json!({"agent_targets": ["wf-run"]}))];
+    config.agent_targets = shipping(&["wf-run"]).agent_targets;
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    crate::document_config::ensure_node(&node, OWNER)
+        .await
+        .unwrap();
+    let access = ConfigAccess::local(node);
+    let requested = Default::default();
+    let prepare = |via| {
+        prepare_document_pack_install(
+            &access,
+            OWNER,
+            &manifest,
+            &config,
+            &requested,
+            &[],
+            via,
+            &|_| None,
+        )
+    };
+    let refused = prepare(crate::pack::InstalledVia::SelfConfig).await;
+    let message = refused.err().unwrap().to_string();
+    assert!(message.contains("operator install"), "{message}");
+    prepare(crate::pack::InstalledVia::Operator).await.unwrap();
+}
+
+#[test]
+fn pack_job_block_targets_outside_pack_and_dependencies_are_refused() {
+    operator_refusal(json!({"agent_targets": ["wf-run", "elsewhere"]}));
+}
+
+#[test]
+fn pack_job_block_trusted_packs_outside_self_and_dependencies_are_refused() {
+    operator_refusal(json!({
+        "agent_targets": ["wf-run"],
+        "policy": {"trusted_packs": ["acme/base", "rogue/pack"]},
+    }));
+}
+
+#[test]
+fn pack_job_block_dynamic_run_is_refused() {
+    operator_refusal(json!({"agent_targets": ["wf-run"], "policy": {"dynamic": "run"}}));
+}
+
+#[test]
+fn pack_job_block_project_roots_must_be_empty() {
+    operator_refusal(json!({
+        "agent_targets": ["wf-run"],
+        "policy": {"project_roots": ["/work/repo"]},
+    }));
+}
+
+#[test]
+fn engine_style_pack_job_block_installs() {
+    let policy = json!({
+        "dynamic": "check",
+        "dynamic_targets": ["wf-read-only"],
+        "trusted_packs": ["acme/engine", "acme/base"],
+    });
+    let job = json!({"agent_targets": ["wf-run", "wf-read-only"], "policy": policy});
+    engine_admission(job, crate::pack::InstalledVia::Operator).unwrap();
+}
+
+/// A graph fixture renamed to `fixture/<name>` that also ships `workflows/`.
+fn graph_archive_shipping_workflows(
+    fixture: &str,
+    name: &str,
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> crate::pack_archive::PackArchive {
+    let (_guard, root) = crate::test_support::fixture_pack_copy(fixture, &json!({}));
+    let path = root.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    manifest["name"] = json!(name);
+    manifest["assets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("workflows/flow.json"));
+    edit(&mut manifest);
+    std::fs::create_dir_all(root.join("workflows")).unwrap();
+    std::fs::write(root.join("workflows/flow.json"), name).unwrap();
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
+    crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn content_then_engine_dependency_order_mounts_the_content_workflows() {
+    let (_node, access) = dependency_fixture().await;
+    let options = graph_bindings();
+    let content = graph_archive_shipping_workflows("review_graph", "content", |_| {});
+    let engine = graph_archive_shipping_workflows("prepared_graph", "engine", |manifest| {
+        let plugin = manifest["plugins"][0].as_object_mut().unwrap();
+        plugin.remove("limits");
+        plugin.insert("asset_mounts".into(), json!([{"class": "workflows"}]));
+    });
+    let load = |archive: &crate::pack_archive::PackArchive| {
+        crate::graph_package::load_archive_graph_package_with_environment(
+            archive,
+            &crate::pack::PackInstallOptions {
+                node_did: OWNER.into(),
+            },
+            &|name| (name == "GENTS_REVIEW_MODEL").then(|| "test-model".to_owned()),
+        )
+        .unwrap()
+    };
+    let engine_options = crate::graph_package::GraphPackageInstallBindings {
+        node_did: OWNER.into(),
+        inference_slots: BTreeMap::from([("worker".into(), "glm:inference".into())]),
+    };
+    let mut prepared = prepared();
+    prepared.dependencies = vec![
+        PreparedDependency::Graph(load(&content), options),
+        PreparedDependency::Graph(load(&engine), engine_options),
+    ];
+    let home = tempfile::tempdir().unwrap();
+    install_prepared_document_pack(
+        &access,
+        OWNER,
+        &documents_archive_shipping(&[]),
+        &[&content, &engine],
+        &prepared,
+        Some(home.path()),
+        false,
+        crate::pack::InstalledVia::SelfConfig,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "prepare_fixture")
+        .expect("the engine plugin is installed");
+    let mounts = crate::plugin::mounts::resolve(home.path(), &record, None, None).unwrap();
+    let packs: Vec<&str> = mounts.iter().map(|mount| mount.pack.as_str()).collect();
+    assert_eq!(packs, ["fixture/content", "fixture/engine"]);
+    assert!(mounts.iter().all(|mount| mount.class == "workflows"));
+    assert!(Path::new(&mounts[0].path).join("flow.json").is_file());
+}
+
+// --- Documents dependencies ---------------------------------------------
+
+/// `dependent_fixture` rewired to depend on `dependee_fixture`, and
+/// `dependee_fixture` with the plugin `echo` when `dependee_plugin`; both
+/// packed the way an install reads them. With `broken_dependent_plugin` the
+/// dependent also ships an `echo` whose artifact is not a plugin, so its
+/// install fails at its own plugin step, after its dependency installed.
+fn documents_dependency_pair(
+    dependee_plugin: bool,
+    broken_dependent_plugin: bool,
+) -> (
+    [tempfile::TempDir; 2],
+    crate::pack_archive::PackArchive,
+    crate::pack_archive::PackArchive,
+) {
+    let archive = |dir: &std::path::Path| {
+        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
+        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    };
+    let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
+        let path = dir.join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        change(&mut manifest);
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    };
+    let (dependee_guard, dependee_dir) =
+        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    if dependee_plugin {
+        std::fs::create_dir_all(dependee_dir.join("plugins")).unwrap();
+        let wat = crate::plugin::tests::constant_output_wat(b"{}");
+        std::fs::write(
+            dependee_dir.join("plugins/echo.afb"),
+            crate::plugin::tests::build_plugin_afb(&wat),
+        )
+        .unwrap();
+        edit(&dependee_dir, &|manifest| {
+            manifest["assets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("plugins/echo.afb"));
+            manifest["plugins"] = json!([{
+                "name": "echo",
+                "description": "Echoes nothing.",
+                "artifact": "plugins/echo.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+            }]);
+        });
+    }
+    let (dependent_guard, dependent_dir) =
+        crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
+    edit(&dependent_dir, &|manifest| {
+        manifest["dependencies"] = json!(["fixture/dependee_fixture"]);
+    });
+    if broken_dependent_plugin {
+        std::fs::create_dir_all(dependent_dir.join("plugins")).unwrap();
+        std::fs::write(dependent_dir.join("plugins/echo.afb"), b"not a plugin").unwrap();
+        edit(&dependent_dir, &|manifest| {
+            manifest["assets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("plugins/echo.afb"));
+            manifest["plugins"] = json!([{
+                "name": "echo",
+                "description": "Echoes nothing.",
+                "artifact": "plugins/echo.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+            }]);
+        });
+    }
+    (
+        [dependee_guard, dependent_guard],
+        archive(&dependee_dir),
+        archive(&dependent_dir),
+    )
+}
+
+async fn install_dependent_with_dependee(
+    access: &ConfigAccess,
+    dependee: &crate::pack_archive::PackArchive,
+    dependent: &crate::pack_archive::PackArchive,
+    plugin_home: Option<&std::path::Path>,
+) {
+    try_install_dependent_with_dependee(access, dependee, dependent, plugin_home)
+        .await
+        .unwrap();
+}
+
+async fn try_install_dependent_with_dependee(
+    access: &ConfigAccess,
+    dependee: &crate::pack_archive::PackArchive,
+    dependent: &crate::pack_archive::PackArchive,
+    plugin_home: Option<&std::path::Path>,
+) -> Result<InstallReport> {
+    let authored = crate::pack::load_pack_config(
+        dependent.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|path| Ok(dependent.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let prepared = prepare_document_pack_install(
+        access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &requested,
+        &[dependee],
+        crate::pack::InstalledVia::Operator,
+        &|_| None,
+    )
+    .await
+    .unwrap();
+    install_prepared_document_pack(
+        access,
+        OWNER,
+        dependent,
+        &[dependee],
+        &prepared,
+        plugin_home,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
+    let (_node, access) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
+    install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
+
+    let rows = access
+        .execute("{ PackInstallation { coordinate explicit required_by } }")
+        .await
+        .unwrap();
+    let rows = rows["data"]["PackInstallation"].as_array().unwrap();
+    let row = |coordinate: &str| {
+        rows.iter()
+            .find(|row| row["coordinate"] == coordinate)
+            .unwrap_or_else(|| panic!("no record for {coordinate}: {rows:?}"))
+    };
+    let dependency = row("fixture/dependee_fixture");
+    assert_eq!(dependency["explicit"], false, "{rows:?}");
+    assert_eq!(
+        dependency["required_by"],
+        json!(["fixture/dependent_fixture"])
+    );
+    assert_eq!(row("fixture/dependent_fixture")["explicit"], true);
+}
+
+#[tokio::test]
+async fn a_failing_dependent_leaves_its_documents_dependency_installed() {
+    let (_node, access) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, true);
+    let home = tempfile::tempdir().unwrap();
+    try_install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path()))
+        .await
+        .unwrap_err();
+
+    let rows = access
+        .execute("{ PackInstallation { coordinate explicit } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        rows["data"]["PackInstallation"],
+        json!([{"coordinate": "fixture/dependee_fixture", "explicit": false}])
+    );
+}
+
+#[tokio::test]
+async fn a_documents_dependency_plugin_installs_before_the_dependent_documents() {
+    let (_node, access) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(true, false);
+    let home = tempfile::tempdir().unwrap();
+    install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path())).await;
+
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "echo").unwrap();
+    assert_eq!(
+        record.owner_pack_coordinate.as_deref(),
+        Some("fixture/dependee_fixture")
+    );
+    let installed = read_installed_pack(&access, OWNER, "fixture/dependee_fixture")
+        .await
+        .unwrap();
+    assert_eq!(installed.unwrap().digest, dependee.digest());
+}
+
+#[tokio::test]
+async fn a_documents_dependency_plugin_outlives_a_failing_dependent() {
+    let (_node, access) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(true, true);
+    let home = tempfile::tempdir().unwrap();
+    try_install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path()))
+        .await
+        .unwrap_err();
+
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "echo").unwrap();
+    assert_eq!(
+        record.owner_pack_coordinate.as_deref(),
+        Some("fixture/dependee_fixture")
+    );
+    let dependent = read_installed_pack(&access, OWNER, "fixture/dependent_fixture")
+        .await
+        .unwrap();
+    assert!(dependent.is_none(), "the dependent installed nothing");
+}
+
+/// The error `prepare_document_pack_install` gives `dependent_fixture` when
+/// it names `dependee_fixture` after `change` edited its manifest; with
+/// `dependee_plugin` the dependee also ships the plugin `echo`.
+async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) -> String {
+    let archive = |dir: &std::path::Path| {
+        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
+        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    };
+    let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
+        let path = dir.join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        change(&mut manifest);
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    };
+    let (_dependee_guard, dependee_dir) =
+        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    if dependee_plugin {
+        std::fs::create_dir_all(dependee_dir.join("plugins")).unwrap();
+        let wat = crate::plugin::tests::constant_output_wat(b"{}");
+        std::fs::write(
+            dependee_dir.join("plugins/echo.afb"),
+            crate::plugin::tests::build_plugin_afb(&wat),
+        )
+        .unwrap();
+        edit(&dependee_dir, &|manifest| {
+            manifest["assets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("plugins/echo.afb"));
+            manifest["plugins"] = json!([{
+                "name": "echo",
+                "description": "Echoes nothing.",
+                "artifact": "plugins/echo.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+            }]);
+        });
+    }
+    edit(&dependee_dir, change);
+    let (_dependent_guard, dependent_dir) =
+        crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
+    edit(&dependent_dir, &|manifest| {
+        manifest["dependencies"] = json!(["fixture/dependee_fixture"]);
+    });
+    let (dependee, dependent) = (archive(&dependee_dir), archive(&dependent_dir));
+    let authored = crate::pack::load_pack_config(
+        dependent.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|path| Ok(dependent.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let (_node, access) = dependency_fixture().await;
+    let error = prepare_document_pack_install(
+        &access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]),
+        &[&dependee],
+        crate::pack::InstalledVia::Operator,
+        &|_| None,
+    )
+    .await
+    .err()
+    .expect("the dependency is refused");
+    format!("{error:#}")
+}
+
+const DEPENDENCY_NEXT_STEP: &str = "install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`";
+
+#[tokio::test]
+async fn an_assets_dependency_is_refused_with_a_next_step() {
+    let error = refused_dependency(false, &|manifest| {
+        manifest["kind"] = json!("assets");
+        manifest.as_object_mut().unwrap().remove("config");
+        manifest["inference_slots"] = json!([]);
+    })
+    .await;
+    assert!(error.contains(DEPENDENCY_NEXT_STEP), "{error}");
+}
+
+#[tokio::test]
+async fn a_plugins_dependency_is_refused_with_a_next_step() {
+    let error = refused_dependency(true, &|manifest| {
+        manifest["kind"] = json!("plugins");
+        manifest.as_object_mut().unwrap().remove("config");
+        manifest["inference_slots"] = json!([]);
+    })
+    .await;
+    assert!(error.contains(DEPENDENCY_NEXT_STEP), "{error}");
+}
+
+#[tokio::test]
+async fn a_documents_dependency_with_its_own_dependencies_is_refused() {
+    let error = refused_dependency(false, &|manifest| {
+        manifest["dependencies"] = json!(["fixture/other_fixture"]);
+    })
+    .await;
+    assert!(
+        error.contains("declares dependencies of its own"),
+        "{error}"
+    );
+    assert!(
+        error.contains("install it with `gents pack install`, then remove it from `dependencies`"),
+        "{error}"
+    );
 }

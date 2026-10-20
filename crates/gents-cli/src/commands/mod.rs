@@ -22,6 +22,7 @@ pub(crate) mod grok_login;
 pub(crate) mod grok_shim;
 pub(crate) mod inference_binding;
 pub(crate) mod init;
+pub(crate) mod job;
 pub(crate) mod mailbox;
 pub(crate) mod mcp;
 pub(crate) mod native_fs_runner;

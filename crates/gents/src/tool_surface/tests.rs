@@ -1374,6 +1374,7 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
                         fill: Some(WriteToolFieldFill::Correlation),
                     },
                 ],
+                job: None,
             }],
             ..Default::default()
         },

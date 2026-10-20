@@ -69,3 +69,39 @@ describe("canonical message availability", () => {
     expect(html).not.toContain("message-copy");
   });
 });
+
+it("offers editing only for readable authored user messages", () => {
+  const item: User = {
+    kind: "userMessage",
+    itemKey: "user",
+    sequence: 0,
+    ownsTurn: true,
+    content: "A prompt",
+    timestamp: null,
+    reconstruction: { state: "ready" },
+  };
+  const onEdit = () => {};
+  expect(
+    renderToStaticMarkup(createElement(UserMessageItem, { item, onEdit })),
+  ).toContain('aria-label="Edit message"');
+  expect(
+    renderToStaticMarkup(
+      createElement(UserMessageItem, {
+        item: { ...item, reconstruction: { state: "denied" } },
+        onEdit,
+      }),
+    ),
+  ).not.toContain('aria-label="Edit message"');
+  expect(
+    renderToStaticMarkup(
+      createElement(UserMessageItem, {
+        item: {
+          ...item,
+          kind: "automatedInput",
+          origin: { kind: "backgroundCompletion" },
+        },
+        onEdit,
+      }),
+    ),
+  ).not.toContain('aria-label="Edit message"');
+});

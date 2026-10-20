@@ -1,8 +1,11 @@
 //! Bounded native external-premise experiment: real multi-document
 //! transaction atomicity against the pinned embedded DefraDB node, through
-//! `ConfigAccess::transact_local_write`. Commit/rollback evidence only:
-//! no claim about host crash durability or remote P2P merge. A blocked
-//! outside read is permitted; a partial pair is not.
+//! `ConfigAccess::transact_local_write`. Commit/rollback evidence only,
+//! including that a duplicate key on a single-field or a composite unique
+//! index errors with "violates unique index" and, when the caller propagates
+//! that error, none of the transaction's writes persists: no claim about host
+//! crash durability or remote P2P merge. A blocked outside read is permitted;
+//! a partial pair is not.
 
 use anyhow::{bail, Context, Result};
 use gents::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -16,10 +19,12 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::watch;
 
-const ATOMICITY_SCHEMA: &str = "
+const ATOMICITY_SCHEMA: &str = r#"
 type TxnAtomicityLeft { label: String amount: Int }
 type TxnAtomicityRight { label: String amount: Int }
-";
+type TxnAtomicityUnique { key: String @index(unique: true) label: String }
+type TxnAtomicityNote @index(fields: ["chain_root_doc_id", "note_id"], unique: true) { chain_root_doc_id: String note_id: String label: String }
+"#;
 
 async fn disposable_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
@@ -283,5 +288,219 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
     write?;
     read?;
     assert_eq!(pair_counts(&node).await?, (1, 1));
+    Ok(())
+}
+
+/// `label` is outside the indexed field so documents sharing a key still get
+/// distinct content-addressed docIDs; only the unique index can reject them.
+fn write_unique(key: &str, label: &str) -> String {
+    format!(
+        r#"mutation {{ create_TxnAtomicityUnique(input: {{ key: "{}", label: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(key),
+        escape_graphql_string(label)
+    )
+}
+
+/// `label` is outside the index so rows sharing the key pair still get
+/// distinct docIDs; only the composite unique index can reject them.
+fn write_note(chain_root_doc_id: &str, note_id: &str, label: &str) -> String {
+    format!(
+        r#"mutation {{ create_TxnAtomicityNote(input: {{ chain_root_doc_id: "{}", note_id: "{}", label: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(chain_root_doc_id),
+        escape_graphql_string(note_id),
+        escape_graphql_string(label)
+    )
+}
+
+/// Read the key inside the transaction and insert it only when absent.
+async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<bool> {
+    let read = ensure_no_errors(
+        txn.execute(&format!(
+            r#"query {{ TxnAtomicityUnique(filter: {{ key: {{ _eq: "{}" }} }}) {{ key }} }}"#,
+            escape_graphql_string(key)
+        ))
+        .await?,
+    )?;
+    let found = read["data"]["TxnAtomicityUnique"]
+        .as_array()
+        .context("unique read omitted collection")?
+        .len();
+    if found > 0 {
+        return Ok(false);
+    }
+    ensure_no_errors(txn.execute(&write_unique(key, "inserted")).await?)?;
+    Ok(true)
+}
+
+/// Premise for read-then-insert with a unique index as the backstop, on the
+/// DefraDB rev pinned in the workspace `Cargo.toml`
+/// (`013c3441e5d6`): a duplicate insert of a
+/// unique-indexed key errors with "violates unique index", and the error,
+/// propagated out of `transact_local_write`, rolls back the whole transaction, so
+/// neither the duplicate nor an earlier write in it persists. DefraDB rejects
+/// the insert; the rollback comes from propagating the error, not from
+/// DefraDB aborting the transaction itself.
+#[tokio::test]
+async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result<()> {
+    let node = disposable_node().await?;
+
+    let outcome: Result<()> = ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "txn_atomicity_unique_violation",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                ensure_no_errors(txn.execute(&write_left("unique-abort", 1)).await?)?;
+                ensure_no_errors(txn.execute(&write_unique("same", "first")).await?)?;
+                ensure_no_errors(txn.execute(&write_unique("same", "second")).await?)?;
+                Ok(())
+            })
+        },
+    )
+    .await;
+
+    let error = format!(
+        "{:#}",
+        outcome.expect_err("a duplicate unique-key insert must fail")
+    );
+    assert!(
+        error.contains("violates unique index"),
+        "the unique index must reject the duplicate key: {error}"
+    );
+    assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 0);
+    assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 0);
+    Ok(())
+}
+
+/// The composite form of the premise above, on the same pinned DefraDB rev:
+/// a duplicate insert on the composite `(chain_root_doc_id, note_id)` unique
+/// index errors with "violates unique index", and the error, propagated out
+/// of `transact_local_write`, rolls back the transaction, so neither its earlier
+/// writes nor the duplicate persists. Rows that share only one of the two
+/// fields are accepted.
+#[tokio::test]
+async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -> Result<()> {
+    let node = disposable_node().await?;
+
+    ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "txn_atomicity_seed_composite_notes",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                ensure_no_errors(txn.execute(&write_note("root-a", "note-1", "seed")).await?)?;
+                ensure_no_errors(txn.execute(&write_note("root-a", "note-2", "seed")).await?)?;
+                ensure_no_errors(txn.execute(&write_note("root-b", "note-1", "seed")).await?)?;
+                Ok(())
+            })
+        },
+    )
+    .await?;
+    assert_eq!(collection_count(&node, "TxnAtomicityNote").await?, 3);
+
+    let outcome: Result<()> = ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "txn_atomicity_composite_violation",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                ensure_no_errors(txn.execute(&write_left("composite-abort", 1)).await?)?;
+                ensure_no_errors(
+                    txn.execute(&write_note("root-c", "note-1", "fresh"))
+                        .await?,
+                )?;
+                ensure_no_errors(
+                    txn.execute(&write_note("root-a", "note-1", "duplicate"))
+                        .await?,
+                )?;
+                Ok(())
+            })
+        },
+    )
+    .await;
+
+    let error = format!(
+        "{:#}",
+        outcome.expect_err("a duplicate composite-key insert must fail")
+    );
+    assert!(
+        error.contains("violates unique index"),
+        "the composite unique index must reject the duplicate pair: {error}"
+    );
+    assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 0);
+    assert_eq!(collection_count(&node, "TxnAtomicityNote").await?, 3);
+    Ok(())
+}
+
+/// Two concurrent read-then-insert transactions on one unique key leave one
+/// row. `transact_local_write` serializes writers through the per-node mutation
+/// gate, so the second read always sees the first commit: the read is the
+/// guard on this path and the unique index is not reached. Same pinned
+/// DefraDB rev as `duplicate_unique_key_errors_and_propagated_error_rolls_back`.
+#[tokio::test]
+async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
+    let node = disposable_node().await?;
+    let attempt = || {
+        ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "txn_atomicity_concurrent_read_then_insert",
+            |txn: &ConfigApplyTxn<'_>| {
+                Box::pin(async move { read_then_insert_unique(txn, "contended").await })
+            },
+        )
+    };
+
+    let (first, second) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(attempt(), attempt())
+    })
+    .await
+    .context("concurrent read-then-insert timed out")?;
+
+    let inserted = [first?, second?];
+    assert_eq!(
+        inserted.iter().filter(|inserted| **inserted).count(),
+        1,
+        "exactly one transaction inserts: {inserted:?}"
+    );
+    assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 1);
+    Ok(())
+}
+
+/// A read-then-insert of an existing key inserts nothing, so the other write
+/// in the same transaction commits. Same pinned DefraDB rev as above.
+#[tokio::test]
+async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()> {
+    let node = disposable_node().await?;
+    ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "txn_atomicity_seed_existing_key",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                ensure_no_errors(txn.execute(&write_unique("existing", "seed")).await?)?;
+                Ok(())
+            })
+        },
+    )
+    .await?;
+
+    let inserted = ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "txn_atomicity_existing_key",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                let inserted = read_then_insert_unique(txn, "existing").await?;
+                ensure_no_errors(txn.execute(&write_left("other-write", 1)).await?)?;
+                Ok(inserted)
+            })
+        },
+    )
+    .await?;
+
+    assert!(!inserted, "the existing key must be found, not inserted");
+    assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 1);
+    assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 1);
     Ok(())
 }

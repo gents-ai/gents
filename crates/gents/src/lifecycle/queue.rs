@@ -45,7 +45,7 @@ use coalescing::{
     parent_agent_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
 };
 pub(crate) use draining::drain_automated_wakeups_in_txn;
-pub use edit_submission::submit_pending_user_edit;
+pub use edit_submission::{submit_pending_user_edit, submit_pending_user_steer};
 pub use enqueue::enqueue_local_steering_request;
 #[cfg(test)]
 pub(crate) use enqueue::enqueue_steering_request;
@@ -75,9 +75,9 @@ pub(crate) use management::{
     validate_pending_user_edit_in_txn, PersistedReplacements,
 };
 pub use management::{
-    pending_user_queue, pending_user_queue_projection, prepare_pending_user_edit,
-    PendingQueueEntry, PendingQueueProjection, PendingQueueSnapshot, REMOVED_REASON,
-    REPLACED_REASON,
+    pending_steer_edit, pending_user_queue, pending_user_queue_projection,
+    prepare_pending_user_edit, PendingQueueEntry, PendingQueueProjection, PendingQueueSnapshot,
+    REMOVED_REASON, REPLACED_REASON,
 };
 pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
 #[cfg(test)]

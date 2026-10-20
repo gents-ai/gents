@@ -40,6 +40,7 @@ ts-rs = { version = "10.1", default-features = false, features = [
 uuid.workspace = true
 
 [features]
+typescript = ["gents/typescript"]
 # Test seams for downstream crates' tests; never enabled by production builds.
 test-fixtures = []
 

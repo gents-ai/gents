@@ -66,6 +66,8 @@ pub struct BackgroundedToolView {
     pub request_id: String,
     pub tool_call_id: String,
     pub tool_name: String,
+    pub starts_session: bool,
+    pub job: bool,
     pub lifecycle_state: Option<String>,
     pub status: Option<String>,
     pub started_at: Option<String>,
@@ -75,6 +77,24 @@ pub struct BackgroundedToolView {
     pub await_mode: Option<String>,
     pub stuck_since: Option<String>,
     pub native_executor: Option<NativeExecutorStatusView>,
+    /// Shared wait-status projection (gents-protocol::wait_status): parsed
+    /// lifecycle, elapsed truth, stable terminal duration. `None` fields mean
+    /// unknown — never fabricated.
+    pub wait_status: Option<WaitStatusProjectionView>,
+}
+
+/// ts-rs mirror of `gents_protocol::wait_status::WaitStatusProjection`.
+/// Field semantics documented there; do not diverge.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitStatusProjectionView {
+    pub lifecycle: String,
+    /// Verbatim persisted lifecycle_state token.
+    pub lifecycle_state_raw: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub running_elapsed_seconds: Option<i64>,
+    pub terminal_elapsed_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -100,6 +120,11 @@ pub struct SessionProvenanceView {
     pub started: Vec<LinkedSessionView>,
     pub sent: Vec<LinkedSessionView>,
     pub received: Vec<LinkedSessionView>,
+    /// The request of this session that its starter's call opened it with
+    /// (C7), while that request is visible.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub opening_request_id: Option<String>,
     pub senders: Vec<TurnSenderView>,
     pub calls: Vec<CausedCallView>,
 }

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(windows)]
 use std::process::Stdio;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use tokio::io::AsyncWriteExt;
+#[cfg(windows)]
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -18,13 +20,21 @@ mod job_object;
 #[cfg(unix)]
 mod process_group;
 mod registry;
+#[cfg(unix)]
+mod spawn;
 
-use capture::{join_capture_after_child_exit, spawn_optional_capped};
+use capture::join_capture_after_child_exit;
+#[cfg(unix)]
+use capture::spawn_native_capped as spawn_optional_capped;
+#[cfg(not(unix))]
+use capture::spawn_optional_capped;
 #[cfg(windows)]
 use job_object::{terminate_job, ManagedChildJob};
 #[cfg(unix)]
 use process_group::{terminate_process_group, ManagedChild};
 use registry::ActiveExecGuard;
+#[cfg(unix)]
+use spawn::spawn_child;
 
 pub(crate) use registry::{active_executor_snapshots, ManagedExecKind};
 
@@ -49,32 +59,13 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
         };
     };
 
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(&request.cwd)
-        .stdin(if request.stdin.is_empty() {
-            Stdio::null()
-        } else {
-            Stdio::piped()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if let Some(environment) = request.environment.as_ref() {
-        command.env_clear().envs(environment);
-    }
-
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
-    let mut child = match command.spawn() {
+    let mut child = match spawn_child(
+        program,
+        args,
+        &request.cwd,
+        request.environment.as_ref(),
+        !request.stdin.is_empty(),
+    ) {
         Ok(child) => ManagedChild::new(child),
         Err(error) => {
             return ManagedExecOutcome::SpawnFailed {
@@ -402,30 +393,15 @@ pub(crate) async fn spawn_managed_process(
         return Err("managed exec argv must not be empty".to_string());
     };
 
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(&request.cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if let Some(environment) = request.environment.as_ref() {
-        command.env_clear().envs(environment);
-    }
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
-    let mut child = command
-        .spawn()
-        .map(ManagedChild::new)
-        .map_err(|error| error.to_string())?;
+    let mut child = spawn_child(
+        program,
+        args,
+        &request.cwd,
+        request.environment.as_ref(),
+        true,
+    )
+    .map(ManagedChild::new)
+    .map_err(|error| error.to_string())?;
     let pid = child.pgid();
     let guard = pid.map(|pid| {
         ActiveExecGuard::insert(

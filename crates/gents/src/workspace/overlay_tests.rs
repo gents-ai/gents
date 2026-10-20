@@ -792,18 +792,21 @@ async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
         for (fields, should_allow) in [(input, false), (restore, true)] {
             let response = fx.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#)).await;
             assert!(!response.has_errors(), "{:?}", response.errors);
-            assert_eq!(fx.grant.validate_for_launch().await.is_ok(), should_allow);
+            let validation = fx.grant.validate_for_launch().await;
+            assert_eq!(
+                validation.is_ok(),
+                should_allow,
+                "validation after {fields}: {validation:?}"
+            );
         }
     }
     let response = fx.node.execute(&format!(r#"mutation {{ update_WorkspaceBinding(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}, input: {{ lifecycle_state: "released" }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    assert!(fx
-        .grant
-        .validate_for_launch()
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("active ReadOnly binding"));
+    let error = fx.grant.validate_for_launch().await.unwrap_err();
+    assert!(
+        error.to_string().contains("active ReadOnly binding"),
+        "unexpected validation failure: {error:#}"
+    );
 }
 
 #[tokio::test]

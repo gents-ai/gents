@@ -1,5 +1,6 @@
 import Proofs.Recovery.Sweeps
 import Proofs.Conformance.ContractCases
+import Proofs.Conformance.PluginJob
 
 namespace Recovery
 
@@ -66,7 +67,8 @@ def orphanedBackgroundRecoveryCase
   }
 
 def sessionMessageRecoveryCase
-    (name : String) (cause : ToolRecoveryCause) : RecoverySweepCase :=
+    (name : String) (cause : ToolRecoveryCause)
+    (handoff : Recovery.AssignmentHandoff := .complete) : RecoverySweepCase :=
   let row : ToolCallRecoveryRow :=
     { call := { r6NativeToolFixture with operation := .sessionMessage }
     , cause := cause }
@@ -77,10 +79,31 @@ def sessionMessageRecoveryCase
       row.call.state.toDefraDB
       recovered.call.state.toDefraDB
       "session-message-stack-observer-arm"
-      (toolCallRecoveryMeasure true row)
-      (toolCallRecoveryMeasure true recovered)) with
+      (toolCallRecoveryMeasure .sessionMessage row)
+      (toolCallRecoveryMeasure .sessionMessage recovered)) with
     recoveryCause := some cause.toContract
-    notificationReason := cause.notificationReason
+    notificationReason :=
+      if cause.toContract = "requestCompleted" then
+        Recovery.sessionMessageHandoffReason true handoff
+      else
+        cause.notificationReason
+  }
+
+/-- Plugin-job recovery witness: one tick of the registered sweep over a
+    running row; a row the tick leaves not running has failed closed. -/
+def pluginJobRecoveryCase (c : Conformance.PluginJob.RecoveryCase) : RecoverySweepCase :=
+  let after := Conformance.PluginJob.recoveryTick c.row
+  let state := fun (row : PluginJobRow) =>
+    (if row.running then ToolExecution.ToolCallState.running else .failed).toDefraDB
+  { (recoveryCase
+      pluginJobRecoverySweep
+      c.name
+      (state c.row)
+      (state after)
+      "plugin-job-recovery-tick"
+      (Conformance.PluginJob.recoveryMeasure c.row)
+      (Conformance.PluginJob.recoveryMeasure after)) with
+    deadlineExpired := some c.row.deadlineExpired
   }
 
 def taskHookRecordRecoveryCase
@@ -197,6 +220,18 @@ def recoverySweepCases : List RecoverySweepCase :=
   , sessionMessageRecoveryCase
       "session_message_request_completed_to_completed" .requestCompleted
   , sessionMessageRecoveryCase
+      "session_message_request_completed_no_goal_to_completed" .requestCompleted
+      .absent
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_unknown_goal_to_completed" .requestCompleted
+      .unknown
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_live_goal_to_completed" .requestCompleted
+      (.live "active")
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_blocked_goal_to_completed" .requestCompleted
+      (.live "blocked")
+  , sessionMessageRecoveryCase
       "session_message_request_failed_to_failed" .requestFailed
   , sessionMessageRecoveryCase
       "session_message_request_interrupted_to_cancelled" .requestInterrupted
@@ -204,7 +239,8 @@ def recoverySweepCases : List RecoverySweepCase :=
       "session_message_request_dead_to_failed" .requestDead
   , sessionMessageRecoveryCase
       "session_message_request_superseded_to_failed" .requestSuperseded
-  , recoveryCase
+  ] ++ Conformance.PluginJob.recoveryCases.map pluginJobRecoveryCase ++
+  [ recoveryCase
       inferenceCallRecoverySweep
       "inference_queued_stale_to_cancelled"
       "queued"
@@ -233,14 +269,14 @@ def recoverySweepCases : List RecoverySweepCase :=
 def restartDispositionCase
     (name : String)
     (awaitMode : ToolExecution.AwaitMode)
-    (sessionMessage : Bool)
+    (kind : RowKind)
     (parent : ParentObservation)
     (theoremName : String)
     (deadlineExpired : Bool := false)
     (process : ManagedExec.StopOutcome := .stopped) : RestartDispositionCase :=
   let row : RestartRow :=
     { awaitMode := awaitMode
-    , sessionMessage := sessionMessage
+    , kind := kind
     , parent := parent
     , deadlineExpired := deadlineExpired
     , process := process
@@ -249,7 +285,7 @@ def restartDispositionCase
   { name := name
   , rustFunction := "ToolCallLifecycle::recover_all"
   , awaitMode := awaitMode.toDefraDB
-  , sessionMessage := sessionMessage
+  , kind := kind
   , parentObservation := parent.toContract
   , deadlineExpired := deadlineExpired
   , processOutcome := process.toContract
@@ -268,80 +304,93 @@ def restartDispositionCase
 def restartDispositionCases : List RestartDispositionCase :=
   [ restartDispositionCase
       "restart_native_background_live_parent_interrupted"
-      .background false .live
+      .background .native .live
       "Recovery.native_background_tool_live_parent_interrupted_on_restart"
   , restartDispositionCase
       "restart_native_background_unowned_process_lost"
-      .background false .live
+      .background .native .live
       "Recovery.native_background_unstopped_process_settles_lost"
       (process := .notOwned)
   , restartDispositionCase
       "restart_native_background_exited_process_lost"
-      .background false .otherTerminal
+      .background .native .otherTerminal
       "Recovery.native_background_unstopped_process_settles_lost"
       (process := .alreadyExited)
   , restartDispositionCase
       "restart_native_background_still_running_left_running"
-      .background false .live
+      .background .native .live
       "Recovery.native_background_still_running_left_running"
       (process := .stillRunning)
   , restartDispositionCase
       "restart_session_message_live_parent_left_running"
-      .background true .live
+      .background .sessionMessage .live
       "Recovery.session_message_row_left_running"
   , restartDispositionCase
       "restart_session_message_interrupted_parent_left_running"
-      .background true .interrupted
+      .background .sessionMessage .interrupted
       "Recovery.session_message_row_left_running"
   , restartDispositionCase
       "restart_session_message_failed_parent_left_running"
-      .background true .otherTerminal
+      .background .sessionMessage .otherTerminal
       "Recovery.session_message_row_left_running"
   , restartDispositionCase
       "restart_session_message_clean_complete_parent_left_running"
-      .background true .cleanlyCompleted
+      .background .sessionMessage .cleanlyCompleted
       "Recovery.session_message_row_left_running"
   , restartDispositionCase
       "restart_session_message_deadline_expired_left_running"
-      .background true .live
+      .background .sessionMessage .live
       "Recovery.session_message_row_left_running"
       (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_deadline_expired_times_out"
-      .background false .live
+      .background .native .live
       "Recovery.deadline_precedes_restart_interrupt"
       (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_interrupted_parent_lost_on_restart"
-      .background false .interrupted
+      .background .native .interrupted
       "Recovery.native_background_tool_interrupted_on_restart"
   , restartDispositionCase
       "restart_native_background_terminal_parent_lost_on_restart"
-      .background false .otherTerminal
+      .background .native .otherTerminal
       "Recovery.native_background_tool_interrupted_on_restart"
   , restartDispositionCase
       "restart_foreground_interrupted_parent_cancelled"
-      .foreground false .interrupted
+      .foreground .native .interrupted
       "Recovery.leave_running_iff_preserved_shapes"
   , restartDispositionCase
       "restart_foreground_live_parent_left_running"
-      .foreground false .live
+      .foreground .native .live
       "Recovery.leave_running_iff_preserved_shapes"
   , restartDispositionCase
       "restart_session_message_missing_parent_left_running"
-      .background true .missing
+      .background .sessionMessage .missing
       "Recovery.missing_parent_never_terminalizes"
       (deadlineExpired := true)
   , restartDispositionCase
       "restart_native_background_expired_missing_parent_deferred"
-      .background false .missing
+      .background .native .missing
       "Recovery.missing_parent_never_terminalizes"
+      (deadlineExpired := true)
+  , restartDispositionCase
+      "restart_plugin_job_live_parent_left_running"
+      .background .pluginJob .live
+      "Recovery.plugin_job_row_left_running"
+  , restartDispositionCase
+      "restart_plugin_job_interrupted_parent_left_running"
+      .background .pluginJob .interrupted
+      "Recovery.plugin_job_row_left_running"
+  , restartDispositionCase
+      "restart_plugin_job_deadline_expired_left_running"
+      .background .pluginJob .otherTerminal
+      "Recovery.plugin_job_row_left_running"
       (deadlineExpired := true)
   ]
 
 theorem restartDispositionCases_cover_every_disposition :
     (restartDispositionCases.filter
-        (fun witness => witness.disposition = "leave_running")).length = 9 ∧
+        (fun witness => witness.disposition = "leave_running")).length = 12 ∧
       (restartDispositionCases.filter
         (fun witness => witness.disposition = "terminalize")).length = 7 := by
   native_decide

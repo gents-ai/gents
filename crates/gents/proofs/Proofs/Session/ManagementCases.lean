@@ -71,11 +71,24 @@ def cases : List Case :=
       .replace (some 1) [2,3] 0 1 [replacement 4 2]⟩
   , intakeCase "expired_steering_is_barrier" [{pending 2 with fresh := false}, pending 3] [2,3]
   , managementCase "expired_pending_edit_rejected" [{pending 2 with fresh := false}] [2] 0 1 [replacement 4 2]
+  , managementCase "promote_queued_head" [pending 2 .queue, pending 3 .queue]
+      [2,3] 0 1 [replacement 4 2]
+  , managementCase "promote_and_reorder_prefix" [pending 2 .queue, pending 3 .queue]
+      [2,3] 0 2 [replacement 5 2, { replacement 4 3 with delivery := .queue }]
+  , managementCase "cannot_demote_steering" [pending 2] [2] 0 1
+      [{ replacement 4 2 with delivery := .queue }]
+  , managementCase "promote_foreign_author_rejected" [{ pending 2 .queue with requester := some 2 }]
+      [2] 0 1 [replacement 4 2]
+  , managementCase "promote_context_barrier_rejected" [pending 2 .queue, { pending 3 .queue with turnContext := 7 }]
+      [2,3] 0 2 [replacement 4 2, { replacement 5 3 with delivery := .queue }]
+  , ⟨"promote_claimed_selection_rejected", { initial [pending 3 .queue] with active := some 2 },
+      .replace (some 1) [2,3] 0 1 [replacement 4 3]⟩
   ]
 
 theorem intake_and_management_decisions :
     (cases.map fun c => c.after.isSome) =
-      [true,true,true,false,false,true,true,true,true,true,false,false,false,false,false,true,true,true,false] := by
+      [true,true,true,false,false,true,true,true,true,true,false,false,false,false,false,true,true,true,false,
+       true,true,false,false,false,false] := by
   native_decide
 
 theorem selected_exact_contiguous_prefix :
@@ -103,5 +116,25 @@ theorem stale_steering_is_barrier :
   native_decide
 
 theorem stale_pending_edit_is_rejected : (cases[18]!).after = none := by native_decide
+
+theorem promoted_head_is_selected_at_the_next_safe_boundary :
+    ((cases[19]!).after.bind fun state =>
+      intakeSteering? queue.scope state active [4,3] true).map
+      (fun state => (state.folding.map (·.requestId), state.pending.map (·.requestId))) =
+      some ([4], [3]) := by native_decide
+
+theorem promotion_preserves_remaining_queue_delivery :
+    ((cases[20]!).after.map fun state => state.pending.map (·.delivery)) =
+      some [.steer, .queue] := by native_decide
+
+theorem promoting_the_last_of_three_retains_the_other_slots_and_active_request :
+    let c := managementCase "promote_last_of_three"
+      [pending 2 .queue, pending 3 .queue, pending 4 .queue] [2,3,4] 0 3
+      [replacement 7 2, { replacement 5 3 with delivery := .queue },
+        { replacement 6 4 with delivery := .queue }]
+    (c.after.map fun state => (state.active, state.pending.map fun entry =>
+      (entry.requestId, entry.orderKey, entry.delivery))) =
+      some (some 1, [(7,2,.steer), (5,3,.queue), (6,4,.queue)]) := by
+  native_decide
 
 end SessionQueue.ManagementCases

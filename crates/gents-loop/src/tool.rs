@@ -85,6 +85,8 @@ pub trait Tool: Sized + Send + Sync {
 pub struct ToolDispatchResult {
     pub result: Result<String, ToolError>,
     pub plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
+    /// Writes the tool deferred to the terminal of this call.
+    pub deferred_writes: Option<crate::live_output::DeferredToolWrites>,
 }
 
 pub trait ToolDyn: Send + Sync {
@@ -97,6 +99,7 @@ pub trait ToolDyn: Send + Sync {
             ToolDispatchResult {
                 result: self.call(args).await,
                 plugin_receipt: None,
+                deferred_writes: None,
             }
         })
     }

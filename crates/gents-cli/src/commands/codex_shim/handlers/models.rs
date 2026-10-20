@@ -512,6 +512,7 @@ mod tests {
             backend_id: "backend-a".to_string(),
             model_name: model_name.to_string(),
             reasoning_effort: None,
+            service_tier: None,
             context_window: None,
             max_output_tokens: None,
             sampling_id: None,

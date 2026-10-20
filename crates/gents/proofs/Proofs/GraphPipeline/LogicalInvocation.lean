@@ -1,11 +1,12 @@
 import Proofs.GoalAutomation
 import Proofs.GraphPipeline.FailureAttribution
+import Proofs.GoalAutomation.RequestAncestry
 
 /- IDs denote physical documents, not timestamps. Finite safety, not scheduler
 liveness. Fuel is row count, sufficient for an acyclic unique-document graph;
 exhausted/ambiguous paths fail closed. -/
 namespace GraphPipeline.LogicalInvocation
-abbrev Doc := Nat
+export GoalAutomation.RequestAncestry (Doc Attempt Edge parents rootsAt roots members ambiguous tips)
 structure RootAuthorization where
   receiptValid : Bool
   routePinned : Bool
@@ -21,41 +22,6 @@ theorem foreign_signed_root_denied (route : Bool) :
 
 theorem unpinned_owner_signed_root_denied :
     RootAuthorization.admitted ⟨true, false, true⟩ = false := rfl
-
-structure Attempt where
-  doc : Doc
-  pinnedRoot : Bool
-  terminal : Option Goals.RequestTerminal
-  deriving DecidableEq, Repr
-structure Edge where
-  parent : Doc
-  child : Doc
-  authenticated : Bool
-  deriving DecidableEq, Repr
-
-def parents (edges : List Edge) (child : Doc) : List Doc :=
-  (edges.filter (fun e => e.authenticated && e.child == child)).map Edge.parent
-
-def rootsAt (rows : List Attempt) (edges : List Edge) : Nat → Doc → List Doc
-  | 0, _ => []
-  | n+1, doc =>
-      let direct := if rows.any (fun a => a.doc == doc && a.pinnedRoot) then [doc] else []
-      direct ++ (parents edges doc).flatMap (rootsAt rows edges n)
-
-def roots (rows : List Attempt) (edges : List Edge) (doc : Doc) : List Doc :=
-  (rootsAt rows edges (rows.length + 1) doc).eraseDups
-
-def members (rows : List Attempt) (edges : List Edge) (root : Doc) : List Attempt :=
-  rows.filter (fun a => roots rows edges a.doc == [root])
-
-def ambiguous (rows : List Attempt) (edges : List Edge) : Bool :=
-  rows.any (fun a => (roots rows edges a.doc).length > 1 ||
-    (parents edges a.doc).eraseDups.length > 1)
-
-def tips (rows : List Attempt) (edges : List Edge) (root : Doc) : List Attempt :=
-  let ms := members rows edges root
-  ms.filter (fun a => !(edges.any (fun e => e.authenticated && e.parent == a.doc &&
-    ms.any (fun child => child.doc == e.child))))
 
 structure GoalEvidence where
   status : Goals.Status

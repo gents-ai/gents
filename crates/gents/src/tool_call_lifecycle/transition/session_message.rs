@@ -51,9 +51,10 @@ impl ToolCallLifecycle {
     pub(crate) async fn settle_session_message(
         &mut self,
         terminal: &CausedRequestTerminal,
+        handoff_reason: Option<&'static str>,
     ) -> Result<bool> {
         anyhow::ensure!(
-            self.is_session_message() && self.await_mode == AwaitMode::Background,
+            self.kind() == ToolRowKind::SessionMessage && self.await_mode == AwaitMode::Background,
             "session-message settlement requires a background agent_new/agent_message row"
         );
         let state = terminal.tool_state();
@@ -62,7 +63,14 @@ impl ToolCallLifecycle {
             state,
             failure: (state == ToolCallState::Failed).then_some(FailureClass::External),
             cancel: (state == ToolCallState::Cancelled).then_some(CancelCause::Interrupted),
-            completion_reason: terminal.completion_reason(),
+            // The assignment handoff is part of the row's durable settlement
+            // record: it persists as the `completionPending:<reason>` suffix
+            // and the completion redrive re-renders it, so a replay after a
+            // crash before the notice was created re-renders the same
+            // assignment evidence instead of a reasonless success form. A
+            // completed turn is not assignment evidence; the suffix names
+            // the caused session's Goal observation.
+            completion_reason: handoff_reason.or_else(|| terminal.completion_reason()),
         };
         let updated = self
             .terminalize_bridge_with_delivery(

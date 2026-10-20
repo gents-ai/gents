@@ -639,6 +639,33 @@ describe("configuration panels", () => {
         account("chatgpt-codex", "c-2", "Team"),
       ];
 
+      it("shows a saved sign-in before its backend or profile has been created", async () => {
+        const { api, app } = harness();
+        api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+          providers: [
+            {
+              id: "anthropic",
+              displayName: "Anthropic",
+              authMethods: ["claude_oauth"],
+            },
+          ],
+        });
+        api.listProviderAccounts.mockResolvedValue([
+          account("claude-subscription", null, "Personal"),
+        ]);
+        renderIn(
+          app,
+          <InferencePanel
+            deployment={{
+              ...rowsDeployment,
+              inferenceBackends: [],
+              inferenceProfiles: [],
+            }}
+          />,
+        );
+        expect(await screen.findByText("Signed in · finish setup")).toBeVisible();
+      });
+
       it("clears another agent's accounts and ignores its late response", async () => {
         const { api, app } = harness();
         let oldRead: (views: typeof accounts) => void = () => {};
@@ -1046,18 +1073,41 @@ describe("configuration panels", () => {
           return { api, app, view, user: userEvent.setup() };
         };
 
-        it("reads usage once on open and not on a snapshot change", async () => {
+        it("reads current usage once on open and not on a snapshot change", async () => {
           const { api, app } = setup();
           await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(1));
           expect(api.readProviderUsage).toHaveBeenCalledWith(
             deployment.nodeDid,
-            false,
+            true,
             null,
           );
           await act(async () =>
             publishSnapshot(app, { bootstrap } as unknown as DesktopClientSnapshot),
           );
           expect(api.readProviderUsage).toHaveBeenCalledTimes(1);
+        });
+
+        it("reads usage again when opening and reopening a provider page", async () => {
+          const { api, view } = setup();
+          await screen.findByText("5h 81%");
+          view.rerender(
+            <InferencePanel deployment={rowsDeployment} item="chatgpt-team" />,
+          );
+          await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(2));
+          api.readProviderUsage.mockResolvedValueOnce([
+            view_("chatgpt-team", { windows: [window("5h", 42)] }),
+          ]);
+          view.rerender(<InferencePanel deployment={rowsDeployment} />);
+          await screen.findByText("5h 42%");
+          view.rerender(
+            <InferencePanel deployment={rowsDeployment} item="chatgpt-team" />,
+          );
+          await waitFor(() => expect(api.readProviderUsage).toHaveBeenCalledTimes(4));
+          expect(api.readProviderUsage).toHaveBeenLastCalledWith(
+            deployment.nodeDid,
+            true,
+            null,
+          );
         });
 
         it("drops the previous agent's usage when the agent changes", async () => {
@@ -1419,6 +1469,19 @@ describe("configuration panels", () => {
     expect(view.nav().canBack).toBe(false);
     await open();
     expect(view.nav().canBack).toBe(true);
+  });
+
+  it("counts session-starting background rows apart from background jobs", async () => {
+    const { api, app } = harness();
+    api.fetchOperationsSnapshot.mockResolvedValue({
+      backgroundedTools: [
+        { toolCallId: "call-session", toolName: "agent_new", startsSession: true },
+        { toolCallId: "call-job-a", toolName: "shell", startsSession: false },
+        { toolCallId: "call-job-b", toolName: "shell", startsSession: false },
+      ],
+    });
+    renderIn(app, <AgentPanel deployment={deployment} />);
+    expect(await screen.findByText(/1 session call · 2 background jobs/)).toBeVisible();
   });
 
   it("requires the node identity fields and saves editable node tags", async () => {

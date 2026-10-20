@@ -140,4 +140,39 @@ example : publish duplicateSequenceHistory scope child remap childKey 1
     true true = none := by decide
 example : publish history scope child (fun _ => 1000) childKey 1 sourceAuthorization true true = none := by decide
 
+def editUser (id sequence : Nat) : MessageEnvelope :=
+  { sourceMessage id sequence with
+    header := { (sourceMessage id sequence).header with role := .user } }
+
+def editHistory : History :=
+  { messages := [editUser 1 0, sourceMessage 2 1,
+      { editUser 3 2 with blocks := [.toolResult 3 "call" none []] }, editUser 4 3]
+    compactions := [] }
+
+structure EditAnchorCase where
+  name : String
+  source : History
+  key : String
+
+def threeUserHistory : History :=
+  { messages := [editUser 1 1, editUser 2 2, editUser 3 3]
+    compactions := [] }
+
+def editAnchorCases : List EditAnchorCase :=
+  [ ⟨"three_user_turns", threeUserHistory, "origin-3"⟩
+  , ⟨"first_user_turn", editHistory, "origin-1"⟩
+  , ⟨"later_user_turn", editHistory, "origin-4"⟩
+  , ⟨"assistant_message", editHistory, "origin-2"⟩
+  , ⟨"tool_result_only", editHistory, "origin-3"⟩
+  , ⟨"missing_message", editHistory, "missing"⟩
+  , ⟨"prefix_is_not_identity", editHistory, "origin-"⟩
+  , ⟨"ambiguous_key", { editHistory with messages :=
+        editHistory.messages ++ [{ editUser 5 4 with key := "origin-1" }] }, "origin-1"⟩
+  , ⟨"empty_user_message", { editHistory with messages :=
+        [{ editUser 1 0 with blocks := [] }] }, "origin-1"⟩ ]
+
+example : editCut editHistory "origin-1" = some 0 := by decide
+example : editCut editHistory "origin-4" = some 3 := by decide
+example : editCut editHistory "origin-3" = none := by decide
+
 end Conformance.SessionDocuments

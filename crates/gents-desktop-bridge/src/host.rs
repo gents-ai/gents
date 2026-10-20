@@ -3,6 +3,7 @@ mod approvals;
 mod connection;
 #[cfg(any(unix, windows))]
 pub mod local;
+pub mod permissions;
 pub mod protocol;
 #[cfg(any(unix, windows))]
 mod service;
@@ -95,14 +96,104 @@ impl ClientHost {
                     .await.map_err(|_| BridgeError::untyped("Authentication save could not be confirmed. Reopen Accounts before trying again."))?;
                 encode(())
             }
+            ClientCommand::RuntimeIsLocal { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                encode(
+                    self.core
+                        .peer_records()
+                        .await
+                        .iter()
+                        .any(|peer| peer.node_did == node_did && peer.is_managed_runtime()),
+                )
+            }
             ClientCommand::InferenceCatalog {} => {
                 encode(gents::inference_setup::inference_setup_catalog())
+            }
+            ClientCommand::InferenceSetupState { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                if matches!(
+                    self.core.options().operator_identity_interaction,
+                    gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent
+                ) {
+                    return encode(
+                        self.core
+                            .read_inference_setup_state(&node_did)
+                            .await
+                            .map_err(backend_error)?,
+                    );
+                }
+                self.core
+                    .operator_access(&node_did)
+                    .map_err(backend_error)?;
+                self.core
+                    .refresh_node(&node_did)
+                    .await
+                    .map_err(backend_error)?;
+                let snapshot = crate::snapshot::build_runtime_snapshot(self.core.as_ref()).await;
+                if !snapshot
+                    .operator_config_authoritative_node_dids
+                    .as_ref()
+                    .is_some_and(|nodes| nodes.contains(&node_did))
+                {
+                    return Err(BridgeError::new(BridgeErrorCode::EndpointUnreachable,
+                        "Runtime configuration is not available. Check the runtime connection and try again."));
+                }
+                let deployment = snapshot
+                    .deployments
+                    .into_iter()
+                    .find(|node| node.node_did == node_did)
+                    .ok_or_else(|| {
+                        BridgeError::new(
+                            BridgeErrorCode::InvalidArgument,
+                            "The configured runtime is no longer available.",
+                        )
+                    })?;
+                encode(crate::inference_setup::InferenceSetupState::from(
+                    deployment,
+                ))
+            }
+            ClientCommand::InferenceModelsDiscover { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                encode(
+                    crate::inference_setup::discover_inference_models_for_core(
+                        request,
+                        Some(&self.core),
+                    )
+                    .await?,
+                )
+            }
+            ClientCommand::InferenceModelRecommendation { request } => encode(
+                crate::inference_setup::inference_model_recommendation(request)?,
+            ),
+            ClientCommand::AgentModelSelect { request } => {
+                self.require_configured_runtime(&request.node_did).await?;
+                encode(
+                    self.core
+                        .select_agent_model(
+                            &request.node_did,
+                            &request.agent_id,
+                            &request.backend_id,
+                            &request.model_name,
+                            request.reasoning_effort,
+                            request.service_tier,
+                        )
+                        .await
+                        .map_err(backend_error)?,
+                )
+            }
+            ClientCommand::ConfigApply { request } => {
+                self.require_configured_runtime(&request.document.node.node_did)
+                    .await?;
+                crate::commands::apply_config_components(&self.core, request)
+                    .await
+                    .map_err(backend_error)?;
+                encode(())
             }
             ClientCommand::AccountsList { request } => {
                 self.require_configured_runtime(&request.node_did).await?;
                 let access = self
                     .core
-                    .operator_graphql(&request.node_did)
+                    .operator_observation_graphql(&request.node_did)
                     .map(gents::ConfigAccess::Graphql)
                     .ok_or_else(|| {
                         anyhow::anyhow!("Connect this local runtime before managing its accounts.")
@@ -355,11 +446,42 @@ impl ClientHost {
                         "use an absolute local runtime home path",
                     ));
                 }
-                self.core
+                let peer = self
+                    .core
                     .refresh_local_standard_peer(&home, "Local runtime")
                     .await
                     .map_err(backend_error)?;
+                let target = crate::local_pairing::ManagedPairingTarget {
+                    node_name: peer.label,
+                    node_did: peer.node_did,
+                    graphql: peer.graphql.ok_or_else(|| {
+                        BridgeError::untyped(
+                            "The local runtime did not provide a configuration endpoint.",
+                        )
+                    })?,
+                };
+                crate::local_pairing::retry_managed_pairing(
+                    &cancel,
+                    crate::local_pairing::MANAGED_PAIRING_ATTEMPTS,
+                    crate::local_pairing::MANAGED_PAIRING_RETRY_DELAY,
+                    || {
+                        crate::local_pairing::ensure_managed_runtime_pairing(
+                            Arc::clone(&self.core),
+                            &home,
+                            &target,
+                            &cancel,
+                        )
+                    },
+                )
+                .await
+                .map_err(|error| BridgeError::untyped(error.to_string()))?;
                 encode(())
+            }
+            ClientCommand::WorkspacePermissionsSave { request } => {
+                encode(permissions::save(&self.core, request).await?)
+            }
+            ClientCommand::WorkspacePermissions { request } => {
+                encode(permissions::state(&self.core, request).await?)
             }
             ClientCommand::ApprovalSubscribe { node_did, token } => {
                 approvals.subscribe(&self.core, &node_did, &token).await?;
@@ -436,8 +558,18 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::SteerPending { request } => encode(
+                crate::commands::steer_pending_message(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::EditPending { request } => encode(
                 crate::commands::edit_pending_queue(&self.core, request)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::ForkBeforeMessage { request } => encode(
+                crate::commands::fork_session_before_message(&self.core, request)
                     .await
                     .map_err(backend_error)?,
             ),

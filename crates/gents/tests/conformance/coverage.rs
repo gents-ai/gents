@@ -175,7 +175,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().frontend_client_shell_cases.len(),
-        27
+        29
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_case_count,
@@ -183,15 +183,15 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(
         lean_contract_snapshot().desktop_client_shell_cases.len(),
-        24
+        26
     );
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
-    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 72);
+    assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 90);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 52);
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 32);
+    assert_eq!(lean_recovery_sweep_cases().len(), 43);
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
@@ -280,6 +280,9 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.graph-pipeline.foundation",
         "boundary.rendered-capture.assembled-request-artifact",
         "boundary.rendered-capture.key-encoding-injectivity",
+        "boundary.plugin-job.guest-determinism",
+        "boundary.plugin-job.single-step-driver",
+        "boundary.plugin-data.transaction",
     ]
     .into_iter()
     .map(str::to_string)
@@ -493,6 +496,41 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "prompt_assembly_claude_wire_start_cases",
             "PromptAssemblyClaudeWireStartCases",
             !snapshot.prompt_assembly_claude_wire_start_cases.is_empty(),
+        ),
+        (
+            "prompt_assembly_service_tier_cases",
+            "PromptAssemblyServiceTierCases",
+            !snapshot.prompt_assembly_service_tier_cases.is_empty(),
+        ),
+        (
+            "workspace_permission_cases",
+            "WorkspacePermissionCases",
+            !snapshot.workspace_permission_cases.is_empty(),
+        ),
+        (
+            "access_review_cases",
+            "AccessReviewCases",
+            !snapshot.access_review_cases.is_empty(),
+        ),
+        (
+            "workspace_permission_write_cases",
+            "WorkspacePermissionWriteCases",
+            !snapshot.workspace_permission_write_cases.is_empty(),
+        ),
+        (
+            "access_review_task_cases",
+            "AccessReviewTaskCases",
+            !snapshot.access_review_task_cases.is_empty(),
+        ),
+        (
+            "workspace_command_root_cases",
+            "WorkspaceCommandRootCases",
+            !snapshot.workspace_command_root_cases.is_empty(),
+        ),
+        (
+            "operator_path_cases",
+            "OperatorPathCases",
+            !snapshot.operator_path_cases.is_empty(),
         ),
         (
             "prompt_assembly_responses_storage_cases",
@@ -998,6 +1036,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
     emitted.insert(("client_settings_cases".into(), "ClientSettingsCases".into()));
     assert!(!snapshot.client_observation_scope_cases.is_empty());
+    assert!(!snapshot.client_observation_admission_cases.is_empty());
+    emitted.insert((
+        "client_observation_admission_cases".into(),
+        "ClientObservationAdmission".into(),
+    ));
     emitted.insert((
         "client_observation_scope_cases".into(),
         "ClientObservationScopeCases".into(),
@@ -1801,6 +1844,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "causal_hop_contract".into(),
         "SessionTargetAuthorityCases".into(),
     ));
+    assert!(!snapshot.title_text_cases["cases"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    emitted.insert(("title_text_cases".into(), "TitleTextCases".into()));
     if !snapshot.title_request_admission_cases.is_empty() {
         emitted.insert((
             "title_request_admission_cases".to_string(),
@@ -1951,6 +1999,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ("tool_effects", "PluginEffectCases"),
         ("tool_effect_terminals", "PluginEffectTerminalCases"),
         ("tool_effect_accounting", "PluginEffectAccountingCases"),
+        ("asset_mount", "PluginAssetMountCases"),
+        ("project_tier", "PluginProjectTierCases"),
+        ("scratch", "PluginScratchCases"),
     ] {
         assert!(snapshot.plugin_resource_cases[family]
             .as_array()
@@ -1963,6 +2014,64 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             .is_some_and(|rows| !rows.is_empty()));
     }
     emitted.insert(("plugin_resource_cases".into(), "PluginToolCallCases".into()));
+    let data = &snapshot.plugin_data_cases;
+    assert!(
+        !data.writes.is_empty()
+            && !data.queries.is_empty()
+            && !data.filters.is_empty()
+            && !data.notes.is_empty()
+    );
+    emitted.insert(("plugin_data_cases".into(), "PluginDataCases".into()));
+    assert!(!snapshot.plugin_calls_route_cases.is_empty());
+    emitted.insert((
+        "plugin_calls_route_cases".into(),
+        "PluginCallsRouteCases".into(),
+    ));
+    for (category, domain, present) in [
+        (
+            "plugin_job_admission_cases",
+            "PluginJobAdmissionCases",
+            !snapshot.plugin_job_admission_cases.is_empty(),
+        ),
+        (
+            "plugin_job_adoption_cases",
+            "PluginJobAdoptionCases",
+            !snapshot.plugin_job_adoption_cases.is_empty(),
+        ),
+        (
+            "plugin_job_key_cases",
+            "PluginJobKeyCases",
+            !snapshot.plugin_job_key_cases.is_empty(),
+        ),
+        (
+            "plugin_job_control_cases",
+            "PluginJobControlCases",
+            !snapshot.plugin_job_control_cases.is_empty(),
+        ),
+        (
+            "plugin_job_authority_cases",
+            "PluginJobAuthorityCases",
+            !snapshot.plugin_job_authority_cases.is_empty(),
+        ),
+        (
+            "plugin_job_wire_cases",
+            "PluginJobWireCases",
+            !snapshot.plugin_job_wire_cases.is_empty(),
+        ),
+        (
+            "plugin_job_lineage_cases",
+            "PluginJobLineageCases",
+            !snapshot.plugin_job_lineage_cases.is_empty(),
+        ),
+        (
+            "plugin_job_recovery_cases",
+            "PluginJobRecoveryCases",
+            !snapshot.plugin_job_recovery_cases.is_empty(),
+        ),
+    ] {
+        assert!(present, "{category} must emit rows");
+        emitted.insert((category.into(), domain.into()));
+    }
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));
@@ -1976,6 +2085,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             && !sessions.projection.is_empty()
             && !sessions.retry.is_empty()
             && !sessions.fork.is_empty()
+            && !sessions.edit_anchors.is_empty()
     );
     emitted.insert((
         "session_document_cases".into(),

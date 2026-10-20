@@ -168,8 +168,8 @@ pub(crate) async fn prepare_goal_control(
             if let Err(error) = fields.validate() {
                 return Ok(Err(error.to_string()));
             }
-            if state.status != GoalStatus::Active {
-                return Ok(Err("only an active goal can be edited".into()));
+            if !super::edit::GoalEditOrigin::Client.can_edit_status(state.status) {
+                return Ok(Err("only an active or paused goal can be edited".into()));
             }
             PreparedGoalControl::Edit { goal, fields }
         }
@@ -256,9 +256,14 @@ pub(crate) async fn stage_goal_control(
             (goal.goal_id, Some(submitted.request_id))
         }
         PreparedGoalControl::Edit { goal, fields } => {
-            let updated = super::edit::stage_active_goal_edit(txn, &goal, &fields)
-                .await?
-                .context("goal changed while staging its edit")?;
+            let updated = super::edit::stage_goal_edit(
+                txn,
+                &goal,
+                &fields,
+                super::edit::GoalEditOrigin::Client,
+            )
+            .await?
+            .context("goal changed while staging its edit")?;
             (updated.goal_id, None)
         }
         PreparedGoalControl::Pause(goal) => {

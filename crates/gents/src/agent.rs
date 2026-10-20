@@ -98,7 +98,8 @@ where
         1,
         request_admission,
     )?
-    .with_tool_surface_runtime_policy(tool_surface.root_execution_guard().cloned(), None);
+    .with_tool_surface_runtime_policy(tool_surface.root_execution_guard().cloned(), None)
+    .with_approval_home(tool_runtime.plugin_home().map(std::path::Path::to_path_buf));
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     daemon.process_request(request, shutdown_rx).await?;
     Ok(())
@@ -223,6 +224,7 @@ pub struct Gents {
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
+    enrollment_authority: Arc<std::sync::RwLock<Option<p2p_reconcile::EnrollmentAuthorityHandle>>>,
     operator_tool_root: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }
@@ -310,6 +312,7 @@ impl Gents {
             // Provider calls require durable rendered input to be fact records.
             rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
+            enrollment_authority: Arc::default(),
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
             plugins,
         })
@@ -413,6 +416,19 @@ impl Gents {
         self.manual_trigger_handle.get()
     }
 
+    /// The caller authenticates the member with DefraDB before requesting metadata.
+    pub async fn client_observation_authorized(&self, member_did: &str) -> anyhow::Result<bool> {
+        let authority = self
+            .enrollment_authority
+            .read()
+            .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("enrollment authority is not running"))?;
+        authority
+            .client_observation_authorized(member_did, self.node_did())
+            .await
+    }
+
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
         runtime::run_agent(self, shutdown).await
     }
@@ -485,6 +501,7 @@ pub(crate) fn agent_config_from_documents(
         backend_endpoint: backend.backend_endpoint,
         backend_auth: backend.backend_auth,
         model_name: inference.profile.model_name.clone(),
+        service_tier: inference.profile.service_tier,
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
         context_window: inference.context_window()?,
         max_output_tokens: inference.max_output_tokens()?,

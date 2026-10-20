@@ -209,5 +209,7 @@ mod session_stale_rows;
 mod session_state;
 #[path = "tests/session_timeline.rs"]
 mod session_timeline;
+#[path = "tests/session_titles.rs"]
+mod session_titles;
 #[path = "tests/sync.rs"]
 mod sync;

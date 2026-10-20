@@ -42,10 +42,10 @@ struct ScenarioManifest {
     prepare: Vec<ScenarioPrepareStep>,
     #[serde(default)]
     allowed_folders: Vec<ScenarioAllowedFolder>,
-    #[serde(default)]
-    graph_dependency_environment: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default, alias = "graph_dependency_environment")]
+    dependency_environment: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(skip)]
-    graph_dependencies: Vec<String>,
+    dependencies: Vec<String>,
     #[serde(skip)]
     plugins: Vec<gents::pack::PackPlugin>,
 
@@ -367,7 +367,7 @@ fn load_manifest_with(
         distribution.name == manifest.name,
         "scenario name must match the distribution manifest"
     );
-    manifest.graph_dependencies = distribution.metadata.dependencies.clone();
+    manifest.dependencies = distribution.metadata.dependencies.clone();
     manifest.plugins = distribution.metadata.plugins.clone();
     manifest.config = Some(load_pack_config_with(pack, lookup)?);
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
@@ -746,7 +746,7 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
     }
     validate_tool_package(&manifest.init.tool_package)?;
     let mut graph_packages = BTreeSet::new();
-    for package in &manifest.graph_dependencies {
+    for package in &manifest.dependencies {
         let package = package.trim();
         if package.is_empty() {
             bail!("manifest dependencies entries must not be empty");
@@ -905,7 +905,7 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
     Ok(())
 }
 
-struct GraphDependencyInstall<'a> {
+struct DependencyInstall<'a> {
     bin: &'a Path,
     home: &'a Path,
     registry: Option<&'a str>,
@@ -914,13 +914,13 @@ struct GraphDependencyInstall<'a> {
     grant_authority: bool,
 }
 
-async fn install_graph_dependencies(
-    ctx: &GraphDependencyInstall<'_>,
+async fn install_dependencies(
+    ctx: &DependencyInstall<'_>,
     packages: &[String],
     environments: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Result<()> {
     for package in packages {
-        tracing::info!(%package, "installing graph dependency");
+        tracing::info!(%package, "installing dependency");
         let mut args = vec![
             "pack".to_owned(),
             "install".to_owned(),
@@ -950,8 +950,8 @@ async fn install_graph_dependencies(
             environments.get(package).cloned().unwrap_or_default(),
         )
         .await
-        .with_context(|| format!("installing graph dependency {package}"))?;
-        tracing::info!(%package, "installed graph dependency");
+        .with_context(|| format!("installing dependency {package}"))?;
+        tracing::info!(%package, "installed dependency");
     }
     Ok(())
 }
@@ -3343,8 +3343,8 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     // Dependencies install before the node applies the scenario pack, so the
     // pack's documents may name theirs and their plugins are on the host
     // when the agents that call them start.
-    install_graph_dependencies(
-        &GraphDependencyInstall {
+    install_dependencies(
+        &DependencyInstall {
             bin: &bin,
             home: &home,
             registry: args.registry.as_deref(),
@@ -3352,8 +3352,8 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
             inference_profile_id: &inference_profile_id,
             grant_authority: args.grant_authority,
         },
-        &manifest.graph_dependencies,
-        &manifest.graph_dependency_environment,
+        &manifest.dependencies,
+        &manifest.dependency_environment,
     )
     .await?;
 
@@ -3793,6 +3793,24 @@ mod tests {
     fn load_manifest_defaults(pack: &Path) -> Result<ScenarioManifest> {
         let distribution = read_distribution_manifest(pack)?;
         load_manifest_with(pack, &distribution, &|_| None)
+    }
+
+    #[test]
+    fn scenario_manifest_reads_the_old_and_new_dependency_environment_keys() {
+        for key in ["graph_dependency_environment", "dependency_environment"] {
+            let manifest: ScenarioManifest = serde_json::from_value(serde_json::json!({
+                "name": "t",
+                "init": {"inference_url": "http://x", "model_name": "m"},
+                "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
+                "expect": {"trigger_ids": []},
+                key: {"dep": {"TOKEN": "value"}}
+            }))
+            .unwrap();
+            assert_eq!(
+                manifest.dependency_environment["dep"]["TOKEN"], "value",
+                "{key}"
+            );
+        }
     }
 
     #[test]
@@ -4440,8 +4458,8 @@ mod tests {
             await_timeout_secs: 1,
             prepare: Vec::new(),
             allowed_folders: Vec::new(),
-            graph_dependency_environment: BTreeMap::new(),
-            graph_dependencies: Vec::new(),
+            dependency_environment: BTreeMap::new(),
+            dependencies: Vec::new(),
             plugins: Vec::new(),
             config: None,
         };

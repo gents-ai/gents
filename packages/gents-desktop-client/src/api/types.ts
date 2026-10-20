@@ -1,9 +1,14 @@
+import type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
+import type { SessionForkResult } from "../generated/SessionForkResult.js";
+import type { PendingMessageSteerRequest } from "../generated/PendingMessageSteerRequest.js";
 import type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
 import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 import type { GoalControlRequest } from "../generated/GoalControlRequest.js";
 import type { GoalControlResult } from "../generated/GoalControlResult.js";
 import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
+import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
+import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
 import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest.js";
@@ -84,6 +89,9 @@ import type {
   PackInstallRequest,
   PackPluginSlot,
   PackSlotProfile,
+  PackWireRequest,
+  PackWireResult,
+  PackWireSources,
 } from "../types/packs.js";
 import type {
   AllowedFolderAccess,
@@ -191,12 +199,16 @@ export type DesktopApiAdapter = {
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
+  steerPendingMessage: (request: PendingMessageSteerRequest) => Promise<PendingQueueEditResult>;
   editPendingQueue: (
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;
   listMailbox: () => Promise<MailboxItemView[]>;
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
   dismissMailboxItem: (itemId: string) => Promise<void>;
+  forkSessionBeforeMessage: (
+    request: SessionForkBeforeRequest,
+  ) => Promise<SessionForkResult>;
   renameSession: (request: SessionRenameRequest) => Promise<void>;
   resendRequest: (
     requestId: string,
@@ -355,6 +367,7 @@ export type DesktopApiAdapter = {
   interruptRequest: (
     request: DesktopInterruptRequestRequest,
   ) => Promise<InterruptRequestResult>;
+  jobControl: (request: DesktopJobControlRequest) => Promise<JobControlOutcome>;
   listInstalledPacks: () => Promise<{ packs: InstalledPack[] }>;
   listPackPluginSlots: () => Promise<{
     plugins: PackPluginSlot[];
@@ -369,6 +382,8 @@ export type DesktopApiAdapter = {
   updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
   removePack: (pack: string) => Promise<void>;
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
+  wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
+  listPackWireSources: () => Promise<PackWireSources>;
   signInToPackRegistry: (token: string) => Promise<void>;
   signOutOfPackRegistry: () => Promise<void>;
   listAllowedFolders: () => Promise<AllowedFolders>;
@@ -406,6 +421,8 @@ export type PackCommand =
   | "updatePack"
   | "removePack"
   | "bindPackPlugin"
+  | "wirePack"
+  | "listPackWireSources"
   | "signInToPackRegistry"
   | "signOutOfPackRegistry";
 

@@ -537,6 +537,7 @@ impl TurnManager {
                 let mut delivery_after = String::new();
                 let mut goal_cursor = super::goals::GoalCursor::default();
                 let mut graph_cursor = super::graph_runs::GraphRunCursor::default();
+                let mut job_cursor = super::job_runs::JobRunCursor::default();
                 let mut goal_refresh_at = tokio::time::Instant::now();
                 loop {
                     if !std::mem::take(&mut first_pass) {
@@ -575,6 +576,19 @@ impl TurnManager {
                         {
                             tracing::warn!(error = %format_args!("{error:#}"),
                             session_id = %observed_session, "Grok graph run observation failed");
+                        }
+                        for error in job_cursor
+                            .refresh(
+                                &manager.node,
+                                &manager.config.node_did,
+                                &observed_session,
+                                &sender,
+                                &projections,
+                            )
+                            .await
+                        {
+                            tracing::warn!(error = %format_args!("{error:#}"),
+                            session_id = %observed_session, "Grok job observation failed");
                         }
                     }
                     if let Err(error) = manager
@@ -2704,6 +2718,17 @@ mod tests {
         serde_json::from_value(json!({"_docID":doc,"request_id":request,"node_did":node_did,"requester_did":node_did,"agent_id":agent_id,"session_id":"session-1","runtime_source_kind":"local-control"})).unwrap()
     }
 
+    #[test]
+    fn job_tick_runs_before_observe_session_tick() {
+        let source = include_str!("turn.rs");
+        let observer = &source[source.find("async fn observe_session_since").unwrap()..];
+        let before_cards = &observer[..observer.find(".observe_session_tick(").unwrap()];
+        assert!(
+            before_cards.matches("job_cursor").count() >= 2,
+            "the job cursor is declared and refreshed ahead of the card tick"
+        );
+    }
+
     fn buffer_sender() -> (Arc<Mutex<Vec<String>>>, PromptSender) {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         (buffer.clone(), PromptSender::Buffer { buffer })
@@ -2942,6 +2967,7 @@ mod tests {
             parent.node_did.as_deref(),
             parent.agent_id.as_deref().expect("fixture agent"),
             parent.doc_id.as_deref().unwrap(),
+            None,
         )
         .await;
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
@@ -3632,15 +3658,7 @@ mod tests {
             "",
         )
         .await;
-        crate::commands::grok_shim::test_fixtures::seed_started_session(
-            &node,
-            &node_did,
-            "opened",
-            Some(&node_did),
-            &agent_id,
-            &parent_doc,
-        )
-        .await;
+        let mut opening_doc = None;
         for (request_id, call_id, call_doc) in [
             ("zz-opening", "call-open", &open_call),
             ("aa-message", "call-message", &message_call),
@@ -3654,7 +3672,28 @@ mod tests {
                 caused_by_parent_request_id:"open-root", caused_by_parent_request_doc_id:"{parent}", caused_by_parent_tool_call_id:"{call_id}", caused_by_parent_tool_call_doc_id:"{call_doc}"
             }}) {{_docID}} }}"#)).await;
             ensure_no_errors(&response, "seed opened session request").unwrap();
+            if request_id == "zz-opening" {
+                opening_doc = Some(
+                    gents_protocol::graphql::extract_mutation_doc_id(
+                        &json!({"data":response.data}),
+                        "AgentRequest",
+                    )
+                    .unwrap(),
+                );
+            }
         }
+        // The session records its opener: `(created_at, _docID)` alone would
+        // tie these two requests on an unfixed document id.
+        crate::commands::grok_shim::test_fixtures::seed_started_session(
+            &node,
+            &node_did,
+            "opened",
+            Some(&node_did),
+            &agent_id,
+            &parent_doc,
+            opening_doc.as_deref(),
+        )
+        .await;
         let started = crate::caused_sessions::load_direct_caused_sessions(&node, &parent)
             .await
             .unwrap();

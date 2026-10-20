@@ -120,3 +120,239 @@ fn wire_commands_reject_privileged_raw_access_and_unscoped_session_reads() {
         assert!(serde_json::from_value::<protocol::ClientCommand>(command).is_err());
     }
 }
+
+#[test]
+fn inference_setup_state_uses_scoped_wire_arguments() {
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"client_inference_setup_state", "args":{"nodeDid":"did:fixture"}
+    }))
+    .unwrap();
+    assert!(command.is_cancellable());
+    assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+        "name":"client_inference_setup_state", "args":{}
+    }))
+    .is_err());
+}
+
+#[test]
+fn agent_model_selection_is_scoped_and_not_cancellable() {
+    let mut request = json!({
+        "nodeDid":"did:fixture", "agentId":"agent", "backendId":"backend",
+        "modelName":"model", "reasoningEffort":"high", "serviceTier":"fast"
+    });
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"client_agent_model_select", "args":{"request":request}
+    }))
+    .unwrap();
+    assert!(!command.is_cancellable());
+    request["sessionId"] = "session".into();
+    assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+        "name":"client_agent_model_select", "args":{"request":request}
+    }))
+    .is_err());
+}
+
+#[tokio::test]
+async fn inference_setup_state_rejects_an_unconfigured_runtime() {
+    let (core, _dir) = crate::tests::support::boot_core().await;
+    let host = ClientHost::new(core.clone());
+    let error = host
+        .execute(
+            protocol::ClientCommand::InferenceSetupState {
+                node_did: "did:unconfigured".into(),
+            },
+            &super::approvals::AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    core.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn passive_snapshots_keep_the_runtime_identity_locked() {
+    use identity::Identity as _;
+
+    let server = wiremock::MockServer::start().await;
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    let directory = tempfile::tempdir().unwrap();
+    let paths = gents_desktop_core::client::DesktopPaths::from_root(directory.path());
+    let options = gents_desktop_core::client::ClientCoreOptions {
+        operator_identity_interaction:
+            gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
+        ..gents_desktop_core::client::ClientCoreOptions::local_only()
+    };
+    let core = Arc::new(
+        gents_desktop_core::client::ClientCore::start_with_paths_and_options(paths, options)
+            .await
+            .unwrap(),
+    );
+    let home = directory.path().join("runtime");
+    std::fs::create_dir_all(&home).unwrap();
+    let key_path = home.join("node.key");
+    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let did = identity.did().unwrap().to_string();
+    std::fs::write(
+        home.join("init.json"),
+        json!({ "node_name": "Local", "node_did": did, "key_path": key_path }).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("runtime.json"),
+        json!({
+            "node_name": "Local", "node_did": did, "graphql": graphql,
+            "p2p_transport": "iroh"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    core.persist_local_standard_peer(
+        "Local",
+        "iroh://unavailable-runtime",
+        &did,
+        &graphql,
+        &home.to_string_lossy(),
+    )
+    .await
+    .unwrap();
+    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    let host = ClientHost::new(core.clone());
+    let approvals = super::approvals::AttachmentApprovals::default();
+    host.execute(
+        protocol::ClientCommand::Snapshot {},
+        &approvals,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let _ = host
+        .execute(
+            protocol::ClientCommand::AccountsList {
+                request: crate::accounts::ProviderAccountsRequest {
+                    node_did: did.clone(),
+                },
+            },
+            &approvals,
+            CancellationToken::new(),
+        )
+        .await;
+    let _ = core
+        .session_goal_observation(&did, "unavailable-session")
+        .await;
+    let _ = core
+        .pending_user_queue_projection(&did, "unavailable-session", &[])
+        .await;
+    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    let requests = server.received_requests().await.unwrap();
+    assert!(!requests.is_empty());
+    assert!(requests
+        .iter()
+        .all(|request| !request.headers.contains_key("authorization")));
+    let settings = gents_desktop_core::inference::InferenceSetupState::project(
+        &gents_desktop_core::client::ClientStore::default(),
+        &did,
+    );
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(
+            gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+        ))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+            gents_desktop_core::inference::InferenceSettingsResponse {
+                contract_version:
+                    gents_desktop_core::inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                state: settings,
+            },
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let settings = host
+        .execute(
+            protocol::ClientCommand::InferenceSetupState {
+                node_did: did.clone(),
+            },
+            &approvals,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settings["nodeDid"], did);
+    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    let requests = server.received_requests().await.unwrap();
+    let settings_read = requests
+        .iter()
+        .find(|request| {
+            request.url.path() == gents_desktop_core::inference::INFERENCE_SETTINGS_PATH
+        })
+        .unwrap();
+    assert!(settings_read
+        .headers
+        .get("authorization")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("Bearer "));
+    core.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn runtime_location_rejects_an_unconfigured_node() {
+    let (core, _dir) = crate::tests::support::boot_core().await;
+    let host = ClientHost::new(core.clone());
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"client_runtime_is_local", "args":{"nodeDid":"did:unconfigured"}
+    }))
+    .unwrap();
+    assert!(command.is_cancellable());
+    let error = host
+        .execute(
+            command,
+            &super::approvals::AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
+    core.shutdown().await.unwrap();
+}
+
+#[test]
+fn workspace_permissions_reads_cannot_supply_an_identity_or_mutate_the_selection() {
+    let mut request = json!({
+        "nodeDid": "did:key:runtime", "agentId": "engineer", "workspacePath": "/project"
+    });
+    let decode = |request: Value| {
+        serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name": "client_workspace_permissions", "args": {"request": request}
+        }))
+    };
+    assert!(decode(request.clone()).unwrap().is_cancellable());
+    for field in ["requesterDid", "mode", "revision", "home", "endpoint"] {
+        request[field] = "untrusted".into();
+        assert!(decode(request.clone()).is_err(), "accepted {field}");
+        request.as_object_mut().unwrap().remove(field);
+    }
+    for field in ["nodeDid", "agentId", "workspacePath"] {
+        let mut incomplete = request.clone();
+        incomplete.as_object_mut().unwrap().remove(field);
+        assert!(decode(incomplete).is_err(), "missing {field}");
+    }
+}
+
+#[test]
+fn workspace_permission_saves_are_strict_and_finish_submitted_mutations() {
+    let request = json!({
+        "scope":{"nodeDid":"runtime","agentId":"agent","workspacePath":"/project"},
+        "expectedRevision":"0","expectedWorkspacePath":"/project","mode":"autoReview"
+    });
+    let decode = |request: Value| {
+        serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name":"client_workspace_permissions_save","args":{"request":request}
+        }))
+    };
+    assert!(!decode(request.clone()).unwrap().is_cancellable());
+    let mut invalid = request;
+    invalid["taskId"] = "another-task".into();
+    assert!(decode(invalid).is_err());
+}

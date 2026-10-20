@@ -17,8 +17,8 @@ use crate::Collection;
 mod dependencies;
 mod documents;
 pub use documents::{
-    document_pack_schema_paths, install_prepared_document_pack, prepare_document_pack_install,
-    PreparedDocumentPackInstall,
+    document_pack_schema_paths, install_prepared_document_pack, plugin_data_unique_keys,
+    prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,
 };
 mod graph;
 
@@ -34,6 +34,9 @@ pub struct PackIdentity {
     pub digest: String,
     pub plugins: Vec<InstalledPackPlugin>,
     pub dependencies: Vec<String>,
+    /// False when this install is a dependency of another pack's install; an
+    /// explicit install is sticky.
+    pub explicit: bool,
 }
 
 impl PackIdentity {
@@ -48,6 +51,7 @@ impl PackIdentity {
             digest: digest.into(),
             plugins,
             dependencies: Vec::new(),
+            explicit: true,
         }
     }
 }
@@ -452,7 +456,7 @@ pub(crate) async fn install_in_txn(
         pack,
         &prior,
         recorded.into_values().collect(),
-        true,
+        pack.explicit,
         false,
     )
     .await?;
@@ -519,6 +523,7 @@ async fn write_plugin_record(
         digest: record.digest,
         plugins: record.plugins,
         dependencies: Vec::new(),
+        explicit: true,
     });
     let installed = current_identity.as_ref().or(installed);
     let retained = installed.is_none()
@@ -551,6 +556,7 @@ async fn write_plugin_record(
         digest: prior.digest.clone().unwrap_or_default(),
         plugins,
         dependencies: Vec::new(),
+        explicit: prior.explicit,
     };
     let plugin_store = prior.plugin_store;
     write_record_in_txn(
@@ -784,6 +790,37 @@ pub async fn read_installed_pack(
             })
         })
         .transpose()
+}
+
+/// The `(collection, id)` pairs `coordinate`'s installation record for
+/// `owner` lists, in record order. Empty when the pack has no node record
+/// (an assets or plugins pack, or none installed).
+pub async fn installed_pack_documents(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<Vec<(Collection, String)>> {
+    let response = access
+        .execute(&format!(
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID documents plugin_store }} }}"#,
+            escape_graphql_string(owner),
+            escape_graphql_string(coordinate)
+        ))
+        .await?;
+    let rows = response["data"][RECORD]
+        .as_array()
+        .context("reading the pack installation record")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "{coordinate} has more than one installation record for {owner}"
+    );
+    let Some(row) = rows.first().filter(|row| !is_plugin_store_row(row)) else {
+        return Ok(Vec::new());
+    };
+    decode_record_field::<Vec<RecordedDocument>>(row, "documents", owner, coordinate)?
+        .into_iter()
+        .map(|document| Ok((collection_named(&document.collection)?, document.id)))
+        .collect()
 }
 
 pub async fn installed_packs(

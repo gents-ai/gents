@@ -584,6 +584,7 @@ where
                         }
                         if let Some(budget) = aggregate_token_budget.as_ref() {
                             let ledger = budget.snapshot()?;
+                            budget.invalidate()?;
                             Err(StreamingError::Completion(
                                 CompletionError::ProviderError(format!(
                                     "aggregate_token_usage_missing: limit={}, used={}; \
@@ -721,6 +722,7 @@ where
                 .filter(|_| !saw_final_usage_event)
             {
                 let ledger = budget.snapshot()?;
+                budget.invalidate()?;
                 aggregate_usage_failure = Some(format!(
                     "aggregate_token_usage_missing: limit={}, used={}; \
                      provider stream ended without a final usage event",
@@ -1296,7 +1298,7 @@ pub async fn build_request<M: CompletionModel>(
         tool_defs.push(crate::rig_compat::to_rig_tool_definition(&native));
     }
 
-    let mut chat_history = assemble_rig_chat_history(config, &prompt, history, prior);
+    let mut chat_history = assemble_rig_chat_history(config, &prompt, history, prior)?;
     let rig_prompt = chat_history.pop().expect("assembled prompt is last");
 
     let mut builder = model
@@ -1325,7 +1327,7 @@ fn assemble_rig_chat_history(
     prompt: &Message,
     history: &[Message],
     prior: &[Message],
-) -> Vec<rig::completion::Message> {
+) -> Result<Vec<rig::completion::Message>, StreamingError> {
     let messages = history
         .iter()
         .chain(prior)
@@ -1334,13 +1336,20 @@ fn assemble_rig_chat_history(
         .collect();
     let ordered =
         request_assembly::provider_order(config.provider_input_counter.profile(), messages);
-    config
+    let mut projected = config
         .preamble
         .as_ref()
         .map(|preamble| rig::completion::Message::system(preamble.clone()))
         .into_iter()
-        .chain(ordered.iter().map(rig_compat::to_rig_message))
-        .collect()
+        .collect::<Vec<_>>();
+    for message in ordered {
+        let message =
+            crate::provider_input::captured_context_for_provider(message).map_err(|error| {
+                StreamingError::Completion(CompletionError::RequestError(error.into()))
+            })?;
+        projected.push(rig_compat::to_rig_message(&message));
+    }
+    Ok(projected)
 }
 
 fn replace_core_chat_history(
@@ -1348,7 +1357,7 @@ fn replace_core_chat_history(
     config: &LoopConfig,
     history: &[TaggedMessage],
     new_messages: &[TaggedMessage],
-) {
+) -> Result<(), StreamingError> {
     let prompt = &new_messages
         .last()
         .expect("new messages retain a prompt")
@@ -1363,6 +1372,7 @@ fn replace_core_chat_history(
         .collect::<Vec<_>>();
     request.chat_history = rig::one_or_many::OneOrMany::many(assemble_rig_chat_history(
         config, prompt, &history, &prior,
-    ))
+    )?)
     .expect("assembled prompt makes chat history nonempty");
+    Ok(())
 }

@@ -1,0 +1,176 @@
+import type { DeploymentView } from "./generated/DeploymentView.js";
+type NodeView = Pick<
+  DeploymentView,
+  | "nodeDid"
+  | "node"
+  | "agents"
+  | "agentConfigs"
+  | "inferenceProfiles"
+  | "inferenceBackends"
+>;
+import type {
+  InferenceDiscoveryResult,
+  InferenceModelRecommendation,
+  InferenceProviderId,
+  PackConfig,
+  ReasoningEffort,
+} from "./types.js";
+import { backendIsConfigured, shouldRebindSetupDefault } from "./firstRun.js";
+
+export type InferenceSetupSettings = {
+  contextWindow: string;
+  maxOutputTokens: string;
+  temperature: string;
+  topP: string;
+  reasoningEffort: ReasoningEffort | "";
+  maxConcurrent: string;
+};
+
+export function buildInferenceSetupPlan({
+  deployment,
+  provider,
+  apiKey,
+  oauth,
+  accountRef = null,
+  discovery,
+  model,
+  recommendation,
+  settings,
+  purpose = "onboarding",
+}: {
+  deployment: NodeView;
+  provider: InferenceProviderId;
+  apiKey: string;
+  oauth: boolean;
+  accountRef?: string | null;
+  discovery: InferenceDiscoveryResult;
+  model: string;
+  recommendation: InferenceModelRecommendation;
+  settings: InferenceSetupSettings;
+  purpose?: "onboarding" | "add-backend" | "select-model";
+}): { document: PackConfig; profileId: string; defaultAgentId: string | null } {
+  const addingBackend = purpose === "add-backend";
+  const normalizedEndpoint = (endpoint: string | null) =>
+    endpoint?.trim().replace(/\/+$/, "") ?? "";
+  const sameConnection = deployment.inferenceBackends.find(
+    (backend) =>
+      backend.providerKind === discovery.providerKind &&
+      (backend.accountRef ?? null) === (oauth ? accountRef : null) &&
+      normalizedEndpoint(backend.endpoint) ===
+        normalizedEndpoint(discovery.effectiveEndpoint),
+  );
+  const placeholder = deployment.inferenceBackends.find(
+    (backend) => !backendIsConfigured(backend),
+  );
+  const addingExtra = deployment.inferenceBackends.some(
+    (backend) =>
+      backendIsConfigured(backend) &&
+      backend.backendId !== sameConnection?.backendId,
+  );
+  const backendId =
+    (!addingBackend ? sameConnection?.backendId : undefined) ??
+    (!addingBackend && !addingExtra ? placeholder?.backendId : undefined) ??
+    (() => {
+      let candidate: string = provider;
+      let suffix = 2;
+      while (
+        deployment.inferenceBackends.some(
+          (backend) => backend.backendId === candidate,
+        )
+      ) {
+        candidate = `${provider}-${suffix++}`;
+      }
+      return candidate;
+    })();
+  const existingProfile =
+    deployment.inferenceProfiles.find((row) => row.backend_id === backendId) ??
+    (!addingBackend && !addingExtra
+      ? deployment.inferenceProfiles[0]
+      : undefined);
+  const profileId = existingProfile?.profile_id ?? `profile-${backendId}`;
+  const samplingId =
+    recommendation.temperature || recommendation.topP
+      ? (existingProfile?.sampling_id ?? `${profileId}-sampling`)
+      : null;
+  const defaultAgentId = deployment.node.defaultAgentId;
+  if (!defaultAgentId && !addingBackend) {
+    throw new Error("The node has no default agent to activate for Setup");
+  }
+  const shouldRebindDefault =
+    purpose === "select-model" ||
+    shouldRebindSetupDefault(deployment, addingExtra);
+  const agentConfigs = (addingBackend ? [] : deployment.agentConfigs)
+    .filter((agent) =>
+      purpose === "select-model"
+        ? agent.agent_id === defaultAgentId
+        : !agent.inference_profile_id ||
+          (agent.agent_id === defaultAgentId && shouldRebindDefault),
+    )
+    .map((agent) => ({
+      ...agent,
+      inference_profile_id: profileId,
+    }));
+
+  return {
+    profileId,
+    defaultAgentId,
+    document: {
+      node: { node_did: deployment.nodeDid },
+      inference_backends: [
+        {
+          node_did: deployment.nodeDid,
+          backend_id: backendId,
+          name: discovery.backendName,
+          provider_kind: discovery.providerKind,
+          openai_wire_api: discovery.openaiWireApi,
+          endpoint: discovery.effectiveEndpoint,
+          auth: oauth
+            ? {
+                kind: "node_oauth",
+                ...(accountRef ? { account_ref: accountRef } : {}),
+              }
+            : apiKey.trim()
+              ? { kind: "api_key", key: apiKey.trim() }
+              : { kind: "unauthenticated" },
+          max_concurrent: Number(settings.maxConcurrent),
+          max_queue_depth: 100,
+          enabled: true,
+        },
+      ],
+      inference_profiles: [
+        {
+          ...existingProfile,
+          node_did: deployment.nodeDid,
+          profile_id: profileId,
+          display_name: discovery.backendName,
+          backend_id: backendId,
+          model_name: model.trim(),
+          reasoning_effort: settings.reasoningEffort || null,
+          context_window: recommendation.contextWindow
+            ? Number(settings.contextWindow)
+            : null,
+          max_output_tokens: recommendation.maxOutputTokens
+            ? Number(settings.maxOutputTokens)
+            : null,
+          sampling_id: samplingId,
+        },
+      ],
+      ...(samplingId
+        ? {
+            inference_sampling: [
+              {
+                node_did: deployment.nodeDid,
+                sampling_id: samplingId,
+                display_name: `${discovery.backendName} recommended sampling`,
+                temperature: recommendation.temperature
+                  ? Number(settings.temperature)
+                  : null,
+                top_p: recommendation.topP ? Number(settings.topP) : null,
+              },
+            ],
+          }
+        : {}),
+      ...(agentConfigs.length ? { agents: agentConfigs } : {}),
+    },
+  };
+}

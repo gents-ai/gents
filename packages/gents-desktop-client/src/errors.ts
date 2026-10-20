@@ -6,6 +6,7 @@ export type BridgeErrorPayload = GeneratedBridgeError;
 const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
   "clientNotRunning",
   "clientStartFailed",
+  "localHistoryLocked",
   "notFound",
   "projectionPending",
   "invalidArgument",

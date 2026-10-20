@@ -71,7 +71,10 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
                 && queue.source == QueueSource::User
                 && old_queue.policy == QueuePolicy::Append
                 && queue.policy == QueuePolicy::Append
-                && old_queue.delivery == queue.delivery,
+                && super::management::replacement_delivery_allowed(
+                    old_queue.delivery,
+                    queue.delivery
+                ),
             InvalidQueuePosition
         );
         current = previous.clone();
