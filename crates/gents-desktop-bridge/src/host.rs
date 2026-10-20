@@ -401,6 +401,7 @@ impl ClientHost {
                 session_id,
                 request_id,
                 tool_call_doc_id,
+                retry_id,
             } => encode(
                 crate::commands::tool_file_changes(
                     &self.core,
@@ -408,6 +409,7 @@ impl ClientHost {
                     session_id,
                     request_id,
                     tool_call_doc_id,
+                    retry_id,
                 )
                 .await
                 .map_err(backend_error)?,

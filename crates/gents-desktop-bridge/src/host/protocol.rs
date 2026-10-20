@@ -144,6 +144,9 @@ pub enum ClientCommand {
         request_id: String,
         #[serde(rename = "toolCallDocId")]
         tool_call_doc_id: String,
+        #[serde(rename = "retryId", default)]
+        #[ts(optional)]
+        retry_id: Option<String>,
     },
     #[serde(rename = "desktop_request_output")]
     RequestOutput {

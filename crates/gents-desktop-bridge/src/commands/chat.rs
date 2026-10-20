@@ -10,9 +10,16 @@ pub async fn tool_file_changes(
     session_id: String,
     request_id: String,
     tool_call_doc_id: String,
+    retry_id: Option<String>,
 ) -> Result<Option<gents_protocol::file_changes::ToolFileChanges>> {
-    core.tool_file_changes(&node_did, &session_id, &request_id, &tool_call_doc_id)
-        .await
+    core.tool_file_changes(
+        &node_did,
+        &session_id,
+        &request_id,
+        &tool_call_doc_id,
+        retry_id.as_deref(),
+    )
+    .await
 }
 
 pub async fn request_output(
