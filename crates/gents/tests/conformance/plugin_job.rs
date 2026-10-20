@@ -702,8 +702,8 @@ fn generated_plugin_job_control_cases_drive_control_owners() {
     let cases = lean_plugin_job_control_cases();
     assert_eq!(
         cases.len(),
-        21,
-        "Lean pins three kill, six resume, six result-read, three result-offer and three step-failure rows in `control_regressions`"
+        23,
+        "Lean pins five kill, six resume, six result-read, three result-offer and three step-failure rows in `control_regressions`"
     );
     let mut names = BTreeSet::new();
     for case in cases {
@@ -726,6 +726,7 @@ fn generated_plugin_job_control_cases_drive_control_owners() {
                     other => panic!("{name}: unknown Lean kill cause {other}"),
                 };
                 let outcome = control::kill_decision(&job, cause, &observe);
+                assert_eq!(outcome.won, expected.won, "{name}: terminal winner");
                 assert_eq!(
                     outcome.row.state,
                     spelled::<JobState>(&expected.row_state),
@@ -744,9 +745,15 @@ fn generated_plugin_job_control_cases_drive_control_owners() {
                 if let Some(requested) = requested {
                     assert_eq!(
                         control::control_outcome(&job, requested, &observe),
-                        JobControlOutcome::Applied {
-                            state: spelled(&expected.job_state),
-                            killed_children: expected.kill.len() as u32,
+                        if expected.won {
+                            JobControlOutcome::Applied {
+                                state: spelled(&expected.job_state),
+                                killed_children: expected.kill.len() as u32,
+                            }
+                        } else {
+                            JobControlOutcome::AlreadyTerminal {
+                                state: spelled(&expected.job_state),
+                            }
                         },
                         "{name}: control outcome"
                     );

@@ -202,6 +202,52 @@ theorem deadline_is_job_action (job : Job) (h : job.state = .running)
 theorem child_terminal_never_terminalizes_job_row (job : Job) (k : SpawnKey) (s : ChildState) :
     (observeChild job k s).state = job.state := rfl
 
+/-- The committed snapshot of a job kill includes its row and child interrupt
+intents. Native `plugin_job.control.kill` must publish these in one existing
+ConfigAccess transaction; child wakes cannot observe just the interrupts.
+Completion notification delivery retains its separate recoverable owner. -/
+structure KillSnapshot where
+  job : Job
+  interrupts : List (SpawnKey × Recovery.KillAction)
+
+/-- Commit the existing kill decision and exactly its admitted interrupt intents. -/
+def commitKill (snapshot : KillSnapshot) (c : Control)
+    (obs : SpawnKey → Recovery.KillObservation) : KillSnapshot :=
+  let killed := Control.kill snapshot.job c obs
+  ⟨killed.1, snapshot.interrupts ++ killed.2⟩
+
+/-- A failed storage transaction publishes neither the terminal row nor interrupts. -/
+def killTransaction (snapshot : KillSnapshot) (c : Control)
+    (obs : SpawnKey → Recovery.KillObservation) (commits : Bool) : KillSnapshot :=
+  if commits then commitKill snapshot c obs else snapshot
+
+/-- Rollback cannot leave interrupted children beside a still-running job. -/
+theorem discarded_kill_preserves_snapshot (snapshot : KillSnapshot) (c : Control)
+    (obs : SpawnKey → Recovery.KillObservation) :
+    killTransaction snapshot c obs false = snapshot := rfl
+
+/-- A competing driver wake after a committed kill loses the terminal compare;
+it cannot replace cancellation with its guest's failure. -/
+theorem committed_kill_blocks_driver (snapshot : KillSnapshot) (c : Control)
+    (state driverState : RowState) (h_control : c.ends = some state)
+    (h_terminal : state ≠ .running) (obs : SpawnKey → Recovery.KillObservation) :
+    terminalizeRow (commitKill snapshot c obs).job driverState =
+      ((commitKill snapshot c obs).job, .lost) := by
+  have ended : (Control.kill snapshot.job c obs).1.state ≠ .running := by
+    by_cases running : snapshot.job.state = .running
+    · simp [Control.kill, h_control, terminalizeRow, running, h_terminal]
+    · simp [Control.kill, h_control, terminalizeRow, running]
+  exact (terminal_admits_nothing _ ended driverState .stop obs).1
+
+/-- A driver that already won terminalization leaves a later kill no child effects. -/
+theorem committed_kill_after_driver_is_inert (snapshot : KillSnapshot)
+    (terminal : snapshot.job.state ≠ .running) (c : Control)
+    (obs : SpawnKey → Recovery.KillObservation) :
+    commitKill snapshot c obs = snapshot := by
+  have unchanged := (terminal_admits_nothing snapshot.job terminal .failed c obs).2
+  cases snapshot
+  simp_all [commitKill]
+
 /-- Interrupting the caller leaves the running job row as it was. -/
 theorem caller_interrupt_retains_job (c : ToolExecution.ToolCallContext)
     (h_job : c.operation = .pluginJob) (h_running : c.state = .running)

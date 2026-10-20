@@ -420,6 +420,21 @@ async fn operator_cancel_client_cancel_and_non_job_stop_each_end_the_row_cancell
         ),
         "{outcome:?}"
     );
+    let replay = control(
+        &ConfigAccess::local(job.h.db.node.clone()),
+        &parent_scope(&job.h),
+        TOOL_CALL,
+        JobControlKind::Stop,
+    )
+    .await
+    .expect("replay stop");
+    assert_eq!(
+        replay,
+        JobControlOutcome::AlreadyTerminal {
+            state: JobState::Cancelled
+        }
+    );
+    assert_stopped(&job, "owner stop and replay").await;
     job.h.runtime.shutdown().await;
 }
 

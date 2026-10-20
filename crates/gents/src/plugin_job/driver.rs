@@ -851,6 +851,7 @@ pub fn step_failure_decision(
         (
             KillOutcome {
                 row: counted,
+                won: false,
                 killed: Vec::new(),
             },
             None,
