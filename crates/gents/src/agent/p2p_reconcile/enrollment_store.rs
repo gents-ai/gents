@@ -853,7 +853,8 @@ impl GraphqlEnrollmentStore {
                     );
                     continue;
                 }
-                CandidateRequestAttribution::ForeignOrUnattributable => {
+                CandidateRequestAttribution::Foreign => continue,
+                CandidateRequestAttribution::Unattributable => {
                     tracing::warn!(
                         "quarantining enrollment request without request or member identity"
                     );
@@ -1565,13 +1566,15 @@ enum CandidateRequestAttribution {
     },
     RequestOnly(String),
     ScopeOnly((String, String)),
-    ForeignOrUnattributable,
+    /// Addressed to another network, such as this node's own request to another server.
+    Foreign,
+    Unattributable,
 }
 
 fn attribute_candidate_request(raw: &Value, local_network: &str) -> CandidateRequestAttribution {
     let network_id = raw_text(raw, "network_id");
     if network_id.is_some_and(|network_id| network_id != local_network) {
-        return CandidateRequestAttribution::ForeignOrUnattributable;
+        return CandidateRequestAttribution::Foreign;
     }
     let network_id = network_id.unwrap_or(local_network);
     let request_id = raw_text(raw, "request_id").map(str::to_string);
@@ -1585,7 +1588,7 @@ fn attribute_candidate_request(raw: &Value, local_network: &str) -> CandidateReq
         (None, Some(member_did)) => {
             CandidateRequestAttribution::ScopeOnly((network_id.to_string(), member_did))
         }
-        (None, None) => CandidateRequestAttribution::ForeignOrUnattributable,
+        (None, None) => CandidateRequestAttribution::Unattributable,
     }
 }
 
@@ -2061,9 +2064,9 @@ impl NetworkRow {
 }
 
 #[derive(Debug, Deserialize)]
-struct RequestRow {
+pub(super) struct RequestRow {
     #[serde(rename = "_docID")]
-    doc_id: String,
+    pub(super) doc_id: String,
     protocol_version: i64,
     request_id: String,
     request_digest: String,
@@ -2085,7 +2088,7 @@ struct RequestRow {
 }
 
 impl RequestRow {
-    fn to_record(&self) -> Result<EnrollmentRequestRecord> {
+    pub(super) fn to_record(&self) -> Result<EnrollmentRequestRecord> {
         Ok(EnrollmentRequestRecord {
             protocol_version: parse_protocol_version(self.protocol_version)?,
             request_id: self.request_id.clone(),

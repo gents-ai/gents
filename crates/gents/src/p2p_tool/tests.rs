@@ -2,7 +2,9 @@ use super::*;
 use crate::agent::p2p_reconcile::{
     reconcile_peer_tick, EnrollmentEndpointEntry, GraphqlPairingStateStore, PairingStateStore,
 };
-use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
+use crate::support::enrollment::{
+    authorize_enrollment_peer, signed_enrollment_offer, wait_for_peer_identity,
+};
 
 async fn call(tool: &P2pTool, value: Value) -> Value {
     let output = Tool::call(tool, serde_json::from_value(value).unwrap())
@@ -231,6 +233,89 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
         .active
         .iter()
         .any(|e| e.request.request_id == enrollment.request_id));
+}
+
+#[tokio::test]
+async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node() {
+    let server = crate::support::test_p2p_db("engineer-enroll-server").await;
+    let candidate = crate::support::test_p2p_db("engineer-enroll-candidate").await;
+    for node in [&server.node, &candidate.node] {
+        ConfigAccess::local(node.clone())
+            .add_schema("type DeploymentNote @branchable { text: String }")
+            .await
+            .unwrap();
+    }
+    let (server_peer, _) = wait_for_peer_identity(&server.node).await;
+    let (candidate_peer, _) = wait_for_peer_identity(&candidate.node).await;
+    let (_, offer_token) = signed_enrollment_offer(
+        &server.node,
+        "engineer-enroll",
+        "Engineer enrollment",
+        server.node_identity.as_ref(),
+        "challenge-engineer-enroll".into(),
+    )
+    .await;
+    let scope = || EndpointScope::<String, ()>::only_units(["DeploymentNote".into()]);
+    let server_tool = P2pTool::new(
+        server.node.clone(),
+        Some(server.node_identity.clone()),
+        true,
+        scope(),
+    );
+    let candidate_tool = P2pTool::new(
+        candidate.node.clone(),
+        Some(candidate.node_identity.clone()),
+        true,
+        scope(),
+    );
+    let request = json!({"argv":["enrollment","request"],"options":{"offer_token":offer_token}});
+    let readonly = P2pTool::new(
+        candidate.node.clone(),
+        Some(candidate.node_identity.clone()),
+        false,
+        scope(),
+    );
+    assert!(
+        Tool::call(&readonly, serde_json::from_value(request.clone()).unwrap())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("mutations are disabled")
+    );
+    let requested = call(&candidate_tool, request.clone()).await;
+    let request_id = requested["outcome"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(requested["outcome"]["peer_id"], server_peer);
+    assert_eq!(requested["outcome"]["peer_did"], server.node_identity.did());
+    let approve = requested["observations"]["approve_on_peer"].clone();
+    let retried = call(&candidate_tool, request).await;
+    assert_eq!(retried["outcome"]["request_id"], request_id);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let pending = call(&server_tool, json!({"argv":["enrollment","pending"]})).await;
+        let listed = pending["outcome"]["pending"].as_array().unwrap();
+        if let Some(entry) = listed.iter().find(|e| e["request_id"] == request_id) {
+            assert_eq!(entry["peer_id"], candidate_peer);
+            assert_eq!(entry["peer_did"], candidate.node_identity.did());
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "request never arrived: {pending}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let approved = call(&server_tool, approve).await;
+    assert_eq!(approved["outcome"]["request_id"], request_id);
+    let applied = call(
+        &server_tool,
+        json!({"argv":["pairings","apply"],"options":{"peer_id":candidate_peer,"peer_did":candidate.node_identity.did(),"collections":["DeploymentNote"]}}),
+    )
+    .await;
+    assert_eq!(applied["outcome"]["unchanged"], false, "{applied}");
 }
 
 #[tokio::test]
