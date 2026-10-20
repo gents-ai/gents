@@ -1961,7 +1961,8 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             panic!("expected hook-managed skip for {call_id}");
         };
         assert!(
-            serde_json::from_str::<serde_json::Value>(&tool_result).expect("JSON tool result")["accepted"]
+            serde_json::from_str::<serde_json::Value>(&tool_result).expect("JSON tool result")
+                ["accepted"]
                 == true,
             "active edit must be accepted: {tool_result}"
         );
