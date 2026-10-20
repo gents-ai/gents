@@ -137,12 +137,16 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
 #[tokio::test]
 async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_its_key() {
     let temp = tempfile::tempdir().unwrap();
+    let identity =
+        crate::KeyIdentity::load_or_create(temp.path().join("identity.key"), None).unwrap();
+    let node_did = crate::NodeIdentity::did(&identity);
     let (record, key, key_file) = file_key(&temp);
     assert_eq!(record.custody, StoreKeyCustody::File);
     let data = temp.path().join("data");
 
     let node = persistent_builder(&data, &key)
         .unwrap()
+        .with_node_identity_did(node_did)
         .build()
         .await
         .unwrap();
@@ -157,6 +161,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     let key = record.load(&key_file, &data).expect("recorded key");
     let reopened = persistent_builder(&data, &key)
         .unwrap()
+        .with_node_identity_did(node_did)
         .build()
         .await
         .unwrap();
@@ -172,6 +177,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
         .engine
         .compression(regolith::CompressionType::None);
     let control = defra_node::EmbeddedNode::builder()
+        .with_node_identity_did(node_did)
         .data_path(&plain)
         .with_regolith_options(plain_options)
         .build()
@@ -277,10 +283,12 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
+    let identity = crate::KeyIdentity::load_or_create(home.join("identity.key"), None).unwrap();
+    let node_did = crate::NodeIdentity::did(&identity);
     std::fs::write(
         crate::home::init_config_path(&home),
         serde_json::to_vec(&serde_json::json!({
-            "home": home, "node_name": "a", "node_did": "did:key:zA",
+            "home": home, "node_name": "a", "node_did": node_did,
             "key_path": "identity.key", "tool_ceiling": "readonly", "tool_root": null
         }))
         .unwrap(),
@@ -288,6 +296,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     .unwrap();
     let data = crate::home::default_data_dir(&home);
     let plain = defra_node::EmbeddedNode::builder()
+        .with_node_identity_did(node_did)
         .data_path(&data)
         .with_storage_backend(defra_node::StorageBackend::Regolith)
         .build()
@@ -327,12 +336,13 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     let config = crate::home::read_init_config::<String, String>(&home)
         .unwrap()
         .unwrap();
-    assert_eq!(config.node_did, "did:key:zA");
+    assert_eq!(config.node_did, node_did);
     assert_eq!(config.key_path.as_deref(), Some("identity.key"));
     assert!(config.store_encryption.is_some());
     assert!(files_containing(&data, REFRESH_TOKEN.as_bytes()).is_empty());
     let encrypted = persistent_builder(&data, &key)
         .unwrap()
+        .with_node_identity_did(node_did)
         .build()
         .await
         .unwrap();
