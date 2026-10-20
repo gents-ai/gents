@@ -33,29 +33,73 @@ pub struct RecordedEdit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ReviewScope {
+    Workspace {
+        workspace_id: String,
+        owner: String,
+        base: String,
+        capability: WorkspacePathCapability,
+        tree: String,
+    },
+    RequestResource {
+        node_did: String,
+        root: String,
+        capability: WorkspacePathCapability,
+        snapshot: String,
+    },
+}
+
+impl ReviewScope {
+    fn well_formed(&self) -> bool {
+        match self {
+            Self::Workspace {
+                workspace_id,
+                owner,
+                base,
+                tree,
+                ..
+            } => [workspace_id, owner, base, tree]
+                .into_iter()
+                .all(|value| !value.is_empty()),
+            Self::RequestResource {
+                node_did,
+                root,
+                snapshot,
+                ..
+            } => [node_did, root, snapshot]
+                .into_iter()
+                .all(|value| !value.is_empty()),
+        }
+    }
+
+    fn capability(&self) -> &WorkspacePathCapability {
+        match self {
+            Self::Workspace { capability, .. } | Self::RequestResource { capability, .. } => {
+                capability
+            }
+        }
+    }
+
+    fn snapshot(&self) -> &str {
+        match self {
+            Self::Workspace { tree, .. } => tree,
+            Self::RequestResource { snapshot, .. } => snapshot,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewReference {
-    pub workspace_id: String,
-    pub owner: String,
-    pub base: String,
-    pub capability: WorkspacePathCapability,
-    pub tree: String,
+    pub scope: ReviewScope,
     pub request_doc_id: String,
     pub review_id: String,
 }
 
 impl ReviewReference {
     fn well_formed(&self) -> bool {
-        [
-            &self.workspace_id,
-            &self.owner,
-            &self.base,
-            &self.tree,
-            &self.request_doc_id,
-            &self.review_id,
-        ]
-        .into_iter()
-        .all(|value| !value.is_empty())
+        !self.request_doc_id.is_empty() && !self.review_id.is_empty() && self.scope.well_formed()
     }
 }
 
@@ -63,7 +107,7 @@ impl ReviewReference {
 #[serde(deny_unknown_fields)]
 pub struct ChangeReview {
     pub reference: ReviewReference,
-    pub before_tree: String,
+    pub before_snapshot: String,
     pub edits: Vec<RecordedEdit>,
 }
 
@@ -74,7 +118,7 @@ pub struct ChangeReview {
 pub struct UndoEvidence {
     pub expected: ReviewReference,
     pub authorized: bool,
-    pub placement_verified: bool,
+    pub resource_verified: bool,
     pub snapshots_available: bool,
     pub no_active_writer: bool,
     pub receipt: Option<ReviewReference>,
@@ -112,13 +156,14 @@ impl UndoDecision {
 
 impl ChangeReview {
     fn structurally_valid(&self) -> bool {
-        let WorkspacePathCapability::ExactPaths { paths } = &self.reference.capability else {
+        let WorkspacePathCapability::ExactPaths { paths } = self.reference.scope.capability()
+        else {
             return false;
         };
         let allowed: HashSet<_> = paths.iter().map(String::as_str).collect();
         let mut seen = HashSet::new();
         self.reference.well_formed()
-            && !self.before_tree.is_empty()
+            && !self.before_snapshot.is_empty()
             && !self.edits.is_empty()
             && self.edits.iter().all(|edit| {
                 edit.canonical
@@ -135,7 +180,7 @@ impl ChangeReview {
 
     pub fn plan_undo(&self, files: &[FileObservation], evidence: &UndoEvidence) -> UndoDecision {
         if !evidence.authorized
-            || !evidence.placement_verified
+            || !evidence.resource_verified
             || evidence.expected != self.reference
             || !self.structurally_valid()
         {
@@ -179,14 +224,25 @@ pub fn inspect_immutable_changes(
         "incomplete workspace review reference"
     );
     ensure!(
-        reference.capability.is_exact(),
+        reference.scope.capability().is_exact(),
         "review requires exact workspace paths"
     );
-    for revision in [
-        before_tree,
-        reference.base.as_str(),
-        reference.tree.as_str(),
-    ] {
+    let snapshot = reference.scope.snapshot();
+    let mut revisions = vec![before_tree, snapshot];
+    match &reference.scope {
+        ReviewScope::Workspace { base, .. } => revisions.push(base),
+        ReviewScope::RequestResource {
+            root: admitted_root,
+            ..
+        } => {
+            let admitted_root = Path::new(admitted_root);
+            ensure!(
+                admitted_root.is_absolute() && std::fs::canonicalize(root)? == admitted_root,
+                "workspace review does not match the request resource"
+            );
+        }
+    }
+    for revision in revisions {
         ensure!(
             matches!(revision.len(), 40 | 64)
                 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
@@ -194,16 +250,16 @@ pub fn inspect_immutable_changes(
         );
         super::adapter::require_snapshot_tree(root, revision)?;
     }
-    reference.capability.validate()?;
+    reference.scope.capability().validate()?;
     let edits = super::adapter::inspect_snapshot_edits(
         root,
         before_tree,
-        &reference.tree,
-        &reference.capability,
+        snapshot,
+        reference.scope.capability(),
     )?;
     Ok(ChangeReview {
         reference,
-        before_tree: before_tree.to_owned(),
+        before_snapshot: before_tree.to_owned(),
         edits,
     })
 }

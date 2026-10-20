@@ -1,5 +1,5 @@
 use super::*;
-use crate::workspace::change_review::{inspect_immutable_changes, ReviewReference};
+use crate::workspace::change_review::{inspect_immutable_changes, ReviewReference, ReviewScope};
 
 #[test]
 fn immutable_review_preserves_later_files_index_and_private_untracked_content() {
@@ -26,17 +26,20 @@ fn immutable_review_preserves_later_files_index_and_private_untracked_content() 
     let index = fs::read(fx.repo.join(".git/index")).unwrap();
     let head = git(&fx.repo, &["rev-parse", "HEAD"]);
 
+    let capability = WorkspacePathCapability::exact_paths(vec![
+        "README.md".into(),
+        "deleted.rs".into(),
+        "new.rs".into(),
+    ])
+    .unwrap();
     let reference = ReviewReference {
-        workspace_id: "workspace".into(),
-        owner: "node".into(),
-        base: before.clone(),
-        capability: WorkspacePathCapability::exact_paths(vec![
-            "README.md".into(),
-            "deleted.rs".into(),
-            "new.rs".into(),
-        ])
-        .unwrap(),
-        tree: after.clone(),
+        scope: ReviewScope::Workspace {
+            workspace_id: "workspace".into(),
+            owner: "node".into(),
+            base: before.clone(),
+            capability: capability.clone(),
+            tree: after.clone(),
+        },
         request_doc_id: "request-document".into(),
         review_id: "review".into(),
     };
@@ -82,17 +85,57 @@ fn immutable_review_preserves_later_files_index_and_private_untracked_content() 
     );
     assert_eq!(git(&fx.repo, &["rev-parse", "HEAD"]), head);
 
+    let request_reference = ReviewReference {
+        scope: ReviewScope::RequestResource {
+            node_did: "node".into(),
+            root: fs::canonicalize(&fx.repo)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            capability,
+            snapshot: after.clone(),
+        },
+        request_doc_id: reference.request_doc_id.clone(),
+        review_id: "ordinary-chat-review".into(),
+    };
+    let ordinary = inspect_immutable_changes(&fx.repo, &before, request_reference.clone()).unwrap();
+    assert_eq!(ordinary.edits, review.edits);
+    let mut foreign_root = request_reference.clone();
+    if let ReviewScope::RequestResource { root, .. } = &mut foreign_root.scope {
+        *root = fs::canonicalize(fx.repo.parent().unwrap())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+    }
+    assert!(inspect_immutable_changes(&fx.repo, &before, foreign_root).is_err());
+    let mut mutable_snapshot = request_reference;
+    if let ReviewScope::RequestResource { snapshot, .. } = &mut mutable_snapshot.scope {
+        *snapshot = "HEAD".into();
+    }
+    assert!(inspect_immutable_changes(&fx.repo, &before, mutable_snapshot).is_err());
+    assert_eq!(fs::read(fx.repo.join(".git/index")).unwrap(), index);
+    assert_eq!(
+        fs::read_to_string(fx.repo.join("private.local")).unwrap(),
+        "private untracked content\n"
+    );
+
     let mut empty = reference.clone();
-    empty.tree.clone_from(&before);
+    if let ReviewScope::Workspace { tree, .. } = &mut empty.scope {
+        tree.clone_from(&before);
+    }
     assert!(inspect_immutable_changes(&fx.repo, &before, empty)
         .unwrap()
         .edits
         .is_empty());
     assert!(inspect_immutable_changes(&fx.repo, "HEAD", reference.clone()).is_err());
     let mut unowned = reference.clone();
-    unowned.capability = WorkspacePathCapability::exact_paths(Vec::new()).unwrap();
+    if let ReviewScope::Workspace { capability, .. } = &mut unowned.scope {
+        *capability = WorkspacePathCapability::exact_paths(Vec::new()).unwrap();
+    }
     assert!(inspect_immutable_changes(&fx.repo, &before, unowned).is_err());
-    let mut missing = reference;
-    missing.base = "f".repeat(40);
+    let mut missing = reference.clone();
+    if let ReviewScope::Workspace { base, .. } = &mut missing.scope {
+        *base = "f".repeat(40);
+    }
     assert!(inspect_immutable_changes(&fx.repo, &before, missing).is_err());
 }
