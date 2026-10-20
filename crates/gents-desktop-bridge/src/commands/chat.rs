@@ -114,6 +114,15 @@ pub async fn send_chat_message(
     Ok(submitted.into())
 }
 
+pub async fn retry_request(
+    core: &ClientCore,
+    request_id: &str,
+    node_did: Option<&str>,
+) -> Result<ChatSendResult> {
+    let parent = core.request_in_scope(request_id, node_did)?;
+    Ok(core.retry_request(&parent).await?.into())
+}
+
 pub(super) fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);

@@ -116,9 +116,48 @@ fn wire_commands_reject_privileged_raw_access_and_unscoped_session_reads() {
         json!({"name":"execute_graphql", "args":{"query":"mutation {}"}}),
         json!({"name":"desktop_session_snapshot", "args":{"sessionId":"session"}}),
         json!({"name":"desktop_session_live_delta", "args":{"sessionId":"session"}}),
+        json!({"name":"desktop_request_retry", "args":{"requestId":"request"}}),
     ] {
         assert!(serde_json::from_value::<protocol::ClientCommand>(command).is_err());
     }
+}
+
+#[test]
+fn request_retry_is_scoped_and_not_cancellable() {
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"desktop_request_retry", "args":{"requestId":"request", "nodeDid":"node"}
+    }))
+    .unwrap();
+    assert!(
+        matches!(&command, protocol::ClientCommand::Retry { request_id, node_did }
+        if request_id == "request" && node_did == "node")
+    );
+    assert!(!command.is_cancellable());
+    assert!(protocol::ClientCommand::NAMES.contains(&"desktop_request_retry"));
+}
+
+#[tokio::test]
+async fn request_retry_reaches_the_existing_parent_owner() {
+    let (core, _dir) = crate::tests::support::boot_core().await;
+    let host = ClientHost::new(core.clone());
+    let error = host
+        .execute(
+            protocol::ClientCommand::Retry {
+                request_id: "missing-parent".into(),
+                node_did: "node".into(),
+            },
+            &super::approvals::AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("request missing-parent not found"),
+        "{error}"
+    );
+    core.shutdown().await.unwrap();
 }
 
 #[test]
