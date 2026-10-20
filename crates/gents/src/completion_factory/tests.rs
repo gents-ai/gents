@@ -682,7 +682,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         "all nullable restart witnesses must be exercised"
     );
     for case in cases {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let agent = agent_with_retry(CompletionRetryProfileFields::default());
         crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_id).await;

@@ -31,7 +31,7 @@ struct NodeReadinessRow {
 }
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+    Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
 #[test]

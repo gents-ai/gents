@@ -10,7 +10,7 @@ fn bindings() -> BTreeMap<String, String> {
 
 #[tokio::test]
 async fn timeline_canonical_messages_share_one_request_payload_scan() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     for sequence in 1..=3 {
         let key = format!("timeline-message-{sequence}");
@@ -48,7 +48,7 @@ async fn timeline_canonical_messages_share_one_request_payload_scan() {
 
 #[tokio::test]
 async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let owner = "did:test:timeline-fork";
     crate::test_support::install_test_agent(&node, owner, "timeline-fork").await;
@@ -113,7 +113,7 @@ async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership
 
 #[tokio::test]
 async fn timeline_batches_request_local_events_and_restores_request_sequence_order() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let response = node
         .execute(
@@ -272,7 +272,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::{sync::Arc, time::Duration};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();

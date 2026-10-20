@@ -1033,7 +1033,7 @@ resources:
         let owner = pin_fixed_signing_identity(identities.path());
         let foreign =
             KeyIdentity::load_or_create(identities.path().join("foreign.key"), None).unwrap();
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         seed(&node, owner.did(), None, "atlas-a", "Atlas original", true).await;
         seed(&node, owner.did(), None, "atlas-b", "Atlas followup", true).await;
@@ -1128,7 +1128,7 @@ resources:
     async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
         let identities = tempfile::tempdir().unwrap();
         let owner = pin_fixed_signing_identity(identities.path());
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         seed(&node, owner.did(), None, "work", "Investigation", false).await;
         for (sequence, text) in [

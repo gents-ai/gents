@@ -62,7 +62,7 @@ use std::sync::{
 };
 
 async fn remote_node() -> Arc<defra_node::EmbeddedNode> {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     for (owner, port) in [("did:test:owner", 8080), ("did:test:foreign", 9090)] {
         let owner = crate::graphql::escape_graphql_string(owner);

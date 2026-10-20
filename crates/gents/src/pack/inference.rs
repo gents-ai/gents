@@ -350,7 +350,7 @@ mod tests {
     #[tokio::test]
     async fn preview_auto_binds_only_the_unambiguous_one_to_one_case() {
         let owner = "did:key:preview-owner";
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         crate::document_config::ensure_node(&node, owner)
             .await
@@ -374,7 +374,7 @@ mod tests {
     #[tokio::test]
     async fn preview_accepts_shared_or_distinct_existing_profiles_and_rejects_foreign_ids() {
         let owner = "did:key:binding-owner";
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         crate::document_config::ensure_node(&node, owner)
             .await

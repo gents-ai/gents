@@ -68,7 +68,7 @@ mod tests {
 
     #[tokio::test]
     async fn unresolvable_configuration_uses_the_default() {
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         assert_eq!(
             configured_output_budget(&node, "did:key:absent", "missing", "bash").await,

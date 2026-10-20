@@ -637,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn activity_rows_reuse_prompt_free_timeline_vocabulary() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let response = node
             .execute(
@@ -732,7 +732,7 @@ mod tests {
         use crate::tool_call_lifecycle::AwaitMode;
 
         const NODE_DID: &str = "did:test:job-timeline";
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let mut root = claimed_request(&node, "job-root", "job-root-session", NODE_DID).await;
         let root_doc_id = root.request().doc_id.clone();
@@ -790,7 +790,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetches_complete_inference_provenance() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         let response = node
@@ -875,7 +875,7 @@ mod tests {
     async fn call_rows_carry_the_serving_account() {
         use crate::oauth_credential::{list_accounts, remove_account_in_txn, store_sign_in};
         let did = "did:key:z6MkTestTimelineAccounts";
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         let spec = crate::inference_setup::connection_spec(
@@ -1021,7 +1021,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetches_native_goal_history_without_projecting_usage_only_commits() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         let response = node

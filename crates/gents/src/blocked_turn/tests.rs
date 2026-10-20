@@ -451,7 +451,7 @@ fn the_value_holds_no_secret() {
 }
 
 async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::ensure_node(&node, DID).await.unwrap();
     let access = ConfigAccess::local(node.clone());

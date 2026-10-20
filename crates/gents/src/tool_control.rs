@@ -235,7 +235,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(&data_path)
                 .build()
                 .await

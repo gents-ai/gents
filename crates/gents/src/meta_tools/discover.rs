@@ -159,7 +159,7 @@ mod tests {
 
     #[tokio::test]
     async fn discover_filters_out_disallowed_registry_services() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let mutation = r#"mutation {
             upsert_ToolServiceRegistry(
@@ -288,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn discover_stays_bounded_when_a_service_endpoint_blackholes() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "hf-data", "strangenas", 9200).await;
@@ -334,7 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn discover_contact_decisions_match_lean_preflight_health_gate() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
 
@@ -395,7 +395,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn discover_fans_out_to_services_concurrently() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
         seed_registry_service(&node, "web-research-mcp", "studio-2", 9213).await;

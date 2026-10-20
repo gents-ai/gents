@@ -1053,7 +1053,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let identity =
             crate::identity::KeyIdentity::load_or_create(dir.path().join("key"), None).unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let secret = [1u8; 32];
         let address = address_from_secret(&secret).unwrap();
