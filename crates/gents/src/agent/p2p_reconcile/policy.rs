@@ -234,7 +234,11 @@ fn client_route_filters(
             equality_filter("node_did", owner_node_did),
         ),
     );
-    for collection in ["AgentSessionInputEdit", "AgentSessionGoalControl"] {
+    for collection in [
+        "FileImageHydrationRequest",
+        "AgentSessionInputEdit",
+        "AgentSessionGoalControl",
+    ] {
         filters.insert(
             collection.to_owned(),
             combine_filters(

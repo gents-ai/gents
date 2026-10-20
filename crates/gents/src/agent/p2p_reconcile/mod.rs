@@ -7,6 +7,7 @@ pub mod enrollment;
 pub mod enrollment_reconcile;
 pub mod enrollment_store;
 pub mod error_class;
+pub mod file_image_hydration;
 mod graphql_helpers;
 pub mod intervals;
 pub mod policy;

@@ -239,6 +239,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "MailboxItem",
     "PeerEndpoint",
     "SessionHydrationRequest",
+    "FileImageHydrationRequest",
     "AgentSessionInputEdit",
     "AgentSessionGoalControl",
     "Agent",
@@ -273,6 +274,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "MailboxItem",
     "PeerEndpoint",
     "SessionHydrationRequest",
+    "FileImageHydrationRequest",
     "AgentSessionInputEdit",
     "AgentSessionGoalControl",
 ];

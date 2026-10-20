@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
+
 pub use gents_protocol::session_hydration::{
     SessionHydrationCollection, SessionHydrationDocumentKey,
 };
@@ -24,7 +26,7 @@ pub fn hydration_collection_name(collection: SessionHydrationCollection) -> &'st
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct HydrationRequest {
     pub request_key: String,
     pub peer_id: String,
