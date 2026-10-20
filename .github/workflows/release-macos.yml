@@ -214,6 +214,9 @@ jobs:
           MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
           MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
           MACOS_CODESIGN_KEYCHAIN_PATH_VAR: ${{ vars.MACOS_CODESIGN_KEYCHAIN_PATH }}
+          CANDIDATE_INPUT: ${{ inputs.signed_unnotarized_candidate }}
+          MACOS_CODESIGN_CERT_P12_BASE64: ${{ secrets.MACOS_CODESIGN_CERT_P12_BASE64 }}
+          MACOS_CODESIGN_CERT_PASSWORD: ${{ secrets.MACOS_CODESIGN_CERT_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -228,14 +231,29 @@ jobs:
           original_keychains_path="${RUNNER_TEMP}/gents-original-keychains.txt"
           original_default_keychain_path="${RUNNER_TEMP}/gents-original-default-keychain.txt"
 
-          if [[ ! -f "${keychain_path}" ]]; then
+          security list-keychains -d user > "${original_keychains_path}"
+          security default-keychain -d user > "${original_default_keychain_path}" || true
+          if [[ "${CANDIDATE_INPUT:-false}" == "true" ]]; then
+            if [[ -z "${MACOS_CODESIGN_CERT_P12_BASE64}" ]]; then
+              echo "::error::Manual signed candidates require MACOS_CODESIGN_CERT_P12_BASE64."
+              exit 1
+            fi
+            umask 077
+            keychain_path="${RUNNER_TEMP}/gents-candidate-signing.keychain-db"
+            certificate_path="${RUNNER_TEMP}/gents-candidate-signing.p12"
+            trap 'rm -f "${certificate_path}"' EXIT
+            echo "CANDIDATE_SIGNING_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
+            printf '%s' "${MACOS_CODESIGN_CERT_P12_BASE64}" | /usr/bin/base64 -D > "${certificate_path}"
+            security create-keychain -p "${keychain_password}" "${keychain_path}"
+            security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+            security import "${certificate_path}" -k "${keychain_path}" \
+              -P "${MACOS_CODESIGN_CERT_PASSWORD}" -T /usr/bin/codesign
+          elif [[ ! -f "${keychain_path}" ]]; then
             echo "::error::Native macOS signing keychain not found at ${keychain_path}."
             exit 1
           fi
 
           echo "SIGNING_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
-          security list-keychains -d user > "${original_keychains_path}"
-          security default-keychain -d user > "${original_default_keychain_path}" || true
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
 
           keychains=()
@@ -756,6 +774,14 @@ jobs:
               security default-keychain -s "${default_keychain}" || true
             fi
           fi
+
+      - name: Remove candidate signing keychain
+        if: always() && inputs.signed_unnotarized_candidate
+        run: |
+          if [[ -n "${CANDIDATE_SIGNING_KEYCHAIN:-}" && -f "${CANDIDATE_SIGNING_KEYCHAIN}" ]]; then
+            security delete-keychain "${CANDIDATE_SIGNING_KEYCHAIN}"
+          fi
+          rm -f "${RUNNER_TEMP}/gents-candidate-signing.p12"
 
       - name: Show Rust build cache stats
         if: always()
