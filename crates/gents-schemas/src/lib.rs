@@ -33,6 +33,8 @@ pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
 pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
+pub const TOOL_FILE_CHANGE_NAME: &str = "ToolFileChange";
+pub const TOOL_FILE_CHANGE: &str = include_str!("../schemas/agent/tool_file_change.graphql");
 pub const AGENT_OUTPUT_SEGMENT_NAME: &str = "AgentOutputSegment";
 pub const AGENT_OUTPUT_SEGMENT: &str =
     include_str!("../schemas/agent/agent_output_segment.graphql");
@@ -203,6 +205,7 @@ pub const ALL: &[&str] = &[
     MAILBOX_ITEM,
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
+    TOOL_FILE_CHANGE,
     COMPACTION_ENTRY,
     RENDERED_REQUEST,
     RENDERED_REQUEST_BLOCK,
@@ -278,6 +281,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
+    TOOL_FILE_CHANGE_NAME,
     COMPACTION_ENTRY_NAME,
     RENDERED_REQUEST_NAME,
     RENDERED_REQUEST_BLOCK_NAME,
@@ -324,6 +328,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
+    TOOL_FILE_CHANGE_NAME,
     COMPACTION_ENTRY_NAME,
     TASK_NAME,
     SCHEDULE_NAME,

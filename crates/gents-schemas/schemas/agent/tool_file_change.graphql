@@ -1,0 +1,8 @@
+type ToolFileChange @branchable {
+    tool_call_doc_id: String @index @immutable
+    request_doc_id: String @index @immutable
+    node_did: String @index @immutable
+    session_id: String @index @immutable
+    requester_did: String @index @immutable
+    file_changes: JSON @immutable
+}

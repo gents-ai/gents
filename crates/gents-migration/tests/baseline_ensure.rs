@@ -546,3 +546,85 @@ async fn empty_registry_injectable_for_tests() {
     assert_eq!(report.baseline_registered, 0);
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn file_observation_install_preserves_retained_collection_lineages_and_documents() {
+    let directory = tempfile::tempdir().unwrap();
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(directory.path())
+        .build()
+        .await
+        .unwrap();
+    let baseline = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .copied()
+        .filter(|entry| entry.name != gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .collect::<Vec<_>>();
+    let registry = Registry {
+        baseline: &baseline,
+        steps: gents_migration::DEFAULT_STEPS,
+        ordinary_indexes: gents_migration::DEFAULT_REGISTRY.ordinary_indexes,
+    };
+    ensure_migrations_with_registry(&node, &registry)
+        .await
+        .unwrap();
+    let created = node
+        .execute(
+            r#"mutation { create_AgentToolCall(input: {
+        tool_call_key: "retained-session:retained-tool", request_id: "retained-request",
+        request_doc_id: "retained-physical-request", session_id: "retained-session",
+        node_did: "did:key:retained-node", requester_did: "did:key:retained-requester",
+        tool_call_id: "retained-tool", lifecycle_state: "completed"
+    }) { _docID } }"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let query = "{ AgentToolCall { _docID tool_call_key request_id request_doc_id session_id node_did requester_did tool_call_id lifecycle_state } }";
+    let before = node.execute(query).await;
+    assert!(!before.has_errors(), "{:?}", before.errors);
+    assert_eq!(
+        before.data.as_ref().unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let versions = baseline
+        .iter()
+        .map(|entry| {
+            (
+                entry.name,
+                node.get_collection(entry.name).unwrap().unwrap().version_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    node.shutdown().await;
+    drop(node);
+
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(directory.path())
+        .build()
+        .await
+        .unwrap();
+    let report = ensure_migrations(&node).await.unwrap();
+    assert_eq!(report.baseline_registered, 1);
+    assert!(node
+        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .unwrap()
+        .is_some());
+    for (name, version) in versions {
+        assert_eq!(
+            node.get_collection(name).unwrap().unwrap().version_id,
+            version,
+            "{name}"
+        );
+    }
+    let after = node.execute(query).await;
+    assert!(!after.has_errors(), "{:?}", after.errors);
+    assert_eq!(after.data, before.data);
+    assert_eq!(
+        ensure_migrations(&node).await.unwrap().baseline_registered,
+        0
+    );
+    node.shutdown().await;
+}

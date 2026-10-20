@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 pub const MAX_FILE_IMAGE_BYTES: u64 = 1024 * 1024;
 pub const FILE_CHANGES_VERSION: u32 = 1;
 
-/// Host observations on an accepted physical tool document, committed beside
-/// its winning terminal. Retained bytes are never provider-facing tool output.
+/// Immutable host observations bound to an accepted physical tool. Storage
+/// commits them beside its winning terminal without changing the tool's schema
+/// lineage. Retained bytes are never provider-facing tool output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
