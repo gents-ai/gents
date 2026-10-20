@@ -184,4 +184,33 @@ theorem revoked_after_delivery_cannot_serve (selection : Selection)
     complete selection beforeDelivery false .confirmed write ≠ some (.selected document) := by
   simp [complete]
 
+/-- The prior outcome is read from the source's immutable, signed receipt for
+this exact demand, never from the client's mutable status projection. A new
+explicit retry uses another demand key and therefore has no prior outcome. -/
+def recordOutcome (prior : Option Selection) (candidate : Selection)
+    (write : TerminalWriteResult) : Option Selection :=
+  match prior with
+  | some outcome => some outcome
+  | none => if write == .committed then some candidate else none
+
+def attemptDeliveryTarget (prior : Option Selection) (selection : Selection)
+    (authorized : Bool) : Option String :=
+  match prior with
+  | some _ => none
+  | none => deliveryTarget selection authorized
+
+theorem recorded_outcome_is_preserved (prior candidate : Selection)
+    (write : TerminalWriteResult) :
+    recordOutcome (some prior) candidate write = some prior := by rfl
+
+theorem recorded_attempt_does_not_redeliver (prior candidate : Selection)
+    (authorized : Bool) :
+    attemptDeliveryTarget (some prior) candidate authorized = none := by rfl
+
+theorem fresh_failed_attempt_has_no_outcome (candidate : Selection) :
+    recordOutcome none candidate .failed = none := by rfl
+
+theorem refusal_cannot_be_replaced_by_restored_authorization (document : String) :
+    recordOutcome (some .rejected) (.selected document) .committed = some .rejected := by rfl
+
 end SessionHydration.FileImages

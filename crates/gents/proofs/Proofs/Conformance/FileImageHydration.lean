@@ -180,6 +180,22 @@ def completionCasesJson := jsonArray (
           [TerminalWriteResult.committed, .failed, .notAttempted].map fun write =>
             completionCaseJson selection beforeDelivery afterDelivery delivery write)
 
+private def attemptCaseJson (prior : Option Selection) (candidate : Selection)
+    (authorized : Bool) (write : TerminalWriteResult) :=
+  "{\"prior\":" ++ (prior.map selectionJson).getD "null" ++
+  ",\"candidate\":" ++ selectionJson candidate ++
+  ",\"authorized\":" ++ boolJson authorized ++
+  ",\"write\":" ++ writeJson write ++
+  ",\"target\":" ++ ((attemptDeliveryTarget prior candidate authorized).map jsonString).getD "null" ++
+  ",\"expected\":" ++ ((recordOutcome prior candidate write).map selectionJson).getD "null" ++ "}"
+
+def attemptCasesJson := jsonArray (
+  [none, some Selection.rejected, some .missing, some (.selected "original-image")].flatMap fun prior =>
+    [Selection.rejected, .missing, .selected "candidate-image"].flatMap fun candidate =>
+      [true, false].flatMap fun authorized =>
+        [TerminalWriteResult.committed, .failed, .notAttempted].map fun write =>
+          attemptCaseJson prior candidate authorized write)
+
 def storageCasesJson := jsonArray (
   ["node", "client"].flatMap fun owner =>
     [some "node", some "client", some "outsider", none].map fun actor =>
