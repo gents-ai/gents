@@ -701,3 +701,23 @@ jobs:
 
       - name: Run triage-hygiene tests
         run: npm run test:triage
+
+  notary-control-tests:
+    # Focused, network-free tests for the staged-artifact notarization control
+    # scripts. They need real macOS ditto/shasum, so they run on a hosted
+    # macOS runner with no secrets. Draft PRs run them too.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run notarization control tests
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/notary-venv"
+          "${RUNNER_TEMP}/notary-venv/bin/pip" install --quiet pyyaml==6.0.2
+          bash -n .github/scripts/notarize-staged-artifact.sh
+          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-notarize-staged-artifact.py
+          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-rc1-notary-auth.py
