@@ -123,6 +123,28 @@ fn wire_commands_reject_privileged_raw_access_and_unscoped_session_reads() {
 }
 
 #[test]
+fn file_change_reads_require_complete_scope_and_are_cancellable() {
+    let args = json!({"nodeDid":"node", "sessionId":"session", "requestId":"request", "toolCallDocId":"physical"});
+    for field in ["nodeDid", "sessionId", "requestId", "toolCallDocId"] {
+        let mut missing = args.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<protocol::ClientCommand>(json!({
+                "name":"desktop_tool_file_changes", "args": missing
+            }))
+            .is_err(),
+            "{field}"
+        );
+    }
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"desktop_tool_file_changes", "args": args
+    }))
+    .unwrap();
+    assert!(command.is_cancellable());
+    assert!(protocol::ClientCommand::NAMES.contains(&"desktop_tool_file_changes"));
+}
+
+#[test]
 fn request_retry_is_scoped_and_not_cancellable() {
     let command: protocol::ClientCommand = serde_json::from_value(json!({
         "name":"desktop_request_retry", "args":{"requestId":"request", "nodeDid":"node"}

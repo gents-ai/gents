@@ -89,6 +89,9 @@ pub struct MessageReconstructionView {
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallView {
     pub tool_call_key: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub tool_call_doc_id: Option<String>,
     pub request_id: Option<String>,
     pub message_sequence: Option<i64>,
     pub tool_name: Option<String>,
@@ -241,6 +244,9 @@ pub enum ToolPresentationView {
 #[serde(rename_all = "camelCase")]
 pub struct RenderedToolCallView {
     pub item_key: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub tool_call_doc_id: Option<String>,
     pub tool_name: String,
     pub status_kind: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]

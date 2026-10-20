@@ -647,6 +647,57 @@ impl ClientCore {
         }
     }
 
+    pub async fn tool_file_changes(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        request_id: &str,
+        tool_call_doc_id: &str,
+    ) -> Result<Option<gents_protocol::file_changes::ToolFileChanges>> {
+        let node_did = normalize_required("node_did", node_did)?;
+        let session_id = normalize_required("session_id", session_id)?;
+        let request_id = normalize_required("request_id", request_id)?;
+        let tool_call_doc_id = normalize_required("tool_call_doc_id", tool_call_doc_id)?;
+        let Some(projection) = self
+            .refresh_local_request(node_did, session_id, Some(request_id), None, &[])
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(row) = find_request_in_scope(&projection.requests, request_id, Some(node_did))?
+        else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            row.session_id.as_deref() == Some(session_id)
+                && row.requester_did == projection.requester_did,
+            "file changes crossed the selected request scope"
+        );
+        let request_doc_id = row
+            .doc_id
+            .as_deref()
+            .context("request lacks physical identity")?;
+        let access = match self.operator_observation_graphql(node_did) {
+            Some(graphql) => ConfigAccess::Graphql(graphql),
+            None => self
+                .store_access
+                .lock()
+                .await
+                .as_ref()
+                .context("local store access is unavailable")?
+                .clone(),
+        };
+        gents::tool_call_lifecycle::load_tool_call_file_changes(
+            &access,
+            tool_call_doc_id,
+            request_doc_id,
+            node_did,
+            session_id,
+            row.requester_did.as_deref(),
+        )
+        .await
+    }
+
     pub async fn request_output(
         &self,
         node_did: &str,

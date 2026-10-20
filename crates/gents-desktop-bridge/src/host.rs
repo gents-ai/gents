@@ -398,6 +398,22 @@ impl ClientHost {
                     .map_err(backend_error)?;
                 encode(crate::types::ChatSendResult::from(submitted))
             }
+            ClientCommand::ToolFileChanges {
+                node_did,
+                session_id,
+                request_id,
+                tool_call_doc_id,
+            } => encode(
+                crate::commands::tool_file_changes(
+                    &self.core,
+                    node_did,
+                    session_id,
+                    request_id,
+                    tool_call_doc_id,
+                )
+                .await
+                .map_err(backend_error)?,
+            ),
             ClientCommand::RequestOutput {
                 node_did,
                 session_id,

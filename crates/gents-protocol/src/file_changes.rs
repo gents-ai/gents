@@ -8,6 +8,7 @@ pub const FILE_CHANGES_VERSION: u32 = 1;
 /// Host observations on an accepted physical tool document, committed beside
 /// its winning terminal. Retained bytes are never provider-facing tool output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct ToolFileChanges {
     pub version: u32,
@@ -16,6 +17,7 @@ pub struct ToolFileChanges {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileChangeImages {
     /// Resolved tool root at mutation time. Placement and request-resource
@@ -27,7 +29,9 @@ pub struct FileChangeImages {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub enum FileImage {
     Missing,
     File {
@@ -42,6 +46,7 @@ pub enum FileImage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum ImageFailure {
     ReadFailed,
@@ -52,6 +57,7 @@ pub enum ImageFailure {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FilePermissions {
     pub readonly: bool,

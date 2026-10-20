@@ -54,11 +54,13 @@ fn completed_progress() -> JobProgress {
     }
 }
 
-/// Copy of gents-cli's `seed_admission` (`crates/gents-cli/tests/suites/cli_job.rs:221-312`):
-/// publishes the admitted assistant header at sequence 1 that the lifecycle load
-/// binds the job row through. Differs from the source in the operator identity
-/// (`seed_job_row` writes `requester_did`) and in reading `request_doc_id` from the row.
-async fn seed_admission(core: &Arc<ClientCore>, session_id: &str, row_doc_id: &str, call: &str) {
+pub(super) async fn seed_admission(
+    core: &Arc<ClientCore>,
+    session_id: &str,
+    row_doc_id: &str,
+    call: &str,
+    sequence: u32,
+) {
     let access = ConfigAccess::local(core.node_arc());
     let read = format!(
         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
@@ -79,9 +81,8 @@ async fn seed_admission(core: &Arc<ClientCore>, session_id: &str, row_doc_id: &s
         .and_then(|value| value.as_str())
         .expect("job row request_doc_id")
         .to_owned();
-    // `seed_job_row` leaves an ended row without the `deadline_at` the lifecycle load requires.
     let deadline = format!(
-        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline_at: "2126-06-01T10:00:00Z" }}) {{ _docID }} }}"#,
+        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ deadline_at: "2126-06-01T10:00:00Z", message_sequence: {sequence} }}) {{ _docID }} }}"#,
         escape_graphql_string(row_doc_id)
     );
     access
@@ -147,7 +148,12 @@ async fn seed_admission(core: &Arc<ClientCore>, session_id: &str, row_doc_id: &s
         gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")
             .expect("segment doc id");
     let message = TranscriptMessage {
-        message_key: gents::session::sequence_message_key(OPERATOR, session_id, Some(OPERATOR), 1),
+        message_key: gents::session::sequence_message_key(
+            OPERATOR,
+            session_id,
+            Some(OPERATOR),
+            sequence,
+        ),
         session_id: session_id.into(),
         node_did: OPERATOR.into(),
         requester_did: Some(OPERATOR.into()),
@@ -156,7 +162,7 @@ async fn seed_admission(core: &Arc<ClientCore>, session_id: &str, row_doc_id: &s
             execution_generation: generation,
         },
         outcome: OutputOutcome::Complete,
-        sequence: 1,
+        sequence,
         role: MessageRole::Assistant,
         native_id: None,
         blocks: vec![MessageBlock::ToolCall {
@@ -230,7 +236,7 @@ async fn job_control_on_an_ended_job_row_is_already_terminal() {
         None,
     )
     .await;
-    seed_admission(&core, "sess_job", &row, "call-done").await;
+    seed_admission(&core, "sess_job", &row, "call-done", 1).await;
 
     for action in [JobControlKind::Stop, JobControlKind::Pause] {
         let outcome = job_control(&core, &request("sess_job", "call-done", action))
