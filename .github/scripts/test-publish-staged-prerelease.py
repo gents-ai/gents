@@ -82,7 +82,11 @@ class FakeGh(pub.Gh):
         self.tags = {}
         self.releases = []
         self.calls = []
-        self.push_runs = 0
+        self.tag_runs = 0
+        self.runs_response = None
+        self.ref_conflict = False
+        self.move_tag_after_draft = None
+        self.ref_lookups = 0
         self.tamper_digest = None
         self.extra_asset = False
         self.wrong_target = False
@@ -114,6 +118,8 @@ class FakeGh(pub.Gh):
         self.calls.append(("run", tuple(args)))
         if args[:2] != ["release", "create"] or self.create_fails:
             return 1, b"", b"failed"
+        if "--verify-tag" not in args or args[2] not in self.tags:
+            return 1, b"", b"tag missing"
         option_values = {args[i + 1] for i, a in enumerate(args) if a in ("--notes-file", "--target", "--title", "--repo")}
         files = [a for a in args[3:] if not a.startswith("-") and a not in option_values]
         assets = [
@@ -123,18 +129,20 @@ class FakeGh(pub.Gh):
             assets[0]["digest"] = "sha256:" + "0" * 64
         if self.extra_asset:
             assets.append({"name": "surprise.bin", "digest": "sha256:" + "1" * 64})
-        target = args[args.index("--target") + 1]
+        target = self.tags[args[2]]
         self.releases.append(
             {
                 "id": 77,
                 "tag_name": args[2],
                 "draft": "--draft" in args,
                 "prerelease": "--prerelease" in args,
-                "target_commitish": "main" if self.wrong_target else target,
+                "target_commitish": target,
                 "assets": assets,
                 "html_url": "https://github.com/{}/releases/tag/{}".format(REPO, args[2]),
             }
         )
+        if self.move_tag_after_draft:
+            self.tags[args[2]] = self.move_tag_after_draft
         return 0, b"", b""
 
     def api(self, path, method="GET", body=None, accept=None, allow_404=False):
@@ -155,10 +163,18 @@ class FakeGh(pub.Gh):
             return ok({"sha": TARGET, "commit": {"committer": {"date": "2026-10-19T18:30:00Z"}}})
         if rest.startswith("commits/"):
             return missing()
+        if rest == "git/refs" and method == "POST":
+            name = body["ref"][len("refs/tags/"):]
+            if self.ref_conflict or name in self.tags:
+                return missing()  # HTTP 422 Reference already exists
+            self.tags[name] = body["sha"]
+            return ok({"ref": body["ref"], "object": {"type": "commit", "sha": body["sha"]}})
         if rest.startswith("git/ref/tags/"):
             tag = rest[len("git/ref/tags/"):]
+            self.ref_lookups += 1
             if tag in self.tags:
-                return ok({"object": {"type": "commit", "sha": self.tags[tag]}})
+                kind = "tag" if self.wrong_target == "annotated" else "commit"
+                return ok({"ref": "refs/tags/" + tag, "object": {"type": kind, "sha": self.tags[tag]}})
             return missing()
         if rest.startswith("releases?"):
             page = int(rest.rsplit("&page=", 1)[1])
@@ -166,10 +182,12 @@ class FakeGh(pub.Gh):
         if rest.startswith("releases/") and method == "PATCH":
             release = self.releases[0]
             release["draft"] = body["draft"]
-            self.tags[release["tag_name"]] = TARGET
             return ok(release)
-        if rest.startswith("actions/runs?event=push"):
-            return ok({"total_count": self.push_runs})
+        if rest.startswith("actions/runs?branch="):
+            if self.runs_response is not None:
+                return ok(self.runs_response)
+            runs = [{"name": "Release macOS"}] * self.tag_runs
+            return ok({"total_count": self.tag_runs, "workflow_runs": runs})
         if rest.startswith("actions/runs/") and "/artifacts" in rest:
             run_id = rest.split("/")[2]
             return ok({"artifacts": self.artifacts.get(run_id, [])})
@@ -202,6 +220,7 @@ class Base(unittest.TestCase):
             "APP_ASSET_SHA256": sha(APP_ZIP),
             "CLI_BINARY_SHA256": sha(CLI_BIN),
             "PROVENANCE_NOTE": "Build stamp and receipts identify this commit; manifest source_sha is null.",
+            "CANDIDATE_APPROVAL_URL": "https://github.com/gents-ai/gents/pull/2781#issuecomment-6282341698",
             "RUN_URL": "https://github.com/gents-ai/gents/actions/runs/999",
         }
 
@@ -246,19 +265,30 @@ class HappyPath(Base):
             self.assertEqual(member.uid, 0)
         self.assertIn(app_asset, (assets / "SHA256SUMS-desktop-macos.txt").read_text())
         notes = (Path(cfg["work"]) / "notes.md").read_text()
-        for text in ("no DMG", APP_ID, CLI_ID, TARGET, "source_sha is null", sha(CLI_BIN), "cannot carry a stapled"):
+        for text in (
+            "no DMG", APP_ID, CLI_ID, TARGET, "source_sha is null", sha(CLI_BIN), "cannot carry a stapled",
+            "Tag target (operator-selected)", "does **not** prove", "issuecomment-6282341698",
+            "clean source tree", "reproducible build",
+        ):
             self.assertIn(text, notes)
+        self.assertNotIn("**Source:**", notes)
 
         release = pub.publish(self.gh, cfg, settle_seconds=0)
         self.assertFalse(release["draft"])
         create = [c for c in self.gh.calls if c[0] == "run"][0][1]
-        for flag in ("--draft", "--prerelease", "--latest=false"):
+        for flag in ("--draft", "--prerelease", "--latest=false", "--verify-tag"):
             self.assertIn(flag, create)
-        self.assertEqual(create[create.index("--target") + 1], TARGET)
+        self.assertNotIn("--target", create)
         self.assertEqual(len(self.gh.api_calls("PATCH")), 1)
+        self.assertEqual(len(self.gh.api_calls("POST")), 1)
         self.assertEqual(self.gh.tags[TAG], TARGET)
-        # No write API calls other than the single publish PATCH.
-        self.assertEqual({c[0] for c in self.gh.calls}, {"GET", "PATCH", "run"})
+        # Writes: one exclusive ref POST, one draft create, one publish PATCH.
+        self.assertEqual({c[0] for c in self.gh.calls}, {"GET", "POST", "PATCH", "run"})
+        order = [c[0] if c[0] != "GET" else ("REF" if "git/ref/tags" in c[1] else "GET") for c in self.gh.calls]
+        post, run, patch = order.index("POST"), order.index("run"), order.index("PATCH")
+        self.assertLess(post, run)
+        self.assertEqual(order[patch - 1], "REF")  # ref re-verified immediately before publishing
+        self.assertEqual(order[patch + 1], "REF")
 
     def test_cli_tarball_is_deterministic(self):
         cfg1, m1 = self.collect()
@@ -278,6 +308,12 @@ class InputValidation(Base):
             {"APP_ASSET_SHA256": "x" * 64},
             {"PROVENANCE_NOTE": "line\x01break"},
             {"GITHUB_REPOSITORY": "a b/c"},
+            {"PROVENANCE_NOTE": ""},
+            {"PROVENANCE_NOTE": "   "},
+            {"CANDIDATE_APPROVAL_URL": ""},
+            {"CANDIDATE_APPROVAL_URL": "https://github.com/other/repo/pull/1"},
+            {"CANDIDATE_APPROVAL_URL": "https://example.com/gents-ai/gents/pull/1"},
+            {"CANDIDATE_APPROVAL_URL": "https://github.com/gents-ai/gents/pull/1 "},
         ):
             with self.subTest(override=override):
                 with self.assertRaises(pub.Refused):
@@ -401,16 +437,37 @@ class PublishSafety(Base):
         self.assert_refused(pub.publish, self.gh, cfg, 0, contains="left as draft")
         self.assertEqual(self.gh.api_calls("PATCH"), [])
 
-    def test_wrong_target_left_as_draft(self):
+    def test_tag_moved_before_publish_left_as_draft(self):
         cfg, _ = self.collect()
-        self.gh.wrong_target = True
-        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="left as draft")
+        self.gh.move_tag_after_draft = "f" * 40
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="immediately before publishing")
         self.assertEqual(self.gh.api_calls("PATCH"), [])
+
+    def test_non_commit_tag_ref_refused(self):
+        cfg, _ = self.collect()
+        self.gh.wrong_target = "annotated"
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="does not point at the target")
+        self.assertEqual([c for c in self.gh.calls if c[0] == "run"], [])
+
+    def test_ref_create_conflict_never_updates(self):
+        cfg, _ = self.collect()
+        self.gh.ref_conflict = True
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="exclusively")
+        self.assertEqual([c for c in self.gh.calls if c[0] in ("run", "PATCH", "PUT")], [])
+        self.assertNotIn(TAG, self.gh.tags)
+        self.assertFalse([c for c in self.gh.calls if c[0] == "PATCH" and "git/refs" in c[1]])
+
+    def test_create_failure_leaves_tag_and_refuses(self):
+        cfg, _ = self.collect()
+        self.gh.create_fails = True
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="runbook recovery")
+        self.assertEqual(self.gh.tags[TAG], TARGET)
+        self.assert_refused(pub.collect, self.gh, self.cfg(), contains="already exists")  # rerun refuses
 
     def test_create_failure(self):
         cfg, _ = self.collect()
         self.gh.create_fails = True
-        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="inspect drafts")
+        self.assert_refused(pub.publish, self.gh, cfg, 0)
         self.assertEqual(self.gh.api_calls("PATCH"), [])
 
     def test_local_asset_changed_after_collect(self):
@@ -425,10 +482,18 @@ class PublishSafety(Base):
         self.assert_refused(pub.publish, self.gh, cfg, 0, contains="already exists")
         self.assertEqual([c for c in self.gh.calls if c[0] == "run"], [])
 
-    def test_push_triggered_runs_reported(self):
+    def test_observed_tag_runs_reported(self):
         cfg, _ = self.collect()
-        self.gh.push_runs = 1
-        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="push-triggered")
+        self.gh.tag_runs = 1
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="Release macOS")
+
+    def test_malformed_run_listing_rejected(self):
+        for response in ({}, {"total_count": "0", "workflow_runs": []}, {"total_count": 0}, [], {"total_count": 0, "workflow_runs": {}}):
+            with self.subTest(response=response):
+                self.gh = FakeGh()
+                cfg, _ = self.collect()
+                self.gh.runs_response = response
+                self.assert_refused(pub.publish, self.gh, cfg, 0, contains="malformed")
 
     def test_publish_requires_matching_manifest(self):
         cfg, _ = self.collect()
@@ -452,8 +517,11 @@ class WorkflowStatic(unittest.TestCase):
         self.assertEqual(
             set(self.on["workflow_dispatch"]["inputs"]),
             {"tag", "target_sha", "app_notarize_run_id", "cli_notarize_run_id", "app_asset_sha256",
-             "cli_binary_sha256", "provenance_note"},
+             "cli_binary_sha256", "provenance_note", "candidate_approval_url"},
         )
+        inputs = self.on["workflow_dispatch"]["inputs"]
+        self.assertTrue(inputs["provenance_note"]["required"])
+        self.assertTrue(inputs["candidate_approval_url"]["required"])
 
     def test_permissions_exact(self):
         self.assertEqual(self.wf["permissions"], {"contents": "write", "actions": "read"})

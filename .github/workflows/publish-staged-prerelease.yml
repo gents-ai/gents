@@ -4,10 +4,13 @@ name: Publish staged macOS prerelease (CI control)
 # notarize-staged-artifact.yml runs (app and CLI), with no build. All GitHub
 # writes use this workflow's GITHUB_TOKEN; GitHub does not start new workflow
 # runs for events created with GITHUB_TOKEN (except workflow_dispatch and
-# repository_dispatch), so creating the tag does not start the tag-triggered
-# release rebuild workflows. The script verifies that after publishing.
-# Assets are verified while the release is still a draft, and only then
-# published. An existing tag or release is never modified. See
+# repository_dispatch); that suppression is what keeps the tag-triggered
+# release rebuild workflows from starting. Afterwards the script only performs
+# a bounded observation of runs for the tag. The tag ref is created
+# exclusively (an existing ref is a conflict, never updated) and re-verified
+# immediately before publishing. Assets are verified while the release is
+# still a draft. The target SHA is operator-selected; the notes say that
+# source provenance is not proven by this workflow. See
 # docs/publish-staged-prerelease.md.
 
 on:
@@ -38,10 +41,13 @@ on:
         required: true
         type: string
       provenance_note:
-        description: Optional one-paragraph source provenance statement for the release notes.
-        required: false
+        description: Required. Basis for the source claim (e.g. embedded build stamps and build receipts); printed in the notes.
+        required: true
         type: string
-        default: ""
+      candidate_approval_url:
+        description: Required. Link to the candidate-approval record in this repository (issue/PR comment).
+        required: true
+        type: string
 
 concurrency:
   group: publish-staged-prerelease
@@ -105,6 +111,7 @@ jobs:
           APP_ASSET_SHA256: ${{ inputs.app_asset_sha256 }}
           CLI_BINARY_SHA256: ${{ inputs.cli_binary_sha256 }}
           PROVENANCE_NOTE: ${{ inputs.provenance_note }}
+          CANDIDATE_APPROVAL_URL: ${{ inputs.candidate_approval_url }}
           PUBLISH_WORK_DIR: ${{ runner.temp }}/publish-${{ github.run_id }}-${{ github.run_attempt }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/publish_staged_prerelease.py collect
@@ -132,6 +139,7 @@ jobs:
           APP_ASSET_SHA256: ${{ inputs.app_asset_sha256 }}
           CLI_BINARY_SHA256: ${{ inputs.cli_binary_sha256 }}
           PROVENANCE_NOTE: ${{ inputs.provenance_note }}
+          CANDIDATE_APPROVAL_URL: ${{ inputs.candidate_approval_url }}
           PUBLISH_WORK_DIR: ${{ runner.temp }}/publish-${{ github.run_id }}-${{ github.run_attempt }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/publish_staged_prerelease.py publish

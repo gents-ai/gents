@@ -11,22 +11,43 @@ outputs of two successful `notarize-staged-artifact.yml` runs: one for the
 desktop app and one for the CLI. It never builds, never signs, and never
 modifies an existing tag or release.
 
-## Why the release rebuild workflows do not start
+## Candidate approval and source provenance
+
+The target SHA is chosen by the operator. The workflow only checks that the
+commit exists. Nothing in it proves that the notarized binaries were built
+from that commit. Two inputs are therefore required:
+
+- **`candidate_approval_url`**: a link to the record in this repository that
+  approves the exact candidate, for example the owner's confirmation comment.
+  Dispatch only after that approval exists. This is a mandatory operator gate;
+  the workflow can check the link's form, not its content.
+- **`provenance_note`**: the basis for linking the binaries to the commit.
+  Examples are embedded build stamps or build receipts. State any gaps, such
+  as a build manifest whose `source_sha` is null.
+
+The release notes show the SHA as **"Tag target (operator-selected)"**. They
+quote the provenance note and the approval link, and state that neither a
+clean source tree nor a reproducible build is established.
+
+## Why the release rebuild workflows should not start
 
 Pushing a `v*` tag normally starts `release-macos`,
 `release-desktop-packages`, `release-linux` and `release-linux-desktop`.
 Those workflows rebuild and upload assets, and `release-macos` uploads with
-`--clobber`. This workflow does not push a tag. It creates a draft release
-targeting the exact commit and then publishes it, and publishing creates the
-tag. All of this uses the workflow's `GITHUB_TOKEN`. GitHub does not start
-new workflow runs for events created by `GITHUB_TOKEN`, except
-`workflow_dispatch` and `repository_dispatch`. No repository settings and no
-other credentials are involved.
+`--clobber`.
 
-After publishing, the script queries push-event runs for the tag. If any
-exist, it fails loudly so they can be cancelled before they change assets.
-This check is the evidence that the behavior held; the documented GitHub
-behavior is not taken on trust.
+This workflow creates the tag ref, the draft release and the publication
+with its own explicitly supplied `GITHUB_TOKEN`. **The preventive control is
+GitHub's documented behavior:** events created by `GITHUB_TOKEN` do not start
+new workflow runs, except `workflow_dispatch` and `repository_dispatch`. No
+repository settings and no other credentials are involved. The tests use a
+fake `gh`, so they cannot demonstrate this service behavior.
+
+After publishing, the script performs a **bounded observation**. After a
+short delay, it lists workflow runs whose head branch is the tag, for any
+event. A malformed listing is an error. Any listed run fails the step, so it
+can be inspected and cancelled. An empty listing at that moment is evidence,
+not proof that no run will start.
 
 ## What `collect` verifies (read-only)
 
@@ -73,44 +94,79 @@ behavior is not taken on trust.
 ## What `publish` does
 
 1. Re-hashes the local assets against the manifest, and re-checks that the
-   tag and release are still absent.
-2. Runs `gh release create --draft --prerelease --latest=false --target
-   <sha>` with the assets.
-3. Requires exactly one draft for the tag with the right target and the
-   prerelease flag. Its asset names must equal the manifest exactly, and each
-   GitHub-computed `digest` must equal the local SHA-256. On any mismatch the
-   release is **left as a draft** and the step fails.
-4. Publishes by PATCHing `draft: false`, then checks that the tag ref is a
-   commit ref pointing at the target SHA.
-5. Waits briefly, then requires zero push-triggered runs for the tag.
+   tag and any release for it are still absent.
+2. **Creates the tag exclusively.** It calls `POST /git/refs` for
+   `refs/tags/<tag>` at the target SHA. GitHub rejects this if the ref
+   already exists (HTTP 422). The step then fails, and the existing ref is
+   **never** updated or forced. It then reads the ref back and requires a
+   commit ref at the target.
+3. Runs `gh release create <tag> --verify-tag --draft --prerelease
+   --latest=false` with the assets. `--verify-tag` requires the tag created
+   in step 2, so `gh` cannot create a different tag.
+4. Requires exactly one draft for the tag, flagged as a prerelease. Its asset
+   names must equal the manifest exactly, and each GitHub-computed `digest`
+   must equal the local SHA-256. On any mismatch the release is **left as a
+   draft** and the step fails.
+5. **Immediately before publishing**, reads the tag ref again and refuses
+   (leaving the draft) unless it is still a commit ref at the target.
+6. Publishes by PATCHing `draft: false`, then reads the tag ref once more.
+7. Waits briefly and runs the bounded observation described above.
+
+## Recovery
+
+The workflow never deletes or moves anything. It refuses whenever the tag or
+a release for it already exists. Recovery is a deliberate operator action:
+
+- **Failure before step 2.** Nothing was written; dispatch again.
+- **Conflict in step 2** (the tag already existed). Find out who created it
+  and where it points. Under exclusive publication ownership this should not
+  happen. Do not delete another publisher's tag. Resolve ownership first.
+- **Failure after step 2** (draft create failed, digest mismatch, tag moved).
+  1. The tag exists, possibly with a draft.
+  2. Inspect both. Confirm the tag points at the intended commit and that no
+     workflow runs started for it.
+  3. Delete the draft, then the tag, using an authorized account.
+  4. Record what was deleted and why in the approval thread.
+  5. Dispatch again.
+- **Failure after step 6** (the release is published). Do not unpublish
+  automatically. Inspect the release and any observed runs, and cancel runs
+  that could modify assets.
 
 ## Operator procedure
 
-1. Finish both `notarize-staged-artifact.yml` runs (app and CLI). Note their
+1. Confirm a candidate-approval record exists for the exact artifacts, and
+   that their architecture matches what the notes claim (`lipo -archs` on
+   every executable; the notes say arm64 only).
+2. Finish both `notarize-staged-artifact.yml` runs (app and CLI). Note their
    run ids, the app zip SHA-256 from the app run's `SHA256SUMS`, and the CLI
    binary SHA-256. Check the CLI SHA-256 against the build receipt.
-2. Dispatch from the default branch:
+3. Dispatch from the default branch:
 
    ```sh
    gh workflow run publish-staged-prerelease.yml --ref main \
      -f tag=v0.21.0-rc1 -f target_sha=<40-hex> \
      -f app_notarize_run_id=<id> -f cli_notarize_run_id=<id> \
      -f app_asset_sha256=<hex> -f cli_binary_sha256=<hex> \
-     -f provenance_note='...'
+     -f provenance_note='...' \
+     -f candidate_approval_url='https://github.com/gents-ai/gents/pull/<n>#issuecomment-<id>'
    ```
 
-3. **If `publish` fails after creating the draft**, inspect the draft. Delete
-   it deliberately before dispatching again; the workflow refuses while any
-   release exists for the tag.
+4. **If `publish` fails**, follow *Recovery* above. The workflow refuses
+   while the tag or any release for it exists.
 
 ## Permissions and limitations
 
-- **Permissions.** `contents: write` (to create and publish the release) and
-  `actions: read` (to read notarize runs and download their outputs). The
+- **Permissions.** `contents: write` (to create the tag ref and the release)
+  and `actions: read` (to read notarize runs and download their outputs). The
   token could technically push to branches, but the script only performs the
   calls described above. Review the script, not just the permissions block.
-- **Tag type.** The tag is lightweight. It is created by publishing the
-  release, so no annotated message is attached.
+- **Tag type.** The tag is a lightweight tag created through the refs API, so
+  no annotated message is attached.
+- **Not covered by the exclusive create:** concurrent publishers. The ref
+  create is exclusive, and the ref is re-verified before publishing, but
+  another party with write access could still act on the tag afterwards.
+  Publication ownership must be exclusive; it was assigned for
+  `v0.21.0-rc1`.
 - **Runner.** The workflow runs on `ubuntu-latest`. It does not re-verify code
   signatures; that was done on macOS by the notarize runs, whose
   Apple-accepted log binding is re-checked here.

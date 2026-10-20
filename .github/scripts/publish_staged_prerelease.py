@@ -19,11 +19,18 @@ Subcommands (configuration comes only from environment variables):
            require the output hashes to equal the operator-pinned hashes; build
            the release assets (the notarized app zip byte-for-byte, a
            deterministic CLI tarball, checksum files) and the release notes.
-  publish  Re-check that the tag/release are still absent; create a DRAFT
-           prerelease targeting the exact commit with the assets; require the
-           draft's asset names and GitHub-computed digests to equal the local
-           manifest exactly; only then publish; confirm the tag points at the
-           target commit and that no push-triggered runs were started.
+  publish  Re-check that the tag/release are still absent; create the tag ref
+           exclusively at the target commit (an existing ref is a conflict and
+           is never updated); create a DRAFT prerelease on that existing tag;
+           require the draft's asset names and GitHub-computed digests to
+           equal the local manifest; re-read the tag ref immediately before
+           publishing and refuse unless it is a commit ref at the target; then
+           publish and re-check the ref. Finally, a bounded observation lists
+           workflow runs for the tag (not proof that none will start).
+
+The target SHA is the operator-selected tag target. This workflow does not
+prove the artifacts were built from it; the release notes say so and record
+the operator's provenance basis and the candidate-approval record.
 """
 
 import calendar
@@ -48,6 +55,7 @@ SHA64_RE = re.compile(r"^[0-9a-f]{64}$")
 RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 NOTE_RE = re.compile(r"^[^\x00-\x08\x0b-\x1f\x7f]{0,2000}$")
+APPROVAL_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(pull|issues)/[0-9]+(#issuecomment-[0-9]+)?$")
 OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 MAX_RELEASE_PAGES = 50
 CLI_DIR = "gents-aarch64-apple-darwin"
@@ -109,6 +117,7 @@ def config():
         "app_sha256": env.get("APP_ASSET_SHA256", ""),
         "cli_sha256": env.get("CLI_BINARY_SHA256", ""),
         "provenance": env.get("PROVENANCE_NOTE", ""),
+        "approval_url": env.get("CANDIDATE_APPROVAL_URL", ""),
         "work": env.get("PUBLISH_WORK_DIR", ""),
         "run_url": env.get("RUN_URL", ""),
     }
@@ -122,10 +131,15 @@ def config():
         ("app_sha256", SHA64_RE),
         ("cli_sha256", SHA64_RE),
         ("provenance", NOTE_RE),
+        ("approval_url", APPROVAL_URL_RE),
     )
     for key, pattern in checks:
         if not pattern.match(cfg[key]):
             raise Refused("input {} is missing or malformed".format(key))
+    if not cfg["provenance"].strip():
+        raise Refused("input provenance is required (state the basis for the source claim)")
+    if not cfg["approval_url"].startswith("https://github.com/{}/".format(cfg["repo"])):
+        raise Refused("input approval_url must link to a record in this repository")
     if cfg["app_run_id"] == cfg["cli_run_id"]:
         raise Refused("app and cli notarize runs must differ")
     if not cfg["work"]:
@@ -293,10 +307,14 @@ def release_notes(cfg, app, cli, assets):
         "(submission `{}`). Command-line binaries cannot carry a stapled ticket; "
         "Gatekeeper checks the ticket online on first run.".format(CLI_TARBALL, cli["submission_id"]),
         "",
-        "**Source:** commit [`{0}`]({1}/commit/{0}).".format(cfg["target_sha"], repo_url),
+        "### Source provenance",
+        "",
+        "- **Tag target (operator-selected):** commit [`{0}`]({1}/commit/{0}). This workflow checks that the "
+        "commit exists; it does **not** prove that these binaries were built from it.".format(cfg["target_sha"], repo_url),
+        "- **Basis for the source claim (operator statement):** " + cfg["provenance"].strip(),
+        "- **Candidate approval record:** " + cfg["approval_url"],
+        "- **Not established:** a clean source tree at build time, or a reproducible build.",
     ]
-    if cfg["provenance"]:
-        lines += ["", "**Provenance:** " + cfg["provenance"]]
     lines += ["", "### SHA-256", "", "| Asset | SHA-256 |", "|---|---|"]
     for name, digest in assets.items():
         lines.append("| `{}` | `{}` |".format(name, digest))
@@ -370,6 +388,60 @@ def find_release(gh, cfg):
     return [r for r in list_releases(gh, cfg) if r.get("tag_name") == cfg["tag"]]
 
 
+def read_tag_ref(gh, cfg):
+    """Return the tag ref's object, refusing anything but a commit ref."""
+    ref = gh.json("repos/{}/git/ref/tags/{}".format(cfg["repo"], cfg["tag"]))
+    if not isinstance(ref, dict) or ref.get("ref") != "refs/tags/" + cfg["tag"]:
+        raise Refused("tag ref lookup returned an unexpected ref")
+    obj = ref.get("object") or {}
+    return obj.get("type"), obj.get("sha")
+
+
+def require_tag_at_target(gh, cfg, when):
+    kind, sha = read_tag_ref(gh, cfg)
+    if kind != "commit" or sha != cfg["target_sha"]:
+        raise Refused("tag {} does not point at the target commit {}; refusing".format(cfg["tag"], when))
+
+
+def create_tag_exclusively(gh, cfg):
+    """POST /git/refs fails (HTTP 422) if the ref exists: never updated."""
+    try:
+        created = gh.json(
+            "repos/{}/git/refs".format(cfg["repo"]),
+            method="POST",
+            body={"ref": "refs/tags/" + cfg["tag"], "sha": cfg["target_sha"]},
+        )
+    except Refused:
+        raise Refused("could not create tag {} exclusively (it may already exist); nothing was updated".format(cfg["tag"]))
+    if not isinstance(created, dict) or created.get("ref") != "refs/tags/" + cfg["tag"]:
+        raise Refused("tag creation returned an unexpected ref")
+    obj = created.get("object") or {}
+    if obj.get("type") != "commit" or obj.get("sha") != cfg["target_sha"]:
+        raise Refused("tag creation returned an unexpected object")
+
+
+def observe_tag_runs(gh, cfg):
+    """Bounded observation: list workflow runs whose head branch is the tag.
+
+    This is evidence, not proof or protection; the preventive control is
+    GitHub's suppression of workflow triggers for GITHUB_TOKEN events.
+    """
+    runs = gh.json("repos/{}/actions/runs?branch={}&per_page=100".format(cfg["repo"], cfg["tag"]))
+    if (
+        not isinstance(runs, dict)
+        or not isinstance(runs.get("total_count"), int)
+        or not isinstance(runs.get("workflow_runs"), list)
+    ):
+        raise Refused("workflow run listing for the tag is malformed; check the Actions tab manually")
+    if runs["total_count"] != 0 or runs["workflow_runs"]:
+        names = sorted({str(r.get("name")) for r in runs["workflow_runs"] if isinstance(r, dict)})
+        raise Refused(
+            "observed {} workflow run(s) for {} ({}); inspect and cancel before they modify assets".format(
+                runs["total_count"], cfg["tag"], ", ".join(names) or "unnamed"
+            )
+        )
+
+
 def publish(gh, cfg, settle_seconds=20):
     work = Path(cfg["work"])
     manifest = _load_json(work / "manifest.json")
@@ -382,24 +454,28 @@ def publish(gh, cfg, settle_seconds=20):
             raise Refused("local asset {} changed since collection".format(name))
     check_unpublished(gh, cfg)
 
+    create_tag_exclusively(gh, cfg)
+    require_tag_at_target(gh, cfg, "after creating it")
+    print("created tag {} at {}".format(cfg["tag"], cfg["target_sha"]))
+
     args = [
         "release", "create", cfg["tag"],
         "--repo", cfg["repo"],
+        "--verify-tag",
         "--draft", "--prerelease", "--latest=false",
-        "--target", cfg["target_sha"],
         "--title", cfg["tag"],
         "--notes-file", str(work / "notes.md"),
     ] + [str(assets_dir / name) for name in sorted(expected)]
     code, _, _ = gh.run(args)
     if code != 0:
-        raise Refused("creating the draft release failed; inspect drafts before any retry")
+        raise Refused("creating the draft release failed; the tag exists; follow the runbook recovery before any retry")
 
     drafts = find_release(gh, cfg)
     if len(drafts) != 1 or not drafts[0].get("draft"):
         raise Refused("expected exactly one draft release for the tag")
     release = drafts[0]
-    if release.get("target_commitish") != cfg["target_sha"] or not release.get("prerelease"):
-        raise Refused("draft release target or prerelease flag is wrong; left as draft")
+    if not release.get("prerelease"):
+        raise Refused("draft release is not a prerelease; left as draft")
     remote = {a.get("name"): a for a in release.get("assets", [])}
     if set(remote) != set(expected):
         raise Refused("draft release asset names differ from the manifest; left as draft")
@@ -408,26 +484,20 @@ def publish(gh, cfg, settle_seconds=20):
             raise Refused("draft asset {} digest differs from the manifest; left as draft".format(name))
     print("draft {} verified: {} assets match the manifest".format(release.get("id"), len(expected)))
 
+    require_tag_at_target(gh, cfg, "immediately before publishing; left as draft")
     published = gh.json(
         "repos/{}/releases/{}".format(cfg["repo"], release["id"]), method="PATCH", body={"draft": False}
     )
-    if published.get("draft") is not False:
+    if not isinstance(published, dict) or published.get("draft") is not False:
         raise Refused("publishing the release failed")
-    ref = gh.json("repos/{}/git/ref/tags/{}".format(cfg["repo"], cfg["tag"]))
-    obj = ref.get("object") or {}
-    if obj.get("type") != "commit" or obj.get("sha") != cfg["target_sha"]:
-        raise Refused("published tag does not point at the target commit")
+    if published.get("tag_name") != cfg["tag"]:
+        raise Refused("published release has an unexpected tag")
+    require_tag_at_target(gh, cfg, "after publishing")
     print("published {} at {}".format(published.get("html_url"), cfg["target_sha"]))
 
     time.sleep(settle_seconds)
-    runs = gh.json("repos/{}/actions/runs?event=push&branch={}".format(cfg["repo"], cfg["tag"]))
-    if runs.get("total_count", 0) != 0:
-        raise Refused(
-            "push-triggered workflow runs exist for {}; inspect and cancel them before they modify assets".format(
-                cfg["tag"]
-            )
-        )
-    print("no push-triggered workflow runs for {}".format(cfg["tag"]))
+    observe_tag_runs(gh, cfg)
+    print("bounded observation: no workflow runs listed for {} after {}s".format(cfg["tag"], settle_seconds))
     return published
 
 
