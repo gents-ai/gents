@@ -71,14 +71,3 @@ body,
     opacity: 0;
   }
 }
-
-/* The kit's scroll area always carries a horizontal bar, and at a page zoom
-   a viewport's content rounds a pixel wider than the viewport and shows it.
-   An area scrolls sideways only when it says so with data-scroll-x. */
-[data-slot="scroll-area"]:not([data-scroll-x]) > [data-slot="scroll-area-viewport"] {
-  overflow-x: hidden !important;
-}
-[data-slot="scroll-area"]:not([data-scroll-x])
-  > [data-slot="scroll-area-scrollbar"][data-orientation="horizontal"] {
-  display: none;
-}
