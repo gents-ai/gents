@@ -25,6 +25,13 @@
 #             submission id and sha256 to the full staged SHA-256; staple,
 #             validate staple, strict codesign, Gatekeeper; package; SHA256SUMS.
 #
+# artifact_kind=cli handles a Developer-ID-signed bare executable instead of an
+# .app: the zip must hold exactly one regular file (EXPECTED_CLI_NAME), whose
+# signature identifier must be EXPECTED_CLI_IDENTIFIER. Bare executables
+# cannot carry a stapled ticket, so `complete` instead requires Apple's log
+# ticketContents to cover the binary's verified CDHash and outputs the
+# verified binary byte-for-byte unchanged.
+#
 # Credential handling mirrors rc1-notary-auth.sh: a per-step 0700 directory
 # under RUNNER_TEMP holding a constant AuthKey.p8 (0600); raw notarytool
 # stderr is captured privately and never printed. Provider-derived values that
@@ -81,6 +88,11 @@ for var in ARTIFACT_SHA256 NOTARY_MODE RUN_DIR; do
 done
 # Apple returns lowercase ids; normalize so exact comparisons hold.
 SUBMISSION_ID="$(printf '%s' "${SUBMISSION_ID:-}" | tr '[:upper:]' '[:lower:]')"
+ARTIFACT_KIND="${ARTIFACT_KIND:-app}"
+case "${ARTIFACT_KIND}" in
+  app | cli) ;;
+  *) fail 2 "artifact_kind must be app or cli" ;;
+esac
 [[ "${ARTIFACT_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
   || fail 2 "artifact_sha256 must be 64 lowercase hex characters"
 case "${NOTARY_MODE}" in
@@ -123,9 +135,17 @@ require_verified() {
   [[ -f "${VERIFIED}" ]] || fail 3 "verify phase has not completed for this run"
   [[ "$(json json-field "${VERIFIED}" artifact_sha256)" == "${ARTIFACT_SHA256}" ]] \
     || fail 3 "verified artifact does not match artifact_sha256"
+  [[ "$(json json-field "${VERIFIED}" artifact_kind)" == "${ARTIFACT_KIND}" ]] \
+    || fail 3 "verified artifact kind does not match artifact_kind"
   APP_NAME="$(json json-field "${VERIFIED}" app_name)"
   APP="${WORK}/x/${APP_NAME}"
-  [[ -d "${APP}" && ! -L "${APP}" ]] || fail 3 "verified app is missing"
+  if [[ "${ARTIFACT_KIND}" == "cli" ]]; then
+    [[ -f "${APP}" && ! -L "${APP}" ]] || fail 3 "verified executable is missing"
+    CDHASH="$(json json-field "${VERIFIED}" cdhash)"
+    ITEM_SHA256="$(json json-field "${VERIFIED}" item_sha256)"
+  else
+    [[ -d "${APP}" && ! -L "${APP}" ]] || fail 3 "verified app is missing"
+  fi
   local actual
   actual="$(shasum -a 256 "${SUBMIT_ZIP}" | awk '{print $1}')"
   [[ "${actual}" == "${ARTIFACT_SHA256}" ]] || fail 3 "private artifact copy changed since verification"
@@ -157,13 +177,27 @@ phase_verify() {
     || fail 3 "artifact SHA-256 mismatch: expected ${ARTIFACT_SHA256}, got ${actual}"
   say "artifact sha256 verified: ${actual}"
 
-  local root
-  root="$(json zip-inspect "${SUBMIT_ZIP}")" || fail 4 "archive failed pre-extraction containment checks"
+  local root expected_ident
+  if [[ "${ARTIFACT_KIND}" == "cli" ]]; then
+    for var in EXPECTED_CLI_NAME EXPECTED_CLI_IDENTIFIER; do
+      [[ -n "${!var:-}" ]] || fail 2 "required setting ${var} is empty"
+    done
+    expected_ident="${EXPECTED_CLI_IDENTIFIER}"
+    root="$(json zip-inspect-cli "${SUBMIT_ZIP}" "${EXPECTED_CLI_NAME}")" \
+      || fail 4 "archive failed pre-extraction containment checks"
+  else
+    expected_ident="${EXPECTED_BUNDLE_ID}"
+    root="$(json zip-inspect "${SUBMIT_ZIP}")" || fail 4 "archive failed pre-extraction containment checks"
+  fi
   mkdir -m 0700 "${WORK}/x"
   ditto -x -k "${SUBMIT_ZIP}" "${WORK}/x" || fail 4 "could not extract staged zip"
-  json tree-check "${WORK}/x" "${root}" || fail 4 "extracted tree failed containment checks"
+  if [[ "${ARTIFACT_KIND}" == "cli" ]]; then
+    json tree-check-cli "${WORK}/x" "${root}" || fail 4 "extracted tree failed containment checks"
+  else
+    json tree-check "${WORK}/x" "${root}" || fail 4 "extracted tree failed containment checks"
+  fi
   local app="${WORK}/x/${root}"
-  say "archive contained: single app root ${root}"
+  say "archive contained: single ${ARTIFACT_KIND} root ${root}"
 
   codesign --verify --deep --strict "${app}" >/dev/null 2>&1 \
     || fail 5 "strict deep signature verification failed"
@@ -173,8 +207,8 @@ phase_verify() {
   ident="$(printf '%s\n' "${details}" | sed -n 's/^Identifier=//p' | head -n1)"
   [[ "${team}" == "${EXPECTED_TEAM_ID}" ]] \
     || fail 5 "TeamIdentifier '$(safe "${team}")' does not match expected ${EXPECTED_TEAM_ID}"
-  [[ "${ident}" == "${EXPECTED_BUNDLE_ID}" ]] \
-    || fail 5 "Identifier '$(safe "${ident}")' does not match expected ${EXPECTED_BUNDLE_ID}"
+  [[ "${ident}" == "${expected_ident}" ]] \
+    || fail 5 "Identifier '$(safe "${ident}")' does not match expected ${expected_ident}"
   printf '%s\n' "${details}" | grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]*\([^)]*runtime[^)]*\)' \
     || fail 5 "hardened runtime flag not present"
   codesign -d --extract-certificates="${WORK}/cert" "${app}" >/dev/null 2>&1 \
@@ -186,12 +220,33 @@ phase_verify() {
     || fail 5 "leaf certificate SHA-256 ${leaf} does not match pinned value"
   say "signature verified: team ${team}, identifier ${ident}, hardened runtime, pinned leaf certificate"
 
-  if [[ "${NOTARY_MODE}" == "submit" ]] && xcrun stapler validate "${app}" >/dev/null 2>&1; then
+  # Every Mach-O file in the artifact must be thin arm64: the release notes
+  # claim arm64 only, and for executables the single verified CDHash must
+  # cover the only slice. Non-Mach-O files are skipped.
+  local f archs
+  while IFS= read -r -d '' f; do
+    if archs="$(lipo -archs "${f}" 2>/dev/null)"; then
+      [[ "${archs}" == "arm64" ]] \
+        || fail 5 "Mach-O file is not thin arm64 (archs: $(safe "${archs}")): $(safe "$(basename "${f}")")"
+    fi
+  done < <(find "${app}" -type f -print0)
+
+  local cdhash="none" item_sha="none"
+  if [[ "${ARTIFACT_KIND}" == "cli" ]]; then
+    printf '%s\n' "${details}" | grep -Eq '^Format=Mach-O thin \(arm64\)$' \
+      || fail 5 "executable is not a thin arm64 Mach-O binary"
+    lipo -archs "${app}" >/dev/null 2>&1 || fail 5 "executable is not a Mach-O binary"
+    cdhash="$(printf '%s\n' "${details}" | sed -n 's/^CDHash=//p' | head -n1)"
+    [[ "${cdhash}" =~ ^[0-9a-f]{40}$ ]] || fail 5 "could not read the executable's CDHash"
+    item_sha="$(shasum -a 256 "${app}" | awk '{print $1}')"
+    say "executable sha256 ${item_sha}, cdhash ${cdhash}"
+  elif [[ "${NOTARY_MODE}" == "submit" ]] && xcrun stapler validate "${app}" >/dev/null 2>&1; then
     fail 6 "artifact already carries a stapled ticket; nothing to submit"
   fi
 
   json write-json-excl "${VERIFIED}" artifact_sha256 "${ARTIFACT_SHA256}" app_name "${root}" \
-    submission_name "${SUBMISSION_NAME}" mode "${NOTARY_MODE}"
+    submission_name "${SUBMISSION_NAME}" mode "${NOTARY_MODE}" artifact_kind "${ARTIFACT_KIND}" \
+    cdhash "${cdhash}" item_sha256 "${item_sha}"
 }
 
 # ================================================================ submit
@@ -357,6 +412,31 @@ phase_complete() {
     || fail 12 "notary log does not bind submission ${id} to artifact ${ARTIFACT_SHA256} as Accepted; refusing to staple"
   say "notary log binds job ${id} to sha256 ${ARTIFACT_SHA256}; issues: ${issues}"
   summary "notary log: job \`${id}\`, archive sha256 \`${ARTIFACT_SHA256}\`, issues: ${issues}"
+
+  if [[ "${ARTIFACT_KIND}" == "cli" ]]; then
+    json log-ticket-check "${OUT}/notary-log.json" "${CDHASH}" >/dev/null 2>&1 \
+      || fail 12 "notary log ticket does not cover the verified CDHash ${CDHASH}; refusing"
+    codesign --verify --strict "${APP}" >/dev/null 2>&1 || fail 13 "executable signature no longer verifies"
+    local now_sha
+    now_sha="$(shasum -a 256 "${APP}" | awk '{print $1}')"
+    [[ "${now_sha}" == "${ITEM_SHA256}" ]] || fail 13 "executable changed since verification"
+    cp -p "${APP}" "${OUT}/${APP_NAME}"
+    [[ "$(shasum -a 256 "${OUT}/${APP_NAME}" | awk '{print $1}')" == "${ITEM_SHA256}" ]] \
+      || fail 14 "copied executable does not match the verified SHA-256"
+    (
+      cd "${OUT}"
+      shasum -a 256 "${APP_NAME}" >SHA256SUMS
+    )
+    [[ -n "${NOTARY_STATE_DIR:-}" ]] || fail 2 "required setting NOTARY_STATE_DIR is empty"
+    if [[ ! -f "${NOTARY_STATE_DIR%/}/${ARTIFACT_SHA256}/accepted-${id}.json" ]]; then
+      json state-write "${NOTARY_STATE_DIR%/}/${ARTIFACT_SHA256}" "accepted-${id}.json" state accepted \
+        submission_id "${id}" cdhash "${CDHASH}" run_id "${GITHUB_RUN_ID:-local}" \
+        || fail 16 "acceptance of ${id} could not be persisted on the host; re-dispatch with mode=resume"
+    fi
+    say "ticket covers cdhash ${CDHASH}; unchanged executable: $(cat "${OUT}/SHA256SUMS")"
+    summary "notarized executable (not stapleable; ticket covers cdhash \`${CDHASH}\`): \`$(cat "${OUT}/SHA256SUMS")\`"
+    return 0
+  fi
 
   xcrun stapler staple "${APP}" >/dev/null 2>"${CRED_DIR}/staple.err" || fail 13 "stapler staple failed"
   xcrun stapler validate "${APP}" >/dev/null 2>&1 || fail 13 "stapled ticket did not validate"

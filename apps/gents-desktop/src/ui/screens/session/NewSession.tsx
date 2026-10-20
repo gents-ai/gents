@@ -119,9 +119,6 @@ function NewSessionComposer() {
   return (
     <div data-testid="composer">
       <Composer
-        /* the text wraps; at page zoom WebKit sizes a self-sizing textarea's
-           content wider than its box, and would draw a horizontal bar */
-        className="[&_textarea]:overflow-x-hidden"
         value={draft}
         onChange={setDraft}
         onSend={send}

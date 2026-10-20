@@ -143,24 +143,30 @@ async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::EditorHistory)
+    let evidence = editor_history::ProfileEvidence::from_env(temp.path())?;
+    let result = exercise(temp.path(), Journey::EditorHistory)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
-    copy_editor_evidence(temp.path(), "editor-history-canonical.json")
+        .and_then(|()| copy_editor_evidence(temp.path(), "editor-history-canonical.json"));
+    if let Some(evidence) = evidence {
+        evidence.finish(temp.path(), &result)?;
+    }
+    result.with_context(|| {
+        [
+            "runtime.log",
+            "runtime.err",
+            "client-host.log",
+            "editor.log",
+            "editor-history-seed-progress.json",
+            "editor-history-seed-failure.json",
+        ]
+        .map(|name| {
+            format!(
+                "{name}:\n{}",
+                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+            )
+        })
+        .join("\n")
+    })
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -275,6 +281,9 @@ fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
 }
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
+    let history = matches!(journey, Journey::EditorHistory)
+        .then(editor_history::Options::from_env)
+        .transpose()?;
     let cli = support::native_binary("gents")?;
     let host_binary = support::native_binary("gents-client-host")?;
     if journey.editor_scenario().is_some() {
@@ -291,6 +300,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let goal_provider_hold = root.join("hold-goal-provider");
     let retry_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let provider_retry_attempts = Arc::clone(&retry_attempts);
+    let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let history_provider_gate = editor_history_gate.clone();
+    let history_provider_hold = root.join("hold-history-provider");
     let provider = FakeLlm::start_with_models(
         if journey.editor_scenario().is_some() {
             &["editor-fixture", "editor-fixture-alternate"]
@@ -312,9 +324,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     return action;
                 }
             }
-            if matches!(journey, Journey::EditorHistory) {
-                if let Some(reply) = editor_history::reply(&request) {
-                    return ChatAction::Sse(fake_llm::completion_text_sse(&reply));
+            if let Some(options) = history {
+                if let Some(reply) = editor_history::reply(request, options) {
+                    return reply;
                 }
             }
             if matches!(journey, Journey::EditorWorkspace)
@@ -349,7 +361,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                         json!({"choices":[{"delta":{"content":"First part"},"finish_reason":null}],"usage":null})
                     ),
                 )],
-                if goal_provider_hold.is_file() {
+                if history_provider_hold.is_file() {
+                    history_provider_gate.clone()
+                } else if goal_provider_hold.is_file() {
                     goal_provider_gate.clone()
                 } else {
                     provider_gate.clone()
@@ -1138,6 +1152,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     if matches!(journey, Journey::EditorHistory) {
+        let options = history.context("history options")?;
         let evidence = editor_history::populate(
             &mut client,
             &mut id,
@@ -1146,6 +1161,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             session,
             agent_id,
             &client_did,
+            options,
+            root,
         )
         .await?;
         std::fs::write(
@@ -1157,6 +1174,32 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
         id += 1;
+        let completion_path = root.join("finish-history-provider");
+        if options.profile {
+            std::fs::write(root.join("hold-history-provider"), "")?;
+            #[cfg(unix)]
+            let runtime_pid = runtime.id();
+            #[cfg(windows)]
+            let runtime_pid: Option<u32> = None;
+            std::fs::write(
+                root.join("editor-history-processes.json"),
+                serde_json::to_vec_pretty(&json!({
+                    "runtimePid":runtime_pid, "fixturePid":std::process::id(),
+                    "runtimeBinary":cli, "hostBinary":host_binary,
+                }))?,
+            )?;
+        }
+        let _completion = options.profile.then(|| {
+            tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                loop {
+                    if completion_path.is_file() {
+                        editor_history_gate.add_permits(1);
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }))
+        });
         run_editor_journey(
             root,
             &paths,
@@ -1166,6 +1209,24 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "history",
         )
         .await?;
+        if options.profile {
+            let evidence = editor_history::verify_profile(
+                &mut client,
+                &mut id,
+                &access,
+                node_did,
+                session,
+                &client_did,
+                options,
+            )
+            .await?;
+            std::fs::write(
+                root.join("editor-history-profile-canonical.json"),
+                serde_json::to_vec_pretty(&evidence)?,
+            )?;
+            #[cfg(feature = "editor-e2e")]
+            copy_editor_evidence(root, "editor-history-profile-canonical.json")?;
+        }
     }
     if matches!(journey, Journey::EditorWorkspace) {
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
@@ -1458,7 +1519,12 @@ async fn run_editor_journey(
         .stderr(Stdio::from(log))
         .kill_on_drop(true)
         .status();
-    let status = tokio::time::timeout(Duration::from_secs(120), child).await;
+    let timeout = if scenario == "history" && editor_history::Options::from_env()?.profile {
+        Duration::from_secs(600)
+    } else {
+        Duration::from_secs(120)
+    };
+    let status = tokio::time::timeout(timeout, child).await;
     let status = status.context("editor journey timed out")??;
     ensure!(status.success(), "editor journey exited with {status}");
     Ok(())
@@ -1618,6 +1684,16 @@ async fn read_session(
     node_did: &str,
     session: &str,
 ) -> Result<Value> {
+    read_session_page(client, id, node_did, session, None).await
+}
+
+async fn read_session_page(
+    client: &mut Attachment,
+    id: &mut u32,
+    node_did: &str,
+    session: &str,
+    before: Option<&str>,
+) -> Result<Value> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let result = client
@@ -1625,7 +1701,8 @@ async fn read_session(
                     *id,
                     "desktop_session_snapshot",
                     json!({
-                        "nodeDid":node_did, "sessionId":session, "timelineLimit":40
+                        "nodeDid":node_did, "sessionId":session, "timelineLimit":40,
+                        "timelineBeforeItemKey":before,
                     }),
                 )
                 .await;
