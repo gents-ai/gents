@@ -712,7 +712,8 @@ class WorkflowStatic(unittest.TestCase):
             {"contents": "read", "actions": "read", "issues": "read", "pull-requests": "read"},
         )
         self.assertEqual(
-            self.jobs["publish"]["permissions"], {"contents": "write", "issues": "read", "pull-requests": "read"}
+            self.jobs["publish"]["permissions"],
+            {"contents": "write", "actions": "read", "issues": "read", "pull-requests": "read"},
         )
         self.assertEqual(self.jobs["publish"]["needs"], "collect")
 

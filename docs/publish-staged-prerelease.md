@@ -28,7 +28,8 @@ from that commit. Two inputs are therefore required:
   The author, association, timestamps and a SHA-256 of the comment text are
   recorded in the manifest. `publish` re-fetches the comment and refuses if
   anything changed, for example if it was edited.
-- **`provenance_note`**: the basis for linking the binaries to the commit.
+- **`provenance_note`** (**mandatory**; an empty or whitespace-only value is
+  refused): the basis for linking the binaries to the commit.
   Examples are embedded build stamps or build receipts. State any gaps, such
   as a build manifest whose `source_sha` is null.
 
@@ -122,9 +123,14 @@ with the write token, which can see drafts.
     notarization workflow, `notarize-staged-artifact.sh` and `notary_json.py`
     must have the same git blob as at this publishing workflow's own commit
     (`github.sha`). So a run produced by a different, unreviewed version of
-    the notarization code is refused. If those files change on `main`
-    between notarizing and publishing, notarize again with the new version
-    first.
+    the notarization code is refused. Avoid merging changes to those files
+    between notarizing and publishing. If they do change, **never submit the
+    artifact to Apple again**. Instead, dispatch `notarize-staged-artifact.yml`
+    with `mode=resume` and the **existing** submission id. That run uses the
+    current code and the same host state and Apple submission, and produces
+    fresh outputs without a new Apple submission. Use its run id here. If the
+    existing submission cannot be resumed, reconcile it by hand (see the
+    notarization runbook) before doing anything else.
   - Its output artifact is exactly one, unexpired, named
     `notarize-staged-<run>-<attempt>`.
   - Every entry in that artifact is a plain file name.
@@ -149,7 +155,8 @@ with the write token, which can see drafts.
   - `SHA256SUMS-desktop-macos.txt` and `SHA256SUMS-cli-macos.txt`.
   - Release notes stating the exact scope: macOS arm64 app and CLI only, no
     DMG, no Linux, no x86_64. The notes also list the submission ids, the
-    hashes, the source commit, and the optional provenance note.
+    hashes, the tag target and its default-branch status, the verified
+    approval record, and the **mandatory** provenance note.
 - **Evidence upload.** The assets, notes and manifest are uploaded as a
   workflow artifact.
 

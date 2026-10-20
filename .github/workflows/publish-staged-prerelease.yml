@@ -157,6 +157,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      actions: read
       issues: read
       pull-requests: read
     steps:
