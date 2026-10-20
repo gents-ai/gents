@@ -63,7 +63,10 @@ RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
 BRANCH_RE = re.compile(r"^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 NOTE_RE = re.compile(r"^[^\x00-\x08\x0b-\x1f\x7f]{0,2000}$")
-APPROVAL_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(pull|issues)/[0-9]+(#issuecomment-[0-9]+)?$")
+APPROVAL_URL_RE = re.compile(
+    r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(pull|issues)/[0-9]+#issuecomment-([0-9]{1,20})$"
+)
+APPROVER_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 MAX_RELEASE_PAGES = 50
 CLI_DIR = "gents-aarch64-apple-darwin"
@@ -129,6 +132,7 @@ def config():
         "work": env.get("PUBLISH_WORK_DIR", ""),
         "run_url": env.get("RUN_URL", ""),
         "target_branch": env.get("TARGET_BRANCH", ""),
+        "off_default_ack": env.get("AUTHORIZE_OFF_DEFAULT_TARGET", ""),
         "publisher_sha": env.get("PUBLISHER_SHA", ""),
     }
     checks = (
@@ -151,6 +155,10 @@ def config():
         not BRANCH_RE.match(cfg["target_branch"]) or cfg["target_branch"] == cfg["default_branch"]
     ):
         raise Refused("input target_branch is malformed or names the default branch")
+    if cfg["off_default_ack"] and cfg["off_default_ack"] != cfg["target_sha"]:
+        raise Refused("authorize_off_default_target, when set, must equal target_sha exactly")
+    if bool(cfg["off_default_ack"]) != bool(cfg["target_branch"]):
+        raise Refused("target_branch and authorize_off_default_target must be given together")
     if not cfg["provenance"].strip():
         raise Refused("input provenance is required (state the basis for the source claim)")
     if not cfg["approval_url"].startswith("https://github.com/{}/".format(cfg["repo"])):
@@ -208,16 +216,24 @@ def is_ancestor(gh, cfg, base, head):
 
 
 def check_target_reachable(gh, cfg):
-    """The target must be on the default branch, or on an explicitly named
-    branch. Returns a description for the notes; never changes the target."""
+    """Classify the target; never changes it.
+
+    On the default branch: no off-default inputs may be given. Off the default
+    branch: the operator must explicitly authorize that exact SHA
+    (authorize_off_default_target == target_sha) and name a branch that
+    contains it. The notes state the outcome either way.
+    """
     if is_ancestor(gh, cfg, cfg["default_branch"], cfg["target_sha"]):
+        if cfg["target_branch"]:
+            raise Refused("target is on the default branch; do not pass off-default authorization inputs")
         cfg["reachability"] = "reachable from the default branch `{}`".format(cfg["default_branch"])
         return
-    if not cfg["target_branch"]:
+    if not cfg["off_default_ack"]:
         raise Refused(
-            "target {} is not reachable from the default branch {}; refusing. If this exact commit is the "
-            "approved candidate, dispatch again naming the branch that contains it in target_branch".format(
-                cfg["target_sha"], cfg["default_branch"]
+            "target {} is NOT an ancestor of the default branch {}. Refusing. To publish this exact commit "
+            "anyway, dispatch with authorize_off_default_target={} and target_branch=<branch containing it>; "
+            "the notes will say it is not on {}".format(
+                cfg["target_sha"], cfg["default_branch"], cfg["target_sha"], cfg["default_branch"]
             )
         )
     branch = gh.json("repos/{}/branches/{}".format(cfg["repo"], cfg["target_branch"]))
@@ -227,10 +243,41 @@ def check_target_reachable(gh, cfg):
     if not is_ancestor(gh, cfg, head, cfg["target_sha"]):
         raise Refused("target {} is not reachable from branch {}".format(cfg["target_sha"], cfg["target_branch"]))
     cfg["reachability"] = (
-        "**not** on the default branch `{}`; reachable from branch `{}` (head `{}`) at publication".format(
+        "**not** an ancestor of the default branch `{}`; publication of this exact commit was explicitly "
+        "authorized off the default branch; reachable from branch `{}` (head `{}`) at publication".format(
             cfg["default_branch"], cfg["target_branch"], head
         )
     )
+
+
+def check_approval(gh, cfg):
+    """The approval record must be a comment in this repository, by an
+    owner/member/collaborator, that names the full target SHA. Its content
+    hash is recorded so publish can detect later edits."""
+    match = APPROVAL_URL_RE.match(cfg["approval_url"])
+    comment = gh.json("repos/{}/issues/comments/{}".format(cfg["repo"], match.group(2)))
+    if not isinstance(comment, dict):
+        raise Refused("approval record is unreadable")
+    if comment.get("html_url") != cfg["approval_url"]:
+        raise Refused("approval record URL does not match the comment")
+    if comment.get("author_association") not in APPROVER_ASSOCIATIONS:
+        raise Refused("approval record author is not an owner, member or collaborator")
+    body = comment.get("body")
+    if not isinstance(body, str) or cfg["target_sha"] not in body:
+        raise Refused("approval record does not name the full target SHA")
+    login = (comment.get("user") or {}).get("login")
+    created = comment.get("created_at")
+    for value in (login, created, comment.get("updated_at")):
+        if not isinstance(value, str) or not re.match(r"^[A-Za-z0-9:._-]{1,64}$", value):
+            raise Refused("approval record metadata is malformed")
+    cfg["approval"] = {
+        "url": cfg["approval_url"],
+        "author": login,
+        "association": comment["author_association"],
+        "created_at": created,
+        "updated_at": comment["updated_at"],
+        "body_sha256": sha256_bytes(body.encode("utf-8")),
+    }
 
 
 def blob_sha(gh, cfg, path, ref):
@@ -381,7 +428,11 @@ def release_notes(cfg, app, cli, assets):
         "commit exists; it does **not** prove that these binaries were built from it.".format(cfg["target_sha"], repo_url),
         "- **Branch reachability:** " + cfg["reachability"] + ".",
         "- **Basis for the source claim (operator statement):** " + cfg["provenance"].strip(),
-        "- **Candidate approval record:** " + cfg["approval_url"],
+        "- **Candidate approval record:** {} by `{}` ({}), created {}; it names this exact commit. "
+        "The record's text was hashed and re-checked before publication.".format(
+            cfg["approval"]["url"], cfg["approval"]["author"], cfg["approval"]["association"].lower(),
+            cfg["approval"]["created_at"],
+        ),
         "- **Not established:** a clean source tree at build time, or a reproducible build.",
     ]
     lines += ["", "### SHA-256", "", "| Asset | SHA-256 |", "|---|---|"]
@@ -407,6 +458,7 @@ def collect(gh, cfg):
     work.mkdir(parents=True)
     mtime = check_target(gh, cfg)
     check_target_reachable(gh, cfg)
+    check_approval(gh, cfg)
     check_unpublished(gh, cfg)
     results = {}
     for kind, run_id, pinned in (
@@ -446,6 +498,7 @@ def collect(gh, cfg):
         "target_sha": cfg["target_sha"],
         "assets": digests,
         "reachability": cfg["reachability"],
+        "approval": cfg["approval"],
         "app_asset_sha256": cfg["app_sha256"],
         "cli_binary_sha256": cfg["cli_sha256"],
         "app_submission_id": results["app"]["submission_id"],
@@ -536,6 +589,9 @@ def publish(gh, cfg, settle_seconds=20):
     check_target_reachable(gh, cfg)
     if manifest.get("reachability") != cfg["reachability"]:
         raise Refused("target reachability changed since collection; refusing")
+    check_approval(gh, cfg)
+    if manifest.get("approval") != cfg["approval"]:
+        raise Refused("approval record changed since collection; refusing")
     check_unpublished(gh, cfg)
 
     create_tag_exclusively(gh, cfg)

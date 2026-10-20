@@ -18,23 +18,49 @@ The target SHA is chosen by the operator. The workflow only checks that the
 commit exists. Nothing in it proves that the notarized binaries were built
 from that commit. Two inputs are therefore required:
 
-- **`candidate_approval_url`**: a link to the record in this repository that
-  approves the exact candidate, for example the owner's confirmation comment.
-  Dispatch only after that approval exists. This is a mandatory operator gate;
-  the workflow can check the link's form, not its content.
+- **`candidate_approval_url`**: a link to an issue or pull-request comment in
+  this repository (`…#issuecomment-<id>`) that approves the exact candidate.
+  The workflow fetches the comment and refuses unless:
+  - Its `html_url` matches the input.
+  - The author is an owner, member or collaborator.
+  - Its text contains the **full** 40-hex target SHA.
+
+  The author, association, timestamps and a SHA-256 of the comment text are
+  recorded in the manifest. `publish` re-fetches the comment and refuses if
+  anything changed, for example if it was edited.
 - **`provenance_note`**: the basis for linking the binaries to the commit.
   Examples are embedded build stamps or build receipts. State any gaps, such
   as a build manifest whose `source_sha` is null.
 
-**Branch reachability.** The target must be reachable from the default
-branch, checked with `compare <default>...<target>` returning `identical` or
-`behind`. If it is not, the workflow refuses and never substitutes another
-commit. Publishing a commit that is only on another branch requires the
-explicit `target_branch` input. That branch must contain the target, and the
-notes then say the commit is **not** on the default branch and name the
-branch and its head. `publish` re-checks this, and refuses if the result
-changed since `collect` (for example, the branch moved). The tag keeps the
-commit reachable after publication, even if the branch is later deleted.
+**Default-branch ancestry.** The workflow runs `compare
+<default>...<target>`, and only `identical` or `behind` count as "on the
+default branch". `ahead` and `diverged` mean the target is **not** an
+ancestor of the default branch. The workflow never substitutes another
+commit; it handles the two cases as follows:
+
+- **The target is an ancestor of the default branch.** It proceeds, and the
+  off-default inputs must be empty.
+- **The target is not an ancestor.** It refuses unless the operator
+  explicitly authorizes that exact commit:
+  - `authorize_off_default_target` must repeat the full `target_sha`, so a
+    typed confirmation is bound to the exact commit.
+  - `target_branch` must name a branch that contains it.
+
+  The two inputs are only accepted together. The notes then say the commit
+  is **not** an ancestor of the default branch, that its publication was
+  explicitly authorized off the default branch, and which branch and head
+  contain it.
+
+`publish` re-checks both the ancestry and the approval record and refuses
+if either changed since `collect`. The tag keeps the commit reachable after
+publication, even if the branch is later deleted.
+
+**`v0.21.0-rc1` example.** `compare main...039e2299…` returns `diverged`
+(17 ahead, 125 behind), so `039e2299` is **not** on `main`. Without the
+authorization inputs the workflow refuses. Publishing it as approved needs
+`authorize_off_default_target=039e2299879565d602eaaa889908e16950015f06` and
+`target_branch=fix/rc1-regolith-validation-progress`. The approval comment
+(`#2781`, issuecomment-6282341698) contains the full SHA.
 
 The release notes show the SHA as **"Tag target (operator-selected)"**. They
 quote the provenance note and the approval link, and state that neither a
@@ -64,10 +90,12 @@ not proof that no run will start.
 
 The workflow has no workflow-level permissions. It runs two jobs:
 
-- **`collect`** has `contents: read` and `actions: read`. It verifies
+- **`collect`** has `contents: read`, `actions: read`, and `issues: read`
+  plus `pull-requests: read` (to read the approval comment). It verifies
   everything and builds the assets, notes and manifest, then uploads them as
   an artifact of this run.
-- **`publish`** has `contents: write` and nothing else, and runs only after
+- **`publish`** has `contents: write`, plus `issues: read` and
+  `pull-requests: read` to re-check the approval comment, and runs only after
   `collect` succeeds. It downloads that artifact and re-verifies it against
   its own inputs before writing anything.
 
@@ -193,7 +221,8 @@ a release for it already exists. Recovery is a deliberate operator action:
      -f app_asset_sha256=<hex> -f cli_binary_sha256=<hex> \
      -f provenance_note='...' \
      -f candidate_approval_url='https://github.com/gents-ai/gents/pull/<n>#issuecomment-<id>' \
-     -f target_branch=<only if target_sha is not on main>
+     -f target_branch=<only if target_sha is not an ancestor of main> \
+     -f authorize_off_default_target=<the same full target_sha, only then>
    ```
 
 4. **If `publish` fails**, follow *Recovery* above. The workflow refuses

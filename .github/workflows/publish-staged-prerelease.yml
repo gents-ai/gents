@@ -10,8 +10,10 @@ name: Publish staged macOS prerelease (CI control)
 # exclusively (an existing ref is a conflict, never updated) and re-verified
 # immediately before publishing. Assets are verified while the release is
 # still a draft. The target SHA is operator-selected; the notes say that
-# source provenance is not proven by this workflow. The target must be on the
-# default branch unless target_branch names the branch containing it.
+# source provenance is not proven by this workflow. The candidate-approval
+# comment must name the full target SHA. A target that is not an ancestor of
+# the default branch is refused unless the operator repeats its full SHA in
+# authorize_off_default_target and names a branch containing it.
 # Two jobs: `collect` (read-only token) builds and uploads the assets;
 # `publish` (contents: write only) downloads them, re-verifies, publishes. See
 # docs/publish-staged-prerelease.md.
@@ -52,7 +54,12 @@ on:
         required: true
         type: string
       target_branch:
-        description: Only if target_sha is NOT on the default branch - the branch that contains it (explicit opt-in, stated in the notes).
+        description: Only if target_sha is NOT an ancestor of the default branch - a branch that contains it. Must be given together with authorize_off_default_target.
+        required: false
+        type: string
+        default: ""
+      authorize_off_default_target:
+        description: Only if target_sha is NOT an ancestor of the default branch - repeat the full target_sha to explicitly authorize publishing that exact off-default commit.
         required: false
         type: string
         default: ""
@@ -79,6 +86,8 @@ jobs:
     permissions:
       contents: read
       actions: read
+      issues: read
+      pull-requests: read
     steps:
       - name: Job-level trusted context guard (pre-checkout)
         env:
@@ -117,6 +126,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ inputs.target_sha }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
+          AUTHORIZE_OFF_DEFAULT_TARGET: ${{ inputs.authorize_off_default_target }}
           APP_NOTARIZE_RUN_ID: ${{ inputs.app_notarize_run_id }}
           CLI_NOTARIZE_RUN_ID: ${{ inputs.cli_notarize_run_id }}
           APP_ASSET_SHA256: ${{ inputs.app_asset_sha256 }}
@@ -147,6 +157,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      issues: read
+      pull-requests: read
     steps:
       - name: Job-level trusted context guard (pre-checkout)
         env:
@@ -191,6 +203,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ inputs.target_sha }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
+          AUTHORIZE_OFF_DEFAULT_TARGET: ${{ inputs.authorize_off_default_target }}
           APP_NOTARIZE_RUN_ID: ${{ inputs.app_notarize_run_id }}
           CLI_NOTARIZE_RUN_ID: ${{ inputs.cli_notarize_run_id }}
           APP_ASSET_SHA256: ${{ inputs.app_asset_sha256 }}

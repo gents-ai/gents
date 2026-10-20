@@ -97,6 +97,14 @@ class FakeGh(pub.Gh):
         }
         self.branches = {}
         self.blob_override = {}  # (path, ref) -> blob
+        self.approval = {
+            "html_url": "https://github.com/gents-ai/gents/pull/2781#issuecomment-6282341698",
+            "author_association": "MEMBER",
+            "body": "Confirmed final candidate " + TARGET + " installed and smoke-tested.",
+            "user": {"login": "jackzampolin"},
+            "created_at": "2026-10-20T03:03:02Z",
+            "updated_at": "2026-10-20T03:03:02Z",
+        }
         self.tamper_digest = None
         self.extra_asset = False
         self.wrong_target = False
@@ -209,6 +217,10 @@ class FakeGh(pub.Gh):
             return self.blobs[int(rest.split("/")[2])]
         if rest == "contents/LICENSE?ref=" + TARGET:
             return LICENSE
+        if rest.startswith("issues/comments/"):
+            if rest == "issues/comments/6282341698" and self.approval is not None:
+                return ok(self.approval)
+            return missing()
         if rest.startswith("compare/"):
             base, head = rest[len("compare/"):].split("...")
             return ok({"status": self.compare.get((base, head), "diverged")})
@@ -336,10 +348,15 @@ class InputValidation(Base):
             {"CANDIDATE_APPROVAL_URL": "https://example.com/gents-ai/gents/pull/1"},
             {"CANDIDATE_APPROVAL_URL": "https://github.com/gents-ai/gents/pull/1 "},
             {"PUBLISHER_SHA": ""},
-            {"TARGET_BRANCH": "main"},
-            {"TARGET_BRANCH": "-x"},
-            {"TARGET_BRANCH": "a..b"},
-            {"TARGET_BRANCH": "has space"},
+            {"TARGET_BRANCH": "main", "AUTHORIZE_OFF_DEFAULT_TARGET": TARGET},
+            {"TARGET_BRANCH": "-x", "AUTHORIZE_OFF_DEFAULT_TARGET": TARGET},
+            {"TARGET_BRANCH": "a..b", "AUTHORIZE_OFF_DEFAULT_TARGET": TARGET},
+            {"TARGET_BRANCH": "has space", "AUTHORIZE_OFF_DEFAULT_TARGET": TARGET},
+            {"TARGET_BRANCH": "fix/rc1"},  # branch without authorization
+            {"AUTHORIZE_OFF_DEFAULT_TARGET": TARGET},  # authorization without branch
+            {"TARGET_BRANCH": "fix/rc1", "AUTHORIZE_OFF_DEFAULT_TARGET": TARGET[:39] + "0"},
+            {"TARGET_BRANCH": "fix/rc1", "AUTHORIZE_OFF_DEFAULT_TARGET": "yes"},
+            {"CANDIDATE_APPROVAL_URL": "https://github.com/gents-ai/gents/pull/2781"},
         ):
             with self.subTest(override=override):
                 with self.assertRaises(pub.Refused):
@@ -360,27 +377,38 @@ class Preconditions(Base):
 
     def test_target_not_on_default_branch_refused_without_opt_in(self):
         self.gh.compare[("main", TARGET)] = "diverged"
-        self.assert_refused(self.collect, None, contains="not reachable from the default branch")
+        self.assert_refused(self.collect, None, contains="NOT an ancestor of the default branch")
         self.assertEqual(self.gh.api_calls("POST"), [])
 
     def test_target_on_named_branch_with_opt_in(self):
         self.gh.compare[("main", TARGET)] = "diverged"
         self.gh.branches["fix/rc1"] = TARGET
         self.gh.compare[(TARGET, TARGET)] = "identical"
-        cfg, manifest = self.collect(self.cfg(TARGET_BRANCH="fix/rc1"))
+        cfg, manifest = self.collect(self.cfg(TARGET_BRANCH="fix/rc1", AUTHORIZE_OFF_DEFAULT_TARGET=TARGET))
         notes = (Path(cfg["work"]) / "notes.md").read_text()
-        self.assertIn("**not** on the default branch `main`", notes)
+        self.assertIn("**not** an ancestor of the default branch `main`", notes)
+        self.assertIn("explicitly authorized off the default branch", notes)
         self.assertIn("`fix/rc1`", notes)
         self.assertIn("fix/rc1", manifest["reachability"])
 
     def test_named_branch_not_containing_target_refused(self):
         self.gh.compare[("main", TARGET)] = "diverged"
         self.gh.branches["fix/rc1"] = "8" * 40
-        self.assert_refused(self.collect, self.cfg(TARGET_BRANCH="fix/rc1"), contains="not reachable from branch")
+        self.assert_refused(self.collect, self.cfg(TARGET_BRANCH="fix/rc1", AUTHORIZE_OFF_DEFAULT_TARGET=TARGET), contains="not reachable from branch")
 
     def test_missing_named_branch_refused(self):
         self.gh.compare[("main", TARGET)] = "diverged"
-        self.assert_refused(self.collect, self.cfg(TARGET_BRANCH="gone"))
+        self.assert_refused(self.collect, self.cfg(TARGET_BRANCH="gone", AUTHORIZE_OFF_DEFAULT_TARGET=TARGET))
+
+    def test_off_default_inputs_refused_for_on_main_target(self):
+        self.assert_refused(
+            self.collect, self.cfg(TARGET_BRANCH="fix/rc1", AUTHORIZE_OFF_DEFAULT_TARGET=TARGET),
+            contains="do not pass off-default",
+        )
+
+    def test_ahead_status_is_not_ancestor(self):
+        self.gh.compare[("main", TARGET)] = "ahead"
+        self.assert_refused(self.collect, None, contains="NOT an ancestor")
 
     def test_unexpected_compare_status_refused(self):
         self.gh.compare[("main", TARGET)] = "weird"
@@ -404,6 +432,43 @@ class Preconditions(Base):
     def test_notarize_run_missing_head_refused(self):
         self.gh.runs[APP_RUN]["head_sha"] = None
         self.assert_refused(self.collect, None, contains="no valid head")
+
+    def test_approval_record_checks(self):
+        for field, value, message in (
+            ("body", "Confirmed final candidate 039e229 (short sha only).", "full target SHA"),
+            ("author_association", "CONTRIBUTOR", "owner, member or collaborator"),
+            ("author_association", "NONE", "owner, member or collaborator"),
+            ("html_url", "https://github.com/gents-ai/gents/pull/9#issuecomment-6282341698", "does not match"),
+            ("created_at", "bad value!", "malformed"),
+        ):
+            with self.subTest(field=field, value=value):
+                self.gh = FakeGh()
+                self.gh.approval[field] = value
+                self.assert_refused(self.collect, None, contains=message)
+        self.gh = FakeGh()
+        self.gh.approval = None
+        self.assert_refused(self.collect, None)
+
+    def test_approval_recorded_in_manifest_and_notes(self):
+        cfg, manifest = self.collect()
+        self.assertEqual(manifest["approval"]["author"], "jackzampolin")
+        self.assertEqual(len(manifest["approval"]["body_sha256"]), 64)
+        notes = (Path(cfg["work"]) / "notes.md").read_text()
+        self.assertIn("names this exact commit", notes)
+        self.assertIn("`jackzampolin` (member)", notes)
+
+    def test_edited_approval_refused_at_publish(self):
+        cfg, _ = self.collect()
+        self.gh.approval["body"] += " (edited)"
+        self.gh.approval["updated_at"] = "2026-10-20T05:00:00Z"
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="approval record changed")
+        self.assertEqual(self.gh.api_calls("POST"), [])
+
+    def test_approval_sha_removed_before_publish_refused(self):
+        cfg, _ = self.collect()
+        self.gh.approval["body"] = "withdrawn"
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="full target SHA")
+        self.assertEqual(self.gh.api_calls("POST"), [])
 
     def test_release_listing_page_cap_and_shape(self):
         original = self.gh.api
@@ -571,14 +636,14 @@ class PublishSafety(Base):
     def test_publish_rechecks_reachability(self):
         cfg, _ = self.collect()
         self.gh.compare[("main", TARGET)] = "diverged"
-        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="not reachable")
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="NOT an ancestor")
         self.assertEqual(self.gh.api_calls("POST"), [])
 
     def test_publish_refuses_changed_reachability(self):
         self.gh.compare[("main", TARGET)] = "diverged"
         self.gh.branches["fix/rc1"] = TARGET
         self.gh.compare[(TARGET, TARGET)] = "identical"
-        cfg, _ = self.collect(self.cfg(TARGET_BRANCH="fix/rc1"))
+        cfg, _ = self.collect(self.cfg(TARGET_BRANCH="fix/rc1", AUTHORIZE_OFF_DEFAULT_TARGET=TARGET))
         self.gh.branches["fix/rc1"] = "9" * 40  # branch moved but still contains target
         self.gh.compare[("9" * 40, TARGET)] = "behind"
         self.assert_refused(pub.publish, self.gh, cfg, 0, contains="reachability changed")
@@ -630,18 +695,25 @@ class WorkflowStatic(unittest.TestCase):
         inputs = self.on["workflow_dispatch"]["inputs"]
         self.assertEqual(
             set(inputs),
-            {"tag", "target_sha", "target_branch", "app_notarize_run_id", "cli_notarize_run_id",
-             "app_asset_sha256", "cli_binary_sha256", "provenance_note", "candidate_approval_url"},
+            {"tag", "target_sha", "target_branch", "authorize_off_default_target", "app_notarize_run_id",
+             "cli_notarize_run_id", "app_asset_sha256", "cli_binary_sha256", "provenance_note",
+             "candidate_approval_url"},
         )
         self.assertTrue(inputs["provenance_note"]["required"])
         self.assertTrue(inputs["candidate_approval_url"]["required"])
         self.assertFalse(inputs["target_branch"]["required"])
+        self.assertFalse(inputs["authorize_off_default_target"]["required"])
 
     def test_permissions_split(self):
         self.assertEqual(self.wf["permissions"], {})
         self.assertEqual(set(self.jobs), {"collect", "publish"})
-        self.assertEqual(self.jobs["collect"]["permissions"], {"contents": "read", "actions": "read"})
-        self.assertEqual(self.jobs["publish"]["permissions"], {"contents": "write"})
+        self.assertEqual(
+            self.jobs["collect"]["permissions"],
+            {"contents": "read", "actions": "read", "issues": "read", "pull-requests": "read"},
+        )
+        self.assertEqual(
+            self.jobs["publish"]["permissions"], {"contents": "write", "issues": "read", "pull-requests": "read"}
+        )
         self.assertEqual(self.jobs["publish"]["needs"], "collect")
 
     def test_each_job_guard_first_and_full_ref(self):
@@ -677,6 +749,7 @@ class WorkflowStatic(unittest.TestCase):
             env = next(s for s in job["steps"] if "publish_staged_prerelease.py" in s.get("run", ""))["env"]
             self.assertEqual(env["PUBLISHER_SHA"], "${{ github.sha }}")
             self.assertEqual(env["TARGET_BRANCH"], "${{ inputs.target_branch }}")
+            self.assertEqual(env["AUTHORIZE_OFF_DEFAULT_TARGET"], "${{ inputs.authorize_off_default_target }}")
             self.assertEqual(env["GH_TOKEN"], "${{ github.token }}")
 
     def test_no_expression_interpolation_in_run(self):
