@@ -1,0 +1,11 @@
+# Per-session progress of the transcript retrieval indexer
+# (Proofs/Retrieval `SessionIndex.watermark`). Chunk rows, not this row,
+# decide which messages are indexed; the watermark only bounds the scan.
+type TranscriptIndexState @index(fields: ["node_did", "session_id"], unique: true) {
+    node_did: String @index @immutable
+    session_id: String @index @immutable
+    watermark: Int
+    pending: Int @index
+    last_error: String
+    updated_at: String @index(direction: DESC)
+}

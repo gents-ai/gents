@@ -211,8 +211,14 @@ fn canonical_whitespace(text: &str) -> String {
     result
 }
 
+/// Vector reads order by a `SIMILARITY` alias, not an ordered scalar index;
+/// DefraDB's vector routing widens its candidate pool until a filtered page
+/// fills, so the bounded residual-filter plan this screen guards cannot occur.
 fn reads(path: &str, template: &str, formatted: bool) -> Vec<Read> {
-    if !template.contains("order") || !(template.contains("limit") || template.contains("offset")) {
+    if !template.contains("order")
+        || !(template.contains("limit") || template.contains("offset"))
+        || template.contains("SIMILARITY(")
+    {
         return Vec::new();
     }
     let template = if formatted {

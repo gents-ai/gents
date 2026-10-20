@@ -39,6 +39,7 @@ pub(super) const PATHS: &[&str] = &[
     "indexes vector",
     "indexes vector dimensions",
     "indexes vector metrics",
+    "indexes vector diskann",
     "indexes vector hnsw",
     "indexes vector flat",
     "indexes vector ivfpq",

@@ -31,6 +31,7 @@ import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ToolPolicy
 import Proofs.Conformance.Contracts.Json.Lsp
+import Proofs.Conformance.Contracts.Json.Retrieval
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
@@ -313,6 +314,8 @@ def snapshotJson : String :=
       ++ goalCapabilityResolutionCasesJson ++ ","
     ++ "\"lsp_action_cases\":"
       ++ lspActionCasesJson ++ ","
+    ++ "\"retrieval_index_cases\":" ++ retrievalIndexCasesJson ++ ","
+    ++ "\"retrieval_hit_cases\":" ++ retrievalHitCasesJson ++ ","
     ++ "\"self_config_field_tables\":"
       ++ selfConfigFieldTablesJson ++ ","
     ++ "\"schema_publication_cases\":" ++ schemaPublicationCasesJson ++ ","

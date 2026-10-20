@@ -284,14 +284,24 @@ pub async fn open_home_store_key_with_custody(
     Ok(key)
 }
 
+/// DefraDB's own embedding endpoint variable. Collections with `@embedding`
+/// and no URL use it, else their provider's default (Ollama at
+/// `http://localhost:11434/api` for the transcript index).
+pub const EMBEDDING_URL_ENV: &str = "DEFRA_EMBEDDING_URL";
+
 pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node::NodeBuilder> {
     crate::storage_backend::reject_legacy_store(data_path)?;
-    Ok(key.encrypt(
-        defra_node::EmbeddedNode::builder()
-            .data_path(data_path)
-            .with_storage_backend(defra_node::StorageBackend::Regolith)
-            .with_regolith_options(crate::storage_backend::regolith_options()),
-    ))
+    let mut builder = defra_node::EmbeddedNode::builder()
+        .data_path(data_path)
+        .with_storage_backend(defra_node::StorageBackend::Regolith)
+        .with_regolith_options(crate::storage_backend::regolith_options());
+    if let Some(url) = std::env::var(EMBEDDING_URL_ENV)
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+    {
+        builder = builder.with_embedding_url(url);
+    }
+    Ok(key.encrypt(builder))
 }
 
 fn unencrypted(data_path: &Path) -> anyhow::Error {

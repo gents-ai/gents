@@ -20,7 +20,7 @@ fn action_help(topic: Option<&str>) -> Result<&'static str> {
             r#"{"action":"count","filter":{"status":"closed"}}. Exact count of authorized sessions, independent of request volume or list limits. Filters are the same as list; no cursor. Use help topic=list for filters."#
         }
         Some("search") => {
-            r#"{"action":"search","query":"rollback decision","limit":10}. Query is required: literal case-insensitive substring of titles, IDs and reconstructed transcript text, not semantic or indexed retrieval. filter.text restricts title/ID, not transcript. Hits include physical message IDs and payload references. Use a shorter substring if no hits. Pass next_cursor as cursor with the same query and filter. Limit: 1–100. Use help topic=list for filters."#
+            r#"{"action":"search","query":"rollback decision","limit":10}. Query is required. mode literal (default): case-insensitive substring of titles, IDs and reconstructed transcript text; use a shorter substring if no hits; pass next_cursor as cursor with the same query and filter. mode semantic: {"action":"search","mode":"semantic","query":"why we reverted the migration"} ranks indexed transcript passages by meaning, nearest first, with a similarity score; session_id narrows it to one session; no cursor, raise limit instead. Semantic covers finished responses only; index reports sessions still being indexed. filter.text restricts title/ID, not transcript. Hits include physical message IDs and payload references; read context with transcript. Limit: 1–100. Use help topic=list for filters."#
         }
         Some("get") => {
             r#"{"action":"get","session_id":"<ID>","details":true}. Session ID is required; discover it with list or search. details=true adds timeline, tool/token/context accounting and compaction observations."#
@@ -264,6 +264,14 @@ pub(super) async fn run(
     let identity = agent
         .parse()
         .context("sessions requires a valid running DID")?;
+    let query_vector = match (action, args.mode.as_deref()) {
+        ("search", Some("semantic")) => Some(semantic_query_vector(tool, args).await?),
+        ("search", None | Some("literal")) => None,
+        ("search", Some(_)) => {
+            bail!("mode must be literal or semantic; next call: sessions {{\"action\":\"help\",\"topic\":\"search\"}}")
+        }
+        _ => None,
+    };
     let args = args.clone();
     let action = action.to_owned();
     ConfigAccess::transact_local_readonly(
@@ -276,7 +284,11 @@ pub(super) async fn run(
             let args = args.clone();
             let action = action.clone();
             let current_session = current_session.clone();
+            let query_vector = query_vector.clone();
             Box::pin(async move {
+                if let Some(vector) = &query_vector {
+                    return semantic_search(txn, &agent, requester.as_deref(), &args, vector).await;
+                }
                 execute(
                     txn,
                     &agent,
@@ -474,6 +486,128 @@ async fn execute(
     } else {
         json!({"sessions":selected,"next_cursor":null,"scope":{"node_did":agent,"requester_did":requester}})
     })
+}
+
+async fn semantic_query_vector(
+    tool: &SessionHistoryTool,
+    args: &SessionHistoryParams,
+) -> Result<Vec<f64>> {
+    let query = args
+        .query
+        .as_deref()
+        .filter(|query| !query.trim().is_empty())
+        .ok_or_else(|| missing_search_query(args))?;
+    anyhow::ensure!(
+        args.cursor.is_none(),
+        "semantic search has no cursor; raise limit instead; next call: sessions {{\"action\":\"search\",\"mode\":\"semantic\",\"query\":{}}}",
+        serde_json::to_string(query)?
+    );
+    crate::retrieval::embedding::embed_query(
+        &tool.node,
+        crate::retrieval::indexer::TRANSCRIPT_CHUNK,
+        crate::retrieval::indexer::CHUNK_VECTOR_FIELD,
+        query,
+    )
+    .await
+    .map_err(|error| {
+        let literal = json!({"action":"search","query":query});
+        anyhow::anyhow!(
+            "semantic search could not embed the query: {error:#}. Transcripts are embedded with BGE-M3 through Ollama (`ollama pull bge-m3`; set DEFRA_EMBEDDING_URL for another endpoint); next call: sessions {literal}"
+        )
+    })
+}
+
+/// Semantic hits are index candidates whose session passes the filter under
+/// ACP and whose canonical message reconstructs for the caller
+/// (`Retrieval.selectHits`).
+async fn semantic_search(
+    txn: &ConfigApplyTxn<'_>,
+    agent: &str,
+    requester: Option<&str>,
+    args: &SessionHistoryParams,
+    vector: &[f64],
+) -> Result<Value> {
+    use crate::retrieval::plan::{select_hits, Candidate};
+    use crate::retrieval::search::{CANDIDATES_PER_HIT, MAX_CANDIDATES};
+
+    anyhow::ensure!(
+        args.limit.is_none_or(|limit| (1..=100).contains(&limit)),
+        "limit must be 1 through 100; next call: sessions {{\"action\":\"help\"}}"
+    );
+    let limit = clamp_limit(args.limit).min(100);
+    let filter = args.filter.clone().unwrap_or_default();
+    let condition = filter_query(&filter, None)?;
+    let candidates = crate::retrieval::search::transcript_candidates(
+        txn,
+        vector,
+        args.session_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty()),
+        (limit * CANDIDATES_PER_HIT).min(MAX_CANDIDATES),
+    )
+    .await?;
+    let mut sessions: std::collections::BTreeMap<(String, String), Option<Value>> =
+        Default::default();
+    let mut materialized = std::collections::BTreeMap::new();
+    for candidate in &candidates {
+        let key = (candidate.node_did.clone(), candidate.session_id.clone());
+        if !sessions.contains_key(&key) {
+            let row = rows(txn.execute(&format!("{{AgentSession(filter: {{_and: [{condition}, {{node_did: {{_eq: {}}}, session_id: {{_eq: {}}}}}]}}, limit: 1) {{{FIELDS}}}}}", quoted(&key.0), quoted(&key.1))).await?, "AgentSession")?.into_iter().next();
+            let row = row.filter(|row| matches_text(row, filter.text.as_deref()));
+            sessions.insert(key.clone(), row);
+        }
+        let Some(session) = &sessions[&key] else {
+            continue;
+        };
+        if materialized.contains_key(&candidate.message_doc_id) {
+            continue;
+        }
+        let mut reader = TxnCanonicalReader::new(txn, &key.0, session["requester_did"].as_str());
+        match reader.load_message(&candidate.message_doc_id).await {
+            Ok((header, _)) => {
+                materialized.insert(candidate.message_doc_id.clone(), header);
+            }
+            Err(error) => tracing::debug!(
+                message_doc_id = %candidate.message_doc_id,
+                error = %format!("{error:#}"),
+                "semantic candidate did not materialize; dropping it"
+            ),
+        }
+    }
+    let mut excerpts = std::collections::BTreeMap::new();
+    let candidates = candidates
+        .into_iter()
+        .map(|candidate| {
+            let reference = (
+                candidate.session_id,
+                candidate.sequence,
+                candidate.ordinal,
+                candidate.message_doc_id,
+            );
+            excerpts.insert(reference.clone(), candidate.text);
+            Candidate {
+                reference,
+                score: candidate.score,
+            }
+        })
+        .collect();
+    let hits: Vec<Value> = select_hits(
+        candidates,
+        |(_, _, _, message)| materialized.contains_key(message),
+        limit,
+    )
+    .into_iter()
+    .map(|hit| {
+        let excerpt = excerpts.remove(&hit.reference).unwrap_or_default();
+        let (session_id, sequence, _, message_doc_id) = hit.reference;
+        let header = &materialized[&message_doc_id];
+        json!({"session_id":session_id,"message_doc_id":message_doc_id,"sequence":sequence,"excerpt":excerpt,"score":hit.score,"payload_references":header.payload_references()})
+    })
+    .collect();
+    let index = crate::retrieval::search::index_status(txn).await?;
+    Ok(
+        json!({"hits":hits,"search_kind":"semantic","index":index,"scope":{"node_did":agent,"requester_did":requester,"visibility":"acp"}}),
+    )
 }
 
 async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {

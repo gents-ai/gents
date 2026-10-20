@@ -1,0 +1,19 @@
+# Derived, node-local retrieval projection of canonical AgentMessage text
+# (Proofs/Retrieval). The background indexer writes chunks only for messages
+# whose request is terminal; AgentMessage stays the transcript of record and
+# every hit is re-read through the canonical reader before it is returned.
+# DefraDB embeds `text` at write time with BGE-M3 through Ollama (node
+# embedding URL, else http://localhost:11434/api); `dimensions` must equal
+# that model's output size. Rows for empty messages pass `embedding: null`
+# so DefraDB embeds nothing and the vector index skips them.
+type TranscriptChunk @index(fields: ["node_did", "session_id", "sequence"]) {
+    chunk_id: String @index(unique: true) @immutable
+    node_did: String @index @immutable
+    requester_did: String @immutable
+    session_id: String @index @immutable
+    message_doc_id: String @index @immutable
+    sequence: Int @index @immutable
+    ordinal: Int @immutable
+    text: String @immutable
+    embedding: [Float32!] @index(vector: {dimensions: 1024, diskann: {metric: COSINE}}) @embedding(provider: "ollama", model: "bge-m3", fields: ["text"])
+}

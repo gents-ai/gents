@@ -157,7 +157,7 @@ check-cli-headless:
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
 
-.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals live-configurator-eval
+.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals retrieval-evals live-configurator-eval
 test: test-agent test-cli
 
 test-agent:
@@ -169,6 +169,9 @@ test-agent-conformance:
 test-evals:
 	$(CARGO) test -p gents --test onboarding_evals
 	$(CARGO) test -p gents --test eval_runner_canary
+
+retrieval-evals:
+	$(CARGO) test -p gents --lib retrieval::evals -- --include-ignored --nocapture
 
 live-configurator-eval:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} scripts/evals/run-ladder.sh $${GENTS_EVAL_SUITE:-all} $${GENTS_EVAL_TRIALS:-3} $${GENTS_EVAL_CONCURRENCY:-4}

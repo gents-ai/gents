@@ -58,6 +58,8 @@ pub struct SessionHistoryParams {
     #[serde(default)]
     pub query: Option<String>,
     #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
     pub details: bool,
     #[serde(default)]
     pub call_id: Option<String>,
@@ -633,7 +635,7 @@ impl Tool for SessionHistoryTool {
                         "agent_id":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
                         "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
                     }},
-                    "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"Include accounting and timeline for get."},
+                    "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: a substring (literal) or a description of what to find (semantic)."},"mode":{"type":"string","enum":["literal","semantic"],"description":"Search mode; defaults to literal."},"details":{"type":"boolean","description":"Include accounting and timeline for get."},
                     "call_id":{"type":"string","minLength":1,"description":"Output: the call_id of a tool result or [tool: …] stub."},
                     "tool_call_doc_id":{"type":"string","minLength":1,"description":"Output: exact tool call document, when a call_id is ambiguous."},
                     "offset_bytes":{"type":"integer","minimum":0,"description":"Output: from the previous next_call."},

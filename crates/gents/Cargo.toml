@@ -28,6 +28,7 @@ required-features = ["live-e2e"]
 
 [dependencies]
 schema.workspace = true
+db.workspace = true
 storage.workspace = true
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow.workspace = true
@@ -151,7 +152,6 @@ oxc_parser = "=0.127.0"
 oxc_span = "=0.127.0"
 acp.workspace = true
 axum = "0.8"
-db.workspace = true
 defra-node.workspace = true
 document.workspace = true
 proptest = "1"

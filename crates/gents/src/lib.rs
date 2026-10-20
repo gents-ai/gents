@@ -366,6 +366,7 @@ pub mod provider_context_reduction;
 pub mod registry;
 pub mod rendered_request;
 mod request_admission;
+pub mod retrieval;
 #[doc(hidden)]
 pub use request_admission::final_claim_admission_disposition;
 pub use request_admission::{

@@ -52,6 +52,7 @@ import Proofs.ClientShell.RequestPatchPublication
 import Proofs.CommandPolicy
 import Proofs.ToolPolicy
 import Proofs.Lsp
+import Proofs.Retrieval
 import Proofs.ToolExecution
 import Proofs.CompletionRetry
 import Proofs.ManagedExec

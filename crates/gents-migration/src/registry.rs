@@ -606,6 +606,16 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreid74trtjvnquhtehlqi2on37cdd7q77jvpwxadbudn6t3k2bx7ety"
     ),
     baseline_entry!(
+        gents_protocol::schemas::TRANSCRIPT_CHUNK_NAME,
+        gents_protocol::schemas::TRANSCRIPT_CHUNK,
+        "bafyreidswsm2bd662zvfost5sgdqdpcqg7yy7qq32b2er4vodpjpp4snwy"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::TRANSCRIPT_INDEX_STATE_NAME,
+        gents_protocol::schemas::TRANSCRIPT_INDEX_STATE,
+        "bafyreiefq2odcz6jjesk4rfgb4bpjnan3hrolspl5rtafzr2ar6idworpi"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME,
         gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE,
         "bafyreihlwf4r2path7v4yufdnxmqrpe5e2f2g4m2vh5ghn2s6oh3xonc2e"

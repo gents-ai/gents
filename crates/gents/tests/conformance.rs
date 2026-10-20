@@ -117,6 +117,8 @@ mod replicated_request_convergence;
 mod request_input;
 #[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
+#[path = "conformance/retrieval.rs"]
+mod retrieval;
 #[path = "conformance/session_hydration.rs"]
 mod session_hydration;
 #[path = "conformance/startup_readiness.rs"]
@@ -226,6 +228,16 @@ fn generated_goal_capability_resolution_matches_rust_decoder() {
 #[test]
 fn generated_lsp_action_cases_match_rust_authorization() {
     lsp::generated_lsp_action_cases_match_rust_authorization();
+}
+
+#[test]
+fn generated_retrieval_index_cases_drive_the_indexer_plan() {
+    retrieval::generated_retrieval_index_cases_drive_the_indexer_plan();
+}
+
+#[test]
+fn generated_retrieval_hit_cases_drive_hit_selection() {
+    retrieval::generated_retrieval_hit_cases_drive_hit_selection();
 }
 
 #[test]

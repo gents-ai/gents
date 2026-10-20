@@ -794,3 +794,234 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     assert_eq!(persisted["data"]["PlanTicket"][0]["status"], "open");
     node.shutdown().await;
 }
+
+/// An Ollama-shaped embedding endpoint: each known word adds weight to one of
+/// eight dimensions, so nearness follows shared vocabulary.
+async fn word_embedding_endpoint() -> (String, tokio::task::JoinHandle<()>) {
+    async fn embed(axum::Json(body): axum::Json<Value>) -> axum::Json<Value> {
+        const VOCABULARY: [&[&str]; 8] = [
+            &["cat", "cats", "kitten"],
+            &["purr", "purrs"],
+            &["sleep", "sleeps", "nap", "sleepy"],
+            &["rust", "compiler"],
+            &["borrow", "checker"],
+            &["pasta", "noodles"],
+            &["sauce", "tomato"],
+            &["recipe", "dinner"],
+        ];
+        let mut vector = [0.05f64; 8];
+        let text = body["prompt"].as_str().unwrap_or_default().to_lowercase();
+        for word in text.split(|c: char| !c.is_alphanumeric()) {
+            if let Some(dimension) = VOCABULARY.iter().position(|words| words.contains(&word)) {
+                vector[dimension] += 1.0;
+            }
+        }
+        axum::Json(json!({ "embedding": vector }))
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/api", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/api/embeddings", axum::routing::post(embed)),
+        )
+        .await
+        .unwrap();
+    });
+    (url, server)
+}
+
+fn note_sdl(collection: &str, url: &str) -> String {
+    format!(
+        "type {collection} {{ title: String body: String topic: String embedding: [Float32!] \
+         @index(vector: {{dimensions: 8, diskann: {{}}}}) \
+         @embedding(provider: \"ollama\", model: \"stub\", url: \"{}\", fields: [\"body\"]) }}",
+        crate::graphql::escape_graphql_string(url)
+    )
+}
+
+async fn call_query(tool: &DefraQueryTool, args: Value) -> Result<Value, String> {
+    Tool::call(tool, serde_json::from_value(args).unwrap())
+        .await
+        .map(|output| serde_json::from_str(&output).unwrap())
+        .map_err(|error| error.to_string())
+}
+
+#[tokio::test]
+async fn similar_ranks_rows_by_embedded_meaning() {
+    let (url, server) = word_embedding_endpoint().await;
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema(&note_sdl("Note", &url)).await.unwrap();
+    node.add_schema("type Plain { body: String }")
+        .await
+        .unwrap();
+    for (title, body, topic) in [
+        ("borrowing", "The rust compiler borrow checker", "code"),
+        ("cats", "Cats purr and sleep all afternoon", "pets"),
+        ("dinner", "A pasta recipe with tomato sauce", "food"),
+    ] {
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "seed_similar_query",
+            &format!(
+                "mutation {{ add_Note(input: {{title: \"{}\", body: \"{}\", topic: \"{}\"}}) {{_docID}} }}",
+                crate::graphql::escape_graphql_string(title),
+                crate::graphql::escape_graphql_string(body),
+                crate::graphql::escape_graphql_string(topic)
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    let tool = DefraQueryTool::new(
+        node.clone(),
+        CollectionScope::restricted(vec!["Note".into(), "Plain".into()]),
+    );
+
+    let fields = call_query(&tool, json!({"argv":["fields"],"collection":"Note"}))
+        .await
+        .unwrap();
+    let vector = fields["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["name"] == "embedding")
+        .unwrap();
+    assert_eq!(
+        vector["vector"],
+        json!({"dimensions":8,"algorithm":"DISKANN","metric":"COSINE","embedding":{"provider":"ollama","model":"stub","fields":["body"]},"query":"similar"})
+    );
+    assert!(fields["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|field| field["name"] != "SIMILARITY" && field["name"] != "_similarity"));
+
+    let base = json!({"argv":["similar"],"collection":"Note","options":{"vector_field":"embedding","text":"sleepy kitten nap","fields":["title"],"limit":3}});
+    let result = call_query(&tool, base.clone()).await.unwrap();
+    assert_eq!(result["ranking"], "similarity");
+    assert_eq!(result["returned_count"], 3);
+    let titles = result["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["title"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(titles[0], "cats");
+    let scores = result["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["_similarity"].as_f64().unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        scores.windows(2).all(|pair| pair[0] >= pair[1]),
+        "{scores:?}"
+    );
+    assert!(scores[0] > scores[1]);
+
+    let mut filtered = base.clone();
+    filtered["options"]["filter"] = json!({"topic":{"_eq":"food"}});
+    let result = call_query(&tool, filtered).await.unwrap();
+    assert_eq!(result["returned_count"], 1);
+    assert_eq!(result["results"][0]["title"], "dinner");
+
+    for (options, expected) in [
+        (
+            json!({"vector_field":"title","text":"cats","fields":["title"]}),
+            "argv:[fields]",
+        ),
+        (
+            json!({"vector_field":"embedding","text":"  ","fields":["title"]}),
+            "nonempty text",
+        ),
+        (json!({"text":"cats","fields":["title"]}), "vector_field"),
+        (
+            json!({"vector_field":"embedding","text":"cats","fields":["title"],"order":[{"title":"ASC"}]}),
+            "unknown option",
+        ),
+        (
+            json!({"vector_field":"embedding","text":"cats","fields":["title"],"limit":0}),
+            "similar limit",
+        ),
+        (
+            json!({"vector_field":"embedding","text":"cats","fields":["_similarity"]}),
+            "reserved",
+        ),
+    ] {
+        let error = call_query(
+            &tool,
+            json!({"argv":["similar"],"collection":"Note","options":options}),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains(expected), "{expected}: {error}");
+    }
+    let error = call_query(&tool, json!({"argv":["similar"],"collection":"Plain","options":{"vector_field":"body","text":"cats","fields":["body"]}}))
+        .await
+        .unwrap_err();
+    assert!(error.contains("diskann"), "{error}");
+
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let error = execute_command(
+        &access,
+        &serde_json::from_value(base).unwrap(),
+        &CollectionScope::all(),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("\"search\""), "{error:#}");
+    server.abort();
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn similar_names_an_unreachable_endpoint_and_a_keyword_fallback() {
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/api", closed.local_addr().unwrap());
+    drop(closed);
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema(&note_sdl("Offline", &url)).await.unwrap();
+    let tool = DefraQueryTool::new(node.clone(), CollectionScope::all());
+    let error = call_query(&tool, json!({"argv":["similar"],"collection":"Offline","options":{"vector_field":"embedding","text":"cats","fields":["title"],"limit":4}}))
+        .await
+        .unwrap_err();
+    let error: Value = serde_json::from_str(&error).unwrap();
+    assert!(error["error"].as_str().unwrap().contains(&url), "{error}");
+    assert_eq!(
+        error["recovery"],
+        json!({"tool":"query","args":{"argv":["search"],"collection":"Offline","options":{"fields":["title"],"search_fields":["body"],"text":"cats","limit":4}}})
+    );
+    node.shutdown().await;
+}
+
+#[test]
+fn similar_help_and_query_keep_the_vector_index_shape() {
+    let help = query_help(Some("similar")).unwrap();
+    assert!(
+        help.contains("vector_field") && help.contains("_similarity"),
+        "{help}"
+    );
+    assert!(!query_help(Some("find"))
+        .unwrap()
+        .contains("vector search are not exposed"));
+    let params = DefraQueryParams {
+        collection: "Note".into(),
+        fields: vec!["title".into()],
+        filter: Some(json!({"topic":{"_eq":"a\" } x"}})),
+        limit: Some(5),
+    };
+    let query = similar::build_similar_query(
+        &params,
+        &CollectionScope::all(),
+        &similar::QueryVector {
+            field: "embedding".into(),
+            vector: vec![0.5, -1.0],
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        query,
+        r#"{ Note(filter: { topic: { _eq: "a\" } x" } }, limit: 5, order: {_alias: {_similarity: DESC}}) { title _similarity: SIMILARITY(embedding: {vector: [0.5,-1]}) } }"#
+    );
+}

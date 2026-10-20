@@ -23,6 +23,11 @@ pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
+pub const TRANSCRIPT_CHUNK_NAME: &str = "TranscriptChunk";
+pub const TRANSCRIPT_CHUNK: &str = include_str!("../schemas/agent/transcript_chunk.graphql");
+pub const TRANSCRIPT_INDEX_STATE_NAME: &str = "TranscriptIndexState";
+pub const TRANSCRIPT_INDEX_STATE: &str =
+    include_str!("../schemas/agent/transcript_index_state.graphql");
 pub const PACK_INSTALLATION_NAME: &str = "PackInstallation";
 pub const PACK_INSTALLATION: &str = include_str!("../schemas/agent/pack_installation.graphql");
 pub const GOAL_CREATION_CLAIM_NAME: &str = "GoalCreationClaim";
@@ -233,6 +238,8 @@ pub const ALL: &[&str] = &[
     EVAL_VERDICT,
     OPTIMIZATION_JOB,
     PACK_INSTALLATION,
+    TRANSCRIPT_CHUNK,
+    TRANSCRIPT_INDEX_STATE,
 ];
 
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
@@ -307,6 +314,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVAL_VERDICT_NAME,
     OPTIMIZATION_JOB_NAME,
     PACK_INSTALLATION_NAME,
+    TRANSCRIPT_CHUNK_NAME,
+    TRANSCRIPT_INDEX_STATE_NAME,
 ];
 
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
@@ -344,9 +353,14 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     OPTIMIZATION_JOB_NAME,
 ];
 
-/// Local trust state that must never be learned from peers.
-pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] =
-    &[NETWORK_ADMIN_PIN_NAME, ENROLLMENT_OPERATOR_NONCE_NAME];
+/// Local trust state that must never be learned from peers, and derived
+/// per-store indexes each node rebuilds from its own canonical rows.
+pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
+    NETWORK_ADMIN_PIN_NAME,
+    ENROLLMENT_OPERATOR_NONCE_NAME,
+    TRANSCRIPT_CHUNK_NAME,
+    TRANSCRIPT_INDEX_STATE_NAME,
+];
 
 pub fn is_local_audit_collection(name: &str) -> bool {
     LOCAL_AUDIT_COLLECTION_NAMES.contains(&name)

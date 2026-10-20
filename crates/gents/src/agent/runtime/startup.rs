@@ -35,6 +35,7 @@ enum BackgroundTaskResult {
     SessionHydrationReconcile(Result<()>),
     SessionCommandReconcile(Result<()>),
     DirectoryProjection(Result<()>),
+    TranscriptIndex(Result<()>),
 }
 
 impl BackgroundTaskResult {
@@ -57,6 +58,7 @@ impl BackgroundTaskResult {
                 result.context("session command reconcile task")
             }
             Self::DirectoryProjection(result) => result.context("directory projection task"),
+            Self::TranscriptIndex(result) => result.context("transcript index task"),
         }
     }
 }
@@ -771,6 +773,25 @@ async fn run_agent_owned(
                 graph_run_node,
                 graph_run_owner_did,
                 graph_run_cancel,
+            )
+            .await,
+        )
+    });
+
+    let transcript_index_node = agent.node.clone();
+    let transcript_index_reader = Some(
+        agent
+            .node_did()
+            .parse()
+            .context("transcript index requires the runtime node DID")?,
+    );
+    let transcript_index_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::TranscriptIndex(
+            crate::retrieval::indexer::run_transcript_indexer(
+                transcript_index_node,
+                transcript_index_reader,
+                transcript_index_cancel,
             )
             .await,
         )

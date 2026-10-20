@@ -161,6 +161,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) invocation_correlation_cases: Vec<serde_json::Value>,
     pub(crate) goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
     pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
+    pub(crate) retrieval_index_cases: Vec<LeanRetrievalIndexCase>,
+    pub(crate) retrieval_hit_cases: Vec<LeanRetrievalHitCase>,
     pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
     pub(crate) self_config_cases: Vec<LeanSelfConfigCase>,
     pub(crate) agent_decision_cases: Vec<LeanAgentDecisionCase>,
@@ -1281,6 +1283,8 @@ mod reduction_engine;
 mod rendered_capture;
 #[path = "request_execution_lease.rs"]
 mod request_execution_lease;
+#[path = "retrieval.rs"]
+mod retrieval;
 #[path = "rolling_compaction.rs"]
 mod rolling_compaction;
 #[path = "self_config.rs"]
@@ -1317,6 +1321,7 @@ pub(crate) use publish_if::*;
 pub(crate) use reduction_engine::*;
 pub(crate) use rendered_capture::*;
 pub(crate) use request_execution_lease::*;
+pub(crate) use retrieval::*;
 pub(crate) use rolling_compaction::*;
 pub(crate) use self_config::*;
 pub(crate) use session_documents::*;

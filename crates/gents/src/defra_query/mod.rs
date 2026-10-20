@@ -54,6 +54,7 @@ mod field_page;
 pub(crate) use field_page::{utf8_page, Utf8PageError};
 mod native_filter;
 mod search;
+mod similar;
 pub use command::{build_paged_query, execute_command, query_help, render_result, QueryParams};
 pub(crate) use native_filter::validate_filter;
 pub(crate) mod query;
@@ -121,27 +122,36 @@ impl Tool for DefraQueryTool {
     type Args = QueryParams;
     type Output = String;
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [search], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string","description":"GraphQL collection name. Discover with schema collection list. Surface IDs belong to config datastore get."},"options":{"type":"object"}}})}
+        ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [search], [similar], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page; search ranks keywords, similar ranks meaning. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string","description":"GraphQL collection name. Discover with schema collection list. Surface IDs belong to config datastore get."},"options":{"type":"object"}}})}
     }
     async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
-        let result = if let Some(actor) = &self.actor {
-            crate::config_client::ConfigAccess::transact_local_readonly(
-                &self.node,
-                Some(actor.clone()),
-                "application_query",
-                |txn| Box::pin(execute_command(txn, &args, &self.scope)),
-            )
-            .await
-        } else {
-            execute_command(
-                &crate::config_client::ConfigAccess::local(self.node.clone()),
-                &args,
-                &self.scope,
-            )
-            .await
-        };
+        let result = async {
+            let facts = similar::prepare(&self.node, &args, &self.scope).await?;
+            if let Some(actor) = &self.actor {
+                crate::config_client::ConfigAccess::transact_local_readonly(
+                    &self.node,
+                    Some(actor.clone()),
+                    "application_query",
+                    |txn| Box::pin(command::execute_with(txn, &args, &self.scope, &facts)),
+                )
+                .await
+            } else {
+                command::execute_with(
+                    &crate::config_client::ConfigAccess::local(self.node.clone()),
+                    &args,
+                    &self.scope,
+                    &facts,
+                )
+                .await
+            }
+        }
+        .await;
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
+            Err(error) if error.is::<similar::SimilarRecovery>() => {
+                let recovery = error.downcast::<similar::SimilarRecovery>().expect("checked type");
+                Err(anyhow!("{}", json!({"error":recovery.message,"recovery":recovery.next_call})).into())
+            }
             Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
             Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
         }

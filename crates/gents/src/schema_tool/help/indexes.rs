@@ -45,9 +45,9 @@ type Note {
   embedding: [Float32!] @index(vector: {dimensions: 768})
 }
 ```
-Defaults: HNSW algorithm, COSINE metric. Choose one algorithm block; it selects the algorithm and holds its settings. @vectorIndex is not supported.
-Discover: help indexes vector dimensions | metrics | hnsw | flat | ivfpq | ivfflat | ssg.
-For generated vectors: help embeddings. Similarity queries use the data/query interface, not schema commands."#
+Defaults: HNSW algorithm, COSINE metric. Choose one algorithm block; it selects the algorithm and holds its settings. @vectorIndex is not supported. Prefer diskann for a collection that will grow large, such as agent memory.
+Discover: help indexes vector dimensions | metrics | diskann | hnsw | flat | ivfpq | ivfflat | ssg.
+For generated vectors: help embeddings. Query by meaning with the query tool: query help similar."#
         }
         ["indexes", "vector", "dimensions"] => {
             r#"Dimensions is the number of numbers in each vector. Set it to the embedding model's output width, or the width of vectors you supply.
@@ -68,8 +68,23 @@ type Point {
   })
 }
 ```
-Put metric inside the selected algorithm block. HNSW, FLAT and SSG support all three metrics. IVF_PQ and IVF_FLAT support COSINE only. Use the same metric when querying.
+Put metric inside the selected algorithm block. HNSW, FLAT and SSG support all three metrics. DISKANN, IVF_PQ and IVF_FLAT support COSINE only. Use the same metric when querying.
 Next: help indexes vector hnsw; help indexes vector flat."#
+        }
+        ["indexes", "vector", "diskann"] => {
+            r#"DISKANN searches a disk-resident neighbor graph over compressed codes, so memory stays small as the collection grows. COSINE is the only supported metric. A memory-style collection that embeds its text on write:
+```graphql
+type Note {
+  title: String
+  body: String
+  embedding: [Float32!]
+    @index(vector: {dimensions: 1024, diskann: {}})
+    @embedding(provider: "ollama", model: "bge-m3", fields: ["title", "body"])
+}
+```
+Defaults: R: 64 maximum edges per node; lBuild: 100 insert candidates; lSearch: 100 search candidates; alphaPercent: 120 pruning slack (at least 100); m: 0 derives subquantizers from dimensions, otherwise m must divide dimensions; sampleBytes: 134217728 caps the training sample; residentCodes: false keeps codes on disk, true holds m bytes per vector in memory for fewer reads.
+Below 1024 live vectors searches are exact scans. The write that reaches 1024 trains the codes and graph; later inserts are searchable at once and the node's background task merges them into the graph every 60 seconds. No rebuild command is needed.
+Next: help embeddings indexing; query help similar."#
         }
         ["indexes", "vector", "hnsw"] => {
             r#"HNSW searches an approximate neighbor graph. It is the default vector algorithm.
@@ -155,11 +170,11 @@ type Note {
   )
 }
 ```
-The output field must be [Float32!]; providers are openai and ollama. Model/provider access must work on the runtime node. fields must be nonempty and cannot reference this or another embedding field. Supply vectors directly when generation happens elsewhere.
+The output field must be [Float32!]; providers are openai and ollama. For a local model use provider: "ollama", model: "bge-m3" (1024 dimensions). Model/provider access must work on the runtime node. fields must be nonempty and cannot reference this or another embedding field. Supply vectors directly when generation happens elsewhere.
 Discover: help embeddings generation; help embeddings indexing."#
         }
         ["embeddings", "generation"] => {
-            r#"Embedding generation may call a provider during a document write. provider, model and optional url select that service; fields identifies the source content. Credentials come from node configuration, not the SDL.
+            r#"Embedding generation may call a provider during a document write. provider, model and optional url select that service; fields identifies the source content. url is the provider API base, for Ollama http://localhost:11434/api; without it the node's embedding URL applies. Credentials come from node configuration, not the SDL. A write fails when the provider stays unreachable after retries; with no resolvable URL or model, generation is skipped.
 Source fields must be scalar String, Int, Float/Float64, Float32, Boolean, DateTime or Blob. JSON, arrays and relationships are unsupported. On create, explicitly supplying the vector skips generation. On update, changing a source field regenerates it unless the vector is explicitly supplied. Verify provider credentials, reachability and generated values before relying on retrieval.
 Next: help embeddings indexing. Inspect documents through the data/query interface when testing generation."#
         }
@@ -173,8 +188,8 @@ type Note {
     @index(vector: {dimensions: 768})
 }
 ```
-Replace your-model and 768 with the configured model and its output width. DefraDB requires dimensions explicitly; @embedding does not fill them in. Keep provider configuration, supplied vectors and query vectors consistent.
-Next: help indexes vector dimensions; help indexes vector metrics."#
+Replace your-model and 768 with the configured model and its output width. DefraDB requires dimensions explicitly; @embedding does not fill them in. Keep provider configuration, supplied vectors and query vectors consistent. query similar embeds query text through the same @embedding.
+Next: help indexes vector diskann; help indexes vector dimensions."#
         }
         _ => return None,
     })

@@ -1197,6 +1197,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_lsp_action_cases_match_rust_authorization",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_retrieval_index_cases_drive_the_indexer_plan",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_retrieval_index_cases_drive_the_indexer_plan",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::generated_retrieval_hit_cases_drive_hit_selection",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_retrieval_hit_cases_drive_hit_selection",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::self_config_field_tables_match_lean_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",
