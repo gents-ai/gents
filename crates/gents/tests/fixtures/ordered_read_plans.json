@@ -224,13 +224,14 @@
     "read": {
       "path": "crates/gents-desktop-core/src/client/query/session_transcript.rs",
       "collection": "AgentOutputSegment",
-      "arguments": "filter: { request_doc_id: { _eq: \"$GENTS_request_id$\" }, $GENTS_0$ }, order: [{ ordinal: ASC }, { _docID: ASC }], limit: $GENTS_1$"
+      "arguments": "filter: { _and: [{ request_doc_id: { _eq: \"$GENTS_request_id$\" }, $GENTS_0$ }, $GENTS_source_filter$] }, order: [{ ordinal: ASC }, { _docID: ASC }], limit: $GENTS_1$"
     },
     "bindings": [
       {
         "request_id": "probe",
         "0": "node_did: {_eq: \"probe\"}",
-        "1": "1"
+        "1": "1",
+        "source_filter": "{_or: [{source: {key: {_eq: \"answer\"}}}]}"
       }
     ]
   },
