@@ -11,16 +11,17 @@ use defra_node::{EmbeddedNode, QueryRequest};
 use futures::future::BoxFuture;
 use identity::Did;
 use query::TransactionHandle;
-use serde_json::{json, Value};
-use tracing::{instrument::WithSubscriber, Instrument};
+use serde_json::{Value, json};
+use tracing::{Instrument, instrument::WithSubscriber};
 
 use super::graphql;
 use super::retry;
 use super::write_telemetry::{
-    record_slow_native_phase, ConflictSource, ReceiptRecovery, RetryOwner, RollbackStatus,
-    WriteAttemptEvent, WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
+    ConflictSource, ReceiptRecovery, RetryOwner, RollbackStatus, WriteAttemptEvent,
+    WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
+    record_slow_native_phase,
 };
-use super::{graphql_api_base, ConfigAccess, GraphqlEndpoint};
+use super::{ConfigAccess, GraphqlEndpoint, graphql_api_base};
 
 enum TxnBackend<'a> {
     Http {
@@ -555,13 +556,16 @@ async fn execute_owned_native(
         .try_with(|fault| fault.native_pause.clone())
         .ok()
         .flatten();
+    let dispatched_at = Instant::now();
     tokio::spawn(
         async move {
+            record_slow_native_phase(operation, "execute-dispatch", dispatched_at.elapsed());
             #[cfg(test)]
             if let Some((reached, release)) = native_pause {
                 reached.notify_one();
                 release.notified().await;
             }
+            let native_started = Instant::now();
             let result = match operation {
                 Some(operation) => {
                     ACTIVE_EMBEDDED_TRANSACTION
@@ -570,6 +574,7 @@ async fn execute_owned_native(
                 }
                 None => node.execute_request_in_txn(request, &handle).await,
             };
+            record_slow_native_phase(operation, "execute-native-await", native_started.elapsed());
             drop(permit);
             let _ = send.send(result);
         }
@@ -1760,7 +1765,13 @@ impl<'a> ConfigApplyTxn<'a> {
                     native_operations, ..
                 } = &self.backend
                 {
+                    let started = Instant::now();
                     native_operations.wait_idle().await;
+                    record_slow_native_phase(
+                        self.operation,
+                        "commit-inflight-drain",
+                        started.elapsed(),
+                    );
                 }
                 let started = Instant::now();
                 let result =
@@ -3104,10 +3115,12 @@ mod variable_tests {
         txn.discard().await.unwrap();
         let read = node.execute("{TransactionJsonProbe {payload}}").await;
         assert!(!read.has_errors());
-        assert!(read.data.unwrap()["TransactionJsonProbe"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            read.data.unwrap()["TransactionJsonProbe"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         node.shutdown().await;
     }
 }
