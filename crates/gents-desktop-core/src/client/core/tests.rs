@@ -1509,6 +1509,8 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         })
         .await?;
     core.refresh_store().await?;
+    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
+        .await?;
     let resent = core
         .resend_request_in_scope("stale-seed", Some(owner.did()))
         .await?;
