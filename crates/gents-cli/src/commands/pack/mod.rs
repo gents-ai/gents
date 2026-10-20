@@ -788,36 +788,46 @@ async fn wire_pack_plugins(
     Ok(wired)
 }
 
+/// Offline command access owns its node and store claim. DefraDB background
+/// tasks may retain the database after a handle drops, so shutdown must finish
+/// before this command releases its access. HTTP access has no owned node here.
 async fn install_documents_command(
     access: gents::config_client::ConfigAccess,
     pack: &PackSource,
     args: &PackInstallArgs,
 ) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-    let bind_mode = if args.scope.graphql.is_some() {
-        Some(ManifestNodeDidBindingArg::Live)
-    } else {
-        Some(ManifestNodeDidBindingArg::Home)
-    };
-    let owner = super::config::binding::resolve_target_node_did(
-        args.scope.node_did.as_deref(),
-        if args.scope.node_did.is_some() {
-            None
+    let result = async {
+        let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+        let bind_mode = if args.scope.graphql.is_some() {
+            Some(ManifestNodeDidBindingArg::Live)
         } else {
-            bind_mode
-        },
-        args.scope.home.as_deref(),
-        args.scope.graphql.as_deref(),
-        Some(&access),
-    )
-    .await?;
-    let mut output = install_documents_pack(&access, &owner, pack, args, args.explicit).await?;
-    if !args.wire.is_empty() && !args.preview {
-        output["wired"] = wire_pack_plugins(&access, &owner, &home, pack, &args.wire)
-            .await?
-            .into();
+            Some(ManifestNodeDidBindingArg::Home)
+        };
+        let owner = super::config::binding::resolve_target_node_did(
+            args.scope.node_did.as_deref(),
+            if args.scope.node_did.is_some() {
+                None
+            } else {
+                bind_mode
+            },
+            args.scope.home.as_deref(),
+            args.scope.graphql.as_deref(),
+            Some(&access),
+        )
+        .await?;
+        let mut output = install_documents_pack(&access, &owner, pack, args, args.explicit).await?;
+        if !args.wire.is_empty() && !args.preview {
+            output["wired"] = wire_pack_plugins(&access, &owner, &home, pack, &args.wire)
+                .await?
+                .into();
+        }
+        Ok::<_, anyhow::Error>(output)
     }
-    crate::print_json(&output)
+    .await;
+    if let Some(node) = access.local_node() {
+        node.shutdown().await;
+    }
+    crate::print_json(&result?)
 }
 
 pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
@@ -1231,6 +1241,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            access.local_node().unwrap().shutdown().await;
         }
 
         let second = documents_pack_dir("1.1.0");
