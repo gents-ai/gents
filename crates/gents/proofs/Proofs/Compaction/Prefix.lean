@@ -199,6 +199,34 @@ theorem sanitizeTurn_append_new_turn (history suffix : List MessageRow)
     filterCallsByTurn_append_before_ordinary
       (dropOrphanedFrom ∅ history) (dropOrphanedFrom ∅ suffix) boundary hboundary]
 
+theorem projected_prefix_stable_of_turn_boundary {messages : List MessageRow}
+    (hend : PromptView.endsAtTurnBoundary messages = true) (suffix : List MessageRow) :
+    (sanitizeTurn (messages ++ suffix)).take (sanitizeTurn messages).length =
+      sanitizeTurn messages := by
+  unfold PromptView.endsAtTurnBoundary at hend
+  cases hlast : messages.getLast? with
+  | none => simp [hlast] at hend
+  | some boundary =>
+      have hkind : boundary.kind = .ordinary := by simpa [hlast] using hend
+      obtain ⟨history, hdecomp⟩ := List.getLast?_eq_some_iff.mp hlast
+      rw [hdecomp]
+      simp only [List.append_assoc, List.singleton_append]
+      rw [sanitizeTurn_append_new_turn history suffix boundary hkind]
+      have hclosed : sanitizeTurn (history ++ [boundary]) =
+          sanitizeTurn history ++ [boundary] := by
+        simpa using sanitizeTurn_append_new_turn history [] boundary hkind
+      rw [hclosed]
+      have hregroup : sanitizeTurn history ++ boundary :: sanitizeTurn suffix =
+          (sanitizeTurn history ++ [boundary]) ++ sanitizeTurn suffix := by simp
+      rw [hregroup]
+      exact List.take_left _ _
+
+theorem admitted_projection_prefix_stable {view : PromptView}
+    (hadmitted : PromptView.canCompactProjection view) (suffix : List MessageRow) :
+    (sanitizeTurn (view.messages ++ suffix)).take (sanitizeTurn view.messages).length =
+      sanitizeTurn view.messages :=
+  projected_prefix_stable_of_turn_boundary hadmitted.1 suffix
+
 theorem safe_prefix_stable_under_arbitrary_suffix {view : PromptView}
     (hsafe : PromptView.safeToReduce view) (suffix : List MessageRow) :
     (PromptAssembly.sanitizeTurn (view.messages ++ suffix)).take

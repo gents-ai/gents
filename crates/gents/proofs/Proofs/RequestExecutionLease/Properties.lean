@@ -219,16 +219,26 @@ theorem terminal_effects_at_most_once
 
 theorem drop_relinquishes_matching_owner
     (pre post : World Generation) (generation : Generation)
+    (hlive : pre.now < effectiveExpiry pre)
     (h : step? pre (.drop .mutationWriteGate generation) = some post) :
     ∃ duration deadline, post.lease = .recoverable generation duration deadline := by
   cases hlease : pre.lease with
   | vacant => simp [step?, hlease] at h
   | active owner duration deadline =>
-      simp [step?, hlease] at h
+      have hnot : ¬ deadline ≤ pre.now := by
+        exact Nat.not_le_of_gt (by simpa [effectiveExpiry, hlease] using hlive)
+      simp [step?, hlease, hnot] at h
       rcases h with ⟨rfl, rfl⟩
       exact ⟨duration, deadline, rfl⟩
   | recoverable owner duration deadline => simp [step?, hlease] at h
   | terminal owner outcome => simp [step?, hlease] at h
+
+theorem expired_drop_preserves_active_lease
+    (pre : World Generation) (owner : Generation) (duration deadline : Time)
+    (hlease : pre.lease = .active owner duration deadline)
+    (hexpired : deadline ≤ pre.now) :
+    step? pre (.drop .mutationWriteGate owner) = some pre := by
+  simp [step?, hlease, hexpired]
 
 theorem dropped_recovery_installs_fresh_generation
     (pre post : World Generation) (expected generation : Generation)

@@ -805,9 +805,11 @@ fn build_add_agent_request_field(
 
 /// Only `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
 /// other state would risk bypassing legitimate terminal classifications.
+#[allow(clippy::too_many_arguments)]
 pub async fn resend_request(
     node: &Arc<EmbeddedNode>,
     store: &ClientStore,
+    access: &ConfigAccess,
     stale_request_id: &str,
     node_did: &str,
     requester_did: &str,
@@ -838,7 +840,7 @@ pub async fn resend_request(
     submit_request(
         node,
         store,
-        &ConfigAccess::local(node.clone()),
+        access,
         &retry_session_id,
         stale_node_did,
         requester_did,

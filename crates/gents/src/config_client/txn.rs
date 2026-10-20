@@ -555,13 +555,16 @@ async fn execute_owned_native(
         .try_with(|fault| fault.native_pause.clone())
         .ok()
         .flatten();
+    let dispatched_at = Instant::now();
     tokio::spawn(
         async move {
+            record_slow_native_phase(operation, "execute-dispatch", dispatched_at.elapsed());
             #[cfg(test)]
             if let Some((reached, release)) = native_pause {
                 reached.notify_one();
                 release.notified().await;
             }
+            let native_started = Instant::now();
             let result = match operation {
                 Some(operation) => {
                     ACTIVE_EMBEDDED_TRANSACTION
@@ -570,6 +573,7 @@ async fn execute_owned_native(
                 }
                 None => node.execute_request_in_txn(request, &handle).await,
             };
+            record_slow_native_phase(operation, "execute-native-await", native_started.elapsed());
             drop(permit);
             let _ = send.send(result);
         }
@@ -1760,7 +1764,13 @@ impl<'a> ConfigApplyTxn<'a> {
                     native_operations, ..
                 } = &self.backend
                 {
+                    let started = Instant::now();
                     native_operations.wait_idle().await;
+                    record_slow_native_phase(
+                        self.operation,
+                        "commit-inflight-drain",
+                        started.elapsed(),
+                    );
                 }
                 let started = Instant::now();
                 let result =

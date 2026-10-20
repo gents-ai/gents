@@ -1,7 +1,7 @@
 use super::*;
 use gents::session::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, OutputSegmentRow,
-    TranscriptMessageRow, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
+    decode_output_segment_row, decode_transcript_message_row, output_source_discriminator,
+    OutputSegmentRow, TranscriptMessageRow, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 use gents_protocol::output::MessagePublication;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -246,18 +246,28 @@ async fn load_page_canonical_dependencies(
         let selections = batch
             .iter()
             .enumerate()
-            .map(|(index, (request_scope, _))| {
+            .map(|(index, (request_scope, sources))| {
+                let discriminators = sources
+                    .iter()
+                    .map(|source| {
+                        let source = serde_json::from_str(source)?;
+                        Ok(serde_json::json!({ "source": output_source_discriminator(&source) }))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let source_filter = gents_protocol::graphql::graphql_input_literal(
+                    &serde_json::json!({ "_or": discriminators }),
+                )?;
                 let request_id = escape_graphql_string(&request_scope.0);
-                format!(
+                Ok(format!(
                     r#"source{index}: AgentOutputSegment(
-                filter: {{ request_doc_id: {{ _eq: "{request_id}" }}, {} }},
+                filter: {{ _and: [{{ request_doc_id: {{ _eq: "{request_id}" }}, {} }}, {source_filter}] }},
                 order: [{{ ordinal: ASC }}, {{ _docID: ASC }}], limit: {}
             ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#,
                     scope_filter(&request_scope.1, request_scope.2.as_deref()),
                     MAX_CANONICAL_DEPENDENCY_ROWS.saturating_add(1)
-                )
+                ))
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .join("\n");
         let data = access
             .execute(
@@ -271,7 +281,10 @@ async fn load_page_canonical_dependencies(
                 parse_canonical_rows(&data, &format!("source{index}"), decode_output_segment_row)?;
             queried_rows = queried_rows.saturating_add(rows.len());
             if rows.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
-                bail!("canonical output request {} exceeds bounded dependency read of {MAX_CANONICAL_DEPENDENCY_ROWS} rows", request_scope.0);
+                bail!(
+                    "canonical output request {} exceeds bounded dependency read of {MAX_CANONICAL_DEPENDENCY_ROWS} rows",
+                    request_scope.0
+                );
             }
             for row in rows {
                 anyhow::ensure!(
@@ -483,11 +496,16 @@ async fn load_session_transcript_page_with_access(
     let tool_before_sequence_filter = before_sequence
         .map(|sequence| format!(", message_sequence: {{ _lt: {sequence} }}"))
         .unwrap_or_default();
+    let message_order = if node_did.is_some() {
+        "[{ sequence: DESC }]"
+    } else {
+        "[{ sequence: DESC }, { message_key: DESC }]"
+    };
     let transcript_query = format!(
         r#"query DesktopSessionTranscriptPage {{
   AgentMessage(
     filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}{message_sequence_filter} }},
-    order: [{{ sequence: DESC }}, {{ message_key: DESC }}],
+    order: {message_order},
     limit: {message_query_limit}
   ) {{ {AGENT_MESSAGE_FIELDS} }}
   AgentToolCall(

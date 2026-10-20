@@ -956,11 +956,11 @@ async fn source_rows(
     .collect())
 }
 
-/// Load output segments for all request documents in the bounded replay view
+/// Load output segments for the pass's referenced request documents
 /// through the indexed request field, in chunks. The per-pass cache still
 /// owns freshness: if reconstruction detects an incomplete reused scan, its
 /// existing retry evicts and rereads that request alone.
-async fn preload_replay_request_output_segments(
+async fn preload_request_output_segments(
     node: &EmbeddedNode,
     request_doc_ids: &[String],
     node_did: &str,
@@ -1418,7 +1418,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         })
         .filter_map(|row| row.message.request_doc_id.clone())
         .collect::<Vec<_>>();
-    preload_replay_request_output_segments(
+    preload_request_output_segments(
         node,
         &replay_output_requests,
         scope.node_did,
@@ -2380,6 +2380,16 @@ pub(super) async fn load_sequenced_messages(
         );
         cache.headers.insert(row.doc_id.clone(), row.clone());
     }
+    let output_requests = headers
+        .iter()
+        .filter(|row| {
+            exclude_request_doc_id.is_none_or(|id| !is_current_admission_input(&row.message, id))
+                && !row.message.payload_references().is_empty()
+        })
+        .filter_map(|row| row.message.request_doc_id.clone())
+        .collect::<Vec<_>>();
+    preload_request_output_segments(node, &output_requests, node_did, requester_did, &mut cache)
+        .await?;
     let mut messages = Vec::new();
     for row in headers.into_iter().filter(|row| {
         exclude_request_doc_id.is_none_or(|id| !is_current_admission_input(&row.message, id))

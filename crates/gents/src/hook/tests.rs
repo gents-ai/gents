@@ -1898,6 +1898,206 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
 }
 
 #[tokio::test]
+async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+            .with_goal_tool_authority(true, false);
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("start goal"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "goal-update-request",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+
+    // Accepted active edit through the hook path: no status, objective updated,
+    // stale-race message absent. Complements the edit_active_goal contract tests
+    // (edited_fields_match_operator_updates_without_changing_goal_identity),
+    // which cover active-edit success and CAS/identity rejection at the edit layer.
+    {
+        crate::goal::set_goal(
+            &node,
+            "did:test:general",
+            &session_id,
+            Some("blocked-edit semantics"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .expect("create active goal");
+        let call_id = "active-edit-accepted";
+        let args = r#"{"objective":"revised while active"}"#;
+        accept_hook_tool_call(
+            &hook,
+            &call_id,
+            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            args,
+            None,
+        )
+        .await;
+        let ToolCallHookAction::Skip {
+            reason: tool_result,
+        } = hook
+            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+            .await
+        else {
+            panic!("expected hook-managed skip for {call_id}");
+        };
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&tool_result).expect("JSON tool result")
+                ["accepted"]
+                == true,
+            "active edit must be accepted: {tool_result}"
+        );
+        let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+            .await
+            .expect("load goal")
+            .expect("goal exists");
+        assert_eq!(goal.objective, "revised while active");
+        crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
+            .await
+            .expect("clear goal");
+    }
+
+    for (status, expected_hint) in [
+        (
+            crate::goal::GoalStatus::Blocked,
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+        ),
+        (
+            crate::goal::GoalStatus::Paused,
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+        ),
+        (
+            crate::goal::GoalStatus::UsageLimited,
+            "gents goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
+        ),
+        (
+            crate::goal::GoalStatus::Complete,
+            "a complete goal is terminal and has no resume path",
+        ),
+        (
+            crate::goal::GoalStatus::BudgetLimited,
+            "a budget_limited goal cannot be reactivated and has no resume path",
+        ),
+    ] {
+        crate::goal::set_goal(
+            &node,
+            "did:test:general",
+            &session_id,
+            Some("blocked-edit semantics"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .expect("create active goal");
+        crate::goal::set_goal(
+            &node,
+            "did:test:general",
+            &session_id,
+            None,
+            Some(status),
+            None,
+        )
+        .await
+        .expect("latch status");
+        let before = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+            .await
+            .expect("load before")
+            .expect("goal exists");
+        for (index, args) in [
+            r#"{"objective":"revised"}"#,
+            r#"{"status":"active","objective":"revised"}"#,
+            r#"{"status":"active"}"#,
+            r#"{"status":" active ","objective":"revised"}"#,
+            r#"{"token_budget":1000}"#,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let call_id = format!("blocked-edit-{}-{index}", status.as_str());
+            accept_hook_tool_call(
+                &hook,
+                &call_id,
+                crate::goal::UPDATE_GOAL_TOOL_NAME,
+                args,
+                None,
+            )
+            .await;
+            let ToolCallHookAction::Skip {
+                reason: tool_result,
+            } = hook
+                .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+                .await
+            else {
+                panic!("expected hook-managed skip for {call_id}");
+            };
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&tool_result).expect("JSON tool result")
+                    ["accepted"]
+                    == false,
+                "{tool_result}"
+            );
+
+            assert!(
+                tool_result.contains(&format!("the current goal status is {}", status.as_str())),
+                "{call_id}: {tool_result}"
+            );
+            assert!(
+                tool_result.contains(expected_hint),
+                "{call_id}: expected {expected_hint:?} in {tool_result}"
+            );
+            assert!(
+                !tool_result.contains("no longer active or its continuation changed"),
+                "{call_id}: stale-race message must not appear for a fresh non-active goal: {tool_result}"
+            );
+            let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+                .await
+                .expect("load goal")
+                .expect("goal exists");
+            assert_eq!(
+                goal.parsed_status(),
+                Some(status),
+                "{call_id}: refused edit must not change status"
+            );
+            assert_eq!(
+                goal.objective, "blocked-edit semantics",
+                "{call_id}: refused edit must not change objective"
+            );
+            assert_eq!(goal.token_budget, before.token_budget);
+            assert_eq!(goal.continuation_sequence, before.continuation_sequence);
+            assert_eq!(goal.goal_id, before.goal_id);
+            assert_eq!(goal.updated_at, before.updated_at);
+        }
+        // Rebuild from a fresh active goal for the next case; complete and
+        // budget_limited cannot be reset to active via set_goal.
+        crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
+            .await
+            .expect("clear goal for next case");
+    }
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn claimed_authored_input_persists_context_once_before_prompt() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));

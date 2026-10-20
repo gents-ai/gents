@@ -344,11 +344,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         .iter()
                         .map(|row| row.message.clone())
                         .collect::<Vec<_>>();
-                    // The projected provider view is a fixpoint; the gate checks
-                    // the exact reconstructed canonical rows instead, so it is
-                    // not vacuous when the projection strips an unfinished tail.
                     let canonical_prefix_is_stable =
-                        compaction::safe_to_reduce(&durable_history);
+                        compaction::session_prefix_is_stable(&durable_history);
                     let file_activity = compaction::history::extract_file_activity(&durable_history);
                     if !file_activity.is_empty() {
                         tracing::debug!(

@@ -1302,10 +1302,12 @@ assistant-role structure of announcements. Pair closure of a compacted
 transcript is not preserved by an arbitrary drop; the previous, narrower fields
 sufficed only because the modelled reducer was `id`.
 
-The runtime counterpart of `safeToReduce` is `compaction::safe_to_reduce`,
-resolved at session scope — see
-`boundary.compaction.safe-to-reduce-session-scope` for the refinement and its
-accepted failure mode.
+`safeToReduce` refines `compaction::safe_to_reduce` for reducers over an
+already coherent provider view. Session admission uses `canCompactProjection`
+and `compaction::session_prefix_is_stable`; `admitted_projection_prefix_stable`
+proves stability of the projected closed prefix despite older pairing repairs.
+Canonical reconstruction supplies publication validity; persistence additionally
+requires the exact raw sequence split checked by `session_cursor_for_reduction`.
 
 ### Durable transcript operations
 

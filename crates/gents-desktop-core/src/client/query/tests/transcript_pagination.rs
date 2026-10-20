@@ -391,7 +391,7 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
     }
     ConfigAccess::write_local(&node, "test.unrelated_history", r#"mutation {
         create_AgentOutputSegment(input: {node_did:"node", requester_did:"reader", session_id:"paged-payload",
-            request_doc_id:"unreferenced", source:{kind:"not_a_source"}, payload:"must not read"}) { _docID }
+            request_doc_id:"request-40", source:{kind:"authored", key:"unreferenced"}, payload:"must not read"}) { _docID }
     }"#).await.expect("unrelated history");
     let page = load_session_transcript_page(
         &node,
@@ -405,6 +405,10 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
     .expect("page");
     assert_eq!(page.store.transcript_messages.len(), 40);
     assert_eq!(page.canonical_dependencies.output_segments.len(), 40);
+    assert_eq!(
+        page.queried_rows, 120,
+        "read only page headers, closures, and referenced sources"
+    );
     assert_eq!(
         page.query_count, 8,
         "one page, two closure batches, five source batches"

@@ -112,6 +112,16 @@ def rowPublished (v : PromptView) (row : MessageRow) : Bool :=
     | _ => false
   | _ => false
 
+/-- Native session reads reconstruct published canonical messages. A closed turn
+makes their provider projection stable under later turns even when older rows
+need pairing repair. Persistence still requires an exact raw sequence cursor. -/
+def canCompactProjection (v : PromptView) : Prop :=
+  endsAtTurnBoundary v.messages = true ∧ v.messages.all (rowPublished v) = true
+
+instance (v : PromptView) : Decidable (canCompactProjection v) := by
+  unfold canCompactProjection
+  infer_instance
+
 def safeToReduce (v : PromptView) : Prop :=
   endsAtTurnBoundary v.messages = true ∧
     PromptAssembly.sanitizeTurn v.messages = v.messages ∧

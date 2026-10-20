@@ -1053,11 +1053,16 @@ pub fn split_for_summary(
     history::split_messages_for_summary_with_counter(messages, keep_recent_tokens, &counter)
 }
 
+/// Requires published canonical messages from the session reconstruction owner.
+/// `Compaction.admitted_projection_prefix_stable` proves that a closed raw turn
+/// preserves its provider projection under later appends. Persisting a reduction
+/// additionally requires `session_cursor_for_reduction` to resolve its exact split.
+pub fn session_prefix_is_stable(messages: &[Message]) -> bool {
+    messages.last().is_some_and(is_ordinary_message)
+}
+
 pub fn safe_to_reduce(messages: &[Message]) -> bool {
-    let Some(last) = messages.last() else {
-        return false;
-    };
-    is_ordinary_message(last)
+    session_prefix_is_stable(messages)
         && sanitize_association_with_sources(messages.to_vec())
             .into_iter()
             .map(|sourced| sourced.message)
