@@ -538,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn repeated_slot_interrupt_is_a_no_op() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"caller","agent_id":"configured","lifecycle_state":"processing"})).await;
         insert(&node, "AgentSession", json!({"session_id":"child","node_did":"owner","requester_did":null,"agent_id":"configured","created_at":"2026-01-01T00:00:00Z","provenance":{"parent_request_doc_id":parent}})).await;

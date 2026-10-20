@@ -251,7 +251,7 @@ mod tests {
     use super::*;
     use crate::plugin_job::driver::tests::{start_running, stepper, write_step_tools, Stepper};
     use crate::plugin_job::driver::StepOutcome;
-    use crate::plugin_job::input::tests::{request, NODE_DID};
+    use crate::plugin_job::input::tests::{node_did, request};
     use crate::plugin_job::keys::{job_session_id, job_spawn_key};
     use crate::plugin_job::records::read_pin;
     use gents_protocol::job::JobState;
@@ -497,9 +497,13 @@ mod tests {
         let driver = driver_of(&step);
         assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 0);
         let registry = crate::hook::BackgroundExecutionRegistry::default();
-        crate::periodic_recovery::run_periodic_recovery_sweeps(&step.job.node, NODE_DID, &registry)
-            .await
-            .unwrap();
+        crate::periodic_recovery::run_periodic_recovery_sweeps(
+            &step.job.node,
+            node_did(),
+            &registry,
+        )
+        .await
+        .unwrap();
         settle_time().await;
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         assert_eq!(step.progress(&step.row).await.revision, 1);

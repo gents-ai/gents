@@ -428,7 +428,7 @@ mod tests {
     use crate::plugin_job::admit::Refusal;
     use crate::plugin_job::driver::tests::{pinned_job_row, settle_row, start_running};
     use crate::plugin_job::driver::{load_lifecycle, settle_plugin_job, Settlement};
-    use crate::plugin_job::input::tests::{insert, live_settings, new_job, request, Job, NODE_DID};
+    use crate::plugin_job::input::tests::{insert, live_settings, new_job, node_did, request, Job};
     use crate::plugin_job::keys::{job_session_id, job_spawn_key};
     use crate::plugin_job::records::{read_pin, read_progress, write_pin_in_txn};
     use crate::tool_call_lifecycle::admission_fixture::{
@@ -448,7 +448,7 @@ mod tests {
         ProcessControlScope {
             request_id: String::new(),
             session_id: session_id.to_owned(),
-            node_did: NODE_DID.to_owned(),
+            node_did: node_did().to_owned(),
             requester_did: requester_did.map(str::to_owned),
         }
     }
@@ -554,7 +554,7 @@ mod tests {
             JobScope {
                 session_id: "session-1".into(),
                 request_id: "request-1".into(),
-                node_did: NODE_DID.into(),
+                node_did: node_did().into(),
                 requester_did: None,
             }
         );
@@ -932,7 +932,7 @@ mod tests {
             json!({
                 "request_id": "request-1",
                 "request_doc_id": "request-doc",
-                "node_did": NODE_DID,
+                "node_did": node_did(),
                 "requester_did": requester,
                 "session_id": "session-1",
                 "tool_call_id": call_id,
@@ -1095,6 +1095,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let node = Arc::new(
             EmbeddedNode::builder()
+                .with_node_identity_did(node_did())
                 .data_path(dir.path().join("db"))
                 .with_http(defra_node::HttpConfig::with_addr(address))
                 .build()
@@ -1115,11 +1116,11 @@ mod tests {
         .await
         .expect("the embedded HTTP GraphQL endpoint must become ready");
 
-        let mut request = claimed_request(&node, "request-1", "session-1", NODE_DID).await;
+        let mut request = claimed_request(&node, "request-1", "session-1", node_did()).await;
         let call = publish_accepted_on_claimed_request(
             node.clone(),
             &mut request,
-            NODE_DID,
+            node_did(),
             0,
             "workflow",
             "call-1",
