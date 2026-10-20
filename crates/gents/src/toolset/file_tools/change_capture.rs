@@ -112,42 +112,70 @@ fn read_image(path: &Path) -> FileImage {
             reason: ImageFailure::UnsupportedEntry,
         };
     }
-    let result = (|| -> std::io::Result<FileImage> {
-        let file = open_regular_file(path)?;
-        let metadata = file.metadata()?;
-        if metadata.len() > MAX_IMAGE_BYTES {
-            return Ok(FileImage::Unavailable {
-                reason: ImageFailure::TooLarge,
-            });
-        }
-        let mut bytes = Vec::new();
-        let mut reader = file.take(MAX_IMAGE_BYTES + 1);
-        reader.read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > MAX_IMAGE_BYTES {
-            return Ok(FileImage::Unavailable {
-                reason: ImageFailure::TooLarge,
-            });
-        }
-        let (permissions, links) = file_metadata(&metadata);
-        let observed = reader.get_ref().metadata()?;
-        if observed.len() != bytes.len() as u64
-            || observed.len() != metadata.len()
-            || observed.modified()? != metadata.modified()?
-            || file_metadata(&observed) != (permissions.clone(), links)
-        {
-            return Ok(FileImage::Unavailable {
-                reason: ImageFailure::ChangedDuringRead,
-            });
-        }
-        Ok(FileImage::File {
-            content_hash: content_hash(&bytes),
-            data: base64::engine::general_purpose::STANDARD.encode(bytes),
-            permissions,
-            links,
+    open_regular_file(path)
+        .and_then(|file| read_open_image(path, file))
+        .unwrap_or(FileImage::Unavailable {
+            reason: ImageFailure::ReadFailed,
         })
-    })();
-    result.unwrap_or(FileImage::Unavailable {
-        reason: ImageFailure::ReadFailed,
+}
+
+fn path_matches_open_image(path: &Path, file: &std::fs::File) -> std::io::Result<bool> {
+    let opened = same_file::Handle::from_file(file.try_clone()?)?;
+    let named = same_file::Handle::from_file(open_regular_file(path)?)?;
+    Ok(opened == named)
+}
+
+fn image_metadata_unchanged(before: &Metadata, after: &Metadata) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (before.ctime(), before.ctime_nsec()) != (after.ctime(), after.ctime_nsec()) {
+            return Ok(false);
+        }
+    }
+    Ok(before.len() == after.len()
+        && before.modified()? == after.modified()?
+        && file_metadata(before) == file_metadata(after))
+}
+
+/// A retained descriptor can outlive its directory entry. Both boundary checks
+/// must still resolve to that descriptor; timestamps alone do not detect a
+/// rename-and-replacement. External writers remain outside the mutation lock.
+fn read_open_image(path: &Path, file: std::fs::File) -> std::io::Result<FileImage> {
+    let metadata = file.metadata()?;
+    if !path_matches_open_image(path, &file).unwrap_or(false) {
+        return Ok(FileImage::Unavailable {
+            reason: ImageFailure::ChangedDuringRead,
+        });
+    }
+    if metadata.len() > MAX_IMAGE_BYTES {
+        return Ok(FileImage::Unavailable {
+            reason: ImageFailure::TooLarge,
+        });
+    }
+    let mut bytes = Vec::new();
+    let mut reader = file.take(MAX_IMAGE_BYTES + 1);
+    reader.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Ok(FileImage::Unavailable {
+            reason: ImageFailure::TooLarge,
+        });
+    }
+    let observed = reader.get_ref().metadata()?;
+    if observed.len() != bytes.len() as u64
+        || !image_metadata_unchanged(&metadata, &observed)?
+        || !path_matches_open_image(path, reader.get_ref()).unwrap_or(false)
+    {
+        return Ok(FileImage::Unavailable {
+            reason: ImageFailure::ChangedDuringRead,
+        });
+    }
+    let (permissions, links) = file_metadata(&metadata);
+    Ok(FileImage::File {
+        content_hash: content_hash(&bytes),
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        permissions,
+        links,
     })
 }
 

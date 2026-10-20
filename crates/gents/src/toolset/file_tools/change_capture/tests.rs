@@ -459,3 +459,49 @@ fn retained_images_reject_corruption_unsupported_versions_and_ambiguous_paths() 
         serde_json::json!("A".repeat((MAX_IMAGE_BYTES.div_ceil(3) * 4 + 4) as usize));
     assert!(FileChanges::decode("physical-tool", oversized).is_err());
 }
+
+#[test]
+fn replaced_directory_entry_cannot_reuse_an_open_file_image() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("file");
+    std::fs::write(&path, "same bytes").unwrap();
+    let opened = open_regular_file(&path).unwrap();
+    let original = opened.metadata().unwrap();
+    std::fs::rename(&path, root.path().join("retained-original")).unwrap();
+    std::fs::write(&path, "same bytes").unwrap();
+    let replacement = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    replacement
+        .set_modified(original.modified().unwrap())
+        .unwrap();
+    let current = replacement.metadata().unwrap();
+    assert_eq!(original.len(), current.len());
+    assert_eq!(original.modified().unwrap(), current.modified().unwrap());
+    let image = serde_json::to_value(read_open_image(&path, opened).unwrap()).unwrap();
+    assert_eq!(image["reason"], "changedDuringRead");
+    assert!(image.get("data").is_none());
+}
+
+#[test]
+fn unlinked_directory_entry_cannot_be_reported_as_a_captured_file() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("file");
+    std::fs::write(&path, "retained descriptor bytes").unwrap();
+    let opened = open_regular_file(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let image = serde_json::to_value(read_open_image(&path, opened).unwrap()).unwrap();
+    assert_eq!(image["reason"], "changedDuringRead");
+    assert!(image.get("data").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn changed_inode_metadata_is_detected_with_unchanged_modification_time() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("file");
+    std::fs::write(&path, "original").unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let before = file.metadata().unwrap();
+    std::fs::hard_link(&path, root.path().join("temporary-link")).unwrap();
+    let after = file.metadata().unwrap();
+    assert!(!image_metadata_unchanged(&before, &after).unwrap());
+}
