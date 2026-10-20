@@ -2,10 +2,11 @@ name: Notarize staged signed macOS artifact (CI control)
 
 # Notarizes an already Developer-ID-signed macOS .app that an operator staged
 # as <inbox>/<sha256>.zip on the studio-1 runner host. No build, no re-signing,
-# no release/tag write. Submission is duplicate-guarded against Apple's own
-# submission history (deterministic name from the artifact SHA-256) and the
-# submission id is recorded before any waiting; ambiguous outcomes are
-# continued with mode=resume, never by submitting again. Dispatch is trusted
+# no release/tag write. Verification runs without credentials; submission is
+# guarded by a durable host-state intent keyed by the full artifact SHA-256
+# (plus Apple history as a secondary check); the receipt is uploaded before
+# waiting; acceptance requires Apple's log to bind the job to the full SHA-256.
+# Ambiguous outcomes are continued with mode=resume, never by resubmitting. Dispatch is trusted
 # only from the default branch of gents-ai/gents. See
 # docs/notarize-staged-artifact.md.
 
@@ -49,6 +50,8 @@ env:
   # SHA-256 of the existing "Developer ID Application: John Zampolin
   # (NXJ753WW5X)" leaf certificate (SHA-1 4855F05BB34BFB227F828F9856DA05D2D02E7D0F).
   EXPECTED_LEAF_CERT_SHA256: ffe161226e3ba89575fbb2fa4e0ffc2f7b0a7c99de8fc2f696a24fb8d74f1baf
+  # Host-local, durable duplicate-guard authority (single fixed runner host).
+  NOTARY_STATE_DIR: /Users/admin/gents-notary-state
 
 jobs:
   notarize:
@@ -98,26 +101,65 @@ jobs:
             }
           done
           bash -n .github/scripts/notarize-staged-artifact.sh
+          python3 -m py_compile .github/scripts/notary_json.py
 
-      - name: Verify, notarize and staple
-        id: notarize
+      # Secret-free: no notary credentials in this step's environment.
+      - name: Verify staged artifact (no credentials)
+        id: verify
         env:
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
           NOTARY_MODE: ${{ inputs.mode }}
           SUBMISSION_ID: ${{ inputs.submission_id }}
-          NOTARY_OUTPUT_DIR: ${{ runner.temp }}/notary-output
+          RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash .github/scripts/notarize-staged-artifact.sh verify
+
+      - name: Submit (duplicate-guarded) or resume preflight
+        id: submit
+        env:
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          NOTARY_MODE: ${{ inputs.mode }}
+          SUBMISSION_ID: ${{ inputs.submission_id }}
+          RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
           MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-        run: bash .github/scripts/notarize-staged-artifact.sh
+        run: bash .github/scripts/notarize-staged-artifact.sh submit
 
-      # Always upload so the receipt (submission id) survives any later
-      # failure. The credential directory is never under this path.
-      - name: Upload receipt and notarized outputs
-        if: always()
+      # Upload the intent/receipt BEFORE the long wait so it survives runner
+      # loss. Runs even if submit failed after recording an uncertain intent.
+      - name: Upload submission receipt
+        if: always() && steps.verify.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (peeled commit)
+        with:
+          name: notarize-staged-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}/out
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Wait, verify Apple log, staple and validate
+        id: complete
+        env:
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          NOTARY_MODE: ${{ inputs.mode }}
+          SUBMISSION_ID: ${{ inputs.submission_id }}
+          RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
+          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+        run: bash .github/scripts/notarize-staged-artifact.sh complete
+
+      # The credential directories are separate per step and never under out/.
+      - name: Upload receipt, Apple info/log and notarized outputs
+        if: always() && steps.verify.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (peeled commit)
         with:
           name: notarize-staged-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/notary-output
+          path: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}/out
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 90
+
+      - name: Remove run work directory
+        if: always()
+        env:
+          RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
+        run: rm -rf "${RUN_DIR}"
