@@ -58,8 +58,12 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
         "every legal Mailbox transition must leave the single open state"
     );
 
+    let directory = tempfile::tempdir().unwrap();
+    let identity =
+        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
+            .with_node_identity_did(gents::NodeIdentity::did(&identity))
             .build()
             .await
             .expect("embedded node"),
