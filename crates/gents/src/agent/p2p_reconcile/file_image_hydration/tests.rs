@@ -165,3 +165,49 @@ fn generated_routes_follow_executable_scope_filters() {
         );
     }
 }
+
+#[test]
+fn generated_completion_cases_gate_delivery_and_receipts() {
+    use super::super::session_hydration::{HydrationDeliveryResult, HydrationTerminalWriteResult};
+    #[derive(Deserialize)]
+    struct Case {
+        selection: FileImageSelection,
+        before_delivery: bool,
+        after_delivery: bool,
+        delivery: String,
+        write: String,
+        target: Option<String>,
+        expected: Option<FileImageSelection>,
+    }
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases: Vec<Case> =
+        serde_json::from_value(snapshot["file_image_hydration_completion_cases"].clone()).unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let delivery = match case.delivery.as_str() {
+            "confirmed" => HydrationDeliveryResult::Confirmed,
+            "indeterminate" => HydrationDeliveryResult::Indeterminate,
+            other => panic!("unexpected delivery {other}"),
+        };
+        let write = match case.write.as_str() {
+            "committed" => HydrationTerminalWriteResult::Committed,
+            "failed" => HydrationTerminalWriteResult::Failed,
+            "notAttempted" => HydrationTerminalWriteResult::NotAttempted,
+            other => panic!("unexpected receipt write {other}"),
+        };
+        assert_eq!(
+            image_delivery_target(&case.selection, case.before_delivery),
+            case.target.as_deref()
+        );
+        assert_eq!(
+            completed_image_selection(
+                &case.selection,
+                case.before_delivery,
+                case.after_delivery,
+                delivery,
+                write
+            ),
+            case.expected
+        );
+    }
+}

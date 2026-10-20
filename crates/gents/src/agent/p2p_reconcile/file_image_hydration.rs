@@ -4,13 +4,7 @@ use super::session_hydration::{
     decide_hydration, HydrationCatalog, HydrationRequest, HydrationVerdict,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileImageDemand {
-    pub admission: HydrationRequest,
-    pub request_doc_id: String,
-    pub tool_call_doc_id: String,
-}
+pub use gents_protocol::file_image_hydration::{FileImageDemand, FileImageSelection};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -47,14 +41,6 @@ pub struct FileImageObservation {
     pub tool_call_doc_id: String,
     pub request_doc_id: String,
     pub scope: FileImageScope,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub enum FileImageSelection {
-    Rejected,
-    Missing,
-    Selected { document: String },
 }
 
 /// Admission retains the session hydration owner. Selected bytes still require
@@ -115,6 +101,39 @@ pub fn select_file_images(
         }
         _ => Rejected,
     }
+}
+
+pub fn image_delivery_target(selection: &FileImageSelection, authorized: bool) -> Option<&str> {
+    if !authorized {
+        return None;
+    }
+    match selection {
+        FileImageSelection::Selected { document } => Some(document),
+        _ => None,
+    }
+}
+
+pub fn completed_image_selection(
+    selection: &FileImageSelection,
+    before_delivery: bool,
+    after_delivery: bool,
+    delivery: super::session_hydration::HydrationDeliveryResult,
+    write: super::session_hydration::HydrationTerminalWriteResult,
+) -> Option<FileImageSelection> {
+    use super::session_hydration::{HydrationDeliveryResult, HydrationTerminalWriteResult};
+    if write != HydrationTerminalWriteResult::Committed {
+        return None;
+    }
+    if !before_delivery || matches!(selection, FileImageSelection::Rejected) {
+        return Some(FileImageSelection::Rejected);
+    }
+    if delivery == HydrationDeliveryResult::Indeterminate {
+        return None;
+    }
+    if !after_delivery {
+        return Some(FileImageSelection::Rejected);
+    }
+    Some(selection.clone())
 }
 
 #[cfg(test)]

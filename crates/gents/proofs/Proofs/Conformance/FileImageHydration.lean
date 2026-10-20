@@ -159,4 +159,25 @@ def subscriptionCasesJson := jsonArray (
     "{\"collection\":" ++ jsonString collection ++
     ",\"explicit_delivery\":" ++ boolJson (ScopeTemplates.explicitDeliveryCollections.contains collection) ++ "}")
 
+private def deliveryJson : DeliveryResult → String
+  | .confirmed => "\"confirmed\"" | .indeterminate => "\"indeterminate\""
+private def writeJson : TerminalWriteResult → String
+  | .committed => "\"committed\"" | .failed => "\"failed\"" | .notAttempted => "\"notAttempted\""
+private def completionCaseJson (selection : Selection) (beforeDelivery afterDelivery : Bool)
+    (delivery : DeliveryResult) (write : TerminalWriteResult) :=
+  "{\"selection\":" ++ selectionJson selection ++
+  ",\"before_delivery\":" ++ boolJson beforeDelivery ++
+  ",\"after_delivery\":" ++ boolJson afterDelivery ++
+  ",\"delivery\":" ++ deliveryJson delivery ++ ",\"write\":" ++ writeJson write ++
+  ",\"target\":" ++ ((deliveryTarget selection beforeDelivery).map jsonString).getD "null" ++
+  ",\"expected\":" ++ ((complete selection beforeDelivery afterDelivery delivery write).map selectionJson).getD "null" ++ "}"
+
+def completionCasesJson := jsonArray (
+  ([Selection.selected "image-document-1", .missing, .rejected]).flatMap fun selection =>
+    [true, false].flatMap fun beforeDelivery =>
+      [true, false].flatMap fun afterDelivery =>
+        [DeliveryResult.confirmed, .indeterminate].flatMap fun delivery =>
+          [TerminalWriteResult.committed, .failed, .notAttempted].map fun write =>
+            completionCaseJson selection beforeDelivery afterDelivery delivery write)
+
 end Conformance.FileImageHydrationContracts

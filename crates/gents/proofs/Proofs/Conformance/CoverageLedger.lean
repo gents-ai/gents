@@ -1330,6 +1330,12 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases"
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_hydration_completion_cases"
+      "FileImageHydrationCompletionCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_completion_cases_gate_delivery_and_receipts"
+      "Checks the native delivery target and durable terminal decision. Physical transport, live enrollment fences and receipt publication retain their existing owners and need integrated qualification.")
+      "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "file_review_subscription_cases"
       "FileReviewSubscriptionCases"

@@ -124,12 +124,25 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     .await
     .unwrap()
     .is_none());
+    assert!(matches!(
+        crate::tool_call_lifecycle::load_tool_file_change_observation(
+            &access,
+            &doc_id,
+            &request_doc_id,
+            &admission.node_did,
+            &session_id,
+            requester_did.as_deref()
+        )
+        .await
+        .unwrap(),
+        crate::tool_call_lifecycle::ToolFileChangeRead::Pending
+    ));
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
     call.complete(&output).await.unwrap();
     let row = ConfigAccess::local(admission.node.clone())
         .execute(&format!(
-            "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state }} ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ file_changes }} }}",
+            "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state }} ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ _docID file_changes }} }}",
             escape_graphql_string(&doc_id), escape_graphql_string(&doc_id)
         ))
         .await
@@ -156,6 +169,27 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     .unwrap();
     assert_eq!(
         serde_json::to_value(&retained).unwrap(),
+        row["ToolFileChange"][0]["file_changes"]
+    );
+    let crate::tool_call_lifecycle::ToolFileChangeRead::Retained {
+        document_id,
+        changes,
+    } = crate::tool_call_lifecycle::load_tool_file_change_observation(
+        &access,
+        &doc_id,
+        &request_doc_id,
+        &admission.node_did,
+        &session_id,
+        requester_did.as_deref(),
+    )
+    .await
+    .unwrap()
+    else {
+        panic!("expected exact retained observation")
+    };
+    assert_eq!(row["ToolFileChange"][0]["_docID"], document_id);
+    assert_eq!(
+        serde_json::to_value(changes).unwrap(),
         row["ToolFileChange"][0]["file_changes"]
     );
     for (request, node, session, requester) in [

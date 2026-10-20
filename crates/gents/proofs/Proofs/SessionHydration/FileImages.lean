@@ -102,4 +102,41 @@ theorem mismatched_image_is_rejected (demand : Demand) (catalog : Catalog)
     select demand catalog [tool] [image] = .rejected := by
   simp [select, ht, hi, hm]
 
+def deliveryTarget (selection : Selection) (authorized : Bool) : Option String :=
+  if !authorized then none
+  else match selection with
+  | .selected document => some document
+  | .missing | .rejected => none
+
+/-- A terminal receipt is durable only after its write commits. Unknown
+transport completion leaves the demand pending; authorization is checked again
+before acknowledging a delivered observation. Missing images have no payload
+but still require current authorization and a committed receipt. -/
+def complete (selection : Selection) (beforeDelivery afterDelivery : Bool)
+    (delivery : DeliveryResult) (write : TerminalWriteResult) : Option Selection :=
+  if write != .committed then none
+  else if !beforeDelivery || selection == .rejected then some .rejected
+  else match delivery with
+  | .indeterminate => none
+  | .confirmed => if !afterDelivery then some .rejected else some selection
+
+theorem revoked_has_no_delivery_target (selection : Selection) :
+    deliveryTarget selection false = none := by simp [deliveryTarget]
+
+theorem failed_receipt_write_stays_pending (selection : Selection)
+    (beforeDelivery afterDelivery : Bool) (delivery : DeliveryResult) :
+    complete selection beforeDelivery afterDelivery delivery .failed = none := by
+  simp [complete]
+
+theorem unconfirmed_delivery_cannot_be_acknowledged (selection : Selection)
+    (afterDelivery : Bool) (write : TerminalWriteResult)
+    (h : selection ≠ .rejected) :
+    complete selection true afterDelivery .indeterminate write = none := by
+  simp [complete, h]
+
+theorem revoked_after_delivery_cannot_serve (selection : Selection)
+    (beforeDelivery : Bool) (write : TerminalWriteResult) (document : String) :
+    complete selection beforeDelivery false .confirmed write ≠ some (.selected document) := by
+  simp [complete]
+
 end SessionHydration.FileImages

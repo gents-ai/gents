@@ -5,6 +5,7 @@ pub mod client_protocol;
 pub mod enrollment;
 pub mod event_delivery;
 pub mod file_changes;
+pub mod file_image_hydration;
 pub mod goal;
 pub mod goal_control;
 pub mod graphql;
