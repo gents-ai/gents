@@ -1462,7 +1462,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
     let escaped_owner = gents::graphql::escape_graphql_string(owner.did());
     let escaped_requester = gents::graphql::escape_graphql_string(core.node_identity().did());
     let created_at = gents::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    local
+    let stale = local
         .write(
             "seed_stale_request",
             &format!(
@@ -1474,6 +1474,42 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
                 }}) {{ _docID }} }}"#
             ),
         )
+        .await?;
+    let session = gents_protocol::session::AgentSession {
+        session_id: "stale-session".into(),
+        node_did: owner.did().into(),
+        requester_did: Some(core.node_identity().did().into()),
+        agent_id: "agent".into(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        closed_at: None,
+        title: None,
+        provenance: None,
+        tags: Vec::new(),
+        observation: Some(gents_protocol::session::SessionObservation {
+            last_activity_at: chrono::Utc::now().to_rfc3339(),
+            preview: None,
+            latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                request_doc_id: stale["data"]["create_AgentRequest"][0]["_docID"]
+                    .as_str()
+                    .expect("seeded stale request document")
+                    .to_string(),
+                request_id: "stale-seed".into(),
+                lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Dead,
+            }),
+        }),
+    };
+    let input = serde_json::to_value(session)?;
+    local
+        .transact_write("seed_stale_session", |txn| {
+            let variables = serde_json::json!({ "input": input.clone() });
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                    &variables,
+                )
+                .await
+            })
+        })
         .await?;
     core.refresh_store().await?;
     let resent = core
