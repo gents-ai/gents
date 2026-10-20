@@ -69,6 +69,7 @@ fn images_preserve_permission_observations_and_refuse_symlink_content() {
 async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_output() {
     let admission = published_admission(PublishedAdmissionOptions {
         name: "file-change-native-terminal".into(),
+        real_identity: true,
         tool_name: Some("write_file".into()),
         paired_client: true,
         ..Default::default()
@@ -228,6 +229,7 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
 async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     let admission = published_admission(PublishedAdmissionOptions {
         name: "file-change-maximum-images".into(),
+        real_identity: true,
         tool_name: Some("write_file".into()),
         paired_client: true,
         ..Default::default()
@@ -371,6 +373,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     use crate::tool_call_lifecycle::FailureClass;
     let admission = published_admission(PublishedAdmissionOptions {
         name: "file-change-failed-terminal".into(),
+        real_identity: true,
         tool_name: Some("write_file".into()),
         ..Default::default()
     })

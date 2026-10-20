@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::pack_archive::{pack_dir, PackArchive};
+use gents::NodeIdentity;
 use serde::Serialize;
 use serde_json::json;
 
@@ -110,7 +111,14 @@ async fn check_filters(
     {
         return Ok(());
     }
-    let node = std::sync::Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
+    let directory = tempfile::tempdir()?;
+    let identity = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
+    let node = std::sync::Arc::new(
+        gents::defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await?,
+    );
     gents::ensure_runtime_schemas(node.as_ref()).await?;
     let access = gents::config_client::ConfigAccess::local(node.clone());
     crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;

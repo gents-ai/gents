@@ -548,10 +548,67 @@ async fn empty_registry_injectable_for_tests() {
 }
 
 #[tokio::test]
-async fn file_observation_install_preserves_retained_collection_lineages_and_documents() {
+async fn retained_file_images_require_a_native_owner_before_schema_install() {
     let directory = tempfile::tempdir().unwrap();
     let node = defra_node::EmbeddedNode::builder()
         .data_path(directory.path())
+        .build()
+        .await
+        .unwrap();
+    let error = ensure_migrations(&node).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires the configured node identity"),
+        "{error}"
+    );
+    assert!(node.get_collection("ToolFileChange").unwrap().is_none());
+    assert!(node.get_collection("AgentToolCall").unwrap().is_none());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn unprotected_file_images_are_rejected_without_changing_retained_data() {
+    let node = common::fresh_node().await;
+    let directive = format!(
+        "@policy(id: \"{}\", resource: \"{}\")",
+        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
+    );
+    let unprotected = gents_protocol::schemas::TOOL_FILE_CHANGE.replace(&directive, "");
+    node.add_schema(&unprotected).await.unwrap();
+    let created = node.execute("mutation { create_ToolFileChange(input: { tool_call_doc_id: \"retained-tool\" }) { _docID } }").await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let before = node
+        .execute("{ ToolFileChange { _docID tool_call_doc_id } }")
+        .await;
+    let error = ensure_migrations(&node).await.unwrap_err();
+    assert!(
+        error.to_string().contains("incompatible document policy"),
+        "{error}"
+    );
+    let after = node
+        .execute("{ ToolFileChange { _docID tool_call_doc_id } }")
+        .await;
+    assert!(!after.has_errors(), "{:?}", after.errors);
+    assert_eq!(after.data, before.data);
+    assert!(node.get_collection("AgentToolCall").unwrap().is_none());
+    assert!(node
+        .get_collection("ToolFileChange")
+        .unwrap()
+        .unwrap()
+        .policy
+        .is_none());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn file_observation_install_preserves_retained_collection_lineages_and_documents() {
+    let directory = tempfile::tempdir().unwrap();
+    let identity = common::node_identity();
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(directory.path())
+        .with_node_identity_did(&identity)
         .build()
         .await
         .unwrap();
@@ -609,6 +666,7 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
 
     let node = defra_node::EmbeddedNode::builder()
         .data_path(directory.path())
+        .with_node_identity_did(&identity)
         .build()
         .await
         .unwrap();

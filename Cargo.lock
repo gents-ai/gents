@@ -5087,10 +5087,13 @@ name = "gents-migration"
 version = "0.21.0-rc0"
 dependencies = [
  "anyhow",
+ "crypto",
+ "defra-core",
  "defra-node",
  "gents-lens-fixture-add-label",
  "gents-protocol",
  "hex",
+ "identity",
  "schema",
  "serde",
  "serde_json",

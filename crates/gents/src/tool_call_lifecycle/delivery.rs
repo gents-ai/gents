@@ -1005,6 +1005,12 @@ impl ToolCallLifecycle {
         operation: &'static str,
         fixture_now: Option<DateTime<Utc>>,
     ) -> Result<bool> {
+        if self.file_changes.is_some() {
+            anyhow::ensure!(
+                self.node.node_identity_did() == Some(self.node_did.as_str()),
+                "retaining file images requires the configured node identity"
+            );
+        }
         let doc_id = self
             .doc_id
             .clone()
