@@ -222,6 +222,7 @@ pub async fn verify_permission_recovery(
     use gents_protocol::session_hydration::HydrationRequest;
     use std::time::Duration;
 
+    const CACHED_RETRY: &str = "030ee487-7cca-496d-be85-bd35f686f154";
     const BLOCKED_RETRY: &str = "56eba703-e534-43b5-980c-203f37523811";
     const RESTORED_RETRY: &str = "4be6aa69-c87a-44bb-a946-2452ac3a283b";
     let physical = field(baseline, "physicalTool")?;
@@ -258,14 +259,20 @@ pub async fn verify_permission_recovery(
         enrollments[0]["candidate_peer"] == demand.admission.peer_id,
         "review peer differs from enrollment"
     );
-    enrollment_decision(root, node_home, "revoke", old_request).await?;
-    wait_review_route(client, id, &demand.admission.node_did, false).await?;
-
     verify_model_receipt(verifier, &original, &demand).await?;
     let args = json!({
         "nodeDid": demand.admission.node_did, "sessionId": demand.admission.session_id,
         "requestId": baseline["requestId"], "toolCallDocId": physical,
     });
+    let mut cached_args = args.clone();
+    cached_args["retryId"] = json!(CACHED_RETRY);
+    let cached_retry = client
+        .call(*id, "desktop_tool_file_changes", cached_args.clone())
+        .await;
+    *id += 1;
+    enrollment_decision(root, node_home, "revoke", old_request).await?;
+    wait_review_route(client, id, &demand.admission.node_did, false).await?;
+
     let cached = client
         .try_call(*id, "desktop_tool_file_changes", args.clone())
         .await?;
@@ -275,8 +282,17 @@ pub async fn verify_permission_recovery(
             && cached["version"] == gents_protocol::file_changes::FILE_CHANGES_VERSION,
         "revocation hid an already retained image"
     );
+    let replayed_cache = client
+        .call(*id, "desktop_tool_file_changes", cached_args)
+        .await;
+    *id += 1;
+    ensure!(
+        replayed_cache == cached_retry && replayed_cache == cached,
+        "revocation hid a served explicit retry"
+    );
     let mut blocked_args = args.clone();
     blocked_args["retryId"] = json!(BLOCKED_RETRY);
+    let started = tokio::time::Instant::now();
     let blocked = client
         .try_call_with_timeout(
             *id,
@@ -287,10 +303,15 @@ pub async fn verify_permission_recovery(
         .await;
     *id += 1;
     let error = blocked.expect_err("revoked enrollment must not serve a fresh review demand");
+    let inactive_read_ms = started.elapsed().as_millis();
+    ensure!(
+        started.elapsed() < Duration::from_secs(5),
+        "inactive review waited {inactive_read_ms} ms"
+    );
     ensure!(
         error
             .message
-            .contains("File review is waiting for the runtime")
+            .contains("Reconnect this runtime to load new file versions.")
             || error.message.contains("Runtime rejected file review"),
         "revoked review failed for an unrelated reason: {error}"
     );
@@ -406,7 +427,8 @@ pub async fn verify_permission_recovery(
     Ok(json!({
         "baseline":baseline, "revokedRequest":old_request, "restoredRequest":next_request,
         "revokedFreshReviewRefused":true, "revokedReadError":error.message,
-        "cachedImageReadableAfterRevocation":true, "signedRefusalObserved":denied.is_some(),
+        "cachedImageReadableAfterRevocation":true, "servedRetryReadableAfterRevocation":true,
+        "inactiveReadMs":inactive_read_ms, "signedRefusalObserved":denied.is_some(),
         "freshRetryServed":true, "retryReplayReused":true, "normalReopenResumed":true,
         "originalReceiptPreserved":true, "workingCopyPreserved":true,
     }))
