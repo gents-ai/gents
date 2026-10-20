@@ -449,6 +449,7 @@ impl ClientCore {
         match mutations::submit_request(
             &self.node,
             snapshot.as_ref(),
+            &self.session_queue_access(node_did),
             session_id,
             node_did,
             &requester_did,

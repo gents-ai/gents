@@ -369,6 +369,78 @@ mod tests {
             .join("plugins/job_fixture.afb")
     }
 
+    const JOB_FIXTURE_BUILD_ROOT: &str = "GENTS_JOB_FIXTURE_BUILD_ROOT";
+
+    /// Rust embeds registry and sysroot paths in panic locations, even in release
+    /// WASM. The committed fixture uses stable logical paths with the repository's
+    /// pinned toolchain; compiler environment changes stay in its subprocess.
+    fn job_fixture_rustflags(root: &Path) -> String {
+        let manifest = root.join("plugins/job_fixture/Cargo.toml");
+        let metadata = std::process::Command::new(env!("CARGO"))
+            .args([
+                "metadata",
+                "--format-version",
+                "1",
+                "--locked",
+                "--manifest-path",
+            ])
+            .arg(&manifest)
+            .output()
+            .expect("query job fixture dependencies");
+        assert!(
+            metadata.status.success(),
+            "job fixture metadata: {}",
+            String::from_utf8_lossy(&metadata.stderr)
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&metadata.stdout).expect("job fixture metadata is JSON");
+        let mut remappings = vec![(root.to_path_buf(), "/fixture".to_owned())];
+        let canonical = root.canonicalize().expect("canonical fixture root");
+        if canonical != root {
+            remappings.push((canonical, "/fixture".to_owned()));
+        }
+        for package in metadata["packages"].as_array().expect("fixture packages") {
+            if package["source"].is_null() {
+                continue;
+            }
+            let manifest = Path::new(package["manifest_path"].as_str().expect("package manifest"));
+            remappings.push((
+                manifest.parent().expect("package directory").to_path_buf(),
+                format!(
+                    "/cargo/{}-{}",
+                    package["name"].as_str().expect("package name"),
+                    package["version"].as_str().expect("package version")
+                ),
+            ));
+        }
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query fixture Rust sysroot");
+        assert!(
+            sysroot.status.success(),
+            "fixture Rust sysroot query failed"
+        );
+        let sysroot = String::from_utf8(sysroot.stdout).expect("Rust sysroot is UTF-8");
+        let sysroot = std::path::PathBuf::from(sysroot.trim());
+        let canonical = sysroot.canonicalize().expect("canonical Rust sysroot");
+        if canonical != sysroot {
+            remappings.push((canonical, "/rust".to_owned()));
+        }
+        remappings.push((sysroot, "/rust".to_owned()));
+        remappings
+            .into_iter()
+            .map(|(from, to)| {
+                format!(
+                    "--remap-path-prefix={}={to}",
+                    from.to_str().expect("fixture compiler paths are UTF-8")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\u{1f}")
+    }
+
     fn build_job_fixture() -> Vec<u8> {
         let _guard = crate::commands::afterburner_build::compile_lock()
             .lock()
@@ -379,7 +451,36 @@ mod tests {
             tmp.path(),
         )
         .unwrap();
-        build_pack(tmp.path(), Some(&tmp.path().join("out.pack"))).unwrap();
+        let cache = tmp.path().join("target");
+        if cache.exists() {
+            std::fs::remove_dir_all(cache).expect("discard copied fixture build cache");
+        }
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "commands::pack::build::tests::write_job_fixture_artifact",
+                "--ignored",
+            ])
+            .env(JOB_FIXTURE_BUILD_ROOT, tmp.path())
+            .env("CARGO_ENCODED_RUSTFLAGS", job_fixture_rustflags(tmp.path()))
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env_remove("RUSTFLAGS");
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("CARGO_PROFILE_RELEASE_") {
+                command.env_remove(key);
+            }
+        }
+        let result = command.output().expect("build the canonical job fixture");
+        assert!(
+            result.status.success(),
+            "job fixture build failed:\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
         std::fs::read(tmp.path().join("plugins/job_fixture.afb")).unwrap()
     }
 
@@ -395,6 +496,11 @@ mod tests {
     #[test]
     #[ignore = "run explicitly to regenerate crates/gents/tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb"]
     fn write_job_fixture_artifact() {
+        if let Some(root) = std::env::var_os(JOB_FIXTURE_BUILD_ROOT) {
+            let root = Path::new(&root);
+            build_pack(root, Some(&root.join("out.pack"))).unwrap();
+            return;
+        }
         std::fs::write(committed_job_fixture_path(), build_job_fixture()).unwrap();
     }
 }

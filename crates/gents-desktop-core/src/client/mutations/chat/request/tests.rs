@@ -997,6 +997,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
     let submitted = super::submit_request(
         &core.node_arc(),
         &snapshot,
+        &ConfigAccess::local(core.node_arc()),
         &session_id,
         node_did,
         &requester_did,

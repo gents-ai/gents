@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::job::{JobEffects, JobMessage, JobScratch, JobSpawn};
+use gents_protocol::job::{JobEffects, JobScratch, JobSpawn};
 use gents_protocol::request_admission::AgentRequestCreate;
 use sha2::{Digest, Sha256};
 

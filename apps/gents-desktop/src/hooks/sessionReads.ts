@@ -3,6 +3,7 @@ import type {
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import {
+  BridgeInvokeError,
   applySessionLiveDelta,
   sessionLiveDeltaRequest,
 } from "@source-inc/gents-desktop-client";
@@ -64,15 +65,14 @@ export function createSessionReads({
     const nodeDid =
       nodeDidOverride === undefined ? store.getState().nodeDid : nodeDidOverride;
     const previous = sessionStore.getState().load;
+    const sameSelection =
+      previous.sessionId === nextSessionId && previous.nodeDid === nodeDid;
     setSessionLoad({
-      phase: "loading",
+      phase: sameSelection && previous.phase === "pending" ? "pending" : "loading",
       sessionId: nextSessionId,
       nodeDid,
       found: null,
-      error:
-        previous.sessionId === nextSessionId && previous.nodeDid === nodeDid
-          ? previous.error
-          : null,
+      error: sameSelection ? previous.error : null,
     });
     try {
       const next = await api.fetchSessionSnapshot(
@@ -101,7 +101,10 @@ export function createSessionReads({
       if (refreshSeq === currentRefresh) {
         const message = String(error);
         setSessionLoad({
-          phase: "failed",
+          phase:
+            error instanceof BridgeInvokeError && error.code === "projectionPending"
+              ? "pending"
+              : "failed",
           sessionId: nextSessionId,
           nodeDid,
           found: null,
