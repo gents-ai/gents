@@ -41,7 +41,7 @@ use rustc_hash::FxHashMap;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::sync::{Notify, futures::Notified, mpsc};
 use tracing::{Instrument, Span, trace};
-use udp::{BATCH_SIZE, RecvMeta};
+use udp::{BATCH_SIZE, RecvMeta, is_msg_size_err};
 
 use crate::{
     ConnectionEvent, EndpointConfig, IO_LOOP_BOUND, RECV_TIME_BOUND, VarInt,
@@ -368,8 +368,8 @@ impl Endpoint {
 
     /// Waits for all connections on the endpoint to be cleanly shut down and drained.
     ///
-    /// This is equivalent to [`wait_all_draining()`] with additionally waiting for the connections to be
-    /// drained. Please see its documentation for more information.
+    /// This is equivalent to [`wait_all_draining()`] with additionally waiting for the connections
+    /// to be drained. Please see its documentation for more information.
     ///
     /// Use `wait_idle()` in favor of `wait_all_draining()` if you care about waiting for the
     /// [`Connection`] structs to be dropped.
@@ -492,8 +492,6 @@ impl Future for EndpointDriver {
 
 impl Drop for EndpointDriver {
     fn drop(&mut self) {
-        // A panic in the driver poisons this mutex. Panicking again from Drop
-        // during unwinding aborts the entire process (n0-computer/noq#723).
         let mut endpoint = self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
         endpoint.driver_lost = true;
         self.0.shared.incoming.notify_waiters();
@@ -501,6 +499,9 @@ impl Drop for EndpointDriver {
         // connections.
         endpoint.recv_state.connections.senders.clear();
         endpoint.recv_state.connections.active_connections = 0;
+        // Wake callers waiting for the connection state cleared above.
+        self.0.shared.all_draining.notify_waiters();
+        self.0.shared.idle.notify_waiters();
     }
 }
 
@@ -696,8 +697,7 @@ fn respond(
     // - A version negotiation response due to an unknown version
     // - A `CLOSE` due to a malformed or unwanted connection attempt
     // - A stateless reset due to an unrecognized connection
-    // - A `Retry` packet due to a connection attempt when
-    //   `use_retry` is set
+    // - A `Retry` packet due to a connection attempt when `use_retry` is set
     //
     // In each case, a well-behaved peer can be trusted to retry a
     // few times, which is guaranteed to produce the same response
@@ -722,8 +722,8 @@ fn respond(
         );
         RawWaker::new(std::ptr::null(), &VTABLE)
     };
-    // SAFETY: Copied from rust stdlib, the NOOP waker is thread-safe and doesn't violate the RawWakerVTable contract,
-    // it doesn't access the data pointer at all.
+    // SAFETY: Copied from rust stdlib, the NOOP waker is thread-safe and doesn't violate the
+    // RawWakerVTable contract, it doesn't access the data pointer at all.
     let waker = unsafe { Waker::from_raw(NOOP) };
     let mut cx = Context::from_waker(&waker);
     _ = sender.as_mut().poll_send(
@@ -752,7 +752,8 @@ struct ConnectionSet {
     /// Counter for all active (non-draining/drained) connections.
     ///
     /// This is directly related to the QUIC connection states "Initial", "Handshake",
-    /// "Established", "Closed", "Draining" and "Drained" (see also `proto/src/connection/state.rs`).
+    /// "Established", "Closed", "Draining" and "Drained" (see also
+    /// `proto/src/connection/state.rs`).
     ///
     /// Any connection state that is not "Draining" or "Drained" is considered active.
     ///
@@ -884,8 +885,6 @@ impl Drop for EndpointRef {
             return;
         }
 
-        // Keep the last endpoint reference safe for the same poisoned-driver
-        // unwind path as EndpointDriver::drop (n0-computer/noq#723).
         let endpoint = &mut *self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
         // If the driver is about to be on its own, ensure it can shut down if the last
         // connection is gone.
@@ -907,6 +906,8 @@ struct RecvState {
     incoming: VecDeque<proto::Incoming>,
     connections: ConnectionSet,
     recv_buf: Box<[u8]>,
+    /// Reused buffer that received datagrams are copied into and split into owned slices.
+    datagrams: BytesMut,
     recv_limiter: WorkLimiter,
 }
 
@@ -916,12 +917,10 @@ impl RecvState {
         max_receive_segments: NonZeroUsize,
         endpoint: &proto::Endpoint,
     ) -> Self {
-        let recv_buf = vec![
-            0;
-            endpoint.config().get_max_udp_payload_size().min(64 * 1024) as usize
-                * max_receive_segments.get()
-                * BATCH_SIZE
-        ];
+        let datagram_capacity = endpoint.config().get_max_udp_payload_size().min(64 * 1024)
+            as usize
+            * max_receive_segments.get();
+        let recv_buf = vec![0; datagram_capacity * BATCH_SIZE];
         Self {
             connections: ConnectionSet {
                 senders: FxHashMap::default(),
@@ -931,6 +930,7 @@ impl RecvState {
             },
             incoming: VecDeque::new(),
             recv_buf: recv_buf.into(),
+            datagrams: BytesMut::with_capacity(datagram_capacity),
             recv_limiter: WorkLimiter::new(RECV_TIME_BOUND),
         }
     }
@@ -961,8 +961,21 @@ impl RecvState {
             match socket.poll_recv(cx, &mut iovs, &mut metas) {
                 Poll::Ready(Ok(msgs)) => {
                     self.recv_limiter.record_work(msgs);
+                    // Copy the received batch into `datagrams` and split each datagram off as
+                    // an owned slice. We can't read directly into `datagrams` and drop
+                    // `recv_buf`: once a slice has been handed to a connection the allocation
+                    // is shared, so the next `reserve` must allocate fresh backing memory.
+                    // Reading in place would therefore mean reserving the worst-case iovec
+                    // envelope before every poll and reallocating it whenever a prior datagram
+                    // is still in flight. `recv_buf` stays an allocate-once scratch buffer, and
+                    // we reserve only the bytes actually received.
+                    let batch_len = metas.iter().take(msgs).map(|meta| meta.len).sum();
+                    self.datagrams.reserve(batch_len);
                     for (meta, buf) in metas.iter().zip(iovs.iter()).take(msgs) {
-                        let mut data: BytesMut = buf[0..meta.len].into();
+                        self.datagrams.extend_from_slice(&buf[..meta.len]);
+                    }
+                    for meta in metas.iter().take(msgs) {
+                        let mut data = self.datagrams.split_to(meta.len);
                         while !data.is_empty() {
                             let buf = data.split_to(meta.stride.min(data.len()));
                             let mut response_buffer = Vec::new();
@@ -984,7 +997,8 @@ impl RecvState {
                                     }
                                 }
                                 Some(DatagramEvent::ConnectionEvent(handle, event)) => {
-                                    // Ignoring errors from dropped connections that haven't yet been cleaned up
+                                    // Ignoring errors from dropped connections that haven't yet
+                                    // been cleaned up
                                     received_connection_packet = true;
                                     let _ = self
                                         .connections
@@ -1010,6 +1024,13 @@ impl RecvState {
                 // Ignore ECONNRESET as it's undefined in QUIC and may be injected by an
                 // attacker
                 Poll::Ready(Err(ref e)) if e.kind() == io::ErrorKind::ConnectionReset => {
+                    continue;
+                }
+                // Ignore EMSGSIZE as we're currently not handling ICMPv4 Fragmentation Needed
+                // and ICMPv6 Packet Too Big (PTB) messages since they cannot be authenticated,
+                // and Datagram Packetization Layer Path MTU Discovery (DPLPMTUD) works without
+                // it anyways.
+                Poll::Ready(Err(ref e)) if is_msg_size_err(e) => {
                     continue;
                 }
                 Poll::Ready(Err(e)) => {

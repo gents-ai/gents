@@ -346,6 +346,10 @@ impl Connection {
     }
 
     /// Accept the next incoming uni-directional stream
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancellation safe. If this does not resolve, no streams were consumed.
     pub fn accept_uni(&self) -> AcceptUni<'_> {
         AcceptUni {
             conn: &self.0,
@@ -355,14 +359,19 @@ impl Connection {
 
     /// Accept the next incoming bidirectional stream
     ///
-    /// **Important Note**: The `Connection` that calls [`open_bi()`] must write to its [`SendStream`]
-    /// before the other `Connection` is able to `accept_bi()`. Calling [`open_bi()`] then
-    /// waiting on the [`RecvStream`] without writing anything to [`SendStream`] will never succeed.
+    /// **Important Note**: The `Connection` that calls [`open_bi()`] must write to its
+    /// [`SendStream`] before the other `Connection` is able to `accept_bi()`. Calling
+    /// [`open_bi()`] then waiting on the [`RecvStream`] without writing anything to
+    /// [`SendStream`] will never succeed.
     ///
     /// [`accept_bi()`]: crate::Connection::accept_bi
     /// [`open_bi()`]: crate::Connection::open_bi
     /// [`SendStream`]: crate::SendStream
     /// [`RecvStream`]: crate::RecvStream
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancellation safe. If this does not resolve, no streams were consumed.
     pub fn accept_bi(&self) -> AcceptBi<'_> {
         AcceptBi {
             conn: &self.0,
@@ -371,9 +380,35 @@ impl Connection {
     }
 
     /// Receive an application datagram
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancellation safe. If this does not resolve, no datagrams were consumed.
     pub fn read_datagram(&self) -> ReadDatagram<'_> {
         ReadDatagram {
             conn: &self.0,
+            notify: self.0.shared.datagram_received.notified(),
+        }
+    }
+
+    /// Receive a batch of application datagrams.
+    ///
+    /// This is the batch analogue of [`read_datagram()`]. The returned future
+    /// resolves once at least one datagram is buffered, drains up to `out.len()` of
+    /// them into `out` from the front in arrival order, and yields the count
+    /// written. It is cheaper than calling [`read_datagram()`] in a loop when
+    /// receiving bursts.
+    ///
+    /// If `out` is empty the future resolves immediately with `Ok(0)`.
+    ///
+    /// [`read_datagram()`]: Connection::read_datagram
+    pub fn read_many_datagrams<'a, 'b>(
+        &'a self,
+        out: &'b mut [Bytes],
+    ) -> ReadManyDatagrams<'a, 'b> {
+        ReadManyDatagrams {
+            conn: &self.0,
+            out,
             notify: self.0.shared.datagram_received.notified(),
         }
     }
@@ -476,11 +511,13 @@ impl Connection {
 
     /// A stream of [`PathEvent`]s for all paths in this connection.
     ///
-    /// The stream will yield a [`PathEvent`] whenever there is a change in the state of any path in this connection.
-    /// The events need to be processed immediately, since there isn't an unbounded buffer for them.
+    /// The stream will yield a [`PathEvent`] whenever there is a change in the state of any path in
+    /// this connection. The events need to be processed immediately, since there isn't an
+    /// unbounded buffer for them.
     ///
-    /// If processing of events lags behind too much, you will get an error of type [`crate::Lagged`] indicating
-    /// how many events were lost. The stream continues after a lag, delivering the oldest retained message next.
+    /// If processing of events lags behind too much, you will get an error of type
+    /// [`crate::Lagged`] indicating how many events were lost. The stream continues after a
+    /// lag, delivering the oldest retained message next.
     pub fn path_events(&self) -> crate::PathEvents {
         crate::PathEvents::new(
             self.0
@@ -494,8 +531,9 @@ impl Connection {
     ///
     /// The events need to be processed immediately, since there isn't an unbounded buffer for them.
     ///
-    /// If processing of events lags behind too much, you will get an error of type [`crate::Lagged`] indicating
-    /// how many events were lost. The stream continues after a lag, delivering the oldest retained message next.
+    /// If processing of events lags behind too much, you will get an error of type
+    /// [`crate::Lagged`] indicating how many events were lost. The stream continues after a
+    /// lag, delivering the oldest retained message next.
     pub fn nat_traversal_updates(&self) -> crate::NatTraversalUpdates {
         crate::NatTraversalUpdates::new(
             self.0
@@ -535,10 +573,11 @@ impl Connection {
     /// Returns a future that resolves, once the connection is closed, to a [`Closed`] struct
     /// describing the close reason and final connection and per-path statistics.
     ///
-    /// Calling [`Self::closed`] keeps the connection alive until it is either closed locally via [`Connection::close`]
-    /// or closed by the remote peer. This function instead does not keep the connection itself alive,
-    /// so if all *other* clones of the connection are dropped, the connection will be closed implicitly even
-    /// if there are futures returned from this function still being awaited.
+    /// Calling [`Self::closed`] keeps the connection alive until it is either closed locally via
+    /// [`Connection::close`] or closed by the remote peer. This function instead does not keep
+    /// the connection itself alive, so if all *other* clones of the connection are dropped, the
+    /// connection will be closed implicitly even if there are futures returned from this
+    /// function still being awaited.
     pub fn on_closed(&self) -> OnClosed {
         let (tx, rx) = oneshot::channel();
         let mut state = self.0.lock_without_waking("on_closed");
@@ -562,7 +601,8 @@ impl Connection {
     /// an internal error (such as an idle timeout or the peer closing the
     /// connection).
     ///
-    /// Note: when the connection is closed, `connection.close_reason().is_some()` will always be true.
+    /// Note: when the connection is closed, `connection.close_reason().is_some()` will always be
+    /// true.
     pub fn close_reason(&self) -> Option<ConnectionError> {
         self.0.lock_without_waking("close_reason").error.clone()
     }
@@ -663,6 +703,36 @@ impl Connection {
                 TooLarge => SendDatagramError::TooLarge,
             }),
         }
+    }
+
+    /// Transmit many unreliable, unordered application datagrams in a single call.
+    ///
+    /// This is the batch analogue of [`send_datagram()`]: it queues the whole batch
+    /// in one call, which is cheaper than calling [`send_datagram()`] repeatedly.
+    /// Like [`send_datagram()`], older queued datagrams may be dropped to make room.
+    ///
+    /// Returns the number of datagrams queued. The batch is rejected with
+    /// [`SendDatagramError::TooLarge`] if any datagram exceeds
+    /// [`max_datagram_size()`](Self::max_datagram_size).
+    ///
+    /// [`send_datagram()`]: Connection::send_datagram
+    pub fn send_many_datagrams(&self, datagrams: &[Bytes]) -> Result<usize, SendDatagramError> {
+        let conn = &mut *self.0.lock_and_wake("send_many_datagrams");
+        if let Some(ref x) = conn.error {
+            return Err(SendDatagramError::ConnectionLost(x.clone()));
+        }
+        conn.inner
+            .datagrams()
+            .send_many(datagrams, true)
+            .map_err(|e| {
+                use proto::SendDatagramError::*;
+                match e {
+                    Blocked(..) => unreachable!(),
+                    UnsupportedByPeer => SendDatagramError::UnsupportedByPeer,
+                    Disabled => SendDatagramError::Disabled,
+                    TooLarge => SendDatagramError::TooLarge,
+                }
+            })
     }
 
     /// Transmit `data` as an unreliable, unordered application datagram
@@ -1146,6 +1216,48 @@ impl Future for ReadDatagram<'_> {
 }
 
 pin_project! {
+    /// Future produced by [`Connection::read_many_datagrams`]
+    pub struct ReadManyDatagrams<'a, 'b> {
+        conn: &'a ConnectionRef,
+        out: &'b mut [Bytes],
+        #[pin]
+        notify: Notified<'a>,
+    }
+}
+
+impl Future for ReadManyDatagrams<'_, '_> {
+    type Output = Result<usize, ConnectionError>;
+    fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+        // An empty `out` can never make progress; resolve instead of waiting for a
+        // datagram we could not deliver.
+        if this.out.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+        let mut state = this.conn.lock_without_waking("ReadManyDatagrams::poll");
+        // Drain everything currently buffered in one lock hold. Check for buffered
+        // datagrams before `state.error` so a closed connection can still be drained
+        // of its finite in-flight datagrams (same ordering as `ReadDatagram`).
+        let n = state.inner.datagrams().recv_many(this.out);
+        if n > 0 {
+            return Poll::Ready(Ok(n));
+        } else if let Some(ref e) = state.error {
+            return Poll::Ready(Err(e.clone()));
+        }
+        loop {
+            match this.notify.as_mut().poll(ctx) {
+                // `state` lock ensures we didn't race with readiness
+                Poll::Pending => return Poll::Pending,
+                // Spurious wakeup, get a new future
+                Poll::Ready(()) => this
+                    .notify
+                    .set(this.conn.shared.datagram_received.notified()),
+            }
+        }
+    }
+}
+
+pin_project! {
     /// Future produced by [`Connection::send_datagram_wait`]
     pub struct SendDatagram<'a> {
         conn: &'a ConnectionRef,
@@ -1340,8 +1452,8 @@ pub(crate) struct ConnectionInner {
 impl ConnectionInner {
     /// Lock the state and return a guard that wakes the connection driver on drop.
     ///
-    /// Use this for operations that may queue frames. The wake ensures the driver sends queued frames.
-    /// If that's not needed, use [`Self::lock_without_waking`].
+    /// Use this for operations that may queue frames. The wake ensures the driver sends queued
+    /// frames. If that's not needed, use [`Self::lock_without_waking`].
     pub(crate) fn lock_and_wake(&self, purpose: &'static str) -> WakeGuard<'_> {
         WakeGuard {
             guard: self.state.lock(purpose),
@@ -1458,8 +1570,9 @@ pub(crate) struct State {
     pub(crate) path_refs: FxHashMap<PathId, PathRefOwner>,
     /// Final path stats for discarded paths.
     ///
-    /// We only insert entries if the discarded path has a non-zero reference count in [`Self::path_refs`].
-    /// When the last reference to a path is dropped its entry is removed from both maps.
+    /// We only insert entries if the discarded path has a non-zero reference count in
+    /// [`Self::path_refs`]. When the last reference to a path is dropped its entry is removed
+    /// from both maps.
     pub(crate) final_path_stats: FxHashMap<PathId, PathStats>,
     pub(crate) path_events: tokio::sync::broadcast::Sender<PathEvent>,
     sender: Pin<Box<dyn UdpSender>>,
@@ -1694,13 +1807,16 @@ impl State {
                 }
                 Path(ref evt @ PathEvent::Abandoned { id, .. }) => {
                     if let Some(sender) = self.open_path.remove(&id) {
-                        // We don't care for the reason why this path was closed here, because semantically
-                        // all close reasons for a path that has not yet been opened equals to `ValidationFailed`.
-                        // With the noq API, there is no way to application-close a not-yet-opened path, so
-                        // `ApplicationClosed` cannot occur. And all other variants will only occur for paths
-                        // that have already been opened.
-                        // The previous iteration of this code had another event `PathEvent::LocallyClosed` which
-                        // contained a `PathError`, but that was only ever set to `ValidationFailed`.
+                        // We don't care for the reason why this path was closed here, because
+                        // semantically all close reasons for a path that
+                        // has not yet been opened equals to `ValidationFailed`.
+                        // With the noq API, there is no way to application-close a not-yet-opened
+                        // path, so `ApplicationClosed` cannot occur. And
+                        // all other variants will only occur for paths that
+                        // have already been opened. The previous iteration
+                        // of this code had another event `PathEvent::LocallyClosed` which
+                        // contained a `PathError`, but that was only ever set to
+                        // `ValidationFailed`.
                         let error = PathError::ValidationFailed;
                         sender.send_modify(|value| *value = Err(error));
                     }
