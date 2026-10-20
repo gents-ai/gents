@@ -169,6 +169,19 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn event_filters_validate_with_owner_bound_runtime_schemas() {
+        let directory = super::super::test_support::fixture_dir("documents_fixture");
+        let (bytes, _) = pack_dir(&directory).unwrap();
+        let archive = PackArchive::from_bytes(&bytes).unwrap();
+        let config = load_config(&archive).unwrap();
+        let mut problems = Vec::new();
+        check_filters(&directory, &config, &mut problems)
+            .await
+            .unwrap();
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    #[tokio::test]
     async fn every_fixture_pack_passes_the_check() {
         let dirs = super::super::test_support::every_fixture_dir();
         assert!(!dirs.is_empty());
