@@ -31,29 +31,45 @@ impl Drop for RequestLifecycle {
             return;
         };
         let node = self.node.clone();
-        let doc_id = escape_graphql_string(&self.request.doc_id);
-        let generation = escape_graphql_string(lease.generation.as_str());
+        let doc_id = self.request.doc_id.clone();
+        let generation = lease.generation.as_str().to_owned();
         // Relinquishment only expires the matching generation. Recovery remains
         // the terminal owner, including when a panic or task abort drops us.
         runtime.spawn(async move {
-            let expired = (Utc::now() - chrono::Duration::milliseconds(1)).to_rfc3339();
-            let active = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing]);
-            let mutation = format!(r#"mutation {{ update_AgentRequest(
-                docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, execution_generation: {{ _eq: "{generation}" }},
-                    lifecycle_state: {{ _in: {active} }} }},
-                input: {{ execution_lease_expires_at: "{expired}" }}
-            ) {{ _docID }} }}"#);
-            if let Err(error) = crate::config_client::ConfigAccess::write_local(
-                &node,
-                "lifecycle.relinquish_execution_lease",
-                &mutation,
-            )
-            .await
+            if let Err(error) =
+                relinquish_execution_lease(&node, &doc_id, &generation, Utc::now()).await
             {
                 tracing::warn!(%error, %doc_id, "could not promptly relinquish execution lease; durable expiry remains recoverable");
             }
         });
     }
+}
+
+async fn relinquish_execution_lease(
+    node: &Arc<EmbeddedNode>,
+    request_doc_id: &str,
+    generation: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let doc_id = escape_graphql_string(request_doc_id);
+    let generation = escape_graphql_string(generation);
+    let expired = escape_graphql_string(&(now - chrono::Duration::milliseconds(1)).to_rfc3339());
+    let now = escape_graphql_string(&now.to_rfc3339());
+    let active = RequestLifecycleState::graphql_list([
+        RequestLifecycleState::Claimed,
+        RequestLifecycleState::Processing,
+    ]);
+    crate::config_client::ConfigAccess::write_local(
+        node,
+        "lifecycle.relinquish_execution_lease",
+        &format!(r#"mutation {{ update_AgentRequest(
+            docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, execution_generation: {{ _eq: "{generation}" }},
+                lifecycle_state: {{ _in: {active} }}, execution_lease_expires_at: {{ _gt: "{now}" }} }},
+            input: {{ execution_lease_expires_at: "{expired}" }}
+        ) {{ _docID }} }}"#),
+    )
+    .await?;
+    Ok(())
 }
 
 impl ExecutionGeneration {

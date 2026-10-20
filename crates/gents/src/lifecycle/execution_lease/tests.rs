@@ -259,6 +259,117 @@ async fn stale_execution_owner_drop_does_not_expire_successor_generation() {
 }
 
 #[tokio::test]
+async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
+    let (node, _dir) = test_node().await;
+    let lifecycle = owner(&node).await;
+    let doc_id = lifecycle.request().doc_id.clone();
+    crate::config_client::ConfigAccess::write_local(
+        &node,
+        "test.expired_owner_drop",
+        &format!(
+            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&doc_id),
+        ),
+    )
+    .await
+    .unwrap();
+    let before = lease_tuple(&request_row(&node, &doc_id).await);
+    let owners_before_drop = Arc::strong_count(&node);
+    drop(lifecycle);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while Arc::strong_count(&node) >= owners_before_drop {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("detached relinquishment must finish before its outcome is observed");
+    assert_eq!(lease_tuple(&request_row(&node, &doc_id).await), before);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_relinquishment_follows_generated_drop_cases() {
+    use crate::lean_vocab_test::{
+        LeanRequestExecutionAction, LeanRequestExecutionBoundary, LeanRequestExecutionLeaseStatus,
+    };
+
+    let (node, _dir) = test_node().await;
+    let mut exercised = 0;
+    for case in crate::lean_vocab_test::lean_request_execution_lease_cases() {
+        let LeanRequestExecutionAction::Drop {
+            boundary: LeanRequestExecutionBoundary::MutationWriteGate,
+            generation,
+        } = case.action
+        else {
+            continue;
+        };
+        let Some(expected) = &case.expected else {
+            continue;
+        };
+        let mut lifecycle = owner(&node).await;
+        drop(lifecycle.renewal_task.take());
+        lifecycle.state = LocalLifecycleState::Completed;
+        let doc_id = lifecycle.request().doc_id.clone();
+        let observed_generation = case.pre.lease.generation.unwrap().to_string();
+        let deadline = DateTime::from_timestamp_millis(
+            case.pre
+                .lease
+                .explicit_deadline
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        let now = DateTime::from_timestamp_millis(case.pre.now.try_into().unwrap()).unwrap();
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "test.generated_drop_case",
+            &format!(
+                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
+                    lifecycle_state: "{}", execution_generation: "{}", execution_lease_expires_at: "{}"
+                }}) {{ _docID }} }}"#,
+                escape_graphql_string(&doc_id),
+                escape_graphql_string(case.pre.request.as_str()),
+                escape_graphql_string(&observed_generation),
+                escape_graphql_string(&deadline.to_rfc3339()),
+            ),
+        ).await.unwrap();
+        let before = lease_tuple(&request_row(&node, &doc_id).await);
+        relinquish_execution_lease(&node, &doc_id, &generation.to_string(), now)
+            .await
+            .unwrap();
+        let row = request_row(&node, &doc_id).await;
+        assert_eq!(row.lifecycle_state, Some(expected.request), "{}", case.name);
+        assert_eq!(
+            row.execution_generation.as_deref(),
+            Some(observed_generation.as_str()),
+            "{}",
+            case.name
+        );
+        match expected.lease.status {
+            LeanRequestExecutionLeaseStatus::Active => {
+                assert_eq!(lease_tuple(&row), before, "{}", case.name);
+            }
+            LeanRequestExecutionLeaseStatus::Recoverable => {
+                assert!(
+                    DateTime::parse_from_rfc3339(
+                        row.execution_lease_expires_at.as_deref().unwrap()
+                    )
+                    .unwrap()
+                        < now,
+                    "{}",
+                    case.name
+                );
+            }
+            _ => panic!("unexpected generated drop outcome: {}", case.name),
+        }
+        exercised += 1;
+    }
+    assert_eq!(exercised, 3);
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn owned_stream_appends_do_not_renew_execution_lease() {
     let (node, _dir) = test_node().await;
     let mut lifecycle = claimed_owner(&node).await;

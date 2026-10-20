@@ -193,6 +193,16 @@ def leaseCases : List LeaseCase :=
     , action := .drop .mutationWriteGate 101
     , expected := some (recoverable 101 5 10 5)
     }
+  , { name := "expired_drop_preserves_the_authoritative_deadline"
+    , pre := processing 101 5 10 11
+    , action := .drop .mutationWriteGate 101
+    , expected := some (processing 101 5 10 11)
+    }
+  , { name := "drop_at_expiry_preserves_the_authoritative_deadline"
+    , pre := processing 101 5 10 10
+    , action := .drop .mutationWriteGate 101
+    , expected := some (processing 101 5 10 10)
+    }
   , { name := "dropped_recovery_takes_fresh_generation"
     , pre := recoverable 101 5 10 11
     , action := .recoverDropped .mutationWriteGate 101 202 5 30
@@ -292,7 +302,7 @@ def leaseCases : List LeaseCase :=
     }
   ]
 
-theorem leaseCases_count : leaseCases.length = 47 := by native_decide
+theorem leaseCases_count : leaseCases.length = 49 := by native_decide
 
 theorem leaseCases_hold :
     leaseCases.all (fun testCase =>
