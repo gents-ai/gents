@@ -8,6 +8,11 @@ open Transcript (MessageRow StrictlyIncreasingMessages)
 def fixtureCallSymbol : Nat := PromptView.providerCallSymbol "1" none
 def fixtureSecondCallSymbol : Nat := PromptView.providerCallSymbol "2" none
 
+def fixtureNativeCallKey (symbol : Nat) : String :=
+  if symbol == fixtureCallSymbol then "1"
+  else if symbol == fixtureSecondCallSymbol then "2" else s!"unmapped-{symbol}"
+
+
 
 
 
@@ -137,6 +142,8 @@ structure CompactionReducerCase where
   group               : String
   reducer             : String
   legal               : Bool
+  inputRows           : List MessageRow
+  projectedPrefixReady : Bool
   preMessageCount     : Nat
   postMessageCount    : Nat
   preservesPairs      : Bool
@@ -156,7 +163,6 @@ structure CompactionReducerCase where
   safeBoundary        : Nat
 
   retainedCount       : Nat
-  deriving Repr
 
 private def pairsClosed (msgs : List MessageRow) : Bool :=
   msgs.all fun row => match row.kind with
@@ -235,8 +241,7 @@ private def assistantCallPublication (row : Transcript.MessageRow)
   let records := indexed.map fun entry =>
     let symbol := entry.1
     let block := entry.2
-    let nativeKey := if symbol == fixtureCallSymbol then "1"
-      else if symbol == fixtureSecondCallSymbol then "2" else s!"unmapped-{symbol}"
+    let nativeKey := fixtureNativeCallKey symbol
     fixtureSegment (1000 + row.messageId * 100 + block)
       ⟨0, .provider 0 row.sequence block⟩ (.request 0)
       { block, part := 0, kind := .arguments
@@ -245,8 +250,7 @@ private def assistantCallPublication (row : Transcript.MessageRow)
     indexed.map fun entry =>
       let symbol := entry.1
       let block := entry.2
-      let nativeKey := if symbol == fixtureCallSymbol then "1"
-        else if symbol == fixtureSecondCallSymbol then "2" else s!"unmapped-{symbol}"
+      let nativeKey := fixtureNativeCallKey symbol
       .toolCall (10000 + symbol) nativeKey none "tool"
         ⟨⟨1000 + row.messageId * 100 + block, 0⟩, .full⟩ none none
   let message : CanonicalOutput.MessageEnvelope :=
@@ -262,8 +266,7 @@ private def toolResultPublication (row : Transcript.MessageRow) (call : Nat) :
     List CanonicalOutput.Segment × CanonicalOutput.MessageEnvelope :=
   let closeId := 1000 + row.messageId * 100
   let physicalCall := 10000 + call
-  let nativeKey := if call == fixtureCallSymbol then "1"
-    else if call == fixtureSecondCallSymbol then "2" else s!"unmapped-{call}"
+  let nativeKey := fixtureNativeCallKey call
   let record := fixtureSegment closeId ⟨0, .tool physicalCall⟩ (.tool physicalCall)
     { block := 0, part := 0, kind := .toolOutput } [65]
   let spec : CanonicalOutput.PayloadSpec := ⟨⟨closeId, 0⟩, .full⟩
@@ -369,9 +372,10 @@ theorem distinct_native_keys_have_distinct_symbols :
 
 
 private def reducerCase (name group : String) (reducer : Reducer)
-    (count splitIndex : Nat) (publicationReady : Bool := true) :
+    (count splitIndex : Nat) (publicationReady : Bool := true)
+    (inputOverride : Option (List MessageRow) := none) :
     CompactionReducerCase :=
-  let source := caseFixture count
+  let source := inputOverride.getD (caseFixture count)
   let view : PromptView := ⟨0, source, none, fun id =>
     if publicationReady then
       source.find? (fun row => row.messageId == id) |>.map
@@ -385,6 +389,8 @@ private def reducerCase (name group : String) (reducer : Reducer)
   let reduced := reduce view
   let reapplied := reduce reduced
   { name, group, reducer := reducer.name, legal := true
+  , inputRows := source
+  , projectedPrefixReady := decide (PromptView.canCompactProjection view)
   , preMessageCount := source.length
   , postMessageCount := reduced.messages.length
   , preservesPairs := !pairsClosed source || pairsClosed reduced.messages
@@ -424,9 +430,18 @@ def compactionReducerCases : List CompactionReducerCase :=
   , reducerCase "summarize_blocked_when_header_loading" "summarize" .summarize 4 2 false
   , reducerCase "summarize_cannot_split_a_leading_turn" "summarize" .summarize 2 1
   , reducerCase "provider_view_is_idempotent" "provider_view" .providerView 3 0
-  , reducerCase "provider_view_drops_orphaned_result" "provider_view" .providerView 1 0 ]
+  , reducerCase "provider_view_drops_orphaned_result" "provider_view" .providerView 1 0
+  , reducerCase "closed_turn_allows_projection_after_unresolved_history" "projection" .providerView 0 0 true
+      (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+             ⟨1, 0, 1, .user, .ordinary⟩])
+  , reducerCase "open_raw_tail_blocks_projected_prefix" "projection" .providerView 0 0 true
+      (some [⟨0, 0, 0, .user, .ordinary⟩,
+             ⟨1, 0, 1, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩])
+  , reducerCase "unpublished_closed_turn_blocks_projected_prefix" "projection" .providerView 0 0 false
+      (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+             ⟨1, 0, 1, .user, .ordinary⟩]) ]
 
-theorem compactionReducerCases_count : compactionReducerCases.length = 17 := by decide
+theorem compactionReducerCases_count : compactionReducerCases.length = 20 := by decide
 
 theorem stable_published_prefix_gate_opens :
     (reducerCase "allowed" "publication" .summarize 4 2).safeToReduce = true := by
