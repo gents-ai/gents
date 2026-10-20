@@ -1489,10 +1489,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             last_activity_at: chrono::Utc::now().to_rfc3339(),
             preview: None,
             latest_request: Some(gents_protocol::session::SessionRequestObservation {
-                request_doc_id: stale["data"]["create_AgentRequest"][0]["_docID"]
-                    .as_str()
-                    .expect("seeded stale request document")
-                    .to_string(),
+                request_doc_id: gents::graphql::created_doc_id(&stale, "AgentRequest")?,
                 request_id: "stale-seed".into(),
                 lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Dead,
             }),
