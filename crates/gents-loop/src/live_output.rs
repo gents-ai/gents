@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -37,16 +38,19 @@ struct LiveToolOutputState {
 /// Host data a tool returned beside its output, to be committed by the
 /// terminal of the call that returned it. The loop only carries it from
 /// dispatch to terminalization; the host that produced it reads it back.
+/// Distinct host producers must not replace each other's contributions. Each
+/// producer retains ownership of the batch stored under its concrete type.
 #[derive(Debug, Clone)]
-pub struct DeferredToolWrites(Arc<dyn std::any::Any + Send + Sync>);
+pub struct DeferredToolWrites(HashMap<TypeId, Arc<dyn Any + Send + Sync>>);
 
 impl DeferredToolWrites {
-    pub fn new<T: std::any::Any + Send + Sync>(writes: T) -> Self {
-        Self(Arc::new(writes))
+    pub fn new<T: Any + Send + Sync>(writes: T) -> Self {
+        let writes: Arc<dyn Any + Send + Sync> = Arc::new(writes);
+        Self(HashMap::from([(TypeId::of::<T>(), writes)]))
     }
 
-    pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
-        self.0.downcast_ref()
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+        self.0.get(&TypeId::of::<T>())?.downcast_ref()
     }
 }
 
@@ -477,13 +481,14 @@ impl LiveToolOutputWriter {
     }
 
     pub async fn record_deferred_writes(&self, writes: DeferredToolWrites) -> anyhow::Result<()> {
-        self.registry
-            .inner
-            .lock()
-            .await
+        let mut states = self.registry.inner.lock().await;
+        let state = states
             .get_mut(&self.tool_call_id)
-            .context("deferred writes have no registered physical tool invocation")?
-            .deferred_writes = Some(writes);
+            .context("deferred writes have no registered physical tool invocation")?;
+        match &mut state.deferred_writes {
+            Some(existing) => existing.0.extend(writes.0),
+            None => state.deferred_writes = Some(writes),
+        }
         Ok(())
     }
 
@@ -626,6 +631,60 @@ impl LiveToolOutputSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn deferred_host_batches_keep_distinct_producers_and_replace_only_their_own_type() {
+        let registry = LiveToolOutputRegistry::default();
+        let writer = registry.writer_for("physical-tool").await;
+        writer
+            .record_deferred_writes(DeferredToolWrites::new(String::from("captured snapshot")))
+            .await
+            .unwrap();
+        writer
+            .record_deferred_writes(DeferredToolWrites::new(1u64))
+            .await
+            .unwrap();
+        writer
+            .record_deferred_writes(DeferredToolWrites::new(2u64))
+            .await
+            .unwrap();
+        let pending = registry.deferred_writes("physical-tool").await.unwrap();
+        assert_eq!(
+            pending.downcast_ref::<String>().unwrap(),
+            "captured snapshot"
+        );
+        assert_eq!(pending.downcast_ref::<u64>(), Some(&2));
+        assert!(pending.downcast_ref::<bool>().is_none());
+    }
+
+    #[tokio::test]
+    async fn concurrent_deferred_host_batches_stay_bound_to_their_physical_tool() {
+        let registry = LiveToolOutputRegistry::default();
+        let first = registry.writer_for("physical-tool").await;
+        let second = registry.writer_for("physical-tool").await;
+        let unrelated = registry.writer_for("other-tool").await;
+        let (left, right, other) = tokio::join!(
+            first.record_deferred_writes(DeferredToolWrites::new(7u64)),
+            second.record_deferred_writes(DeferredToolWrites::new(String::from("snapshot"))),
+            unrelated.record_deferred_writes(DeferredToolWrites::new(false)),
+        );
+        left.unwrap();
+        right.unwrap();
+        other.unwrap();
+        let pending = registry.deferred_writes("physical-tool").await.unwrap();
+        assert_eq!(pending.downcast_ref::<u64>(), Some(&7));
+        assert_eq!(pending.downcast_ref::<String>().unwrap(), "snapshot");
+        assert!(pending.downcast_ref::<bool>().is_none());
+        let pending = registry.deferred_writes("other-tool").await.unwrap();
+        assert_eq!(pending.downcast_ref::<bool>(), Some(&false));
+        assert!(pending.downcast_ref::<u64>().is_none());
+        registry.remove("physical-tool").await;
+        assert!(first
+            .record_deferred_writes(DeferredToolWrites::new(9u64))
+            .await
+            .is_err());
+        assert!(registry.deferred_writes("physical-tool").await.is_none());
+    }
 
     fn render(source: &str, parts: &[PresentationPart]) -> String {
         parts
