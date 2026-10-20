@@ -74,13 +74,11 @@ async fn transcript_pages_bound_canonical_headers_and_keep_stable_cursors() {
     .expect("older page");
     assert_eq!(older.query_count, 2);
     assert!(older.has_newer);
-    assert!(
-        older
-            .store
-            .transcript_messages
-            .iter()
-            .all(|row| row.message.sequence < 91)
-    );
+    assert!(older
+        .store
+        .transcript_messages
+        .iter()
+        .all(|row| row.message.sequence < 91));
 }
 
 #[tokio::test]
@@ -347,16 +345,12 @@ fn unreadable_reason_follows_the_exact_read_scope() {
         session_unreadable_reason(&node_owned, Some(desktop), true),
         None
     );
-    assert!(
-        session_unreadable_reason(&node_owned, Some(desktop), false)
-            .is_some_and(|reason| reason.contains("owned by its node"))
-    );
+    assert!(session_unreadable_reason(&node_owned, Some(desktop), false)
+        .is_some_and(|reason| reason.contains("owned by its node")));
 
     let other = session_row("other", node_did, Some("did:test:other"));
-    assert!(
-        session_unreadable_reason(&other, Some(desktop), true)
-            .is_some_and(|reason| reason.contains("another requester"))
-    );
+    assert!(session_unreadable_reason(&other, Some(desktop), true)
+        .is_some_and(|reason| reason.contains("another requester")));
 
     let unscoped = session_row("unscoped", node_did, None);
     assert!(session_unreadable_reason(&unscoped, Some(desktop), true).is_some());
@@ -365,7 +359,7 @@ fn unreadable_reason_follows_the_exact_read_scope() {
 
 #[tokio::test]
 async fn transcript_payload_page_batches_exact_dependencies_without_reading_other_history() {
-    use crate::client::canonical_output::{CanonicalMessageProjection, project_canonical_message};
+    use crate::client::canonical_output::{project_canonical_message, CanonicalMessageProjection};
     use gents::config_client::ConfigAccess;
 
     let node = std::sync::Arc::new(NodeBuilder::default().build().await.expect("node"));

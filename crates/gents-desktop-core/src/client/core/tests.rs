@@ -1458,6 +1458,82 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         query.contains("enrollment"),
         "retain signed enrollment admission"
     );
+    let local = gents::ConfigAccess::local(core.node_arc());
+    let escaped_owner = gents::graphql::escape_graphql_string(owner.did());
+    let escaped_requester = gents::graphql::escape_graphql_string(core.node_identity().did());
+    let created_at = gents::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let stale = local
+        .write(
+            "seed_stale_request",
+            &format!(
+                r#"mutation {{ create_AgentRequest(input: {{
+                    request_id: "stale-seed", session_id: "stale-session",
+                    node_did: "{escaped_owner}", requester_did: "{escaped_requester}",
+                    agent_id: "agent", content: "resend directly", purpose: "normal",
+                    lifecycle_state: "dead", failure_reason: "Stale", created_at: "{created_at}"
+                }}) {{ _docID }} }}"#
+            ),
+        )
+        .await?;
+    let session = gents_protocol::session::AgentSession {
+        session_id: "stale-session".into(),
+        node_did: owner.did().into(),
+        requester_did: Some(core.node_identity().did().into()),
+        agent_id: "agent".into(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        closed_at: None,
+        title: None,
+        provenance: None,
+        tags: Vec::new(),
+        observation: Some(gents_protocol::session::SessionObservation {
+            last_activity_at: chrono::Utc::now().to_rfc3339(),
+            preview: None,
+            latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                request_doc_id: gents::graphql::created_doc_id(&stale, "AgentRequest")?,
+                request_id: "stale-seed".into(),
+                lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Dead,
+            }),
+        }),
+    };
+    let input = serde_json::to_value(session)?;
+    local
+        .transact_write("seed_stale_session", |txn| {
+            let variables = serde_json::json!({ "input": input.clone() });
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                    &variables,
+                )
+                .await
+            })
+        })
+        .await?;
+    core.refresh_store().await?;
+    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
+        .await?;
+    let resent = core
+        .resend_request_in_scope("stale-seed", Some(owner.did()))
+        .await?;
+    let response = local
+        .execute(&format!(
+            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{request_id}} }}",
+            gents::graphql::escape_graphql_string(&resent.request_id),
+        ))
+        .await?;
+    assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
+    let requests = server.received_requests().await.unwrap();
+    let mutation: serde_json::Value = serde_json::from_slice(
+        &requests
+            .iter()
+            .rev()
+            .find(|request| String::from_utf8_lossy(&request.body).contains("create_AgentRequest"))
+            .unwrap()
+            .body,
+    )?;
+    let query = mutation["query"].as_str().unwrap();
+    assert!(query.contains("stale-seed"), "preserve resend lineage");
+    assert!(query.contains(core.node_identity().did()));
+    assert!(query.contains("enrollment"));
     let record = core
         .sync_state
         .records()
@@ -1479,6 +1555,15 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             .is_err_and(|error| error.to_string().contains("route is not ready")),
         "the direct owner route must not bypass the existing write fence: {denied:?}"
     );
+    let denied_resend = core
+        .resend_request_in_scope("stale-seed", Some(owner.did()))
+        .await;
+    assert!(
+        denied_resend
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("route is not ready")),
+        "resend must preserve the write fence: {denied_resend:?}"
+    );
     assert_eq!(
         server
             .received_requests()
@@ -1489,12 +1574,15 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
                 String::from_utf8_lossy(&request.body).contains("create_AgentRequest")
             })
             .count(),
-        1
+        2
     );
     let response = gents::ConfigAccess::local(core.node_arc())
         .execute("{ AgentRequest { request_id } }")
         .await?;
-    assert_eq!(response["data"]["AgentRequest"], serde_json::json!([]));
+    assert_eq!(
+        response["data"]["AgentRequest"],
+        serde_json::json!([{ "request_id": "stale-seed" }])
+    );
     core.shutdown().await?;
     Ok(())
 }

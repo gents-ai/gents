@@ -108,6 +108,20 @@ pub async fn interrupt_request_by_doc_id_with_access(
         .map(|_| ())
 }
 
+/// Latch the exact scoped request inside the caller's transaction, so a job's
+/// terminal decision and child interrupts share one commit and rollback boundary.
+pub(crate) async fn interrupt_request_by_doc_id_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<()> {
+    let filter = exact_request_filter(request_doc_id, node_did, requester_did)?;
+    interrupt_request_matching_in_txn(txn, &filter)
+        .await
+        .map(|_| ())
+}
+
 async fn interrupt_request_matching(
     node: &std::sync::Arc<EmbeddedNode>,
     filter: String,

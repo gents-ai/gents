@@ -232,10 +232,13 @@ mod tests {
         );
         let mut malformed = accepted;
         malformed["source"] = serde_json::json!("malformed");
-        assert!(
-            decode_scoped_request_output_segments(&[malformed], "agent", Some("session"), None)
-                .is_err()
-        );
+        assert!(decode_scoped_request_output_segments(
+            &[malformed],
+            "agent",
+            Some("session"),
+            None
+        )
+        .is_err());
     }
 
     #[test]
@@ -295,16 +298,14 @@ mod tests {
                 .len(),
             1
         );
-        assert!(
-            decode_scoped_request_output_segments(
-                &[row.clone()],
-                "agent",
-                Some("other-session"),
-                Some("requester")
-            )
-            .unwrap()
-            .is_empty()
-        );
+        assert!(decode_scoped_request_output_segments(
+            &[row.clone()],
+            "agent",
+            Some("other-session"),
+            Some("requester")
+        )
+        .unwrap()
+        .is_empty());
         assert!(
             decode_scoped_request_output_segments(&[row], "agent", None, None)
                 .unwrap()
@@ -387,14 +388,10 @@ mod tests {
         let object = variables.as_object().unwrap();
         assert_eq!(object.len(), 1, "exactly the $input variable");
         assert!(object.contains_key("input"));
-        assert!(
-            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
-                .contains("$input: AgentOutputSegmentMutationInputArg!")
-        );
-        assert!(
-            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
-                .contains("create_AgentOutputSegment(input: $input)")
-        );
+        assert!(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
+            .contains("$input: AgentOutputSegmentMutationInputArg!"));
+        assert!(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
+            .contains("create_AgentOutputSegment(input: $input)"));
     }
 
     #[test]
