@@ -14,7 +14,7 @@ import { useApp } from "../app/AppContext";
 const words = (value: string) => value.replace(/_/g, " ");
 
 export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
-  const { api, drafts, stores, view } = useApp();
+  const { actions, drafts, stores, view } = useApp();
   const sessionId = stores.selection.use.sessionId();
   const state = tool.jobState;
   const progress = tool.jobProgress;
@@ -25,8 +25,8 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
     state === "timed_out";
   const control = (action: JobControlKind) => {
     if (!sessionId || !tool.toolCallId) return;
-    api
-      .jobControl({ sessionId, toolCallId: tool.toolCallId, action })
+    actions
+      .controlJob({ sessionId, toolCallId: tool.toolCallId, action })
       .catch((e: unknown) => toastFailure(action, e));
   };
   const answer = () => {
