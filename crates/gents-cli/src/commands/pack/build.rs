@@ -451,6 +451,10 @@ mod tests {
             tmp.path(),
         )
         .unwrap();
+        let cache = tmp.path().join("target");
+        if cache.exists() {
+            std::fs::remove_dir_all(cache).expect("discard copied fixture build cache");
+        }
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command
             .args([
