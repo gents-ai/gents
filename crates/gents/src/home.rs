@@ -40,6 +40,9 @@ pub fn default_home_dir() -> Result<PathBuf> {
 const DATA_DIR_NAME: &str = "data";
 const KEYS_DIR_NAME: &str = "keys";
 pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+/// Host-local listen addresses for `gents server`; binding precedes opening
+/// the store, so they cannot live in a document.
+pub const NETWORK_CONFIG_FILE_NAME: &str = "network.json";
 pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
 pub const PACKS_DIR_NAME: &str = "packs";
 pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
@@ -64,6 +67,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     INIT_CONFIG_FILE_NAME,
     KEYS_DIR_NAME,
     RUNTIME_STATE_FILE_NAME,
+    NETWORK_CONFIG_FILE_NAME,
     P2P_SECRET_KEY_FILE_NAME,
     PACKS_DIR_NAME,
     PLUGINS_DIR_NAME,

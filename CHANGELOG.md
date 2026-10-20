@@ -6,6 +6,19 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `gents service install` takes `--http-addr`, `--http-port`,
+  `--p2p-bind-addr`, `--p2p-port`, `--p2p-relay-mode` and `--p2p-discovery`
+  (plus `--reset-network`), so a node running as the native service can listen
+  on its tailnet address. They persist into `<home>/network.json`, which
+  `gents server` reads for each of those flags it is not given; the launchd
+  and systemd definitions still run only `gents server --home <home>`, so the
+  settings survive reinstalls and desktop-managed updates and apply at the
+  next start. The persisted HTTP address must be loopback or one interface,
+  never `0.0.0.0`/`::`. `gents service status` adds the configured network.
+- The Engineer's `p2p` tool adds `enrollment request`: with mutation
+  authority and a peer's `/status` enrollment token, a node signs and delivers
+  its own enrollment request, so the peer approves it with `enrollment approve`
+  and pairs with `pairings apply` without the desktop app.
 - `gents pack wire` (with `--targets-from` and `--remove`), `gents pack install
   --wire <agent>` and the desktop's Enable for agent action add a job plugin
   to an agent's Tools with a reviewed job block, without turning on direct
