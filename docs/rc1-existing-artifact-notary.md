@@ -64,7 +64,7 @@ these artifacts; the originals are immutable.
    `github.event.repository.default_branch` expression (empty expression and
    any tag/PR-head ref fail closed; both jobs re-assert this as their FIRST
    step, before any checkout), then preflights the control toolchain
-   (shellcheck, python3, PyYAML), shellchecks and syntax-checks the auth
+   (sh, python3), syntax-checks the auth
    helper, and runs both test suites (`test-rc1-notary-auth.py`,
    `test-rc1-notary-workflow.py`).
 2. **`notary-auth-preflight`** — invokes `.github/scripts/rc1-notary-auth.sh`
@@ -129,3 +129,12 @@ shellcheck -s sh .github/scripts/rc1-notary-auth.sh
 ```
 
 The auth helper is the only notary-capable script; it never submits.
+
+## Runtime dependency correction after run 39357437645
+
+That run failed at the guard because ShellCheck was absent; the Apple auth
+job was skipped, so this is not evidence of credential rejection. The live
+workflow now requires shell and Python 3 for syntax and stdlib behavioral tests.
+ShellCheck and PyYAML remain local/review-time dependencies for the validation
+commands above, not live probe dependencies. No global runner tools are installed.
+Candidate provenance is independent of this authentication-only probe.
