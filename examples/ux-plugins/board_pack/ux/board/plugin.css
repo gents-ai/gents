@@ -4,7 +4,7 @@
 .gents-board-lane { display: grid; align-content: start; gap: .5rem; min-width: 0 }
 .gents-board-lane-title { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; margin: 0; opacity: .7 }
 .gents-board-lane-title span { opacity: .6; margin-left: .25rem }
-.gents-board-card { display: grid; gap: .25rem; padding: .5rem; border: 1px solid var(--color-border, #8884); border-radius: .5rem }
+.gents-board-card { display: grid; gap: .25rem; padding: .5rem; border: 1px solid var(--border); border-radius: var(--radius-md) }
 .gents-board-card-title { font-size: .8rem; overflow-wrap: anywhere }
 .gents-board-card-title code { font-size: .7rem; opacity: .6 }
 .gents-board-card-actions { display: flex; flex-wrap: wrap; gap: .125rem }
@@ -12,6 +12,6 @@
 
 /* the task a ::board{id} card deep-linked to */
 .gents-board-card-highlight {
-  outline: 2px solid var(--ring, currentColor);
+  outline: 2px solid var(--ring);
   outline-offset: 1px;
 }
