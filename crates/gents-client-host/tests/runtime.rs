@@ -26,6 +26,8 @@ use console::ConsoleChild as Child;
 mod configured_actions;
 #[path = "support/editor_goal_recovery.rs"]
 mod editor_goal_recovery;
+#[path = "support/editor_goal_removal.rs"]
+mod editor_goal_removal;
 #[path = "support/editor_history.rs"]
 mod editor_history;
 #[path = "support/editor_retry.rs"]
@@ -57,6 +59,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorGoalRecovery,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorGoalRemoval,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRetry,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
@@ -70,6 +74,7 @@ impl Journey {
             Self::EditorSteering => Some("steering"),
             Self::EditorHistory => Some("history"),
             Self::EditorGoalRecovery => Some("goals"),
+            Self::EditorGoalRemoval => Some("goal-removal"),
             Self::EditorRetry => Some("retry"),
             Self::EditorWorkspace => Some("workspace"),
             _ => None,
@@ -251,6 +256,30 @@ fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_removes_goals_without_cancelling_current_work_or_queued_input() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorGoalRemoval)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-goal-removal-canonical.json")
+}
+
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
@@ -270,6 +299,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let provider_retry_attempts = Arc::clone(&retry_attempts);
     let goal_recovery = Arc::new(editor_goal_recovery::Provider::default());
     let provider_goal_recovery = Arc::clone(&goal_recovery);
+    let goal_removal = Arc::new(editor_goal_removal::Provider::default());
+    let provider_goal_removal = Arc::clone(&goal_removal);
     let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let goal_provider_gate = editor_goal_gate.clone();
     let goal_provider_hold = root.join("hold-goal-provider");
@@ -284,6 +315,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorGoalRemoval) {
+                if let Some(action) = provider_goal_removal.reply(request, &emitted) {
+                    return action;
+                }
+            }
             if matches!(journey, Journey::EditorGoalRecovery) {
                 if let Some(action) = provider_goal_recovery.reply(request, &emitted) {
                     return action;
@@ -1240,6 +1276,51 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-workspace-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
+    }
+    if matches!(journey, Journey::EditorGoalRemoval) {
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        id += 1;
+        let releases: Vec<_> = (0..2)
+            .map(|index| {
+                let release = root.join(format!("finish-removed-goal-{index}"));
+                let held = Arc::clone(&goal_removal);
+                tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                    loop {
+                        if release.is_file() {
+                            held.release(index);
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }))
+            })
+            .collect();
+        let editor_result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "goal-removal",
+        )
+        .await;
+        std::fs::write(
+            root.join("editor-goal-removal-provider.json"),
+            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        copy_editor_evidence(root, "editor-goal-removal-provider.json")?;
+        editor_result?;
+        let evidence =
+            editor_goal_removal::verify(&access, &provider, root, node_did, &client_did).await?;
+        std::fs::write(
+            root.join("editor-goal-removal-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+        drop(releases);
     }
     if matches!(journey, Journey::EditorGoalRecovery) {
         std::fs::write(
