@@ -7,6 +7,7 @@ use crate::session_hydration::HydrationRequest;
 
 pub const FILE_IMAGE_RECEIPT_VERSION: u8 = 2;
 const KEY_DOMAIN: &str = "gents-file-image-demand-v1";
+const RETRY_KEY_DOMAIN: &str = "gents-file-image-retry-v1";
 const RECEIPT_DOMAIN: &str = "gents-file-image-receipt-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -52,6 +53,14 @@ impl FileImageDemand {
                 self.tool_call_doc_id.as_str(),
             ],
         );
+        bs58::encode(Sha256::digest(payload)).into_string()
+    }
+
+    /// One explicit retry keeps its identifier across transport cancellation or
+    /// replay. Its fresh demand preserves earlier terminal receipts unchanged.
+    pub fn derive_retry_request_key(&self, retry_id: &str) -> String {
+        let original = self.derive_request_key();
+        let payload = canonical_domain_payload(RETRY_KEY_DOMAIN, [original.as_str(), retry_id]);
         bs58::encode(Sha256::digest(payload)).into_string()
     }
 

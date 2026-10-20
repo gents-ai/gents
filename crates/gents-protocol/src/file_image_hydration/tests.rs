@@ -128,3 +128,26 @@ fn request_keys_distinguish_field_boundaries_and_all_selection_dimensions() {
     right.admission.requester_did = "b:c".into();
     assert_ne!(left.derive_request_key(), right.derive_request_key());
 }
+
+#[test]
+fn explicit_retry_keys_preserve_scope_and_replay_identity() {
+    let original = receipt().demand;
+    let retry = original.derive_retry_request_key("explicit-click");
+    assert_ne!(retry, original.derive_request_key());
+    assert_ne!(retry, original.derive_retry_request_key("another-click"));
+    assert_eq!(retry, original.derive_retry_request_key("explicit-click"));
+    for (field, _) in original.reference_fields().into_iter().skip(1) {
+        let mut changed = serde_json::to_value(&original).unwrap();
+        if let Some(value) = changed.get_mut(field) {
+            *value = serde_json::json!("other");
+        } else {
+            changed["admission"][field] = serde_json::json!("other");
+        }
+        let changed: FileImageDemand = serde_json::from_value(changed).unwrap();
+        assert_ne!(
+            retry,
+            changed.derive_retry_request_key("explicit-click"),
+            "{field}"
+        );
+    }
+}
