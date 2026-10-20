@@ -655,6 +655,7 @@ mod tests {
                 caused_by_source_doc_id: None,
                 answer: None,
                 cwd: None,
+                resolve_request_id: None,
             },
         )
         .await?;
@@ -695,6 +696,7 @@ mod tests {
                 caused_by_source_doc_id: None,
                 answer: None,
                 cwd: None,
+                resolve_request_id: None,
             },
         )
         .await?;

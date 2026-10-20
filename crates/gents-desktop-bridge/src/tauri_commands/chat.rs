@@ -218,6 +218,7 @@ pub async fn desktop_request_retry(
         request_id: submitted.request_id,
         node_did: submitted.node_did,
         agent_id: submitted.agent_id,
+        outcome: None,
     })
 }
 

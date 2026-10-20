@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 use gents::config_client::ConfigAccess;
-use gents_protocol::graphql::{escape_graphql_string, GraphqlRequestOptions};
+use gents_protocol::graphql::{
+    escape_graphql_string, graphql_error_is_retryable, GraphqlRequestOptions,
+};
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
@@ -65,6 +67,41 @@ impl std::fmt::Display for SubmissionOutcomeUnknown {
 
 impl std::error::Error for SubmissionOutcomeUnknown {}
 
+/// Error context attached to every receipt read, so an unreadable receipt is
+/// recognisable after `write_with_receipt` wraps it.
+const RECEIPT_READ_CONTEXT: &str = "reading owner signed submission receipt";
+
+impl UnresolvedSubmission {
+    /// Retain a prepared signed create and the identity it will produce.
+    pub(crate) fn new(create: AgentRequestCreate, result: SubmittedRequest) -> Result<Self> {
+        let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+        Ok(Self {
+            request_id: create.request_id.clone(),
+            session_id: create.session_id.clone(),
+            node_did: create.node_did.clone(),
+            create,
+            mutation,
+            result,
+        })
+    }
+
+    fn outcome_unknown(&self) -> anyhow::Error {
+        tracing::warn!(
+            action = "chat_submit_receipt_unresolved",
+            request_id = %self.request_id,
+            session_id = %self.session_id,
+            node_did = %self.node_did,
+            "owner chat submission outcome unknown; retaining signed payload for identical replay"
+        );
+        SubmissionOutcomeUnknown {
+            request_id: self.request_id.clone(),
+            session_id: self.session_id.clone(),
+            pending: self.clone(),
+        }
+        .into()
+    }
+}
+
 /// Read the durable signed receipt for exactly this prepared request.
 ///
 /// Returns `Ok(true)` only when the scoped row matches the request identity and
@@ -75,6 +112,12 @@ pub(super) async fn owner_receipt(
     access: &ConfigAccess,
     create: &AgentRequestCreate,
 ) -> Result<bool> {
+    read_owner_receipt(access, create)
+        .await
+        .context(RECEIPT_READ_CONTEXT)
+}
+
+async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) -> Result<bool> {
     let ConfigAccess::Graphql(endpoint) = access else {
         return Ok(false);
     };
@@ -96,8 +139,7 @@ pub(super) async fn owner_receipt(
             retry_backoff: Duration::ZERO,
         },
     )
-    .await
-    .context("reading immutable signed submission receipt")?;
+    .await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
@@ -125,6 +167,83 @@ pub(super) async fn owner_receipt(
     Ok(true)
 }
 
+/// Commit a retained signed submission, reconciling ambiguous outcomes.
+///
+/// Embedded (local) writes are atomic, so their errors are definite. Owner
+/// writes that fail ambiguously, or whose receipt cannot be read, return
+/// [`SubmissionOutcomeUnknown`]. A definite owner rejection is re-checked
+/// against the receipt first, because an earlier ambiguous attempt may have
+/// committed before the rejected repost.
+pub(super) async fn commit_signed_submission(
+    access: &ConfigAccess,
+    pending: UnresolvedSubmission,
+) -> Result<SubmittedRequest> {
+    let written = access
+        .write_with_receipt("desktop.chat.submit", &pending.mutation, || {
+            owner_receipt(access, &pending.create)
+        })
+        .await;
+    let Err(error) = written else {
+        return Ok(pending.result);
+    };
+    if !matches!(access, ConfigAccess::Graphql(_)) {
+        return Err(error);
+    }
+    let receipt_unreadable = error
+        .chain()
+        .any(|cause| cause.to_string() == RECEIPT_READ_CONTEXT);
+    if !receipt_unreadable && !graphql_error_is_retryable(&error) {
+        match owner_receipt(access, &pending.create).await {
+            Ok(true) => return Ok(pending.result),
+            Ok(false) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    Err(pending.outcome_unknown())
+}
+
+/// Whether the owner holds a request with this exact identity in its scope.
+///
+/// Used when the signed payload of an unknown send is no longer retained (for
+/// example after a restart): presence proves delivery, absence proves the
+/// earlier attempt never committed, because owner writes are atomic.
+pub async fn submitted_request_exists(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: &str,
+    request_id: &str,
+) -> Result<bool> {
+    let ConfigAccess::Graphql(endpoint) = access else {
+        anyhow::bail!("only an owner connection can prove whether a send was delivered");
+    };
+    let scope = gents::session::session_scope_filter(
+        node_did,
+        session_id,
+        (!requester_did.is_empty()).then_some(requester_did),
+    );
+    let logical = escape_graphql_string(request_id);
+    let response = gents::config_client::query_graphql_with_options(
+        endpoint,
+        &format!(
+            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{request_id}}}}"
+        ),
+        GraphqlRequestOptions {
+            timeout: Duration::from_secs(30),
+            max_attempts: 1,
+            retry_backoff: Duration::ZERO,
+        },
+    )
+    .await
+    .context(RECEIPT_READ_CONTEXT)?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .context("request receipt query omitted rows")?;
+    ensure!(rows.len() <= 1, "ambiguous scoped submission receipt");
+    Ok(!rows.is_empty())
+}
+
 /// Resolve an earlier unknown submission outcome without re-preparing it.
 ///
 /// The retained signed payload is never re-signed: reconciliation first reads
@@ -135,32 +254,10 @@ pub async fn resolve_unresolved_submission(
     access: &ConfigAccess,
     pending: &UnresolvedSubmission,
 ) -> Result<SubmittedRequest> {
-    if owner_receipt(access, &pending.create).await? {
-        return Ok(pending.result.clone());
-    }
-    let written = access
-        .write_with_receipt("desktop.chat.submit.resolve", &pending.mutation, || {
-            owner_receipt(access, &pending.create)
-        })
-        .await;
-    match written {
-        Ok(()) => Ok(pending.result.clone()),
-        Err(_error) => {
-            // The transport error may echo the signed payload; report identity only.
-            tracing::warn!(
-                action = "chat_submit_receipt_unresolved",
-                request_id = %pending.request_id,
-                session_id = %pending.session_id,
-                node_did = %pending.node_did,
-                "owner submission receipt still unresolved after identical replay"
-            );
-            Err(SubmissionOutcomeUnknown {
-                request_id: pending.request_id.clone(),
-                session_id: pending.session_id.clone(),
-                pending: pending.clone(),
-            }
-            .into())
-        }
+    match owner_receipt(access, &pending.create).await {
+        Ok(true) => Ok(pending.result.clone()),
+        Ok(false) => commit_signed_submission(access, pending.clone()).await,
+        Err(_) => Err(pending.outcome_unknown()),
     }
 }
 
@@ -275,7 +372,6 @@ mod tests {
     async fn accepted_then_response_lost_returns_original_identity() {
         let server = MockServer::start().await;
         let create = test_create();
-        let mutation = test_mutation(&create);
         // The owner committed, then the response body was lost in transit.
         mount_create(
             &server,
@@ -285,16 +381,11 @@ mod tests {
         mount_receipt(&server, vec![receipt_row(&create)]).await;
         let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
 
-        let written = access
-            .write_with_receipt("desktop.chat.submit", &mutation, || {
-                owner_receipt(&access, &create)
-            })
-            .await;
+        let submitted = commit_signed_submission(&access, test_pending())
+            .await
+            .expect("a confirmed receipt recovers the ambiguous commit");
 
-        assert!(
-            written.is_ok(),
-            "a confirmed receipt recovers the ambiguous commit: {written:?}"
-        );
+        assert_eq!(submitted, test_result());
         assert_eq!(
             create_requests(&server).await.len(),
             1,
@@ -392,5 +483,50 @@ mod tests {
             Some(pending.mutation.as_str()),
             "the replay must be the retained signed mutation byte-for-byte"
         );
+    }
+
+    #[tokio::test]
+    async fn definite_owner_rejection_stays_an_ordinary_error() {
+        let server = MockServer::start().await;
+        mount_create(
+            &server,
+            ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{"message": "request admission rejected"}]
+            })),
+        )
+        .await;
+        mount_receipt(&server, Vec::new()).await;
+        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+
+        let error = commit_signed_submission(&access, test_pending())
+            .await
+            .expect_err("a definite rejection with no receipt fails");
+
+        assert!(
+            error.downcast_ref::<SubmissionOutcomeUnknown>().is_none(),
+            "a definite rejection must not be reported as possibly delivered: {error:#}"
+        );
+        assert_eq!(create_requests(&server).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejected_repost_after_earlier_commit_recovers_identity() {
+        let server = MockServer::start().await;
+        let create = test_create();
+        mount_create(
+            &server,
+            ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{"message": "document already exists"}]
+            })),
+        )
+        .await;
+        mount_receipt(&server, vec![receipt_row(&create)]).await;
+        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+
+        let submitted = commit_signed_submission(&access, test_pending())
+            .await
+            .expect("a matching receipt proves the earlier commit");
+
+        assert_eq!(submitted, test_result());
     }
 }

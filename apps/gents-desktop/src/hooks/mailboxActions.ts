@@ -59,7 +59,7 @@ export function createMailboxActions({
     answer: MailboxQuestionAnswer,
   ) {
     try {
-      await api.sendChatMessage({
+      const sent = await api.sendChatMessage({
         nodeDid: item.targetNodeDid,
         agentId: item.targetAgentId,
         sessionId: item.sessionId ?? null,
@@ -67,6 +67,10 @@ export function createMailboxActions({
         causedBySourceDocId: item.itemId,
         answer,
       });
+      if (sent.outcome === "deliveryUnknown")
+        reportFailure(
+          "Your answer may have been delivered. Check the session before answering again.",
+        );
       selection.releaseMailboxRoute(store, item.itemId);
       await refreshSnapshot();
     } catch (error) {

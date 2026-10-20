@@ -95,6 +95,11 @@ pub struct ChatSendRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
+    /// Reconcile this earlier send whose delivery is unknown instead of sending
+    /// a new request; the original signed request is replayed or confirmed.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub resolve_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

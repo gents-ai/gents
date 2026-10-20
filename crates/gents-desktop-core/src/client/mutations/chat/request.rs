@@ -73,34 +73,12 @@ pub async fn submit_request(
         None,
     )
     .await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     // Owner submissions, including resends routed through this function, are
-    // receipt-reconciled: an unknown outcome returns SubmissionOutcomeUnknown
-    // carrying the original signed payload so a later replay is identical.
-    let written = access
-        .write_with_receipt("desktop.chat.submit", &mutation, || {
-            receipt::owner_receipt(access, &create)
-        })
-        .await;
-    if written.is_err() {
-        // The underlying transport/GraphQL error can echo the signed mutation
-        // body, so it is deliberately replaced by a typed error that carries
-        // only the request identity plus the payload for identical replay.
-        return Err(receipt::SubmissionOutcomeUnknown {
-            request_id: create.request_id.clone(),
-            session_id: create.session_id.clone(),
-            pending: receipt::UnresolvedSubmission {
-                request_id: create.request_id.clone(),
-                session_id: create.session_id.clone(),
-                node_did: create.node_did.clone(),
-                create,
-                mutation,
-                result,
-            },
-        }
-        .into());
-    }
-    Ok(result)
+    // receipt-reconciled. An unknown outcome returns `SubmissionOutcomeUnknown`
+    // carrying the original signed payload, so reconciliation replays identical
+    // bytes instead of minting a new request identity.
+    receipt::commit_signed_submission(access, receipt::UnresolvedSubmission::new(create, result)?)
+        .await
 }
 
 #[cfg(test)]
@@ -1019,4 +997,7 @@ mod tests;
 
 mod receipt;
 
-pub use receipt::{resolve_unresolved_submission, SubmissionOutcomeUnknown, UnresolvedSubmission};
+pub use receipt::{
+    resolve_unresolved_submission, submitted_request_exists, SubmissionOutcomeUnknown,
+    UnresolvedSubmission,
+};

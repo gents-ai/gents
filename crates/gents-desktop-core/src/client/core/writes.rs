@@ -29,6 +29,8 @@ use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
 use super::ClientCore;
+mod pending_submissions;
+
 #[cfg(test)]
 use super::ClientPeerStatus;
 use crate::client::peer_directory::RemovalCause;
@@ -475,7 +477,8 @@ impl ClientCore {
                 );
                 Ok(result)
             }
-            Err(error) => Err(self.record_mutation_error("submit request", error)),
+            Err(error) => Err(self
+                .record_mutation_error("submit request", self.retain_unresolved_submission(error))),
         }
     }
 
