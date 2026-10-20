@@ -4,7 +4,7 @@ import Proofs.Conformance.ContractTypes
 namespace Conformance.Contracts
 
 def goalStatuses : List Goals.Status :=
-  [ .active, .paused, .blocked, .usageLimited, .budgetLimited, .complete ]
+  [ .active, .paused, .blocked, .usageLimited, .budgetLimited, .complete, .stopped ]
 
 def goalStatusNames : List String :=
   goalStatuses.map Goals.Status.toDefraDB
@@ -28,6 +28,7 @@ def goalSamples : List Goals.State :=
 def goalActions : List (String × Goals.Action) :=
   [ ("pause", .pause)
   , ("resume", .resume)
+  , ("stop", .stop)
   , ("complete", .complete)
   , ("blocked_audit_same_request", .blockedAudit .sameRequest)
   , ("blocked_audit_same_condition", .blockedAudit .sameCondition)
@@ -44,7 +45,7 @@ def goalMachine : StateMachineContract :=
   machineContract
     "Goal"
     goalStatusNames
-    ["complete"]
+    ["complete", "stopped"]
     (actionNames goalActions)
     (transitionPairsFromSamples
       goalSamples
