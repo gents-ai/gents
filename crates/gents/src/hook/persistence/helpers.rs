@@ -207,10 +207,36 @@ pub(super) fn json_envelope_with_bounded_result(
     if rendered.len() <= limits.max_bytes {
         return rendered;
     }
-    envelope[result_key] = serde_json::Value::String(format!(
-        "[{} bytes omitted from envelope; full output stored on the tool-call row]",
-        result.len()
-    ));
+    // The omitted bytes remain durably stored and retrievable. Only the
+    // process-control caller sets "await_mode"; in that wait/read-process
+    // context the exact next call is read_process keyed by the canonical
+    // tool_call_id. Without that context or a non-empty string identity, keep
+    // the generic omission wording rather than inventing a retrieval path or
+    // inferring an identity.
+    let canonical_tool_call_id = envelope
+        .get("tool_call_id")
+        .and_then(|value| value.as_str())
+        .filter(|id| !id.is_empty());
+    let stub = if envelope.get("await_mode").and_then(|value| value.as_str()) == Some("background")
+    {
+        match canonical_tool_call_id {
+            Some(tool_call_id) => format!(
+                "[{} bytes omitted from envelope; retrieve the full output with read_process using tool_call_id \"{}\"]",
+                result.len(),
+                tool_call_id
+            ),
+            None => format!(
+                "[{} bytes omitted from envelope; the full output is retained]",
+                result.len()
+            ),
+        }
+    } else {
+        format!(
+            "[{} bytes omitted from envelope; the full output is retained]",
+            result.len()
+        )
+    };
+    envelope[result_key] = serde_json::Value::String(stub);
     json_string(envelope)
 }
 
@@ -418,6 +444,56 @@ mod tests {
                 .as_str()
                 .is_some_and(|s| s.contains("omitted")),
             "expected the stub fallback, got {parsed}"
+        );
+    }
+
+    #[test]
+    fn json_envelope_stub_names_read_process_only_in_process_context() {
+        let limits = crate::truncation::TruncationLimits::default();
+        // Control characters escape to 6 wire bytes each, so the raw payload
+        // stays under the inner truncation bound while the rendered envelope
+        // exceeds the outer bound: the real omission fallback runs.
+        let oversized = "\u{1}".repeat(10_000);
+        let expected = |hint: &str| {
+            format!(
+                "[{} bytes omitted from envelope; {}]",
+                oversized.len(),
+                hint
+            )
+        };
+        let with_context = json_envelope_with_bounded_result(
+            serde_json::json!({
+                "ok": true, "status": "completed", "result": null,
+                "tool_call_id": "tool-row-2737", "await_mode": "background"
+            }),
+            "result",
+            &oversized,
+            "wait_process",
+            &limits,
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&with_context).expect("envelope must remain valid JSON");
+        assert_eq!(
+            parsed["result"].as_str().expect("result string"),
+            expected(
+                "retrieve the full output with read_process using tool_call_id \"tool-row-2737\""
+            )
+        );
+        let without_context = json_envelope_with_bounded_result(
+            serde_json::json!({
+                "ok": true, "status": "completed", "result": null,
+                "tool_call_id": "tool-row-2737"
+            }),
+            "result",
+            &oversized,
+            "wait_process",
+            &limits,
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&without_context).expect("envelope must remain valid JSON");
+        assert_eq!(
+            parsed["result"].as_str().expect("result string"),
+            expected("the full output is retained")
         );
     }
 

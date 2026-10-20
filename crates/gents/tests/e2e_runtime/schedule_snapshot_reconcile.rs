@@ -354,7 +354,12 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
-    assert_eq!(request["content"], TASK_PROMPT);
+    assert_eq!(
+        request["content"],
+        format!(
+            "Scheduled task instructions (rendered from saved configuration):\n\n{TASK_PROMPT}"
+        )
+    );
     assert_eq!(request["agent_id"], default_agent_id);
     assert_eq!(request["execution_origin"], "scheduled");
     assert_eq!(request["caused_by_trigger_id"], TRIGGER_ID);
