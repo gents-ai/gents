@@ -64,9 +64,24 @@ pub(crate) fn source_output_segments_query(
     request_doc_id: &str,
     source: &gents_protocol::output::OutputSource,
 ) -> Result<String> {
+    let discriminator = output_source_discriminator(source);
+    let filter = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "request_doc_id": {"_eq": request_doc_id},
+        "source": discriminator,
+    }))?;
+    Ok(format!(
+        "{{ AgentOutputSegment(filter: {filter}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"
+    ))
+}
+
+/// DefraDB JSON filters match indexed scalar leaves. This discriminator may
+/// also match another typed source; callers must verify full source equality.
+pub fn output_source_discriminator(
+    source: &gents_protocol::output::OutputSource,
+) -> serde_json::Value {
     use gents_protocol::output::OutputSource;
 
-    let discriminator = match source {
+    match source {
         OutputSource::ProviderTurn { turn_index, .. } => {
             serde_json::json!({"turn_index": {"_eq": turn_index}})
         }
@@ -75,14 +90,7 @@ pub(crate) fn source_output_segments_query(
             serde_json::json!({"tool_call_doc_id": {"_eq": tool_call_doc_id}})
         }
         OutputSource::Authored { key } => serde_json::json!({"key": {"_eq": key}}),
-    };
-    let filter = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "request_doc_id": {"_eq": request_doc_id},
-        "source": discriminator,
-    }))?;
-    Ok(format!(
-        "{{ AgentOutputSegment(filter: {filter}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"
-    ))
+    }
 }
 
 pub fn request_output_facts_query(request_doc_id: &str) -> String {
@@ -224,13 +232,10 @@ mod tests {
         );
         let mut malformed = accepted;
         malformed["source"] = serde_json::json!("malformed");
-        assert!(decode_scoped_request_output_segments(
-            &[malformed],
-            "agent",
-            Some("session"),
-            None
-        )
-        .is_err());
+        assert!(
+            decode_scoped_request_output_segments(&[malformed], "agent", Some("session"), None)
+                .is_err()
+        );
     }
 
     #[test]
@@ -290,14 +295,16 @@ mod tests {
                 .len(),
             1
         );
-        assert!(decode_scoped_request_output_segments(
-            &[row.clone()],
-            "agent",
-            Some("other-session"),
-            Some("requester")
-        )
-        .unwrap()
-        .is_empty());
+        assert!(
+            decode_scoped_request_output_segments(
+                &[row.clone()],
+                "agent",
+                Some("other-session"),
+                Some("requester")
+            )
+            .unwrap()
+            .is_empty()
+        );
         assert!(
             decode_scoped_request_output_segments(&[row], "agent", None, None)
                 .unwrap()
@@ -380,10 +387,14 @@ mod tests {
         let object = variables.as_object().unwrap();
         assert_eq!(object.len(), 1, "exactly the $input variable");
         assert!(object.contains_key("input"));
-        assert!(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
-            .contains("$input: AgentOutputSegmentMutationInputArg!"));
-        assert!(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
-            .contains("create_AgentOutputSegment(input: $input)"));
+        assert!(
+            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
+                .contains("$input: AgentOutputSegmentMutationInputArg!")
+        );
+        assert!(
+            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
+                .contains("create_AgentOutputSegment(input: $input)")
+        );
     }
 
     #[test]
