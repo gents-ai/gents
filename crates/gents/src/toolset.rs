@@ -63,6 +63,13 @@ pub(crate) fn write_capable_bash_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn write_file_for_test(root: &std::path::Path) -> Box<dyn ToolDyn> {
+    Box::new(WriteFileTool::new(
+        ToolContext::new(root.to_path_buf(), false).unwrap(),
+    ))
+}
+
+#[cfg(test)]
 pub(crate) fn cli_tool_for_test(config: CliToolConfig) -> Box<dyn crate::llm::tool::ToolDyn> {
     Box::new(CliTool::new(config))
 }

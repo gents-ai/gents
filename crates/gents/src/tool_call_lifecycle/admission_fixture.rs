@@ -215,7 +215,7 @@ pub(crate) async fn complete_child(
     assert_eq!(terminal, crate::lifecycle::TerminalizeResult::Won);
 }
 
-async fn ensure_fixture_session(
+pub(crate) async fn ensure_fixture_session(
     node: &EmbeddedNode,
     session_id: &str,
     node_did: &str,

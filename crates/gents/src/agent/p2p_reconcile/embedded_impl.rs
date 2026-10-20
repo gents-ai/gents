@@ -438,7 +438,7 @@ fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminErro
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::collections::BTreeSet;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -485,8 +485,8 @@ mod tests {
         }
     "#;
 
-    struct TestNode {
-        node: Arc<EmbeddedNode>,
+    pub(in crate::agent::p2p_reconcile) struct TestNode {
+        pub(in crate::agent::p2p_reconcile) node: Arc<EmbeddedNode>,
         _tempdir: tempfile::TempDir,
     }
 
@@ -619,7 +619,9 @@ mod tests {
         test
     }
 
-    async fn runtime_http_test_node(identity: &dyn NodeIdentity) -> (TestNode, String) {
+    pub(in crate::agent::p2p_reconcile) async fn runtime_http_test_node(
+        identity: &dyn NodeIdentity,
+    ) -> (TestNode, String) {
         let address = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -645,7 +647,7 @@ mod tests {
         bs58::encode(signature).into_string()
     }
 
-    async fn authorize_enrollment_peer(
+    pub(in crate::agent::p2p_reconcile) async fn authorize_enrollment_peer(
         node: Arc<EmbeddedNode>,
         admin_identity: Arc<dyn NodeIdentity>,
         member_identity: Arc<dyn NodeIdentity>,
@@ -656,39 +658,47 @@ mod tests {
         let issued_at = issued.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let expires_at = (issued + chrono::Duration::minutes(5))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let network_id = format!("network-{}", uuid::Uuid::new_v4());
-
-        let mut network = NetworkRecord {
-            network_id: network_id.clone(),
-            admin_did: admin_identity.did().to_string(),
-            display_name: "final admission test".to_string(),
-            default_template: "conversation".to_string(),
-            created_at: issued_at.clone(),
-            sig: Vec::new(),
-        };
-        network.sig = admin_identity
-            .sign(&network.signing_payload())
+        let existing_network = GraphqlEnrollmentStore::new(node.clone(), admin_identity.clone())
+            .load_projection()
             .await
-            .expect("sign test network");
-        let response = node
-            .execute(&format!(
-                r#"mutation {{ create_Network(input: {{
+            .expect("load enrollment fixture network")
+            .network_id;
+        let network_id = existing_network
+            .clone()
+            .unwrap_or_else(|| format!("network-{}", uuid::Uuid::new_v4()));
+        if existing_network.is_none() {
+            let mut network = NetworkRecord {
+                network_id: network_id.clone(),
+                admin_did: admin_identity.did().to_string(),
+                display_name: "final admission test".to_string(),
+                default_template: "conversation".to_string(),
+                created_at: issued_at.clone(),
+                sig: Vec::new(),
+            };
+            network.sig = admin_identity
+                .sign(&network.signing_payload())
+                .await
+                .expect("sign test network");
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{ create_Network(input: {{
                     network_id: "{}", admin_did: "{}", display_name: "{}",
                     default_template: "{}", created_at: "{}", admin_sig: "{}"
                 }}) {{ _docID }} }}"#,
-                escape_graphql_string(&network.network_id),
-                escape_graphql_string(&network.admin_did),
-                escape_graphql_string(&network.display_name),
-                escape_graphql_string(&network.default_template),
-                escape_graphql_string(&network.created_at),
-                escape_graphql_string(&bs58_sig(&network.sig)),
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "create signed Network: {:?}",
-            response.errors
-        );
+                    escape_graphql_string(&network.network_id),
+                    escape_graphql_string(&network.admin_did),
+                    escape_graphql_string(&network.display_name),
+                    escape_graphql_string(&network.default_template),
+                    escape_graphql_string(&network.created_at),
+                    escape_graphql_string(&bs58_sig(&network.sig)),
+                ))
+                .await;
+            assert!(
+                !response.has_errors(),
+                "create signed Network: {:?}",
+                response.errors
+            );
+        }
 
         let p2p = node.p2p().expect("admin P2P enabled");
         let server_peer = p2p.local_peer_id().await.expect("admin peer id");
@@ -697,7 +707,7 @@ mod tests {
             .await
             .expect("admin ticket lookup")
             .expect("admin shareable ticket");
-        let challenge = format!("challenge-{network_id}-{member_peer}");
+        let challenge = format!("challenge-{}", uuid::Uuid::new_v4());
         let offer_id = format!(
             "offer-{}",
             derive_enrollment_id(
@@ -731,7 +741,7 @@ mod tests {
             .await
             .expect("sign enrollment offer");
         let offer_token = encode_offer(&offer).expect("encode enrollment offer");
-        let client_nonce = format!("nonce-{network_id}-{member_peer}");
+        let client_nonce = format!("nonce-{}", uuid::Uuid::new_v4());
         let request_id = format!(
             "enroll-{}",
             derive_enrollment_id(
@@ -1009,7 +1019,9 @@ mod tests {
             .request_id
     }
 
-    async fn wait_for_peer_info(admin: &EmbeddedRemoteP2pAdmin) -> Vec<String> {
+    pub(in crate::agent::p2p_reconcile) async fn wait_for_peer_info(
+        admin: &EmbeddedRemoteP2pAdmin,
+    ) -> Vec<String> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             let addresses = admin.peer_info().await.expect("peer info");
@@ -1030,7 +1042,9 @@ mod tests {
             .collection_id
     }
 
-    async fn wait_for_active_peer(admin: &EmbeddedRemoteP2pAdmin) {
+    pub(in crate::agent::p2p_reconcile) async fn wait_for_active_peer(
+        admin: &EmbeddedRemoteP2pAdmin,
+    ) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             let peers = admin.active_peers().await.expect("active peers");
