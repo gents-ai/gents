@@ -51,6 +51,11 @@ export function useListWindow<T>(
       return [...indexes].sort((a, b) => a - b);
     },
   });
+  // Keep row measurements across the threshold; non-windowed scroll correction
+  // belongs to the transcript's prepend owner.
+  virtual.shouldAdjustScrollPositionOnItemSizeChange = enabled
+    ? undefined
+    : () => false;
   useLayoutEffect(() => {
     const list = ref.current;
     if (!active || !scroller || !list) return;
