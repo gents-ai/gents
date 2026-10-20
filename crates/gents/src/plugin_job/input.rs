@@ -1571,6 +1571,17 @@ pub(crate) mod tests {
         }
 
         pub(crate) async fn write_progress(&self, row: &str, state: JobState, spawned: u32) {
+            self.write_progress_observed(row, state, spawned, 0).await;
+        }
+
+        /// [`Self::write_progress`] with `observed` terminal children observed.
+        pub(crate) async fn write_progress_observed(
+            &self,
+            row: &str,
+            state: JobState,
+            spawned: u32,
+            observed: u32,
+        ) {
             ConfigAccess::transact_local_write(&self.node, None, "test.input.progress", |txn| {
                 Box::pin(async move {
                     let guest = JobProgress {
@@ -1598,7 +1609,7 @@ pub(crate) mod tests {
                             spent: spawned,
                             remaining: 4 - spawned,
                         },
-                        observed_terminal_children: 0,
+                        observed_terminal_children: observed,
                         state,
                         pause_reason: None,
                     };

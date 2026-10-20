@@ -1521,9 +1521,9 @@ structure RecoveryCase where
   row : Recovery.PluginJobRow
 
 private def jobRow (terminalChildren observed live stepNew : Nat)
-    (deadlineExpired := false) (available := true) : Recovery.PluginJobRow :=
+    (deadlineExpired := false) (available := true) (stepped := true) : Recovery.PluginJobRow :=
   { running := true, sessionStopped := false, terminalChildren, observed, live, stepNew,
-    deadlineExpired, available }
+    deadlineExpired, available, stepped }
 
 def recoveryCases : List RecoveryCase :=
   [ ⟨"plugin_job_unobserved_terminal_step_with_new_effects_keeps_running", jobRow 2 1 0 1⟩
@@ -1536,7 +1536,11 @@ def recoveryCases : List RecoveryCase :=
   , ⟨"plugin_job_stopped_session_kills_row",
       { jobRow 1 1 1 0 with sessionStopped := true }⟩
   , ⟨"plugin_job_terminal_stale_kick_does_not_invoke_guest",
-      { jobRow 0 0 0 0 with running := false }⟩ ]
+      { jobRow 0 0 0 0 with running := false }⟩
+  , ⟨"plugin_job_resumed_row_first_step_with_new_effects_keeps_running",
+      jobRow 1 1 0 1 (stepped := false)⟩
+  , ⟨"plugin_job_resumed_row_first_step_without_new_effects_stalls",
+      jobRow 1 1 0 0 (stepped := false)⟩ ]
 
 /-- One tick of the registered sweep. -/
 def recoveryTick (row : Recovery.PluginJobRow) : Recovery.PluginJobRow :=
@@ -1559,14 +1563,15 @@ theorem recovery_regressions :
       [ (true, 1, 0, true, 2), (true, 1, 0, false, 2), (true, 1, 0, true, 2)
       , (true, 1, 0, false, 1), (true, 1, 0, false, 1), (true, 1, 0, false, 2)
       , (false, 0, 0, true, 1), (true, 1, 0, false, 1)
-      , (false, 0, 0, false, 0) ] := by
+      , (false, 0, 0, false, 0), (true, 1, 0, true, 1), (true, 1, 0, false, 1) ] := by
   native_decide
 
 private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
   Json.mkObj [("running", toJson r.running), ("session_stopped", toJson r.sessionStopped),
     ("terminal_children", toJson r.terminalChildren),
     ("observed", toJson r.observed), ("live", toJson r.live), ("step_new", toJson r.stepNew),
-    ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available)]
+    ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available),
+    ("stepped", toJson r.stepped)]
 
 private def renderRecovery (c : RecoveryCase) : Json :=
   let after := recoveryTick c.row
