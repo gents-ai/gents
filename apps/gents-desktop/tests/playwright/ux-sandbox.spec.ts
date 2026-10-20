@@ -158,6 +158,44 @@ test.describe("the plugin frame", () => {
       .toBe('"7"');
   });
 
+  test("takes no space until a surface shows it, and is placed over the viewport that does", async ({
+    page,
+  }) => {
+    /* the frame exists from the first line of load(); until a page is on
+       screen it must paint nothing and cover nothing */
+    const fresh = await page.evaluate(() => {
+      void window.__UX_HARNESS__.load();
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[data-ux-frame="harness/probe"]',
+      )!;
+      const rect = frame.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        visibility: getComputedStyle(frame).visibility,
+      };
+    });
+    expect(fresh).toEqual({ width: 0, height: 0, visibility: "hidden" });
+    await expect(frameOf(page).getByTestId("plugin-page")).toBeVisible();
+    const placed = await page.evaluate(() => {
+      const frame = document.querySelector<HTMLIFrameElement>(
+        'iframe[data-ux-frame="harness/probe"]',
+      )!;
+      const viewport = document.querySelector('[data-testid="ux-frame-viewport"]')!;
+      const f = frame.getBoundingClientRect();
+      const v = viewport.getBoundingClientRect();
+      return {
+        visibility: getComputedStyle(frame).visibility,
+        overViewport:
+          Math.abs(f.left - v.left) < 1 &&
+          Math.abs(f.top - v.top) < 1 &&
+          f.width > 0 &&
+          Math.abs(f.height - v.height) < 1,
+      };
+    });
+    expect(placed).toEqual({ visibility: "visible", overViewport: true });
+  });
+
   test("takes the frame down with a disable and builds a new one on enable", async ({
     page,
   }) => {

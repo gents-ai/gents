@@ -79,6 +79,10 @@ function createIframeTransport(key: string): FrameTransport {
   iframe.setAttribute("title", `plugin ${key}`);
   iframe.dataset.uxFrame = key;
   stageElement().appendChild(iframe);
+  /* parked until a viewport shows a surface: an unstyled frame is a
+     300x150 box at the stage's corner, painting the runtime's background
+     over the shell */
+  placeFrame(key, iframe, null);
   const channel = new MessageChannel();
   let handler: ((message: FrameToHost) => void) | null = null;
   const queued: HostToFrame[] = [];
