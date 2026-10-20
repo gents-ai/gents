@@ -1,0 +1,174 @@
+name: RC1 existing-artifact notary auth (CI control)
+
+# Auth-only control-plane workflow for the fixed RC1 candidate from
+# gents-ai/gents build run 39302246819 at application source SHA
+# 08edd1bdfedca73fa28e648e4781ae03aeacf5e6. It performs exactly one thing: a
+# read-only `xcrun notarytool history` probe proving the App Store Connect
+# notary credential path works. There is deliberately NO submission, NO
+# stapling, NO release/tag write, NO product build, and NO artifact download
+# in this workflow; those are separate, independently reviewed future work.
+# Dispatch is trusted only from the pinned repository's default branch, which
+# requires an Engineer-merged registration of this file on that branch.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: rc1-existing-artifact-notary
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GENTS_REPO: gents-ai/gents
+  GENTS_SOURCE_SHA: 08edd1bdfedca73fa28e648e4781ae03aeacf5e6
+  GENTS_BUILD_RUN_ID: "39302246819"
+
+jobs:
+  repository-guard:
+    name: Guard repository and dispatch context
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    timeout-minutes: 10
+    steps:
+      # Job-level trusted-context guard that runs BEFORE any checkout. On a
+      # self-hosted runner no untrusted ref (tag or PR head) may cause code
+      # from the repo to execute.
+      - name: Job-level trusted context guard (pre-checkout)
+        env:
+          TRUSTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "::error::Job-level guard: only workflow_dispatch events are accepted."
+            exit 1
+          fi
+          if [[ "${GITHUB_REPOSITORY}" != "${GENTS_REPO}" ]]; then
+            echo "::error::Job-level guard: expected repository ${GENTS_REPO}, got ${GITHUB_REPOSITORY}."
+            exit 1
+          fi
+          if [[ -z "${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Job-level guard: github.event.repository.default_branch was empty; refusing to proceed."
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != "refs/heads/${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Job-level guard: only 'refs/heads/${TRUSTED_DEFAULT_BRANCH}' is trusted, got '${GITHUB_REF}'."
+            exit 1
+          fi
+          if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+            echo "::error::Job-level guard: head ref '${GITHUB_HEAD_REF}' present; refusing."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (peeled commit)
+        with:
+          persist-credentials: false
+
+      - name: Assert trusted dispatch context
+        env:
+          # Explicit trusted-context expression; the runner-provided
+          # default-branch environment variable is not used because its
+          # availability is not guaranteed across runner versions.
+          TRUSTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "::error::This workflow only accepts manual workflow_dispatch."
+            exit 1
+          fi
+          if [[ "${GITHUB_REPOSITORY}" != "${GENTS_REPO}" ]]; then
+            echo "::error::Expected repository ${GENTS_REPO}, got ${GITHUB_REPOSITORY}."
+            exit 1
+          fi
+          if [[ -z "${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::github.event.repository.default_branch was empty; refusing to evaluate the branch guard."
+            exit 1
+          fi
+          # Compare the full ref, not just the short name: a tag literally
+          # named like the default branch would otherwise bypass the guard.
+          if [[ "${GITHUB_REF}" != "refs/heads/${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Dispatch is only trusted on the default branch 'refs/heads/${TRUSTED_DEFAULT_BRANCH}', got ref '${GITHUB_REF}'."
+            exit 1
+          fi
+          if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+            echo "::error::Dispatch carries a head ref '${GITHUB_HEAD_REF}'; refusing untrusted pull_request context."
+            exit 1
+          fi
+
+      - name: Preflight control toolchain and syntax-check control scripts
+        run: |
+          set -euo pipefail
+          # Fail fast (before any Apple/notary contact is possible) if the
+          # control-plane tools this auth-only workflow depends on are
+          # missing from the runner image.
+          for tool in shellcheck python3; do
+            command -v "${tool}" >/dev/null 2>&1 \
+              || { echo "::error::required control tool '${tool}' not found on runner"; exit 1; }
+          done
+          python3 -c 'import yaml' 2>/dev/null \
+            || { echo "::error::python3 PyYAML module not available (workflow tests require it)"; exit 1; }
+          shellcheck -s sh .github/scripts/rc1-notary-auth.sh
+          sh -n .github/scripts/rc1-notary-auth.sh
+
+      - name: Run notary control self-tests
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/test-rc1-notary-auth.py
+          python3 .github/scripts/test-rc1-notary-workflow.py
+
+  notary-auth-preflight:
+    name: Notary auth-only preflight (history)
+    needs: repository-guard
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    timeout-minutes: 10
+    steps:
+      - name: Job-level trusted context guard (pre-checkout)
+        env:
+          TRUSTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "::error::Job-level guard: only workflow_dispatch events are accepted."
+            exit 1
+          fi
+          if [[ "${GITHUB_REPOSITORY}" != "${GENTS_REPO}" ]]; then
+            echo "::error::Job-level guard: expected repository ${GENTS_REPO}, got ${GITHUB_REPOSITORY}."
+            exit 1
+          fi
+          if [[ -z "${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Job-level guard: github.event.repository.default_branch was empty; refusing to proceed."
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != "refs/heads/${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Job-level guard: only 'refs/heads/${TRUSTED_DEFAULT_BRANCH}' is trusted, got '${GITHUB_REF}'."
+            exit 1
+          fi
+          if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+            echo "::error::Job-level guard: head ref '${GITHUB_HEAD_REF}' present; refusing."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (peeled commit)
+        with:
+          persist-credentials: false
+
+      - name: Run auth-only notary credential probe
+        env:
+          MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+          # The helper runs in $RUNNER_TEMP (runner-scoped private temp),
+          # materializes the .p8 as 0600 inside a 0700 dir, captures the full
+          # notary history/errors in private 0600 files, emits only the
+          # allowlisted success line or a fixed HTTP-status diagnostic, and
+          # removes the key material and captured output via EXIT/INT/TERM
+          # traps. Cleanup is best-effort: it cannot cover SIGKILL or runner
+          # loss, so credential revocability remains the durable control.
+          bash .github/scripts/rc1-notary-auth.sh
+          echo "rc1-notary-auth: credential path verified; no submission was attempted (auth-only workflow)."
