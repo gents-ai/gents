@@ -74,8 +74,8 @@ async fn file_image_review_receipts_require_exact_scope_and_valid_node_signature
                 .await
                 .unwrap()
                 .unwrap()
-                .selection,
-            selection
+                .selection(),
+            &selection
         );
         for field in demand
             .reference_fields()
@@ -104,9 +104,11 @@ async fn file_image_review_receipts_require_exact_scope_and_valid_node_signature
 #[tokio::test]
 async fn file_image_review_admission_reuses_only_the_exact_reference() {
     let root = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(root.path().join("client.key"), None).unwrap();
     let node = std::sync::Arc::new(
         defra_node::EmbeddedNode::builder()
             .data_path(root.path())
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .unwrap(),

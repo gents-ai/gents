@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
-use gents::tool_call_lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
+use gents::tool_call_lifecycle::{
+    load_tool_file_change_observation, ToolFileChangeRead, VerifiedFileImageReceipt,
+};
 use gents::NodeIdentity;
 use gents_protocol::file_changes::ToolFileChanges;
 use gents_protocol::file_image_hydration::{
@@ -103,36 +105,38 @@ impl ClientCore {
                 let response = access.execute(&demand_query(&demand)).await?;
                 let row = demand_row(&response)?.context("file review demand disappeared")?;
                 if let Some(receipt) = verified_receipt(row, &demand, &self.node_identity).await? {
-                    match receipt.selection {
+                    match receipt.selection() {
                         FileImageSelection::Rejected => {
-                            anyhow::bail!("Runtime rejected file review: {}", receipt.detail)
+                            anyhow::bail!("Runtime rejected file review: {}", receipt.detail())
                         }
                         FileImageSelection::Missing => return Ok(None),
                         FileImageSelection::Selected { document } => {
-                            match load_tool_file_change_observation(
-                                &access,
-                                &demand.tool_call_doc_id,
-                                &demand.request_doc_id,
-                                &demand.admission.node_did,
-                                &demand.admission.session_id,
-                                Some(&demand.admission.requester_did),
-                            )
-                            .await?
-                            {
-                                ToolFileChangeRead::Retained {
-                                    document_id,
-                                    changes,
-                                } => {
-                                    anyhow::ensure!(
-                                        document_id == document,
+                            if receipt.grant_local_read(self.node.clone()).await? {
+                                match load_tool_file_change_observation(
+                                    &access,
+                                    &demand.tool_call_doc_id,
+                                    &demand.request_doc_id,
+                                    &demand.admission.node_did,
+                                    &demand.admission.session_id,
+                                    Some(&demand.admission.requester_did),
+                                )
+                                .await?
+                                {
+                                    ToolFileChangeRead::Retained {
+                                        document_id,
+                                        changes,
+                                    } => {
+                                        anyhow::ensure!(
+                                        &document_id == document,
                                         "file review observation differs from the signed receipt"
                                     );
-                                    return Ok(Some(changes));
+                                        return Ok(Some(changes));
+                                    }
+                                    ToolFileChangeRead::Unsupported => {
+                                        anyhow::bail!("local file-image collection is unavailable")
+                                    }
+                                    ToolFileChangeRead::Missing | ToolFileChangeRead::Pending => {}
                                 }
-                                ToolFileChangeRead::Unsupported => {
-                                    anyhow::bail!("local file-image collection is unavailable")
-                                }
-                                ToolFileChangeRead::Missing | ToolFileChangeRead::Pending => {}
                             }
                         }
                     }
@@ -215,7 +219,7 @@ async fn verified_receipt(
     row: &Value,
     demand: &FileImageDemand,
     identity: &dyn NodeIdentity,
-) -> Result<Option<FileImageHydrationReceipt>> {
+) -> Result<Option<VerifiedFileImageReceipt>> {
     ensure_demand(row, demand)?;
     let text = |field: &str| {
         row[field]
@@ -249,18 +253,9 @@ async fn verified_receipt(
         signer_did: text("outcome_signer_did")?.into(),
         signature: bs58::decode(text("outcome_signature")?).into_vec()?,
     };
-    receipt.validate_shape()?;
-    anyhow::ensure!(
-        identity
-            .verify(
-                &demand.admission.node_did,
-                &receipt.signing_payload()?,
-                &receipt.signature
-            )
-            .await?,
-        "file review receipt signature is invalid"
-    );
-    Ok(Some(receipt))
+    Ok(Some(
+        VerifiedFileImageReceipt::verify(receipt, demand, identity).await?,
+    ))
 }
 
 #[cfg(test)]

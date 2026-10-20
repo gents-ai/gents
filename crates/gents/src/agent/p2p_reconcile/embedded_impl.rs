@@ -1577,6 +1577,48 @@ mod tests {
                 .unwrap(),
             [true]
         );
+        let mut demand = gents_protocol::file_image_hydration::FileImageDemand {
+            admission: gents_protocol::session_hydration::HydrationRequest {
+                request_key: String::new(),
+                peer_id: peer_id.clone(),
+                requester_did: receiver_identity.did().into(),
+                node_did: sender_identity.did().into(),
+                session_id: "session".into(),
+            },
+            request_doc_id: "request".into(),
+            tool_call_doc_id: "selected-tool".into(),
+        };
+        demand.admission.request_key = demand.derive_request_key();
+        let mut receipt = gents_protocol::file_image_hydration::FileImageHydrationReceipt {
+            version: gents_protocol::file_image_hydration::FILE_IMAGE_RECEIPT_VERSION,
+            demand: demand.clone(),
+            selection: gents_protocol::file_image_hydration::FileImageSelection::Selected {
+                document: selected.clone(),
+            },
+            detail: String::new(),
+            processed_at: "2026-10-20T00:00:00Z".into(),
+            signer_did: sender_identity.did().into(),
+            signature: Vec::new(),
+        };
+        receipt.signature = sender_identity
+            .sign(&receipt.signing_payload().unwrap())
+            .await
+            .unwrap();
+        let receipt = crate::tool_call_lifecycle::VerifiedFileImageReceipt::verify(
+            receipt,
+            &demand,
+            &receiver_identity,
+        )
+        .await
+        .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !receipt.grant_local_read(receiver.clone()).await.unwrap() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "image creator registration did not arrive"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         wait_for_value(
             receiver,
             "ToolFileChange",
@@ -1592,6 +1634,83 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["_docID"], selected);
         assert_eq!(rows[0]["file_changes"]["tool_call_doc_id"], "selected-tool");
+        let outsider_identity =
+            KeyIdentity::load_or_create(keys.path().join("outsider.key"), None).unwrap();
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        for case in snapshot["stored_file_image_access_cases"]
+            .as_array()
+            .unwrap()
+        {
+            let owner = match case["owner"].as_str().unwrap() {
+                "node" => sender,
+                "client" => receiver,
+                role => panic!("unknown modeled storage owner: {role}"),
+            };
+            let visible = if let Some(actor) = case["actor"].as_str() {
+                let did = match actor {
+                    "node" => sender_identity.did(),
+                    "client" => receiver_identity.did(),
+                    "outsider" => outsider_identity.did(),
+                    role => panic!("unknown modeled actor: {role}"),
+                }
+                .parse()
+                .unwrap();
+                let result = crate::config_client::ConfigAccess::transact_local_write(
+                    owner,
+                    Some(did),
+                    "test.file_images.storage_access",
+                    |txn| {
+                        Box::pin(async move { txn.execute("{ ToolFileChange { _docID } }").await })
+                    },
+                )
+                .await
+                .unwrap();
+                result["data"]["ToolFileChange"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["_docID"] == selected)
+            } else {
+                let collection = owner.get_collection("ToolFileChange").unwrap().unwrap();
+                owner
+                    .document_acp()
+                    .check_doc_access(
+                        &defra_node::AcpIdentity::Anonymous,
+                        defra_node::DocumentPermission::Read,
+                        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+                        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
+                        &collection.collection_id,
+                    )
+                    .await
+                    .unwrap()
+            };
+            assert_eq!(visible, case["expected"].as_bool().unwrap(), "{case}");
+        }
+        let outsider_test = runtime_test_node_with_identity(&outsider_identity).await;
+        let outsider = &outsider_test.node;
+        let outsider_admin = EmbeddedRemoteP2pAdmin::new(outsider.clone());
+        outsider_admin.connect(&receiver_addresses).await.unwrap();
+        wait_for_active_peer(&outsider_admin).await;
+        let pull = outsider
+            .p2p()
+            .unwrap()
+            .sync_documents(
+                "ToolFileChange",
+                vec![selected.clone()],
+                Some(Duration::from_secs(5)),
+            )
+            .await;
+        let copied = crate::config_client::ConfigAccess::local(outsider.clone())
+            .execute("{ ToolFileChange { _docID } }")
+            .await
+            .unwrap();
+        assert!(
+            copied["data"]["ToolFileChange"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "an unrelated transport peer fetched a retained image from its recipient: {pull:?}"
+        );
         assert!(sender_admin
             .list_p2p_collections()
             .await
@@ -1604,6 +1723,7 @@ mod tests {
             .is_empty());
         sender.shutdown().await;
         receiver.shutdown().await;
+        outsider.shutdown().await;
     }
 
     #[tokio::test]
