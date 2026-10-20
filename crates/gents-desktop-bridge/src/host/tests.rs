@@ -1,3 +1,5 @@
+mod runtime;
+
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -280,6 +282,18 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     assert!(!gents::identity::can_mint_defradb_bearer(&did));
     let host = ClientHost::new(core.clone());
     let approvals = super::approvals::AttachmentApprovals::default();
+    assert_eq!(
+        host.execute(
+            protocol::ClientCommand::RuntimeIsLocal {
+                node_did: did.clone()
+            },
+            &approvals,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap(),
+        true
+    );
     host.execute(
         protocol::ClientCommand::Snapshot {},
         &approvals,
@@ -354,27 +368,6 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .to_str()
         .unwrap()
         .starts_with("Bearer "));
-    core.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn runtime_location_rejects_an_unconfigured_node() {
-    let (core, _dir) = crate::tests::support::boot_core().await;
-    let host = ClientHost::new(core.clone());
-    let command: protocol::ClientCommand = serde_json::from_value(json!({
-        "name":"client_runtime_is_local", "args":{"nodeDid":"did:unconfigured"}
-    }))
-    .unwrap();
-    assert!(command.is_cancellable());
-    let error = host
-        .execute(
-            command,
-            &super::approvals::AttachmentApprovals::default(),
-            CancellationToken::new(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code, crate::BridgeErrorCode::InvalidArgument);
     core.shutdown().await.unwrap();
 }
 
