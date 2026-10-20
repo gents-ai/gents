@@ -214,6 +214,13 @@ pub enum ClientCommand {
     },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
+    #[serde(rename = "desktop_request_retry")]
+    Retry {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
     #[serde(rename = "desktop_pending_queue_edit")]
     EditPending { request: PendingQueueEditRequest },
     #[serde(rename = "desktop_pending_message_steer")]
@@ -270,6 +277,7 @@ impl ClientCommand {
         "desktop_session_goal",
         "desktop_goal_control",
         "desktop_chat_send",
+        "desktop_request_retry",
         "desktop_pending_queue_edit",
         "desktop_pending_message_steer",
         "desktop_session_fork_before_message",
