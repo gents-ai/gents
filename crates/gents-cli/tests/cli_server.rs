@@ -1872,6 +1872,55 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-network-settings-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let p2p_port = allocate_port()?;
+    let agent_name = format!("cli-network-settings-{}", Uuid::new_v4().simple());
+    run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    fs::write(
+        home_dir.join(".gents").join("network.json"),
+        serde_json::to_vec(&json!({
+            "http_addr": "127.0.0.1",
+            "p2p_bind_addr": "127.0.0.1",
+            "p2p_port": p2p_port,
+            "p2p_relay_mode": "disabled",
+            "p2p_discovery": "disabled",
+        }))?,
+    )?;
+
+    let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
+    wait_for_port(port, &mut serve)?;
+    let listen = readiness
+        .get("p2p_listen_addresses")
+        .and_then(Value::as_array)
+        .context("readiness lists P2P listen addresses")?;
+    assert!(
+        listen
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|address| address.contains(&format!("127.0.0.1:{p2p_port}"))),
+        "P2P must listen on the persisted port {p2p_port}: {listen:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
