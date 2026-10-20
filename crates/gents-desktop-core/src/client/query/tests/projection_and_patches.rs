@@ -431,7 +431,64 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
 }
 
 #[test]
-fn selected_request_lookup_distinguishes_arrival_from_a_missing_canonical_head() {
+fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
+    use crate::error::{BridgeError, BridgeErrorCode};
+
+    let lookup = || super::super::SelectedRequestLookup {
+        query: String::new(),
+        expected_doc_id: Some("canonical-doc".into()),
+        expected_request_id: Some("canonical-request".into()),
+    };
+    let absent = serde_json::json!({ "AgentRequest": [] });
+    let error = lookup()
+        .decode(&absent, "did:test:agent", "session", None)
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<BridgeError>().map(|error| error.code),
+        Some(BridgeErrorCode::ProjectionPending)
+    );
+
+    let row = serde_json::json!({
+        "_docID": "canonical-doc", "request_id": "canonical-request",
+        "node_did": "did:test:agent", "session_id": "session",
+        "requester_did": null, "purpose": "normal"
+    });
+    for (field, value) in [
+        ("_docID", serde_json::json!("logical-twin-doc")),
+        ("request_id", serde_json::json!("different-request")),
+        ("node_did", serde_json::json!("did:test:other-node")),
+        ("session_id", serde_json::json!("other-session")),
+        ("requester_did", serde_json::json!("did:test:other-user")),
+        ("purpose", Value::Null),
+    ] {
+        let mut changed = row.clone();
+        changed[field] = value;
+        let data = serde_json::json!({"AgentRequest": [changed]});
+        let error = lookup()
+            .decode(&data, "did:test:agent", "session", None)
+            .unwrap_err();
+        assert!(
+            error.downcast_ref::<BridgeError>().is_none(),
+            "{field} must fail rather than wait: {error}"
+        );
+    }
+    let duplicated = serde_json::json!({"AgentRequest": [row.clone(), row.clone()]});
+    assert!(lookup()
+        .decode(&duplicated, "did:test:agent", "session", None)
+        .unwrap_err()
+        .downcast_ref::<BridgeError>()
+        .is_none());
+    let arrived = serde_json::json!({"AgentRequest": [row]});
+    let rows = lookup()
+        .decode(&arrived, "did:test:agent", "session", None)
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].doc_id.as_deref(), Some("canonical-doc"));
+    assert_eq!(rows[0].request_id, "canonical-request");
+}
+
+#[test]
+fn selected_request_lookup_keeps_unobserved_rows_pending() {
     use crate::error::{BridgeError, BridgeErrorCode};
 
     let data = serde_json::json!({ "AgentRequest": [] });
@@ -455,9 +512,11 @@ fn selected_request_lookup_distinguishes_arrival_from_a_missing_canonical_head()
     };
     let error = head
         .decode(&data, "did:test:agent", "session", None)
-        .expect_err("missing canonical head is invalid");
-    assert!(error.downcast_ref::<BridgeError>().is_none());
-    assert!(error.to_string().contains("exact physical request"));
+        .expect_err("unobserved canonical head is pending");
+    assert_eq!(
+        error.downcast_ref::<BridgeError>().map(|error| error.code),
+        Some(BridgeErrorCode::ProjectionPending)
+    );
 }
 
 #[test]

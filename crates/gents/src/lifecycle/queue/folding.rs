@@ -16,9 +16,14 @@ pub(crate) struct FoldedInput {
     pub(crate) request_doc_id: String,
     pub(crate) request_id: String,
     pub(crate) content: String,
+    pub(crate) input: gents_protocol::request_input::RequestInput,
 }
 
 impl FoldedInput {
+    pub(crate) fn message(&self) -> Result<gents_protocol::message::Message> {
+        self.input.authored_message(&self.content)
+    }
+
     pub(crate) fn key(&self) -> String {
         folded_input_key(&self.request_doc_id)
     }
@@ -114,7 +119,7 @@ fn folds_into(
         && blank(row.caused_by_trigger_id.as_deref())
         && blank(row.caused_by_source_doc_id.as_deref())
         && blank(row.caused_by_parent_tool_call_doc_id.as_deref())
-        && !blank(row.content.as_deref())
+        && (!blank(row.content.as_deref()) || !input.captured_context.is_empty())
 }
 
 pub(crate) async fn fold_candidates(
@@ -193,6 +198,7 @@ pub(crate) async fn select_fold_in_claim_txn(
             request_doc_id: doc.clone(),
             request_id: row.request_id.clone(),
             content: row.content.clone().unwrap_or_default(),
+            input: row.input.clone().unwrap_or_default(),
         });
     }
     Ok(selected)
@@ -246,7 +252,11 @@ pub(crate) async fn consume_folded_in_txn(
     if row.doc_id.as_deref() != Some(consumption.folded_request_doc_id.as_str())
         || !selected
         || expected
-            != &gents_protocol::message::Message::user(row.content.clone().unwrap_or_default())
+            != &row
+                .input
+                .as_ref()
+                .unwrap_or(&RequestInput::default())
+                .authored_message(row.content.as_deref().unwrap_or_default())?
     {
         return Err(PendingInputChanged.into());
     }
@@ -393,6 +403,7 @@ pub(crate) async fn load_consumed_folded_inputs(
                             request_doc_id: doc,
                             request_id: row.request_id,
                             content: row.content.unwrap_or_default(),
+                            input: row.input.unwrap_or_default(),
                         })
                     })
                     .collect()

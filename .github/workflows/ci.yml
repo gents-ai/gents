@@ -98,6 +98,25 @@ jobs:
           shellcheck .github/scripts/setup-afterburner-toolchains.sh
           python3 .github/scripts/test-afterburner-downloads.py
 
+  publish-control-tests:
+    # Focused, network-free tests for the staged-prerelease publication
+    # control script (fake gh). No secrets; read-only token.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run publication control tests
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/publish-venv"
+          "${RUNNER_TEMP}/publish-venv/bin/pip" install --quiet pyyaml==6.0.2
+          "${RUNNER_TEMP}/publish-venv/bin/python" .github/scripts/test-publish-staged-prerelease.py
+
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
     if: >-

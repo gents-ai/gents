@@ -25,16 +25,14 @@ const RETRY_CONTINUATION: &str = "Continue the failed request from the recorded 
 
 pub(super) fn request_entry(
     mut history: Vec<TaggedMessage>,
-    content: &str,
+    authored: &Message,
     resume: bool,
     context: Option<&Message>,
     wake_notifications: &[TaggedMessage],
 ) -> Result<(Vec<TaggedMessage>, TaggedMessage)> {
     if !resume {
         history = super::wake_input::project(history, wake_notifications);
-        history.push(TaggedMessage::unassociated(Message::user(
-            content.to_owned(),
-        )));
+        history.push(TaggedMessage::unassociated(authored.clone()));
     } else if let Some(context) = context {
         history.push(TaggedMessage::unassociated(context.clone()));
     } else if history
@@ -419,10 +417,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     loop_config.context_message = request_context_message.clone();
                     loop_config.resume_from_history = resume_from_history;
                     loop_config.folded_prompts = folded_prompts.clone();
+                    let authored_prompt = request.input.authored_message(&request.content)?;
                     let authored_input = |folded: Vec<crate::agent::loop_stream::FoldedPrompt>| {
                         crate::agent::loop_stream::AuthoredInput {
                             context: request_context_message.clone(),
-                            prompt: crate::llm::message::Message::user(request.content.clone()),
+                            prompt: authored_prompt.clone(),
                             folded,
                         }
                     };
@@ -488,7 +487,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             .collect();
                         let entry = request_entry(
                             history.to_vec(),
-                            &request.content,
+                            &authored_prompt,
                             resume_from_history,
                             loop_config.context_message.as_ref(),
                             wake_notifications,
@@ -1406,7 +1405,7 @@ pub(super) mod tests {
             let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
             let (mut actual, prompt) = super::request_entry(
                 history,
-                &case["authored"].to_string(),
+                &crate::llm::message::Message::user(case["authored"].to_string()),
                 case["resume"].as_bool().unwrap(),
                 context.as_ref(),
                 &[],

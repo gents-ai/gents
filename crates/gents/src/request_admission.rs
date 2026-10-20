@@ -604,6 +604,10 @@ async fn verify_request_input(
             "auxiliary request cannot carry ordinary request input",
         );
     }
+    deny_if(
+        input.captured_context.iter().all(|context| context.is_well_formed()),
+        "captured context requires an ordered UTF-16 range and a positive buffer version when present",
+    )?;
     let owner = required_row_string(row.node_did.as_deref(), "node_did")?;
     let agent = required_row_string(row.agent_id.as_deref(), "agent_id")?;
     let (context, tools, _) = load_request_context(node, owner, agent).await?;
@@ -1181,6 +1185,9 @@ pub(crate) async fn load_request_for_admission_test(
 
 #[cfg(test)]
 mod title_tests;
+
+#[cfg(test)]
+mod captured_context_tests;
 
 #[cfg(test)]
 pub(crate) mod workspace_cleanup_tests;

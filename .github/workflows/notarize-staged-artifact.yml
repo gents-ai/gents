@@ -17,6 +17,14 @@ on:
         description: SHA-256 (lowercase hex) of the staged zip; file must be <inbox>/<sha256>.zip.
         required: true
         type: string
+      artifact_kind:
+        description: app (zip of one signed .app; stapled) or cli (zip of one signed executable; ticket checked, not stapleable).
+        required: true
+        type: choice
+        default: app
+        options:
+          - app
+          - cli
       mode:
         description: submit (new submission, duplicate-guarded) or resume (continue an existing submission id).
         required: true
@@ -47,6 +55,12 @@ env:
   NOTARY_INBOX_DIR: /Users/admin/gents-notary-inbox
   EXPECTED_TEAM_ID: NXJ753WW5X
   EXPECTED_BUNDLE_ID: com.source-inc.gents
+  EXPECTED_CLI_NAME: gents
+  # The authentic 039e2299 candidate CLI is signed with Identifier=gents
+  # (checked with codesign -dv). release-macos.yml signs CLIs as
+  # com.source-inc.gents.cli; this workflow pins the candidate's actual
+  # identifier rather than re-signing it to match.
+  EXPECTED_CLI_IDENTIFIER: gents
   # SHA-256 of the existing "Developer ID Application: John Zampolin
   # (NXJ753WW5X)" leaf certificate (SHA-1 4855F05BB34BFB227F828F9856DA05D2D02E7D0F).
   EXPECTED_LEAF_CERT_SHA256: ffe161226e3ba89575fbb2fa4e0ffc2f7b0a7c99de8fc2f696a24fb8d74f1baf
@@ -94,7 +108,7 @@ jobs:
       - name: Preflight runtime tools
         run: |
           set -euo pipefail
-          for tool in python3 shasum ditto codesign xcrun spctl; do
+          for tool in python3 shasum ditto codesign xcrun spctl lipo; do
             command -v "${tool}" >/dev/null 2>&1 || {
               echo "::error::required tool '${tool}' not found on runner"
               exit 1
@@ -109,6 +123,7 @@ jobs:
         env:
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
           NOTARY_MODE: ${{ inputs.mode }}
+          ARTIFACT_KIND: ${{ inputs.artifact_kind }}
           SUBMISSION_ID: ${{ inputs.submission_id }}
           RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
         run: bash .github/scripts/notarize-staged-artifact.sh verify
@@ -118,6 +133,7 @@ jobs:
         env:
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
           NOTARY_MODE: ${{ inputs.mode }}
+          ARTIFACT_KIND: ${{ inputs.artifact_kind }}
           SUBMISSION_ID: ${{ inputs.submission_id }}
           RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
           MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
@@ -141,6 +157,7 @@ jobs:
         env:
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
           NOTARY_MODE: ${{ inputs.mode }}
+          ARTIFACT_KIND: ${{ inputs.artifact_kind }}
           SUBMISSION_ID: ${{ inputs.submission_id }}
           RUN_DIR: ${{ runner.temp }}/notarize-${{ github.run_id }}-${{ github.run_attempt }}
           MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}

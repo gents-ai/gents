@@ -39,6 +39,102 @@ struct RetryRequestIdInjection {
     new_request_id: String,
 }
 
+#[test]
+fn authored_submission_presence_matches_the_model_for_initial_and_retry_input() -> Result<()> {
+    for case in &lean_contract_snapshot().request_input_cases {
+        let input: RequestInput = serde_json::from_value(case["input"].clone())?;
+        assert_eq!(
+            normalize_authored_content(&input, case["authored_text"].as_str().unwrap()).is_ok(),
+            case["expected_has_authored_input"].as_bool().unwrap(),
+            "{}",
+            case["name"],
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_simulated_route(),
+    )
+    .await?;
+    let result = async {
+        let recovery = lean_contract_snapshot()
+            .session_recovery_cases
+            .iter()
+            .find(|case| case.legal)
+            .context("legal retry witness")?;
+        let pre = seed_session_recovery_pre_state(&core, recovery).await?;
+        let captured = lean_contract_snapshot()
+            .request_input_cases
+            .iter()
+            .find(|case| case["name"] == "capture-only-without-invented-prose")
+            .context("capture-only input witness")?;
+        let request_id = Uuid::new_v4().to_string();
+        let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            &request_id,
+            core.node_identity().did(),
+            core.node_identity().did(),
+            RECOVERY_AGENT_ID,
+            &pre.session_id,
+            captured["authored_text"].as_str().unwrap(),
+            &recovery.pre_origin,
+            canonical_request_created_at_after(pre.parent.created_at.as_deref())?,
+            test_local_admission(&core),
+        );
+        create.input = serde_json::from_value(captured["input"].clone())?;
+        create.retry_count = recovery.pre_retry_count as i64;
+        create.max_retries = recovery.max_retries as i64;
+        gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
+        ConfigAccess::write_local(
+            &core.node_arc(),
+            "test.capture_retry_parent",
+            &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+        force_request_state_for_test(
+            &core.node_arc(),
+            &request_id,
+            &forced_retry_parent_state(recovery),
+        )
+        .await?;
+        core.refresh_store().await?;
+        let parent = fetch_request_row_for_test(core.node(), &request_id).await?;
+        gents::verify_request_receipt_signature(&parent)?;
+        let snapshot = core.store().snapshot();
+        let retry = retry_request(
+            &core.node_arc(),
+            snapshot.as_ref(),
+            &parent,
+            core.node_identity().did(),
+            core.node_identity(),
+            test_local_admission(&core),
+        )
+        .await?;
+        let row = fetch_request_row_for_test(core.node(), &retry.request_id).await?;
+        gents::verify_request_receipt_signature(&row)?;
+        assert_eq!(row.content.as_deref(), Some(""));
+        assert_eq!(row.input, parent.input);
+        assert_eq!(row.retry_parent_request_doc_id, parent.doc_id);
+        assert_eq!(
+            fetch_request_row_for_test(core.node(), &request_id)
+                .await?
+                .input,
+            parent.input
+        );
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    let shutdown = Arc::new(core).shutdown().await;
+    result?;
+    shutdown?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     let node = defra_node::EmbeddedNode::builder().build().await?;
@@ -814,34 +910,15 @@ async fn fetch_request_row_for_test(
 ) -> Result<AgentRequestRow> {
     let escaped_request_id = escape_graphql_string(request_id);
     query_single_for_test(
-            node,
-            &format!(
-                r#"{{
-                    AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                        _docID
-                        request_id
-                        node_did
-                        requester_did
-                        agent_id
-                        session_id
-                        content
-                        input
-                        max_total_tokens
-                        lifecycle_state
-                        deadline
-                        backend_id
-                        execution_origin
-                        retry_root_request
-                        retry_parent_request
-                        retry_parent_request_doc_id
-                        retry_count
-                        max_retries
-                    }}
-                }}"#
-            ),
-            "AgentRequest",
-        )
-        .await
+        node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                {} backend_id
+            }} }}"#,
+            gents::SIGNED_REQUEST_FIELDS,
+        ),
+        "AgentRequest",
+    ).await
 }
 
 async fn latest_request_id_for_session_for_test(
@@ -1394,7 +1471,7 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
     )
     .await?;
     core.refresh_store().await?;
-    let parent = request_from_store_for_test(&core, &original.request_id)?;
+    let parent = fetch_request_row_for_test(core.node(), &original.request_id).await?;
 
     let (left, right) = tokio::join!(core.retry_request(&parent), core.retry_request(&parent));
     let left = left?;
