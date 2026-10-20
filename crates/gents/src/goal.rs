@@ -233,6 +233,7 @@ pub enum GoalStatus {
     UsageLimited,
     BudgetLimited,
     Complete,
+    Stopped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +283,7 @@ pub enum GoalAuditObservation {
 pub enum GoalAction {
     Pause,
     Resume,
+    Stop,
     Complete,
     BlockedAudit(GoalAuditObservation),
     OperatorBlock,
@@ -326,11 +328,23 @@ impl GoalState {
                     ..self
                 })
             }
-            GoalAction::Complete if self.status != GoalStatus::Complete => Some(Self {
-                status: GoalStatus::Complete,
-                wrapup_completed: true,
-                ..self
-            }),
+            GoalAction::Complete
+                if !matches!(self.status, GoalStatus::Complete | GoalStatus::Stopped) =>
+            {
+                Some(Self {
+                    status: GoalStatus::Complete,
+                    wrapup_completed: true,
+                    ..self
+                })
+            }
+            GoalAction::Stop
+                if !matches!(self.status, GoalStatus::Complete | GoalStatus::Stopped) =>
+            {
+                Some(Self {
+                    status: GoalStatus::Stopped,
+                    ..self
+                })
+            }
             GoalAction::BlockedAudit(observation) if self.status == GoalStatus::Active => {
                 let blocked_audits = match observation {
                     GoalAuditObservation::SameRequest => self.blocked_audits.max(0),
@@ -474,7 +488,8 @@ pub fn decide_goal_continuation(
         GoalStatus::Paused
         | GoalStatus::Blocked
         | GoalStatus::UsageLimited
-        | GoalStatus::Complete => GoalDecision::None,
+        | GoalStatus::Complete
+        | GoalStatus::Stopped => GoalDecision::None,
     }
 }
 
@@ -487,6 +502,7 @@ impl GoalStatus {
             Self::UsageLimited => "usage_limited",
             Self::BudgetLimited => "budget_limited",
             Self::Complete => "complete",
+            Self::Stopped => "stopped",
         }
     }
 
@@ -498,6 +514,7 @@ impl GoalStatus {
             "usage_limited" | "usageLimited" => Some(Self::UsageLimited),
             "budget_limited" | "budgetLimited" => Some(Self::BudgetLimited),
             "complete" => Some(Self::Complete),
+            "stopped" => Some(Self::Stopped),
             _ => None,
         }
     }
@@ -518,6 +535,7 @@ fn operator_action_for_status(current: GoalStatus, target: GoalStatus) -> Option
         GoalStatus::UsageLimited => GoalAction::UsageLimit,
         GoalStatus::BudgetLimited => GoalAction::BudgetExhausted,
         GoalStatus::Complete => GoalAction::Complete,
+        GoalStatus::Stopped => GoalAction::Stop,
     })
 }
 

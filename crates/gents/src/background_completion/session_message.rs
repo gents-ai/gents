@@ -171,6 +171,7 @@ fn assignment_status_reason(status: crate::goal::GoalStatus) -> &'static str {
         crate::goal::GoalStatus::UsageLimited => "assignment_usage_limited",
         crate::goal::GoalStatus::BudgetLimited => "assignment_budget_limited",
         crate::goal::GoalStatus::Complete => "assignment_complete",
+        crate::goal::GoalStatus::Stopped => "assignment_stopped",
     }
 }
 

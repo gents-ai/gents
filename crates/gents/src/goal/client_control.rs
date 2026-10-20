@@ -22,6 +22,7 @@ pub(crate) enum PreparedGoalControl {
         fields: GoalEdit,
     },
     Pause(GoalDocument),
+    Stop(GoalDocument),
     ResumeCurrent(GoalDocument),
     ResumeIdle {
         goal: GoalDocument,
@@ -55,9 +56,15 @@ pub(crate) async fn prepare_goal_control(
         ));
     }
     let goal = load_canonical_goal_in_txn(txn, &command.node_did, &command.session_id).await?;
-    let requests =
+    let requests = if matches!(
+        command.operation,
+        GoalOperation::Create { .. } | GoalOperation::Resume {}
+    ) {
         super::request_head::load_session_requests(txn, &command.node_did, &command.session_id)
-            .await?;
+            .await?
+    } else {
+        Vec::new()
+    };
     let idle = goal_session_is_idle(&requests);
     if let GoalOperation::Create {
         objective,
@@ -179,6 +186,12 @@ pub(crate) async fn prepare_goal_control(
             }
             PreparedGoalControl::Pause(goal)
         }
+        GoalOperation::Stop {} => {
+            if state.step(GoalAction::Stop).is_none() {
+                return Ok(Err("goal status does not allow removal".into()));
+            }
+            PreparedGoalControl::Stop(goal)
+        }
         GoalOperation::Resume {} => {
             if state.step(GoalAction::Resume).is_none()
                 || (!idle && state.status != GoalStatus::Paused)
@@ -217,6 +230,7 @@ pub(crate) async fn stage_goal_control(
         PreparedGoalControl::Create { request, .. } => &request.node_did,
         PreparedGoalControl::Edit { goal, .. }
         | PreparedGoalControl::Pause(goal)
+        | PreparedGoalControl::Stop(goal)
         | PreparedGoalControl::ResumeCurrent(goal)
         | PreparedGoalControl::ResumeIdle { goal, .. } => &goal.node_did,
     };
@@ -266,13 +280,18 @@ pub(crate) async fn stage_goal_control(
             .context("goal changed while staging its edit")?;
             (updated.goal_id, None)
         }
-        PreparedGoalControl::Pause(goal) => {
+        operation @ (PreparedGoalControl::Pause(_) | PreparedGoalControl::Stop(_)) => {
+            let (goal, status) = match operation {
+                PreparedGoalControl::Pause(goal) => (goal, GoalStatus::Paused),
+                PreparedGoalControl::Stop(goal) => (goal, GoalStatus::Stopped),
+                _ => unreachable!(),
+            };
             let updated = set_goal_in_txn(
                 txn,
                 &goal.node_did,
                 &goal.session_id,
                 None,
-                Some(GoalStatus::Paused),
+                Some(status),
                 None,
                 None,
             )

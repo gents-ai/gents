@@ -202,6 +202,9 @@ impl DefraSessionHook {
                         GoalStatus::Complete => {
                             "a complete goal is terminal and has no resume path"
                         }
+                        GoalStatus::Stopped => {
+                            "the goal was removed by its operator and cannot be resumed"
+                        }
                         GoalStatus::BudgetLimited => {
                             "a budget_limited goal cannot be reactivated and has no resume path"
                         }

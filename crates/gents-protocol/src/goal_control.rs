@@ -8,6 +8,11 @@ use crate::{
 
 pub const SESSION_GOAL_CONTROL_VERSION: u8 = 1;
 
+/// Older runtimes cannot decode a Stop intent. Clients must observe this
+/// capability on the selected serving runtime before publishing that intent.
+pub const GOAL_STOP_CONTRACT_VERSION: u8 = 1;
+pub const STATUS_GOAL_STOP_CONTRACT_FIELD: &str = "goal_stop_contract_version";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -99,6 +104,7 @@ pub enum GoalOperation {
     },
     Pause {},
     Resume {},
+    Stop {},
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
