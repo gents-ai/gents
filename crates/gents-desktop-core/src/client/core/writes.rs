@@ -1417,6 +1417,7 @@ impl ClientCore {
         let result = mutations::resend_request(
             &self.node,
             snapshot.as_ref(),
+            &self.session_queue_access(node_did),
             stale_request_id,
             node_did,
             &requester_did,
