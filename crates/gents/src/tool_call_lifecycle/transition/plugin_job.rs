@@ -16,6 +16,12 @@ pub(crate) struct PluginJobTerminal {
     continuation: bool,
 }
 
+impl PluginJobTerminal {
+    pub(crate) fn won(&self) -> bool {
+        self.won
+    }
+}
+
 fn terminal_fields(state: ToolCallState, reason: Option<&str>) -> TerminalFields<'_> {
     TerminalFields {
         state,
