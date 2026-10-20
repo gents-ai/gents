@@ -19,7 +19,9 @@ export function WorkflowsOffer({ deployment }: { deployment: NodeView }) {
       .then(
         (sources) =>
           current &&
-          setInstalled(sources.plugins.some((p) => p.plugin === WORKFLOW_ENGINE.plugin)),
+          setInstalled(
+            sources.plugins.some((p) => p.plugin === WORKFLOW_ENGINE.plugin),
+          ),
       )
       .catch(() => {});
     return () => {
