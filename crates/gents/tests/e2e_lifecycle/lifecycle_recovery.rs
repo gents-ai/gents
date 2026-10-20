@@ -625,7 +625,23 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                 })
             })
             .collect::<Vec<_>>();
-        panic!("failed wake did not retain its notification and processing successor: {error}; requests={}; messages={notifications:?}; tools={tools:?}; provider_calls={}",
+        let inputs = runtime
+            .backend
+            .observed_completion_bodies()
+            .into_iter()
+            .map(|body| {
+                body["messages"]
+                    .as_array()
+                    .and_then(|messages| {
+                        messages
+                            .iter()
+                            .rev()
+                            .find(|message| message["role"] == "user")
+                    })
+                    .map(|message| message["content"].clone())
+            })
+            .collect::<Vec<_>>();
+        panic!("failed wake did not retain its notification and processing successor: {error}; requests={}; messages={notifications:?}; tools={tools:?}; provider_inputs={inputs:?}; provider_calls={}",
             serde_json::to_string(&rows).expect("encode wake diagnostics"),
             runtime.backend.observed_requests("continue"),
         );
