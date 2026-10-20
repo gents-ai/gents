@@ -163,7 +163,8 @@ impl RecvStream {
     /// [`RecvStream::read_chunk`]; use [`bytes_read()`](Self::bytes_read) to query that offset
     /// explicitly.
     ///
-    /// For unordered reads, convert the stream into an unordered stream using [`Self::into_unordered`].
+    /// For unordered reads, convert the stream into an unordered stream using
+    /// [`Self::into_unordered`].
     ///
     /// Slightly more efficient than [`RecvStream::read`] due to not copying. Chunk boundaries do
     /// not correspond to peer writes, and hence cannot be used as framing.
@@ -197,6 +198,17 @@ impl RecvStream {
             Ok(Some(chunk)) => ReadStatus::Readable(chunk),
             res => (None, res.err()).into(),
         })
+    }
+
+    fn is_ordered(&self) -> Result<bool, ReadError> {
+        let mut conn = self.conn.lock_without_waking("RecvStream::is_ordered");
+        if self.is_0rtt {
+            conn.check_0rtt().map_err(|()| ReadError::ZeroRttRejected)?;
+        }
+        conn.inner
+            .recv_stream(self.stream)
+            .is_ordered()
+            .map_err(|_| ReadError::ClosedStream)
     }
 
     /// Reads the next segments of data.
@@ -251,13 +263,14 @@ impl RecvStream {
     /// all data read. Uses unordered reads to be more efficient than using `AsyncRead` would
     /// allow. `size_limit` should be set to limit worst-case memory use.
     ///
-    /// If unordered reads have already been made, the resulting buffer may have gaps containing
-    /// arbitrary data.
-    ///
-    /// This operation is *not* cancel-safe.
+    /// This operation is *not* cancel-safe. If cancelled after it has begun reading, further read
+    /// operations on the stream return [`ReadError::ClosedStream`].
     ///
     /// [`ReadToEndError::TooLong`]: crate::ReadToEndError::TooLong
     pub async fn read_to_end(&mut self, size_limit: usize) -> Result<Vec<u8>, ReadToEndError> {
+        if !self.is_ordered()? {
+            return Err(ReadError::ClosedStream.into());
+        }
         ReadToEnd {
             stream: self,
             size_limit,
@@ -390,12 +403,7 @@ impl RecvStream {
                 let mut recv = conn.inner.recv_stream(self.stream);
                 let mut chunks = recv.read(ordered).map_err(|e| match e {
                     ReadableError::ClosedStream => ReadError::ClosedStream,
-                    ReadableError::IllegalOrderedRead => {
-                        // We should never get here because the only way to do unordered reads is
-                        // via UnorderedRecvStream, which allows only unordered reads. It is not
-                        // possible to get a RecvStream from an UnorderedRecvStream.
-                        unreachable!("ordered read after unordered read")
-                    }
+                    ReadableError::IllegalOrderedRead => ReadError::ClosedStream,
                 })?;
                 let status = read_fn(&mut chunks);
                 if chunks.finalize().should_transmit() {

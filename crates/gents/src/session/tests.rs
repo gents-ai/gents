@@ -115,6 +115,48 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 }
 
 #[tokio::test]
+async fn history_reconstruction_batches_distinct_requests() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = "session-many-request-scans";
+    let count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
+    for index in 0..count {
+        let request = format!("doc-{index}");
+        import_history_observation(
+            &node,
+            &request,
+            session_id,
+            "did:test:test",
+            None,
+            &format!("message {index}"),
+            &canonical_rows::authored_message_key(&request, "prompt"),
+            index as u32 + 1,
+            None,
+        )
+        .await;
+    }
+    let (history, scans) = count_request_output_scans(history::load_history_projection(
+        &node,
+        session_id,
+        "did:test:test",
+        None,
+        None,
+        None,
+    ))
+    .await;
+    let history = history.unwrap();
+    assert_eq!(history.len(), count);
+    for (index, message) in history.iter().enumerate() {
+        assert_eq!(message, &Message::user(format!("message {index}")));
+    }
+    assert!(
+        scans <= 2,
+        "history used {scans} output scans for {count} requests"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
     let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
     let node = std::sync::Arc::new(
@@ -608,14 +650,16 @@ async fn close_session_preserves_creation_time() {
         row.get("agent_id").and_then(|value| value.as_str()),
         Some("deploy-test")
     );
-    assert!(row
-        .get("created_at")
-        .and_then(|value| value.as_str())
-        .is_some_and(|value| !value.is_empty()));
-    assert!(row
-        .get("closed_at")
-        .and_then(|value| value.as_str())
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        row.get("created_at")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        row.get("closed_at")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| !value.is_empty())
+    );
 
     assert_eq!(row["created_at"], original_created_at);
     let _ = std::fs::remove_dir_all(&data_path);
@@ -1244,15 +1288,17 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     assert_eq!(foreign.len(), 1);
     assert_eq!(local[0].summary, "local summary");
     assert_eq!(foreign[0].summary, "foreign summary");
-    assert!(load_compaction_entries(
-        &node,
-        "same-chain",
-        "did:key:owner",
-        Some("did:key:requester")
-    )
-    .await
-    .unwrap()
-    .is_empty());
+    assert!(
+        load_compaction_entries(
+            &node,
+            "same-chain",
+            "did:key:owner",
+            Some("did:key:requester")
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
 }
 
 async fn claimed_authored_request(
@@ -1357,8 +1403,8 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
 async fn single_header_transaction_matches_bulk_coordinate_validation() {
     use crate::config_client::ConfigAccess;
     use canonical_rows::{
-        decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
-        CREATE_AGENT_MESSAGE_MUTATION,
+        AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION, decode_transcript_message_row,
+        transcript_message_create_variables,
     };
     use gents_protocol::output::MessagePublication;
 

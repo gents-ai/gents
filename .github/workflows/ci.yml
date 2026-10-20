@@ -719,3 +719,4 @@ jobs:
           bash -n .github/scripts/notarize-staged-artifact.sh
           "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-notarize-staged-artifact.py
           "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-rc1-notary-auth.py
+          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-release-signing-mode.py

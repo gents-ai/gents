@@ -208,7 +208,7 @@ export function projectSessionLoadingStatus({
       !sessionLoad.nodeDid ||
       sessionLoad.nodeDid === selectedNodeDid);
 
-  if (loadMatches && sessionLoad.phase === "pending") {
+  if (loadMatches && sessionLoad.phase === "pending" && !sessionMatches) {
     return {
       layer: "sessionSync",
       phase: "loading",
