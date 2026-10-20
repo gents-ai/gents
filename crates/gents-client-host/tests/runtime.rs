@@ -1162,9 +1162,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::EditorReview) {
         editor_review::prepare(root)?;
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
-        client
-            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
-            .await;
+        ensure!(
+            client
+                .call(id, "client_runtime_is_local", json!({"nodeDid": node_did}))
+                .await
+                == false,
+            "review must use the paired runtime without local operator access"
+        );
         id += 1;
         let result = run_editor_journey(
             root,

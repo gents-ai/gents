@@ -161,7 +161,8 @@ pub async fn verify(
         .context("remote review delivery receipts")?;
     ensure!(
         receipts.len() == 1,
-        "review demand must be reused after delivery"
+        "review demand must be reused after delivery; found {} receipts",
+        receipts.len()
     );
     let receipt = &receipts[0];
     let mut demand = gents_protocol::file_image_hydration::FileImageDemand {
