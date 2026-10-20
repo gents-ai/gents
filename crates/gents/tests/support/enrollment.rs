@@ -48,15 +48,14 @@ pub async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
     }
 }
 
-pub async fn authorize_enrollment_peer(
-    node: Arc<EmbeddedNode>,
+/// Upsert the admin's signed Network on `node` and sign a fresh offer from it.
+pub async fn signed_enrollment_offer(
+    node: &EmbeddedNode,
     network_id: &str,
     network_name: &str,
-    admin_identity: Arc<dyn NodeIdentity>,
-    member_identity: Arc<dyn NodeIdentity>,
-    member_peer: &str,
-    member_address: &str,
-) -> AuthorizedEnrollment {
+    admin_identity: &dyn NodeIdentity,
+    challenge: String,
+) -> (EnrollmentOfferRecord, String) {
     let issued = chrono::Utc::now();
     let now = issued.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let expires_at =
@@ -117,7 +116,6 @@ pub async fn authorize_enrollment_peer(
         .await
         .expect("server ticket lookup")
         .expect("server shareable ticket");
-    let challenge = format!("challenge-{network_id}-{member_peer}");
     let offer_id = format!(
         "offer-{}",
         derive_enrollment_id(
@@ -151,6 +149,26 @@ pub async fn authorize_enrollment_peer(
         .await
         .expect("sign enrollment offer");
     let offer_token = encode_offer(&offer).expect("encode enrollment offer");
+    (offer, offer_token)
+}
+
+pub async fn authorize_enrollment_peer(
+    node: Arc<EmbeddedNode>,
+    network_id: &str,
+    network_name: &str,
+    admin_identity: Arc<dyn NodeIdentity>,
+    member_identity: Arc<dyn NodeIdentity>,
+    member_peer: &str,
+    member_address: &str,
+) -> AuthorizedEnrollment {
+    let (offer, offer_token) = signed_enrollment_offer(
+        &node,
+        network_id,
+        network_name,
+        admin_identity.as_ref(),
+        format!("challenge-{network_id}-{member_peer}"),
+    )
+    .await;
     let client_nonce = format!("nonce-{network_id}-{member_peer}");
     let request_id = format!(
         "enroll-{}",
@@ -180,8 +198,8 @@ pub async fn authorize_enrollment_peer(
         owner_agent: offer.owner_agent.clone(),
         profile: offer.profile.clone(),
         client_nonce,
-        issued_at: now,
-        expires_at,
+        issued_at: offer.issued_at.clone(),
+        expires_at: offer.expires_at.clone(),
         candidate_sig: Vec::new(),
     };
     request.request_digest = request.computed_digest();

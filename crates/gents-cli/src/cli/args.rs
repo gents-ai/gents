@@ -250,8 +250,16 @@ pub(crate) enum Command {
 
 #[derive(Subcommand)]
 pub(crate) enum ServiceCommand {
-    #[command(about = "Write the native user-service definition without starting it")]
-    Install(ServiceTargetArgs),
+    #[command(
+        about = "Write the native user-service definition without starting it",
+        long_about = "Write the native user-service definition without starting it. The definition runs `gents server --home <HOME>`; network flags persist into <HOME>/network.json, which `gents server` reads for every flag it is not given, so the settings survive reinstalls and desktop-managed updates and apply at the next start"
+    )]
+    Install {
+        #[command(flatten)]
+        target: ServiceTargetArgs,
+        #[command(flatten)]
+        network: ServiceNetworkArgs,
+    },
     #[command(about = "Start the native service")]
     Start {
         #[command(flatten)]
@@ -283,8 +291,32 @@ pub(crate) struct ServiceTargetArgs {
     pub(crate) executable: Option<PathBuf>,
 }
 
+#[derive(clap::Args, Default)]
+pub(crate) struct ServiceNetworkArgs {
+    #[arg(
+        long,
+        help = "HTTP listen address: loopback or one interface, such as this host's tailnet address. Requests still need a DID-signed bearer the node's access control admits"
+    )]
+    pub(crate) http_addr: Option<IpAddr>,
+    #[arg(long, help = "HTTP listen port")]
+    pub(crate) http_port: Option<u16>,
+    #[arg(long, help = "P2P listen address")]
+    pub(crate) p2p_bind_addr: Option<IpAddr>,
+    #[arg(long, help = "P2P listen port; 0 picks a random port at each start")]
+    pub(crate) p2p_port: Option<u16>,
+    #[arg(long, value_enum)]
+    pub(crate) p2p_relay_mode: Option<P2pRelayModeArg>,
+    #[arg(long, value_enum)]
+    pub(crate) p2p_discovery: Option<P2pDiscoveryArg>,
+    #[arg(
+        long,
+        help = "Clear the persisted network settings before applying the other network flags"
+    )]
+    pub(crate) reset_network: bool,
+}
+
 pub(crate) enum ServiceAction {
-    Install,
+    Install { network: ServiceNetworkArgs },
     Start { enable: bool },
     Stop { keep_enabled: bool },
     Restart,
@@ -297,7 +329,7 @@ pub(crate) enum ServiceAction {
 impl ServiceCommand {
     pub(crate) fn into_parts(self) -> (Option<PathBuf>, Option<PathBuf>, ServiceAction) {
         let (target, action) = match self {
-            Self::Install(target) => (target, ServiceAction::Install),
+            Self::Install { target, network } => (target, ServiceAction::Install { network }),
             Self::Start { target, enable } => (target, ServiceAction::Start { enable }),
             Self::Stop {
                 target,
@@ -1869,11 +1901,14 @@ pub(crate) struct ServeArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, hide = true)]
     pub(crate) data_dir: Option<PathBuf>,
-    #[arg(long, default_value = "127.0.0.1")]
-    pub(crate) http_addr: IpAddr,
     #[arg(
         long,
-        help = "HTTP port. Defaults to 9191, where the desktop and CLI expect the default home's runtime"
+        help = "HTTP listen address. Defaults to the home's network.json (`gents service install --http-addr`), else 127.0.0.1"
+    )]
+    pub(crate) http_addr: Option<IpAddr>,
+    #[arg(
+        long,
+        help = "HTTP port. Defaults to the home's network.json, else 9191, where the desktop and CLI expect the default home's runtime"
     )]
     pub(crate) http_port: Option<u16>,
     #[arg(long)]
@@ -1990,16 +2025,30 @@ pub(crate) struct ServeArgs {
         help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL/Codex shim"
     )]
     pub(crate) p2p_transport: P2pTransportArg,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "P2P listen address. Defaults to the home's network.json, else 127.0.0.1"
+    )]
     pub(crate) p2p_bind_addr: Option<IpAddr>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "P2P listen port. Defaults to the home's network.json, else a random port"
+    )]
     pub(crate) p2p_port: Option<u16>,
     #[arg(long)]
     pub(crate) p2p_secret_key_path: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = P2pRelayModeArg::Disabled)]
-    pub(crate) p2p_relay_mode: P2pRelayModeArg,
-    #[arg(long, value_enum, default_value_t = P2pDiscoveryArg::Disabled)]
-    pub(crate) p2p_discovery: P2pDiscoveryArg,
+    #[arg(
+        long,
+        value_enum,
+        help = "P2P relay mode. Defaults to the home's network.json, else disabled"
+    )]
+    pub(crate) p2p_relay_mode: Option<P2pRelayModeArg>,
+    #[arg(
+        long,
+        value_enum,
+        help = "P2P discovery. Defaults to the home's network.json, else disabled"
+    )]
+    pub(crate) p2p_discovery: Option<P2pDiscoveryArg>,
     #[arg(
         long,
         env = "DEFRA_P2P_MAX_PENDING_DAGS",
@@ -2352,13 +2401,15 @@ impl P2pTransportArg {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum P2pRelayModeArg {
     Default,
     Disabled,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum P2pDiscoveryArg {
     #[value(name = "n0")]
     N0,

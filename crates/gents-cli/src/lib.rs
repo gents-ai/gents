@@ -31,6 +31,7 @@ mod home_state;
 mod http;
 mod interactive_backend;
 pub mod native_service;
+mod network_settings;
 mod p2p_relay;
 pub mod packs;
 mod process_resources;
@@ -480,16 +481,24 @@ fn service_command(command: ServiceCommand) -> Result<()> {
         Some(path) => absolutize(path)?,
         None => std::env::current_exe().context("resolving the gents executable")?,
     };
-    let manager = NativeServiceManager::new(NativeServiceConfig::new(home, executable)?)?;
+    let config = NativeServiceConfig::new(home, executable)?;
+    let home = config.home.clone();
+    let manager = NativeServiceManager::new(config)?;
     match action {
-        ServiceAction::Install => manager.install(),
+        ServiceAction::Install { network } => {
+            network_settings::install_service(&manager, &home, &network).map(drop)
+        }
         ServiceAction::Start { enable } => manager.start(enable),
         ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
         ServiceAction::Restart => manager.restart(),
         ServiceAction::Enable => manager.set_enabled(true),
         ServiceAction::Disable => manager.set_enabled(false),
         ServiceAction::Status => {
-            print!("{}\n", manager.status()?.summary());
+            print!(
+                "{}\n{}\n",
+                manager.status()?.summary(),
+                network_settings::NetworkSettings::read(&home)?.summary()
+            );
             Ok(())
         }
         ServiceAction::Uninstall => manager.uninstall(),

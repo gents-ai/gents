@@ -582,6 +582,10 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
+    crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
+    let http_ip = args
+        .http_addr
+        .unwrap_or(crate::network_settings::DEFAULT_HTTP_ADDR);
     let http_port = args.http_port.unwrap_or(crate::DEFAULT_HTTP_PORT);
     if args.http_port.is_none() && !crate::home_state::is_default_home(&home_dir) {
         tracing::warn!(
@@ -590,7 +594,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             "serving a non-default home on port {http_port}, which the desktop app and the default CLI expect to belong to the default home; pass --http-port to serve this home on another port"
         );
     }
-    let http_addr = SocketAddr::new(args.http_addr, http_port);
+    let http_addr = SocketAddr::new(http_ip, http_port);
     if http_port == 0 {
         anyhow::bail!(
             "--http-port 0 is not supported: the embedded HTTP server does not expose its \
@@ -599,7 +603,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     }
     let graphql_url = format!(
         "http://{}:{}/api/v0/graphql",
-        display_host(args.http_addr),
+        display_host(http_ip),
         http_port
     );
     let init_config = read_init_config(&home_dir)?;
@@ -660,7 +664,10 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
     if let Some(config) = p2p_config.as_ref() {
-        crate::p2p_relay::log_relay_mode_diagnostics(args.p2p_relay_mode);
+        crate::p2p_relay::log_relay_mode_diagnostics(
+            args.p2p_relay_mode
+                .unwrap_or(crate::network_settings::DEFAULT_P2P_RELAY_MODE),
+        );
         log_p2p_admission_config(config);
     }
     let p2p_admission_state = p2p_config.as_ref().map(p2p_admission_state);
@@ -1545,11 +1552,17 @@ fn resolve_server_p2p_config(
             args.p2p_bind_addr
                 .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
         ),
-        relay_mode: match args.p2p_relay_mode {
+        relay_mode: match args
+            .p2p_relay_mode
+            .unwrap_or(crate::network_settings::DEFAULT_P2P_RELAY_MODE)
+        {
             P2pRelayModeArg::Default => p2p::iroh::IrohRelayModeConfig::Default,
             P2pRelayModeArg::Disabled => p2p::iroh::IrohRelayModeConfig::Disabled,
         },
-        discovery: match args.p2p_discovery {
+        discovery: match args
+            .p2p_discovery
+            .unwrap_or(crate::network_settings::DEFAULT_P2P_DISCOVERY)
+        {
             P2pDiscoveryArg::N0 => p2p::iroh::IrohDiscoveryConfig::N0,
             P2pDiscoveryArg::Disabled => p2p::iroh::IrohDiscoveryConfig::Disabled,
         },

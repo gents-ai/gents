@@ -4,6 +4,7 @@ pub mod embedded_impl;
 pub mod endpoint;
 pub mod engine;
 pub mod enrollment;
+pub mod enrollment_candidate;
 pub mod enrollment_reconcile;
 pub mod enrollment_store;
 pub mod error_class;
