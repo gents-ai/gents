@@ -7,28 +7,45 @@ inductive StoragePermission where
   | read
   deriving DecidableEq, Repr
 
-/-- Each replica registers its branchable image collection with its own native
-node DID and an owner-only DefraDB policy. DefraDB's branchable read guard checks
-that collection object when a replicated document has no local registration.
-Transport enrollment never grants read access to the stored copy. Revocation
-prevents future delivery; it cannot retract bytes already delivered to an owner. -/
-def storageReadGrants (owner : Identity.DID) : Identity.GrantStore StoragePermission :=
-  ⟨fun actor _ => !owner.isEmpty && actor == owner⟩
+/-- DefraDB retains the signed creator as each replica's document owner.
+A verified delivery receipt authorizes only its named requester to retain a
+local read grant. The creator keeps its existing rights; unrelated actors gain
+none. Revocation prevents future delivery, not reads of bytes already delivered. -/
+def storageReadGrants (creator requester : Identity.DID) (granted : Bool) :
+    Identity.GrantStore StoragePermission :=
+  ⟨fun actor _ => (!creator.isEmpty && actor == creator) ||
+    (granted && !requester.isEmpty && actor == requester)⟩
 
-def storedImageReadable (owner : Identity.DID) (actor : Option Identity.DID) : Bool :=
-  actor.any (fun did => (storageReadGrants owner).granted did .read)
+def storedImageReadable (creator requester : Identity.DID) (granted : Bool)
+    (actor : Option Identity.DID) : Bool :=
+  actor.any (fun did => (storageReadGrants creator requester granted).granted did .read)
 
-theorem anonymous_cannot_read_stored_image (owner : Identity.DID) :
-    storedImageReadable owner none = false := by
-  rfl
+def authorizesReadGrant (source requester signer localActor storedCreator : Identity.DID)
+    (verified : Bool) : Bool :=
+  verified && !source.isEmpty && !requester.isEmpty && signer == source &&
+    storedCreator == source && localActor == requester
 
-theorem foreign_actor_cannot_read_stored_image (owner actor : Identity.DID)
-    (h : actor ≠ owner) : storedImageReadable owner (some actor) = false := by
+theorem anonymous_cannot_read_stored_image (creator requester : Identity.DID) (granted : Bool) :
+    storedImageReadable creator requester granted none = false := by rfl
+
+theorem foreign_actor_cannot_read_stored_image (creator requester actor : Identity.DID)
+    (granted : Bool) (hc : actor ≠ creator) (hr : actor ≠ requester) :
+    storedImageReadable creator requester granted (some actor) = false := by
+  simp [storedImageReadable, storageReadGrants, hc, hr]
+
+theorem creator_can_read (creator requester : Identity.DID) (granted : Bool)
+    (h : creator.isEmpty = false) :
+    storedImageReadable creator requester granted (some creator) = true := by
   simp [storedImageReadable, storageReadGrants, h]
 
-theorem storage_owner_can_read (owner : Identity.DID) (h : owner.isEmpty = false) :
-    storedImageReadable owner (some owner) = true := by
+theorem requester_can_read_after_grant (creator requester : Identity.DID)
+    (h : requester.isEmpty = false) :
+    storedImageReadable creator requester true (some requester) = true := by
   simp [storedImageReadable, storageReadGrants, h]
+
+theorem unverified_receipt_cannot_grant (source requester signer localActor storedCreator : Identity.DID) :
+    authorizesReadGrant source requester signer localActor storedCreator false = false := by
+  simp [authorizesReadGrant]
 
 structure Demand where
   admission : Request

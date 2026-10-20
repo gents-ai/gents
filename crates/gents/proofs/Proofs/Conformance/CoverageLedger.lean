@@ -1336,6 +1336,11 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_keeps_unselected_images_and_collection_interest_local"
       "Drives native document ACP on the source and recipient, and attempts a direct pull from an unrelated transport peer. Fresh enrollment remains the delivery owner's obligation.")
       "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_image_read_grant_cases"
+      "FileImageReadGrantCases"
+      "tool_call_lifecycle::file_review_access::tests::file_image_read_grant_matches_signed_receipt_contract")
+      "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "file_image_hydration_completion_cases"
       "FileImageHydrationCompletionCases"

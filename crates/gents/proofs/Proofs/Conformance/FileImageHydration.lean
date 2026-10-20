@@ -185,6 +185,21 @@ def storageCasesJson := jsonArray (
     [some "node", some "client", some "outsider", none].map fun actor =>
       "{\"owner\":" ++ jsonString owner ++
       ",\"actor\":" ++ (actor.map jsonString).getD "null" ++
-      ",\"expected\":" ++ boolJson (storedImageReadable owner actor) ++ "}")
+      ",\"expected\":" ++ boolJson (storedImageReadable "node" "client" (owner == "client") actor) ++ "}")
+
+def readGrantCasesJson := jsonArray (
+  ["node", ""].flatMap fun source =>
+    ["client", ""].flatMap fun requester =>
+      ["node", "other"].flatMap fun signer =>
+        ["client", "other"].flatMap fun localActor =>
+          ["node", "other", ""].flatMap fun storedCreator =>
+            [true, false].map fun verified =>
+              "{\"source\":" ++ jsonString source ++
+              ",\"requester\":" ++ jsonString requester ++
+              ",\"signer\":" ++ jsonString signer ++
+              ",\"local_actor\":" ++ jsonString localActor ++
+              ",\"stored_creator\":" ++ jsonString storedCreator ++
+              ",\"verified\":" ++ boolJson verified ++
+              ",\"expected\":" ++ boolJson (authorizesReadGrant source requester signer localActor storedCreator verified) ++ "}")
 
 end Conformance.FileImageHydrationContracts
