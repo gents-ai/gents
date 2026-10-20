@@ -511,29 +511,6 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/retrieval/indexer.rs",
-      "collection": "AgentMessage",
-      "arguments": "filter: {node_did: {_eq: $GENTS_0$}, requester_did: {_eq: $GENTS_1$}, session_id: {_eq: $GENTS_2$}, sequence: {_ge: $GENTS_watermark$}}, order: {sequence: ASC}, limit: $GENTS_3$"
-    },
-    "bindings": [
-      {
-        "0": "\"probe\"",
-        "1": "\"probe\"",
-        "2": "\"probe\"",
-        "watermark": "1",
-        "3": "101"
-      },
-      {
-        "0": "\"probe\"",
-        "1": "null",
-        "2": "\"probe\"",
-        "watermark": "1",
-        "3": "101"
-      }
-    ]
-  },
-  {
-    "read": {
       "path": "crates/gents/src/run_timeline_fetch.rs",
       "collection": "AgentToolCall",
       "arguments": "filter: { request_id: { _in: [$GENTS_request_list$] } }, order: { started_at: ASC }, limit: $GENTS_limit$"

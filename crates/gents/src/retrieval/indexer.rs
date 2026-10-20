@@ -361,13 +361,16 @@ async fn read_session_work(
                 });
             };
             let requester = session.requester_did.as_deref();
+            // The window is a sequence range with no limit: the pinned planner
+            // can bound an ordered index scan before its residual filters, so a
+            // limited `sequence >= watermark` read returns short windows.
+            let window_end = watermark + MESSAGE_WINDOW as u32 - 1;
             let headers = rows(
                 &txn.execute(&format!(
-                    "{{AgentMessage(filter: {{node_did: {{_eq: {}}}, requester_did: {{_eq: {}}}, session_id: {{_eq: {}}}, sequence: {{_ge: {watermark}}}}}, order: {{sequence: ASC}}, limit: {}) {{{AGENT_MESSAGE_FIELDS}}}}}",
+                    "{{AgentMessage(filter: {{node_did: {{_eq: {}}}, requester_did: {{_eq: {}}}, session_id: {{_eq: {}}}, sequence: {{_ge: {watermark}}}, _and: [{{sequence: {{_le: {window_end}}}}}]}}, order: {{sequence: ASC}}) {{{AGENT_MESSAGE_FIELDS}}}}}",
                     quoted(&key.node_did),
                     requester.map(quoted).unwrap_or_else(|| "null".into()),
                     quoted(&key.session_id),
-                    MESSAGE_WINDOW + 1
                 ))
                 .await?,
                 "AgentMessage",
@@ -375,9 +378,7 @@ async fn read_session_work(
             .iter()
             .map(decode_transcript_message_row)
             .collect::<Result<Vec<_>>>()?;
-            let window_end = (headers.len() > MESSAGE_WINDOW)
-                .then(|| headers[MESSAGE_WINDOW - 1].message.sequence);
-            let headers: Vec<_> = headers.into_iter().take(MESSAGE_WINDOW).collect();
+            let window_end = Some(window_end);
             let settled_requests = terminal_requests(txn, &headers).await?;
             let messages: Vec<IndexMessage> = headers
                 .iter()
