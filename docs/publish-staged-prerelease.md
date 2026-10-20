@@ -3,8 +3,9 @@
 Workflow: `.github/workflows/publish-staged-prerelease.yml`
 Script: `.github/scripts/publish_staged_prerelease.py collect|publish`
 Tests: `python3 .github/scripts/test-publish-staged-prerelease.py`. All GitHub
-calls go through a fake `gh`. The static workflow checks need PyYAML and are
-skipped without it. The tests are not wired into `ci.yml`; run them manually.
+calls go through a fake `gh`. The static workflow checks need PyYAML. The
+`publish-control-tests` job in `ci.yml` runs them, with PyYAML, on pull
+requests.
 
 This workflow publishes a **new** macOS prerelease (`vX.Y.Z-rcN`) from the
 outputs of two successful `notarize-staged-artifact.yml` runs: one for the
@@ -24,6 +25,16 @@ from that commit. Two inputs are therefore required:
 - **`provenance_note`**: the basis for linking the binaries to the commit.
   Examples are embedded build stamps or build receipts. State any gaps, such
   as a build manifest whose `source_sha` is null.
+
+**Branch reachability.** The target must be reachable from the default
+branch, checked with `compare <default>...<target>` returning `identical` or
+`behind`. If it is not, the workflow refuses and never substitutes another
+commit. Publishing a commit that is only on another branch requires the
+explicit `target_branch` input. That branch must contain the target, and the
+notes then say the commit is **not** on the default branch and name the
+branch and its head. `publish` re-checks this, and refuses if the result
+changed since `collect` (for example, the branch moved). The tag keeps the
+commit reachable after publication, even if the branch is later deleted.
 
 The release notes show the SHA as **"Tag target (operator-selected)"**. They
 quote the provenance note and the approval link, and state that neither a
@@ -49,6 +60,21 @@ event. A malformed listing is an error. Any listed run fails the step, so it
 can be inspected and cancelled. An empty listing at that moment is evidence,
 not proof that no run will start.
 
+## Jobs and permissions
+
+The workflow has no workflow-level permissions. It runs two jobs:
+
+- **`collect`** has `contents: read` and `actions: read`. It verifies
+  everything and builds the assets, notes and manifest, then uploads them as
+  an artifact of this run.
+- **`publish`** has `contents: write` and nothing else, and runs only after
+  `collect` succeeds. It downloads that artifact and re-verifies it against
+  its own inputs before writing anything.
+
+A read-only token cannot see draft releases. `collect`'s absence check
+therefore covers tags and published releases. `publish` repeats the check
+with the write token, which can see drafts.
+
 ## What `collect` verifies (read-only)
 
 - **Inputs.**
@@ -63,6 +89,14 @@ not proof that no run will start.
 - **Each notarize run.**
   - It is a `workflow_dispatch` run of `notarize-staged-artifact.yml` on the
     default branch, in this repository, `completed` / `success`.
+  - Its `head_sha` is reachable from the default branch.
+  - **Same reviewed implementation.** At the run's `head_sha`, the
+    notarization workflow, `notarize-staged-artifact.sh` and `notary_json.py`
+    must have the same git blob as at this publishing workflow's own commit
+    (`github.sha`). So a run produced by a different, unreviewed version of
+    the notarization code is refused. If those files change on `main`
+    between notarizing and publishing, notarize again with the new version
+    first.
   - Its output artifact is exactly one, unexpired, named
     `notarize-staged-<run>-<attempt>`.
   - Every entry in that artifact is a plain file name.
@@ -93,8 +127,16 @@ not proof that no run will start.
 
 ## What `publish` does
 
-1. Re-hashes the local assets against the manifest, and re-checks that the
-   tag and any release for it are still absent.
+1. Re-verifies the downloaded manifest against this job's inputs:
+   - The tag, target and pinned hashes match.
+   - The asset set is exactly the expected four files.
+   - Every asset hash matches.
+   - The app asset equals `app_asset_sha256`.
+   - The CLI tarball contains `cli_binary_sha256`.
+
+   It then re-checks the target commit and its reachability (which must be
+   unchanged since `collect`), and that the tag and any release, drafts
+   included, are still absent.
 2. **Creates the tag exclusively.** It calls `POST /git/refs` for
    `refs/tags/<tag>` at the target SHA. GitHub rejects this if the ref
    already exists (HTTP 422). The step then fails, and the existing ref is
@@ -134,9 +176,11 @@ a release for it already exists. Recovery is a deliberate operator action:
 
 ## Operator procedure
 
-1. Confirm a candidate-approval record exists for the exact artifacts, and
-   that their architecture matches what the notes claim (`lipo -archs` on
-   every executable; the notes say arm64 only).
+1. Confirm a candidate-approval record exists for the exact artifacts. Check
+   whether the target is on the default branch; if it is not, decide
+   explicitly whether to publish it from its branch (`target_branch`). Also
+   confirm that the artifacts' architecture matches what the notes claim
+   (`lipo -archs` on every executable; the notes say arm64 only).
 2. Finish both `notarize-staged-artifact.yml` runs (app and CLI). Note their
    run ids, the app zip SHA-256 from the app run's `SHA256SUMS`, and the CLI
    binary SHA-256. Check the CLI SHA-256 against the build receipt.
@@ -148,7 +192,8 @@ a release for it already exists. Recovery is a deliberate operator action:
      -f app_notarize_run_id=<id> -f cli_notarize_run_id=<id> \
      -f app_asset_sha256=<hex> -f cli_binary_sha256=<hex> \
      -f provenance_note='...' \
-     -f candidate_approval_url='https://github.com/gents-ai/gents/pull/<n>#issuecomment-<id>'
+     -f candidate_approval_url='https://github.com/gents-ai/gents/pull/<n>#issuecomment-<id>' \
+     -f target_branch=<only if target_sha is not on main>
    ```
 
 4. **If `publish` fails**, follow *Recovery* above. The workflow refuses

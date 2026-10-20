@@ -49,10 +49,18 @@ import zipfile
 from pathlib import Path
 
 NOTARIZE_WORKFLOW_PATH = ".github/workflows/notarize-staged-artifact.yml"
+# A notarize run is only accepted if these files at the run's head commit are
+# byte-identical (same blob) to the ones at this publishing workflow's commit.
+NOTARIZE_IMPLEMENTATION = (
+    NOTARIZE_WORKFLOW_PATH,
+    ".github/scripts/notarize-staged-artifact.sh",
+    ".github/scripts/notary_json.py",
+)
 TAG_RE = re.compile(r"^v([0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+)$")
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA64_RE = re.compile(r"^[0-9a-f]{64}$")
 RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
+BRANCH_RE = re.compile(r"^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 NOTE_RE = re.compile(r"^[^\x00-\x08\x0b-\x1f\x7f]{0,2000}$")
 APPROVAL_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(pull|issues)/[0-9]+(#issuecomment-[0-9]+)?$")
@@ -120,6 +128,8 @@ def config():
         "approval_url": env.get("CANDIDATE_APPROVAL_URL", ""),
         "work": env.get("PUBLISH_WORK_DIR", ""),
         "run_url": env.get("RUN_URL", ""),
+        "target_branch": env.get("TARGET_BRANCH", ""),
+        "publisher_sha": env.get("PUBLISHER_SHA", ""),
     }
     checks = (
         ("repo", re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")),
@@ -132,10 +142,15 @@ def config():
         ("cli_sha256", SHA64_RE),
         ("provenance", NOTE_RE),
         ("approval_url", APPROVAL_URL_RE),
+        ("publisher_sha", SHA40_RE),
     )
     for key, pattern in checks:
         if not pattern.match(cfg[key]):
             raise Refused("input {} is missing or malformed".format(key))
+    if cfg["target_branch"] and (
+        not BRANCH_RE.match(cfg["target_branch"]) or cfg["target_branch"] == cfg["default_branch"]
+    ):
+        raise Refused("input target_branch is malformed or names the default branch")
     if not cfg["provenance"].strip():
         raise Refused("input provenance is required (state the basis for the source claim)")
     if not cfg["approval_url"].startswith("https://github.com/{}/".format(cfg["repo"])):
@@ -183,6 +198,49 @@ def check_unpublished(gh, cfg):
             )
 
 
+def is_ancestor(gh, cfg, base, head):
+    """True if `head` is reachable from `base` (compare base...head)."""
+    cmp = gh.json("repos/{}/compare/{}...{}".format(cfg["repo"], base, head))
+    status = cmp.get("status") if isinstance(cmp, dict) else None
+    if status not in ("identical", "behind", "ahead", "diverged"):
+        raise Refused("commit comparison returned an unexpected status")
+    return status in ("identical", "behind")
+
+
+def check_target_reachable(gh, cfg):
+    """The target must be on the default branch, or on an explicitly named
+    branch. Returns a description for the notes; never changes the target."""
+    if is_ancestor(gh, cfg, cfg["default_branch"], cfg["target_sha"]):
+        cfg["reachability"] = "reachable from the default branch `{}`".format(cfg["default_branch"])
+        return
+    if not cfg["target_branch"]:
+        raise Refused(
+            "target {} is not reachable from the default branch {}; refusing. If this exact commit is the "
+            "approved candidate, dispatch again naming the branch that contains it in target_branch".format(
+                cfg["target_sha"], cfg["default_branch"]
+            )
+        )
+    branch = gh.json("repos/{}/branches/{}".format(cfg["repo"], cfg["target_branch"]))
+    head = ((branch or {}).get("commit") or {}).get("sha") if isinstance(branch, dict) else None
+    if not isinstance(head, str) or not SHA40_RE.match(head):
+        raise Refused("target_branch could not be resolved")
+    if not is_ancestor(gh, cfg, head, cfg["target_sha"]):
+        raise Refused("target {} is not reachable from branch {}".format(cfg["target_sha"], cfg["target_branch"]))
+    cfg["reachability"] = (
+        "**not** on the default branch `{}`; reachable from branch `{}` (head `{}`) at publication".format(
+            cfg["default_branch"], cfg["target_branch"], head
+        )
+    )
+
+
+def blob_sha(gh, cfg, path, ref):
+    entry = gh.json("repos/{}/contents/{}?ref={}".format(cfg["repo"], path, ref))
+    value = entry.get("sha") if isinstance(entry, dict) else None
+    if not isinstance(value, str) or not re.match(r"^[0-9a-f]{40}$", value):
+        raise Refused("could not read {} at {}".format(path, ref))
+    return value
+
+
 def check_run(gh, cfg, run_id):
     run = gh.json("repos/{}/actions/runs/{}".format(cfg["repo"], run_id))
     expected = {
@@ -200,6 +258,16 @@ def check_run(gh, cfg, run_id):
     attempt = run.get("run_attempt")
     if not isinstance(attempt, int) or attempt < 1:
         raise Refused("notarize run {} has no valid attempt".format(run_id))
+    head = run.get("head_sha")
+    if not isinstance(head, str) or not SHA40_RE.match(head):
+        raise Refused("notarize run {} has no valid head commit".format(run_id))
+    if not is_ancestor(gh, cfg, cfg["default_branch"], head):
+        raise Refused("notarize run {} head is not on the default branch".format(run_id))
+    for path in NOTARIZE_IMPLEMENTATION:
+        if blob_sha(gh, cfg, path, head) != blob_sha(gh, cfg, path, cfg["publisher_sha"]):
+            raise Refused(
+                "notarize run {} used a different {} than this publishing workflow's commit".format(run_id, path)
+            )
     return attempt
 
 
@@ -311,6 +379,7 @@ def release_notes(cfg, app, cli, assets):
         "",
         "- **Tag target (operator-selected):** commit [`{0}`]({1}/commit/{0}). This workflow checks that the "
         "commit exists; it does **not** prove that these binaries were built from it.".format(cfg["target_sha"], repo_url),
+        "- **Branch reachability:** " + cfg["reachability"] + ".",
         "- **Basis for the source claim (operator statement):** " + cfg["provenance"].strip(),
         "- **Candidate approval record:** " + cfg["approval_url"],
         "- **Not established:** a clean source tree at build time, or a reproducible build.",
@@ -337,6 +406,7 @@ def collect(gh, cfg):
         raise Refused("work directory already exists")
     work.mkdir(parents=True)
     mtime = check_target(gh, cfg)
+    check_target_reachable(gh, cfg)
     check_unpublished(gh, cfg)
     results = {}
     for kind, run_id, pinned in (
@@ -375,6 +445,9 @@ def collect(gh, cfg):
         "tag": cfg["tag"],
         "target_sha": cfg["target_sha"],
         "assets": digests,
+        "reachability": cfg["reachability"],
+        "app_asset_sha256": cfg["app_sha256"],
+        "cli_binary_sha256": cfg["cli_sha256"],
         "app_submission_id": results["app"]["submission_id"],
         "cli_submission_id": results["cli"]["submission_id"],
     }
@@ -447,11 +520,22 @@ def publish(gh, cfg, settle_seconds=20):
     manifest = _load_json(work / "manifest.json")
     if manifest.get("tag") != cfg["tag"] or manifest.get("target_sha") != cfg["target_sha"]:
         raise Refused("collected manifest does not match inputs")
+    if manifest.get("app_asset_sha256") != cfg["app_sha256"] or manifest.get("cli_binary_sha256") != cfg["cli_sha256"]:
+        raise Refused("collected manifest pins do not match inputs")
     expected = manifest["assets"]
     assets_dir = work / "assets"
+    if set(expected) != {cfg["app_asset"], CLI_TARBALL, "SHA256SUMS-desktop-macos.txt", "SHA256SUMS-cli-macos.txt"}:
+        raise Refused("collected manifest has an unexpected asset set")
     for name, digest in expected.items():
         if sha256_file(assets_dir / name) != digest:
             raise Refused("local asset {} changed since collection".format(name))
+    if expected[cfg["app_asset"]] != cfg["app_sha256"]:
+        raise Refused("app asset does not match the pinned value")
+    check_cli_tarball(assets_dir / CLI_TARBALL, cfg["cli_sha256"])
+    check_target(gh, cfg)
+    check_target_reachable(gh, cfg)
+    if manifest.get("reachability") != cfg["reachability"]:
+        raise Refused("target reachability changed since collection; refusing")
     check_unpublished(gh, cfg)
 
     create_tag_exclusively(gh, cfg)

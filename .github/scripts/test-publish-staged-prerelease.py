@@ -38,6 +38,9 @@ CLI_STAGED = "d" * 64
 APP_ZIP = b"PK stapled notarized app zip bytes"
 CLI_BIN = b"\xcf\xfa\xed\xfe signed cli bytes"
 LICENSE = b"MIT License text\n"
+PUBLISHER = "5" * 40
+NOTARIZE_HEAD = "6" * 40
+DEFAULT_TIP = "7" * 40
 
 
 def sha(data):
@@ -87,6 +90,13 @@ class FakeGh(pub.Gh):
         self.ref_conflict = False
         self.move_tag_after_draft = None
         self.ref_lookups = 0
+        # compare: (base, head) -> status; default: target on main, runs on main.
+        self.compare = {
+            ("main", TARGET): "behind",
+            ("main", NOTARIZE_HEAD): "behind",
+        }
+        self.branches = {}
+        self.blob_override = {}  # (path, ref) -> blob
         self.tamper_digest = None
         self.extra_asset = False
         self.wrong_target = False
@@ -111,6 +121,7 @@ class FakeGh(pub.Gh):
             "status": "completed",
             "conclusion": "success",
             "run_attempt": 1,
+            "head_sha": NOTARIZE_HEAD,
             "repository": {"full_name": REPO},
         }
 
@@ -198,6 +209,15 @@ class FakeGh(pub.Gh):
             return self.blobs[int(rest.split("/")[2])]
         if rest == "contents/LICENSE?ref=" + TARGET:
             return LICENSE
+        if rest.startswith("compare/"):
+            base, head = rest[len("compare/"):].split("...")
+            return ok({"status": self.compare.get((base, head), "diverged")})
+        if rest.startswith("branches/"):
+            name = rest[len("branches/"):]
+            return ok({"commit": {"sha": self.branches[name]}}) if name in self.branches else missing()
+        if rest.startswith("contents/") and "?ref=" in rest:
+            path, ref = rest[len("contents/"):].split("?ref=")
+            return ok({"sha": self.blob_override.get((path, ref), "b" * 40)})
         raise AssertionError("unexpected API path " + path)
 
     def api_calls(self, method):
@@ -221,6 +241,7 @@ class Base(unittest.TestCase):
             "CLI_BINARY_SHA256": sha(CLI_BIN),
             "PROVENANCE_NOTE": "Build stamp and receipts identify this commit; manifest source_sha is null.",
             "CANDIDATE_APPROVAL_URL": "https://github.com/gents-ai/gents/pull/2781#issuecomment-6282341698",
+            "PUBLISHER_SHA": PUBLISHER,
             "RUN_URL": "https://github.com/gents-ai/gents/actions/runs/999",
         }
 
@@ -314,6 +335,11 @@ class InputValidation(Base):
             {"CANDIDATE_APPROVAL_URL": "https://github.com/other/repo/pull/1"},
             {"CANDIDATE_APPROVAL_URL": "https://example.com/gents-ai/gents/pull/1"},
             {"CANDIDATE_APPROVAL_URL": "https://github.com/gents-ai/gents/pull/1 "},
+            {"PUBLISHER_SHA": ""},
+            {"TARGET_BRANCH": "main"},
+            {"TARGET_BRANCH": "-x"},
+            {"TARGET_BRANCH": "a..b"},
+            {"TARGET_BRANCH": "has space"},
         ):
             with self.subTest(override=override):
                 with self.assertRaises(pub.Refused):
@@ -331,6 +357,53 @@ class Preconditions(Base):
     def test_existing_draft_refused(self):
         self.gh.releases.append({"tag_name": TAG, "draft": True})
         self.assert_refused(self.collect, None, contains="already exists")
+
+    def test_target_not_on_default_branch_refused_without_opt_in(self):
+        self.gh.compare[("main", TARGET)] = "diverged"
+        self.assert_refused(self.collect, None, contains="not reachable from the default branch")
+        self.assertEqual(self.gh.api_calls("POST"), [])
+
+    def test_target_on_named_branch_with_opt_in(self):
+        self.gh.compare[("main", TARGET)] = "diverged"
+        self.gh.branches["fix/rc1"] = TARGET
+        self.gh.compare[(TARGET, TARGET)] = "identical"
+        cfg, manifest = self.collect(self.cfg(TARGET_BRANCH="fix/rc1"))
+        notes = (Path(cfg["work"]) / "notes.md").read_text()
+        self.assertIn("**not** on the default branch `main`", notes)
+        self.assertIn("`fix/rc1`", notes)
+        self.assertIn("fix/rc1", manifest["reachability"])
+
+    def test_named_branch_not_containing_target_refused(self):
+        self.gh.compare[("main", TARGET)] = "diverged"
+        self.gh.branches["fix/rc1"] = "8" * 40
+        self.assert_refused(self.collect, self.cfg(TARGET_BRANCH="fix/rc1"), contains="not reachable from branch")
+
+    def test_missing_named_branch_refused(self):
+        self.gh.compare[("main", TARGET)] = "diverged"
+        self.assert_refused(self.collect, self.cfg(TARGET_BRANCH="gone"))
+
+    def test_unexpected_compare_status_refused(self):
+        self.gh.compare[("main", TARGET)] = "weird"
+        self.assert_refused(self.collect, None, contains="unexpected status")
+
+    def test_notarize_run_head_off_default_branch_refused(self):
+        self.gh.compare[("main", NOTARIZE_HEAD)] = "ahead"
+        self.assert_refused(self.collect, None, contains="head is not on the default branch")
+
+    def test_notarize_run_with_different_implementation_refused(self):
+        for path in (
+            ".github/workflows/notarize-staged-artifact.yml",
+            ".github/scripts/notarize-staged-artifact.sh",
+            ".github/scripts/notary_json.py",
+        ):
+            with self.subTest(path=path):
+                self.gh = FakeGh()
+                self.gh.blob_override[(path, NOTARIZE_HEAD)] = "c" * 40
+                self.assert_refused(self.collect, None, contains="used a different")
+
+    def test_notarize_run_missing_head_refused(self):
+        self.gh.runs[APP_RUN]["head_sha"] = None
+        self.assert_refused(self.collect, None, contains="no valid head")
 
     def test_release_listing_page_cap_and_shape(self):
         original = self.gh.api
@@ -495,6 +568,46 @@ class PublishSafety(Base):
                 self.gh.runs_response = response
                 self.assert_refused(pub.publish, self.gh, cfg, 0, contains="malformed")
 
+    def test_publish_rechecks_reachability(self):
+        cfg, _ = self.collect()
+        self.gh.compare[("main", TARGET)] = "diverged"
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="not reachable")
+        self.assertEqual(self.gh.api_calls("POST"), [])
+
+    def test_publish_refuses_changed_reachability(self):
+        self.gh.compare[("main", TARGET)] = "diverged"
+        self.gh.branches["fix/rc1"] = TARGET
+        self.gh.compare[(TARGET, TARGET)] = "identical"
+        cfg, _ = self.collect(self.cfg(TARGET_BRANCH="fix/rc1"))
+        self.gh.branches["fix/rc1"] = "9" * 40  # branch moved but still contains target
+        self.gh.compare[("9" * 40, TARGET)] = "behind"
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="reachability changed")
+        self.assertEqual(self.gh.api_calls("POST"), [])
+
+    def test_publish_rechecks_pins_and_asset_set(self):
+        cfg, _ = self.collect()
+        manifest_path = Path(cfg["work"]) / "manifest.json"
+        original = manifest_path.read_text()
+        for mutate in (
+            lambda m: m.update(app_asset_sha256="0" * 64),
+            lambda m: m["assets"].update({"extra.bin": "0" * 64}),
+        ):
+            manifest = json.loads(original)
+            mutate(manifest)
+            manifest_path.write_text(json.dumps(manifest))
+            self.assert_refused(pub.publish, self.gh, cfg, 0)
+        self.assertEqual(self.gh.api_calls("POST"), [])
+
+    def test_publish_rechecks_cli_tarball_contents(self):
+        cfg, manifest = self.collect()
+        assets = Path(cfg["work"]) / "assets"
+        tarball = assets / "gents-aarch64-apple-darwin.tar.gz"
+        pub.build_cli_tarball(b"other binary", LICENSE, 0, tarball)
+        manifest["assets"]["gents-aarch64-apple-darwin.tar.gz"] = pub.sha256_file(tarball)
+        (Path(cfg["work"]) / "manifest.json").write_text(json.dumps(manifest))
+        self.assert_refused(pub.publish, self.gh, cfg, 0, contains="pinned binary")
+        self.assertEqual(self.gh.api_calls("POST"), [])
+
     def test_publish_requires_matching_manifest(self):
         cfg, _ = self.collect()
         cfg = dict(cfg, tag="v0.21.0-rc2")
@@ -510,52 +623,82 @@ class WorkflowStatic(unittest.TestCase):
             raise unittest.SkipTest("PyYAML not installed")
         cls.wf = yaml.safe_load(WORKFLOW.read_text())
         cls.on = cls.wf.get(True, cls.wf.get("on"))
-        cls.steps = cls.wf["jobs"]["publish"]["steps"]
+        cls.jobs = cls.wf["jobs"]
 
     def test_dispatch_only(self):
         self.assertEqual(list(self.on), ["workflow_dispatch"])
-        self.assertEqual(
-            set(self.on["workflow_dispatch"]["inputs"]),
-            {"tag", "target_sha", "app_notarize_run_id", "cli_notarize_run_id", "app_asset_sha256",
-             "cli_binary_sha256", "provenance_note", "candidate_approval_url"},
-        )
         inputs = self.on["workflow_dispatch"]["inputs"]
+        self.assertEqual(
+            set(inputs),
+            {"tag", "target_sha", "target_branch", "app_notarize_run_id", "cli_notarize_run_id",
+             "app_asset_sha256", "cli_binary_sha256", "provenance_note", "candidate_approval_url"},
+        )
         self.assertTrue(inputs["provenance_note"]["required"])
         self.assertTrue(inputs["candidate_approval_url"]["required"])
+        self.assertFalse(inputs["target_branch"]["required"])
 
-    def test_permissions_exact(self):
-        self.assertEqual(self.wf["permissions"], {"contents": "write", "actions": "read"})
+    def test_permissions_split(self):
+        self.assertEqual(self.wf["permissions"], {})
+        self.assertEqual(set(self.jobs), {"collect", "publish"})
+        self.assertEqual(self.jobs["collect"]["permissions"], {"contents": "read", "actions": "read"})
+        self.assertEqual(self.jobs["publish"]["permissions"], {"contents": "write"})
+        self.assertEqual(self.jobs["publish"]["needs"], "collect")
 
-    def test_guard_first_and_full_ref(self):
-        self.assertIn("pre-checkout", self.steps[0]["name"])
-        self.assertIn("refs/heads/${TRUSTED_DEFAULT_BRANCH}", self.steps[0]["run"])
+    def test_each_job_guard_first_and_full_ref(self):
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertIn("pre-checkout", job["steps"][0]["name"])
+                self.assertIn("refs/heads/${TRUSTED_DEFAULT_BRANCH}", job["steps"][0]["run"])
 
     def test_pinned_actions(self):
-        uses = [s["uses"] for s in self.steps if "uses" in s]
         self.assertEqual(
-            uses,
+            [s["uses"] for s in self.jobs["collect"]["steps"] if "uses" in s],
             ["actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
              "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"],
         )
-        self.assertFalse(self.steps[1]["with"]["persist-credentials"])
+        self.assertEqual(
+            [s["uses"] for s in self.jobs["publish"]["steps"] if "uses" in s],
+            ["actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+             "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"],
+        )
+        for job in self.jobs.values():
+            checkout = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout"))
+            self.assertFalse(checkout["with"]["persist-credentials"])
+
+    def test_commands_per_job(self):
+        runs = lambda job: [s.get("run", "") for s in self.jobs[job]["steps"]]
+        self.assertTrue(any(r.endswith("publish_staged_prerelease.py collect") for r in runs("collect")))
+        self.assertFalse(any("publish_staged_prerelease.py publish" in r for r in runs("collect")))
+        self.assertTrue(any(r.endswith("publish_staged_prerelease.py publish") for r in runs("publish")))
+        self.assertFalse(any("publish_staged_prerelease.py collect" in r for r in runs("publish")))
+
+    def test_publisher_sha_and_target_branch_passed(self):
+        for job in self.jobs.values():
+            env = next(s for s in job["steps"] if "publish_staged_prerelease.py" in s.get("run", ""))["env"]
+            self.assertEqual(env["PUBLISHER_SHA"], "${{ github.sha }}")
+            self.assertEqual(env["TARGET_BRANCH"], "${{ inputs.target_branch }}")
+            self.assertEqual(env["GH_TOKEN"], "${{ github.token }}")
 
     def test_no_expression_interpolation_in_run(self):
-        for step in self.steps:
-            self.assertNotIn("${{", step.get("run", ""))
+        for job in self.jobs.values():
+            for step in job["steps"]:
+                self.assertNotIn("${{", step.get("run", ""))
 
     def test_no_repository_secrets(self):
         self.assertNotIn("secrets.", json.dumps(self.wf))
 
     def test_hosted_runner_and_concurrency(self):
-        self.assertEqual(self.wf["jobs"]["publish"]["runs-on"], "ubuntu-latest")
+        for job in self.jobs.values():
+            self.assertEqual(job["runs-on"], "ubuntu-latest")
         self.assertFalse(self.wf["concurrency"]["cancel-in-progress"])
 
-    def test_collect_before_publish(self):
-        runs = [s.get("run", "") for s in self.steps]
-        collect = next(i for i, r in enumerate(runs) if r.endswith("collect"))
-        publish = next(i for i, r in enumerate(runs) if r.endswith("publish"))
-        self.assertLess(collect, publish)
+    def test_ci_runs_these_tests(self):
+        import yaml
 
+        ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+        job = ci["jobs"]["publish-control-tests"]
+        self.assertIn("test-publish-staged-prerelease.py", json.dumps(job))
+        self.assertNotIn("secrets.", json.dumps(job))
 
 if __name__ == "__main__":
     unittest.main()
