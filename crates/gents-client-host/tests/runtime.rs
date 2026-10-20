@@ -42,8 +42,23 @@ enum Journey {
     Conversation,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     Editor,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorSteering,
     Goal,
 }
+
+impl Journey {
+    fn editor_scenario(self) -> Option<&'static str> {
+        match self {
+            Self::Editor => Some("full"),
+            Self::EditorSteering => Some("steering"),
+            _ => None,
+        }
+    }
+}
+
+const STEERING_INPUT: &str = "Steering input from the installed editor.";
+const STEERING_REPLY: &str = "Steering input received.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_client_submits_signed_input_and_observes_live_and_durable_output() -> Result<()> {
@@ -87,10 +102,35 @@ async fn editor_preserves_live_session_and_draft_across_window_reload() -> Resul
         })
 }
 
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorSteering)
+        .await
+        .with_context(|| {
+            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
+        })?;
+    let artifacts = std::fs::read_to_string(temp.path().join("editor-artifacts-path"))?;
+    let artifacts = std::fs::canonicalize(artifacts)?;
+    let extension = std::env::var_os("GENTS_VSCODE_ROOT").context("extension root")?;
+    ensure!(
+        artifacts.starts_with(std::fs::canonicalize(
+            Path::new(&extension).join("test-results")
+        )?),
+        "editor evidence left its artifact directory"
+    );
+    std::fs::copy(
+        temp.path().join("editor-steering-canonical.json"),
+        artifacts.join("editor-steering-canonical.json"),
+    )?;
+    Ok(())
+}
+
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let cli = support::native_binary("gents")?;
     let host_binary = support::native_binary("gents-client-host")?;
-    if matches!(journey, Journey::Editor) {
+    if journey.editor_scenario().is_some() {
         std::fs::write(
             root.join("AGENTS.md"),
             "# Project instructions fixture\nUse the current editor workspace.\n",
@@ -103,13 +143,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let goal_provider_gate = editor_goal_gate.clone();
     let goal_provider_hold = root.join("hold-goal-provider");
     let provider = FakeLlm::start_with_models(
-        if matches!(journey, Journey::Editor) {
+        if journey.editor_scenario().is_some() {
             &["editor-fixture", "editor-fixture-alternate"]
         } else {
             &["editor-fixture"]
         },
         None,
-        Arc::new(move |_| {
+        Arc::new(move |request| {
+            if matches!(journey, Journey::EditorSteering)
+                && request["messages"].to_string().contains(STEERING_INPUT)
+            {
+                return ChatAction::Sse(fake_llm::completion_text_sse(STEERING_REPLY));
+            }
             ChatAction::GatedSse(
                 vec![(
                     Duration::ZERO,
@@ -135,7 +180,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .arg(&node_home)
         .args([
             "--tool-package",
-            if matches!(journey, Journey::Editor) {
+            if journey.editor_scenario().is_some() {
                 "write"
             } else {
                 "readonly"
@@ -217,7 +262,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     drop(seed);
     let mut host_command = Command::new(&host_binary);
     host_command.args(["--serve", "--home"]).arg(paths.root());
-    if matches!(journey, Journey::Editor) {
+    if journey.editor_scenario().is_some() {
         host_command.arg("--editor-store");
     }
     #[cfg(unix)]
@@ -398,7 +443,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 id,
                 "desktop_chat_send",
                 json!({"request":{
-                    "nodeDid":node_did,"agentId":agent_id,"content":content,"delivery":"queue"
+                    "nodeDid":node_did,"agentId":agent_id,"content":content,"delivery":"queue",
+                    "cwd": matches!(journey, Journey::EditorSteering).then_some(root)
                 }}),
             )
             .await
@@ -427,6 +473,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await
         .context("submitted request did not reach the runtime")??;
     gents::verify_request_receipt_signature(&row)?;
+    let original_doc_id = row.doc_id.clone().context("submitted physical request")?;
     ensure!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
     ensure!(client_did != node_did);
     ensure!(
@@ -481,6 +528,33 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("live output was not observed before provider completion")??;
+    if matches!(journey, Journey::EditorSteering) {
+        let completion_path = root.join("finish-provider");
+        let completion_gate = Arc::clone(&gate);
+        let _completion = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if completion_path.is_file() {
+                    completion_gate.add_permits(1);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "steering",
+        )
+        .await?;
+        id += 1;
+    }
     if matches!(journey, Journey::Goal) {
         let mut view = wait_goal(&mut client, &mut id, node_did, session, "active").await?;
         ensure!(view["goal"]["goalId"] == receipt["goalId"]);
@@ -604,49 +678,19 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             gents::plugin::approval::ask(&approval_home, &question, gents::plugin::approval::WAIT)
                 .await
         });
-        let extension_root = std::env::var_os("GENTS_VSCODE_ROOT")
-            .context("Set GENTS_VSCODE_ROOT to the extension checkout before running editor-e2e")?;
-        let extension_root = Path::new(&extension_root);
-        ensure!(
-            extension_root.is_absolute(),
-            "GENTS_VSCODE_ROOT must be absolute"
-        );
-        let script = extension_root.join("tests/editor.mjs");
-        ensure!(
-            script.is_file(),
-            "The extension checkout has no tests/editor.mjs"
-        );
-        let mut editor = Command::new("node");
-        if std::env::var("GENTS_VSCODE_STARTUP_CUSTODY").as_deref() == Ok("file") {
-            let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
-            let startup = Arc::new(
-                ClientCore::start_with_paths_and_options(
-                    startup_paths.clone(),
-                    ClientCoreOptions::local_only(),
-                )
-                .await?,
-            );
-            startup.shutdown().await?;
-            editor.env("GENTS_VSCODE_STARTUP_CLIENT_HOME", startup_paths.root());
-        }
-        let log = std::fs::File::create(root.join("editor.log"))?;
-        let child = editor
-            .env("GENTS_VSCODE_INFERENCE_ENDPOINT", provider.endpoint())
-            .arg(script)
-            .arg(root)
-            .arg(paths.root())
-            .arg(&host_binary)
-            .arg(session)
-            .stdout(Stdio::from(log.try_clone()?))
-            .stderr(Stdio::from(log))
-            .kill_on_drop(true)
-            .status();
-        let status = tokio::time::timeout(Duration::from_secs(120), child).await;
-        if !matches!(&status, Ok(Ok(status)) if status.success()) {
+        let result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "full",
+        )
+        .await;
+        if result.is_err() {
             approval_wait.abort();
         }
-        let status = status.context("editor journey timed out")??;
-        ensure!(status.success(), "editor journey exited with {status}");
+        result?;
         let stopped = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content session_id lifecycle_state }} }}"#,
@@ -754,14 +798,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         id += 1;
     }
     gate.add_permits(1);
+    let expected_reply = if matches!(journey, Journey::EditorSteering) {
+        STEERING_REPLY
+    } else {
+        "First part and final part."
+    };
     let mut last_projection = Value::Null;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let projection = read_session(&mut client, &mut id, node_did, session).await?;
             let durable = projection["timelineItems"].as_array().is_some_and(|items| {
                 items.iter().any(|item| {
-                    item["kind"] == "assistantMessage"
-                        && item["content"] == "First part and final part."
+                    item["kind"] == "assistantMessage" && item["content"] == expected_reply
                 })
             });
             if projection["turnState"] == "completed" && durable {
@@ -793,10 +841,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             );
             match output["output"]["kind"].as_str() {
                 Some("terminalMessage") => {
-                    ensure!(
-                        output["output"]["content"] == "First part and final part.",
-                        "{output}"
-                    );
+                    ensure!(output["output"]["content"] == expected_reply, "{output}");
                     break Ok::<_, anyhow::Error>(());
                 }
                 Some("loading") => tokio::time::sleep(Duration::from_millis(50)).await,
@@ -888,9 +933,29 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         })
         .count();
     ensure!(
-        user_rounds == 1,
-        "expected one submitted user round, observed {user_rounds}"
+        user_rounds
+            == if matches!(journey, Journey::EditorSteering) {
+                2
+            } else {
+                1
+            },
+        "unexpected provider round count: {user_rounds}"
     );
+    if matches!(journey, Journey::EditorSteering) {
+        let evidence = verify_editor_steering(
+            &access,
+            &provider,
+            node_did,
+            session,
+            &original_doc_id,
+            &client_did,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-steering-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+    }
     if matches!(journey, Journey::Conversation) {
         configured_actions::exercise(
             &mut client,
@@ -1001,6 +1066,158 @@ async fn exercise_message_edit(
         "editing mutated the original conversation"
     );
     Ok(())
+}
+
+async fn run_editor_journey(
+    root: &Path,
+    paths: &DesktopPaths,
+    host_binary: &Path,
+    session: &str,
+    endpoint: &str,
+    scenario: &str,
+) -> Result<()> {
+    let extension_root = std::env::var_os("GENTS_VSCODE_ROOT")
+        .context("Set GENTS_VSCODE_ROOT to the extension checkout before running editor-e2e")?;
+    let extension_root = Path::new(&extension_root);
+    ensure!(
+        extension_root.is_absolute(),
+        "GENTS_VSCODE_ROOT must be absolute"
+    );
+    let script = extension_root.join("tests/editor.mjs");
+    ensure!(
+        script.is_file(),
+        "The extension checkout has no tests/editor.mjs"
+    );
+    let mut editor = Command::new("node");
+    if scenario == "full" && std::env::var("GENTS_VSCODE_STARTUP_CUSTODY").as_deref() == Ok("file")
+    {
+        let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
+        let startup = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                startup_paths.clone(),
+                ClientCoreOptions::local_only(),
+            )
+            .await?,
+        );
+        startup.shutdown().await?;
+        editor.env("GENTS_VSCODE_STARTUP_CLIENT_HOME", startup_paths.root());
+    }
+    let log = std::fs::File::create(root.join("editor.log"))?;
+    let child = editor
+        .env("GENTS_VSCODE_INFERENCE_ENDPOINT", endpoint)
+        .env("GENTS_VSCODE_EDITOR_JOURNEY", scenario)
+        .arg(script)
+        .arg(root)
+        .arg(paths.root())
+        .arg(&host_binary)
+        .arg(session)
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log))
+        .kill_on_drop(true)
+        .status();
+    let status = tokio::time::timeout(Duration::from_secs(120), child).await;
+    let status = status.context("editor journey timed out")??;
+    ensure!(status.success(), "editor journey exited with {status}");
+    Ok(())
+}
+
+async fn verify_editor_steering(
+    access: &gents::ConfigAccess,
+    provider: &FakeLlm,
+    node_did: &str,
+    session: &str,
+    original_doc_id: &str,
+    client_did: &str,
+) -> Result<Value> {
+    use gents_protocol::request_input::QueueDelivery;
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+    let result = access.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
+        gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session), gents::SIGNED_REQUEST_FIELDS,
+    )).await?;
+    let rows: Vec<gents_protocol::row::AgentRequestRow> =
+        serde_json::from_value(result["data"]["AgentRequest"].clone())?;
+    ensure!(
+        rows.len() == 3,
+        "steering must retain one active row and two signed versions of the input: {result}"
+    );
+    for row in &rows {
+        gents::verify_request_receipt_signature(row)?;
+        ensure!(
+            row.admission_signer_did.as_deref() == Some(client_did)
+                && row.requester_did.as_deref() == Some(client_did),
+            "steering changed the enrolled author"
+        );
+    }
+    let active = rows
+        .iter()
+        .find(|row| row.doc_id.as_deref() == Some(original_doc_id))
+        .context("original request")?;
+    let input = |delivery| {
+        rows.iter().find(|row| {
+            row.content.as_deref() == Some(STEERING_INPUT)
+                && row
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.queue.as_ref())
+                    .is_some_and(|queue| queue.delivery == delivery)
+        })
+    };
+    let queued = input(QueueDelivery::Queue).context("original queued input")?;
+    let steered = input(QueueDelivery::Steer).context("promoted input")?;
+    ensure!(
+        active.lifecycle_state == Some(RequestLifecycleState::Completed)
+            && queued.lifecycle_state == Some(RequestLifecycleState::Superseded)
+            && steered.lifecycle_state == Some(RequestLifecycleState::Superseded)
+            && queued.superseded_by_request_doc_id == steered.doc_id
+            && steered.superseded_by_request_doc_id.as_deref() == Some(original_doc_id),
+        "the pending row must be promoted and consumed by the original physical request: {result}"
+    );
+    let rendered = access.execute(&format!(
+        r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id turn_index }} }}"#,
+        gents::graphql::escape_graphql_string(&active.request_id),
+    )).await?;
+    let rendered = rendered["data"]["RenderedRequest"]
+        .as_array()
+        .context("rendered steering requests")?;
+    ensure!(
+        rendered.len() == 2
+            && rendered
+                .iter()
+                .all(|row| row["request_doc_id"] == original_doc_id)
+            && rendered[0]["turn_index"] != rendered[1]["turn_index"],
+        "steering must continue the original capture exactly once: {rendered:?}"
+    );
+    let requests = provider.captured_chat_requests();
+    let provider_input_occurrences = requests
+        .iter()
+        .map(|body| body["messages"].to_string().matches(STEERING_INPUT).count())
+        .sum::<usize>();
+    let steered_rounds = requests
+        .iter()
+        .filter(|body| body["messages"].to_string().contains(STEERING_INPUT))
+        .collect::<Vec<_>>();
+    ensure!(
+        steered_rounds.len() == 1
+            && steered_rounds[0]["messages"]
+                .to_string()
+                .matches(STEERING_INPUT)
+                .count()
+                == 1,
+        "the provider must receive the promoted input exactly once: {requests:?}"
+    );
+    Ok(json!({
+        "nodeDid": node_did, "sessionId": session, "authorDid": client_did,
+        "activeRequestDocId": original_doc_id, "queuedRequestDocId": queued.doc_id,
+        "steeredRequestDocId": steered.doc_id, "activeState": active.lifecycle_state,
+        "queuedState": queued.lifecycle_state, "steeredState": steered.lifecycle_state,
+        "queuedReplacedBy": queued.superseded_by_request_doc_id,
+        "steeredConsumedBy": steered.superseded_by_request_doc_id,
+        "renderedRequests": rendered, "providerInputOccurrences": provider_input_occurrences,
+        "providerRequests": requests.len(),
+        "verifiedSignatures": rows.len(),
+    }))
 }
 
 async fn read_session(
