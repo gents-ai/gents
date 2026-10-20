@@ -583,7 +583,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     std::fs::write(&process_gate, b"release\n").expect("release held background process");
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let successor = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             let request = db.node.execute(
                 r#"{ AgentRequest(filter: { request_id: { _eq: "failed-wake-backoff" } }, limit: 1) { request_id lifecycle_state } }"#,
@@ -608,8 +608,28 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     })
-    .await
-    .expect("failed wake did not retain canonical background completion notification with its successor wake in inference");
+    .await;
+    if let Err(error) = successor {
+        let rows = background_wake_retry_rows(&db.node, session_id).await;
+        let notifications = fetch_message_snapshots_for_session(&db.node, session_id)
+            .await
+            .into_iter()
+            .map(|message| message.message_key)
+            .collect::<Vec<_>>();
+        let tools = fetch_tool_call_snapshots_for_session(&db.node, session_id)
+            .await
+            .into_iter()
+            .map(|call| {
+                serde_json::json!({
+                    "name":call.tool_name, "state":call.lifecycle_state,
+                })
+            })
+            .collect::<Vec<_>>();
+        panic!("failed wake did not retain its notification and processing successor: {error}; requests={}; messages={notifications:?}; tools={tools:?}; provider_calls={}",
+            serde_json::to_string(&rows).expect("encode wake diagnostics"),
+            runtime.backend.observed_requests("continue"),
+        );
+    }
     runtime.shutdown().await;
 
     let wake_rows_before = background_wake_retry_rows(&db.node, session_id).await;
