@@ -11,6 +11,7 @@ import {
   EARLIER_SEND_NOT_DELIVERED_HINT,
 } from "../src/hooks/chatActions";
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
+import { createMailboxActions } from "../src/hooks/mailboxActions";
 import { writeSession } from "../src/hooks/sessionStore";
 import { loadUnresolvedSubmissions } from "../src/hooks/unresolvedSubmissions";
 import { admittingProjection, shellStores } from "./shell-fixture";
@@ -158,5 +159,37 @@ describe("chat send with an unknown delivery outcome", () => {
     expect(sendChatMessage).toHaveBeenLastCalledWith(
       expect.objectContaining({ content: "yes", resolveRequestId: null }),
     );
+  });
+
+  it("reconciles a mailbox answer whose delivery is unknown", async () => {
+    const sendChatMessage = vi
+      .fn()
+      .mockResolvedValueOnce(unknownOutcome)
+      .mockResolvedValueOnce({ ...unknownOutcome, outcome: null });
+    const stores = shellStores({
+      selection: { nodeDid: "agent", agentId: "setup", sessionId: "session-1" },
+    });
+    const reportFailure = vi.fn();
+    const mailbox = createMailboxActions({
+      api: { sendChatMessage } as unknown as DesktopApiAdapter,
+      stores,
+      refreshSnapshot: async () => {},
+      reportFailure,
+    } as never);
+    const item = {
+      itemId: "question-1",
+      targetNodeDid: "agent",
+      targetAgentId: "setup",
+      sessionId: "session-1",
+    } as never;
+
+    await mailbox.answerMailboxQuestion(item, { choice: "yes" } as never);
+    expect(loadUnresolvedSubmissions()).toHaveLength(1);
+    await mailbox.answerMailboxQuestion(item, { choice: "yes" } as never);
+
+    expect(sendChatMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ resolveRequestId: "request-unknown" }),
+    );
+    expect(loadUnresolvedSubmissions()).toEqual([]);
   });
 });

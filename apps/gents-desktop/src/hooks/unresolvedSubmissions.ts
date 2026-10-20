@@ -50,7 +50,9 @@ function store(entries: UnresolvedChatSubmission[]) {
     if (entries.length === 0) localStorage.removeItem(KEY);
     else localStorage.setItem(KEY, JSON.stringify(entries));
   } catch {
-    // Storage is best effort; the in-memory owner still blocks fresh resends.
+    // Storage is best effort: without it a reload loses the block on a fresh
+    // resend, though the in-memory desktop client can still replay the
+    // original request when it is reconciled before the reload.
   }
 }
 

@@ -10,9 +10,7 @@ use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 use gents::config_client::ConfigAccess;
-use gents_protocol::graphql::{
-    escape_graphql_string, graphql_error_is_retryable, GraphqlRequestOptions,
-};
+use gents_protocol::graphql::{escape_graphql_string, GraphqlRequestOptions};
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
@@ -169,11 +167,13 @@ async fn read_owner_receipt(access: &ConfigAccess, create: &AgentRequestCreate) 
 
 /// Commit a retained signed submission, reconciling ambiguous outcomes.
 ///
-/// Embedded (local) writes are atomic, so their errors are definite. Owner
-/// writes that fail ambiguously, or whose receipt cannot be read, return
-/// [`SubmissionOutcomeUnknown`]. A definite owner rejection is re-checked
-/// against the receipt first, because an earlier ambiguous attempt may have
-/// committed before the rejected repost.
+/// Embedded (local) writes are atomic, so their errors are definite. An owner
+/// write is only a definite rejection when the owner answered with a GraphQL
+/// `errors` body and the receipt proves it holds no such request; every other
+/// post-send failure (HTTP status, transport, undecodable body, unreadable
+/// receipt, or an "already exists" rejection with no visible receipt) returns
+/// [`SubmissionOutcomeUnknown`], because the owner may hold or still be
+/// committing the request.
 pub(super) async fn commit_signed_submission(
     access: &ConfigAccess,
     pending: UnresolvedSubmission,
@@ -192,14 +192,29 @@ pub(super) async fn commit_signed_submission(
     let receipt_unreadable = error
         .chain()
         .any(|cause| cause.to_string() == RECEIPT_READ_CONTEXT);
-    if !receipt_unreadable && !graphql_error_is_retryable(&error) {
+    if !receipt_unreadable && owner_rejected(&error) {
         match owner_receipt(access, &pending.create).await {
             Ok(true) => return Ok(pending.result),
-            Ok(false) => return Err(error),
-            Err(_) => {}
+            Ok(false) if !reports_existing_request(&error) => return Err(error),
+            _ => {}
         }
     }
     Err(pending.outcome_unknown())
+}
+
+/// The owner processed the mutation and answered with GraphQL errors.
+fn owner_rejected(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().starts_with("graphql returned errors:"))
+}
+
+/// A rejection that implies the owner already holds a request with this id.
+fn reports_existing_request(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let text = cause.to_string().to_ascii_lowercase();
+        text.contains("already exists") || text.contains("duplicate")
+    })
 }
 
 /// Whether the owner holds a request with this exact identity in its scope.
@@ -211,16 +226,18 @@ pub async fn submitted_request_exists(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
-    requester_did: &str,
     request_id: &str,
 ) -> Result<bool> {
     let ConfigAccess::Graphql(endpoint) = access else {
         anyhow::bail!("only an owner connection can prove whether a send was delivered");
     };
-    let scope = gents::session::session_scope_filter(
-        node_did,
-        session_id,
-        (!requester_did.is_empty()).then_some(requester_did),
+    // Scoped by node and session only: the requester authority may have changed
+    // since the send, and an exact requester match would then prove a false
+    // absence.
+    let scope = format!(
+        r#"node_did:{{_eq:"{}"}},session_id:{{_eq:"{}"}}"#,
+        escape_graphql_string(node_did),
+        escape_graphql_string(session_id)
     );
     let logical = escape_graphql_string(request_id);
     let response = gents::config_client::query_graphql_with_options(
@@ -528,5 +545,47 @@ mod tests {
             .expect("a matching receipt proves the earlier commit");
 
         assert_eq!(submitted, test_result());
+    }
+
+    #[tokio::test]
+    async fn owner_http_status_failure_after_send_is_unknown_not_rejected() {
+        for status in [502, 504] {
+            let server = MockServer::start().await;
+            mount_create(&server, ResponseTemplate::new(status)).await;
+            mount_receipt(&server, Vec::new()).await;
+            let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+
+            let error = commit_signed_submission(&access, test_pending())
+                .await
+                .expect_err("an unconfirmed post-send failure is not a success");
+
+            let unknown = error
+                .downcast_ref::<SubmissionOutcomeUnknown>()
+                .unwrap_or_else(|| panic!("HTTP {status} must be an unknown outcome: {error:#}"));
+            assert_eq!(unknown.request_id, test_result().request_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn already_exists_rejection_without_visible_receipt_is_unknown() {
+        let server = MockServer::start().await;
+        mount_create(
+            &server,
+            ResponseTemplate::new(200).set_body_json(json!({
+                "errors": [{"message": "document already exists"}]
+            })),
+        )
+        .await;
+        mount_receipt(&server, Vec::new()).await;
+        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+
+        let error = commit_signed_submission(&access, test_pending())
+            .await
+            .expect_err("an unconfirmed duplicate rejection is not a success");
+
+        assert!(
+            error.downcast_ref::<SubmissionOutcomeUnknown>().is_some(),
+            "an existing-request rejection with no visible receipt may still be delivered: {error:#}"
+        );
     }
 }

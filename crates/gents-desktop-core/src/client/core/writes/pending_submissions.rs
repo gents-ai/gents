@@ -6,7 +6,6 @@
 //! reconciliation then falls back to proving presence or absence by request id.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 
 use super::super::super::mutations::{
     resolve_unresolved_submission, submitted_request_exists, SubmissionOutcomeUnknown,
@@ -15,29 +14,39 @@ use super::super::super::mutations::{
 use super::{observe_submitted_request, ClientCore};
 
 impl ClientCore {
-    /// Keep the signed payload of an unknown-outcome send for identical replay.
-    pub(super) fn retain_unresolved_submission(&self, error: anyhow::Error) -> anyhow::Error {
-        if let Some(unknown) = error.downcast_ref::<SubmissionOutcomeUnknown>() {
-            self.unresolved_submissions
-                .lock()
-                .expect("unresolved submission lock poisoned")
-                .insert(unknown.request_id.clone(), unknown.pending.clone());
-        }
+    /// Map a submit failure, keeping the signed payload of an unknown-outcome
+    /// send for identical replay. An unknown outcome is not recorded as a
+    /// mutation failure: the request may have been delivered.
+    pub(super) fn submit_failure(&self, error: anyhow::Error) -> anyhow::Error {
+        let Some(unknown) = error.downcast_ref::<SubmissionOutcomeUnknown>() else {
+            return self.record_mutation_error("submit request", error);
+        };
+        self.unresolved_submissions
+            .lock()
+            .expect("unresolved submission lock poisoned")
+            .insert(unknown.request_id.clone(), unknown.pending.clone());
         error
+    }
+
+    fn forget_unresolved_submission(&self, request_id: &str) {
+        self.unresolved_submissions
+            .lock()
+            .expect("unresolved submission lock poisoned")
+            .remove(request_id);
     }
 
     /// Reconcile an earlier send whose owner outcome was unknown.
     ///
-    /// Returns `Ok(Some(_))` once the owner holds the original request,
-    /// `Ok(None)` when the payload is no longer retained and the owner proves
-    /// it never received the request (a fresh send is then safe), and
-    /// `SubmissionOutcomeUnknown` again when the outcome still cannot be
-    /// determined.
+    /// Returns `Ok(Some(_))` once the owner holds the original request, and
+    /// `Ok(None)` when the owner proves it never received it (a fresh send is
+    /// then safe). `SubmissionOutcomeUnknown` is returned again when the
+    /// outcome still cannot be determined.
     pub async fn resolve_chat_submission(
         &self,
         node_did: &str,
         session_id: &str,
         request_id: &str,
+        content: &str,
     ) -> Result<Option<SubmittedRequest>> {
         let retained = self
             .unresolved_submissions
@@ -51,17 +60,25 @@ impl ClientCore {
                     pending.node_did == node_did && pending.session_id == session_id,
                     "unresolved submission {request_id} belongs to another session"
                 );
+                // Mailbox answers carry no composer content; they are keyed by
+                // their mailbox item instead.
+                anyhow::ensure!(
+                    content.trim().is_empty() || pending.create.content.trim() == content.trim(),
+                    "unresolved submission {request_id} is a different message"
+                );
                 let access = self.session_queue_access(&pending.node_did);
                 match resolve_unresolved_submission(&access, &pending).await {
                     Ok(receipt) => {
-                        self.unresolved_submissions
-                            .lock()
-                            .expect("unresolved submission lock poisoned")
-                            .remove(request_id);
+                        self.forget_unresolved_submission(request_id);
                         Some(receipt)
                     }
-                    Err(error) => {
-                        return Err(self.record_mutation_error("resolve chat submission", error))
+                    Err(error) if error.is::<SubmissionOutcomeUnknown>() => return Err(error),
+                    // The receipt proved absence and the owner definitely
+                    // rejected the identical replay, so it holds nothing with
+                    // this identity.
+                    Err(_) => {
+                        self.forget_unresolved_submission(request_id);
+                        None
                     }
                 }
             }
@@ -80,17 +97,10 @@ impl ClientCore {
                 })
             }
             None => {
-                let peer_record = self
-                    .peer_record_for_chat_write(node_did, Utc::now())
-                    .await?;
-                let (_, _, requester_did) = self
-                    .request_authority(node_did, peer_record.as_ref())
-                    .await?;
                 let present = submitted_request_exists(
                     &self.session_queue_access(node_did),
                     node_did,
                     session_id,
-                    &requester_did,
                     request_id,
                 )
                 .await

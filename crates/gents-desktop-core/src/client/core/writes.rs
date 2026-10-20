@@ -477,8 +477,7 @@ impl ClientCore {
                 );
                 Ok(result)
             }
-            Err(error) => Err(self
-                .record_mutation_error("submit request", self.retain_unresolved_submission(error))),
+            Err(error) => Err(self.submit_failure(error)),
         }
     }
 

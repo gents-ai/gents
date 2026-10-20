@@ -47,7 +47,7 @@ pub(super) async fn resolve_chat_submission(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("resolving an earlier send requires its session_id"))?;
     match core
-        .resolve_chat_submission(node_did, session_id, request_id)
+        .resolve_chat_submission(node_did, session_id, request_id, &request.content)
         .await
     {
         Ok(Some(receipt)) => Ok(receipt.into()),
