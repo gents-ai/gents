@@ -516,6 +516,13 @@ mod tests {
     }
 
     async fn p2p_node_with_identity(node_identity_did: Option<&str>) -> TestNode {
+        p2p_node_with_options(node_identity_did, None).await
+    }
+
+    async fn p2p_node_with_options(
+        node_identity_did: Option<&str>,
+        http_address: Option<std::net::SocketAddr>,
+    ) -> TestNode {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let mut builder = EmbeddedNode::builder()
             .data_path(tempdir.path())
@@ -538,6 +545,9 @@ mod tests {
             });
         if let Some(did) = node_identity_did {
             builder = builder.with_node_identity_did(did);
+        }
+        if let Some(address) = http_address {
+            builder = builder.with_http(defra_node::HttpConfig::with_addr(address));
         }
         let node = Arc::new(builder.build().await.expect("embedded p2p node"));
         TestNode {
@@ -595,11 +605,10 @@ mod tests {
     }
 
     async fn runtime_test_node() -> TestNode {
-        let test = p2p_node().await;
-        ensure_runtime_schemas(&test.node)
-            .await
-            .expect("runtime schemas");
-        test
+        let directory = tempfile::tempdir().unwrap();
+        let identity =
+            KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        runtime_test_node_with_identity(&identity).await
     }
 
     async fn runtime_test_node_with_identity(identity: &dyn NodeIdentity) -> TestNode {
@@ -608,6 +617,28 @@ mod tests {
             .await
             .expect("runtime schemas");
         test
+    }
+
+    async fn runtime_http_test_node(identity: &dyn NodeIdentity) -> (TestNode, String) {
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let test = p2p_node_with_options(Some(identity.did()), Some(address)).await;
+        ensure_runtime_schemas(&test.node).await.unwrap();
+        let endpoint = format!("http://{address}/api/v0/graphql");
+        let access = crate::config_client::ConfigAccess::graphql(&endpoint);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if access.execute("{ AgentRequest { _docID } }").await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("native HTTP endpoint becomes ready");
+        (test, endpoint)
     }
 
     fn bs58_sig(signature: &[u8]) -> String {
@@ -1473,8 +1504,8 @@ mod tests {
         let receiver_identity =
             KeyIdentity::load_or_create(keys.path().join("receiver.key"), None).unwrap();
         assert_ne!(sender_identity.did(), receiver_identity.did());
-        let sender_test = runtime_test_node_with_identity(&sender_identity).await;
-        let receiver_test = runtime_test_node_with_identity(&receiver_identity).await;
+        let (sender_test, sender_http) = runtime_http_test_node(&sender_identity).await;
+        let (receiver_test, receiver_http) = runtime_http_test_node(&receiver_identity).await;
         let sender = &sender_test.node;
         let receiver = &receiver_test.node;
         let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
@@ -1641,20 +1672,19 @@ mod tests {
             .as_array()
             .unwrap()
         {
-            let owner = match case["owner"].as_str().unwrap() {
-                "node" => sender,
-                "client" => receiver,
+            let (owner, endpoint) = match case["owner"].as_str().unwrap() {
+                "node" => (sender, sender_http.as_str()),
+                "client" => (receiver, receiver_http.as_str()),
                 role => panic!("unknown modeled storage owner: {role}"),
             };
-            let visible = if let Some(actor) = case["actor"].as_str() {
-                let did = match actor {
-                    "node" => sender_identity.did(),
-                    "client" => receiver_identity.did(),
-                    "outsider" => outsider_identity.did(),
-                    role => panic!("unknown modeled actor: {role}"),
-                }
-                .parse()
-                .unwrap();
+            let actor = case["actor"].as_str().map(|actor| match actor {
+                "node" => sender_identity.did(),
+                "client" => receiver_identity.did(),
+                "outsider" => outsider_identity.did(),
+                role => panic!("unknown modeled actor: {role}"),
+            });
+            let visible = if let Some(actor) = actor {
+                let did = actor.parse().unwrap();
                 let result = crate::config_client::ConfigAccess::transact_local_write(
                     owner,
                     Some(did),
@@ -1685,6 +1715,24 @@ mod tests {
                     .unwrap()
             };
             assert_eq!(visible, case["expected"].as_bool().unwrap(), "{case}");
+            let http = match actor {
+                Some(did) => crate::config_client::ConfigAccess::graphql_as(endpoint, did),
+                None => crate::config_client::ConfigAccess::graphql(endpoint),
+            };
+            let response = http
+                .execute("{ ToolFileChange { _docID file_changes } }")
+                .await
+                .unwrap();
+            let http_visible = response["data"]["ToolFileChange"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["_docID"] == selected);
+            assert_eq!(
+                http_visible,
+                case["expected"].as_bool().unwrap(),
+                "HTTP: {case}"
+            );
         }
         let outsider_test = runtime_test_node_with_identity(&outsider_identity).await;
         let outsider = &outsider_test.node;
