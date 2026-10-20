@@ -74,7 +74,12 @@ impl Attachment {
     }
 
     pub async fn next(&mut self) -> Value {
-        let bytes = tokio::time::timeout(Duration::from_secs(30), self.output.next())
+        self.next_before(tokio::time::Instant::now() + Duration::from_secs(30))
+            .await
+    }
+
+    async fn next_before(&mut self, deadline: tokio::time::Instant) -> Value {
+        let bytes = tokio::time::timeout_at(deadline, self.output.next())
             .await
             .expect("native reply deadline")
             .expect("native output closed")
@@ -94,10 +99,22 @@ impl Attachment {
         name: &str,
         args: Value,
     ) -> Result<Value, BridgeError> {
+        self.try_call_with_timeout(id, name, args, Duration::from_secs(30))
+            .await
+    }
+
+    pub async fn try_call_with_timeout(
+        &mut self,
+        id: u32,
+        name: &str,
+        args: Value,
+        timeout: Duration,
+    ) -> Result<Value, BridgeError> {
+        let deadline = tokio::time::Instant::now() + timeout;
         self.send(json!({"kind":"call", "id":id, "command":{"name":name, "args":args}}))
             .await;
         loop {
-            let response = self.next().await;
+            let response = self.next_before(deadline).await;
             if response["kind"] == "response" {
                 assert_eq!(response["id"], id);
                 if !response["error"].is_null() {
