@@ -27,18 +27,38 @@ structure Edit where
   canonical : Bool := true
   deriving DecidableEq, Repr
 
-/-- The binding is the existing workspace identity and path capability. The
-request document and immutable review identify the recorded effect; neither a
-path nor an observation establishes a new principal or grants access. -/
+/-- Ordinary chats use the existing request's admitted filesystem resource; they
+need no IsolatedWorkspace. A root is a resource observation, never a principal.
+Both scopes retain immutable snapshots and exact paths. Native authorization
+still resolves the physical request and its DID through the existing owners. -/
+inductive Scope where
+  | workspace (binding : Binding)
+  | requestResource (nodeDid root : String) (capability : WorkspacePathCapability) (snapshot : String)
+  deriving DecidableEq, Repr
+
+def Scope.capability : Scope → WorkspacePathCapability
+  | .workspace binding => binding.capability
+  | .requestResource _ _ capability _ => capability
+
+def Scope.snapshot : Scope → String
+  | .workspace binding => binding.tree
+  | .requestResource _ _ _ snapshot => snapshot
+
+def Scope.wellFormed : Scope → Bool
+  | .workspace binding => !binding.workspaceId.isEmpty && !binding.owner.isEmpty &&
+      !binding.base.isEmpty && !binding.tree.isEmpty
+  | .requestResource nodeDid root _ snapshot =>
+      !nodeDid.isEmpty && !root.isEmpty && !snapshot.isEmpty
+
 structure Reference where
-  binding : Binding
+  scope : Scope
   requestDocId : String
   reviewId : String
   deriving DecidableEq, Repr
 
 structure Review where
   reference : Reference
-  beforeTree : String
+  beforeSnapshot : String
   edits : List Edit
   deriving DecidableEq, Repr
 
@@ -50,7 +70,7 @@ proof that arbitrary host processes cannot race a filesystem operation. -/
 structure Evidence where
   expected : Reference
   authorized : Bool
-  placementVerified : Bool
+  resourceVerified : Bool
   snapshotsAvailable : Bool
   noActiveWriter : Bool
   receipt : Option Reference := none
@@ -58,11 +78,9 @@ structure Evidence where
 
 def structurallyValid (review : Review) : Bool :=
   !review.reference.requestDocId.isEmpty && !review.reference.reviewId.isEmpty &&
-  !review.reference.binding.workspaceId.isEmpty && !review.reference.binding.owner.isEmpty &&
-  !review.reference.binding.base.isEmpty &&
-  !review.beforeTree.isEmpty && !review.reference.binding.tree.isEmpty &&
+  review.reference.scope.wellFormed && !review.beforeSnapshot.isEmpty &&
   !review.edits.isEmpty && decide (review.edits.map Edit.path).Nodup &&
-  match review.reference.binding.capability with
+  match review.reference.scope.capability with
   | .unrestrictedCompatibility => false
   | .exactPaths paths => review.edits.all fun edit =>
       edit.canonical && paths.contains edit.path && versionValid edit.before &&
@@ -80,7 +98,7 @@ def restoreFile (review : Review) (file : File) : File :=
 
 def execute (files : List File) (review : Review) (e : Evidence) :
     List File × Disposition :=
-  if !e.authorized || !e.placementVerified || e.expected != review.reference ||
+  if !e.authorized || !e.resourceVerified || e.expected != review.reference ||
       !structurallyValid review then (files, .denied)
   else if e.receipt == some review.reference then (files, .recovered)
   else if e.receipt.isSome || !e.snapshotsAvailable || !e.noActiveWriter ||
@@ -168,5 +186,10 @@ theorem unavailable_snapshots_cannot_restore (files : List File) (review : Revie
     (e : Evidence) (h : e.snapshotsAvailable = false) (noReceipt : e.receipt = none) :
     execute files review e = (files, .denied) := by
   simp [execute, h, noReceipt]
+
+theorem missing_request_resource_cannot_restore (files : List File) (review : Review)
+    (e : Evidence) (h : e.resourceVerified = false) :
+    execute files review e = (files, .denied) := by
+  simp [execute, h]
 
 end Workspace.ChangeReview
