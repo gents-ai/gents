@@ -179,6 +179,7 @@ export function createSessionReads({
   async function loadOlderSessionTimeline(): Promise<boolean> {
     const capturedRun = runEpoch;
     const capturedNodeDid = store.getState().nodeDid;
+    const capturedSessionId = store.getState().sessionId;
     try {
       for (let hop = 0; hop < MAX_HIDDEN_PAGE_HOPS; hop += 1) {
         const current = readSession(sessionStore);
@@ -211,7 +212,14 @@ export function createSessionReads({
       }
       return false;
     } catch (error) {
-      if (capturedRun !== runEpoch) return false;
+      if (
+        capturedRun !== runEpoch ||
+        capturedNodeDid !== store.getState().nodeDid ||
+        capturedSessionId !== store.getState().sessionId
+      )
+        return false;
+      if (error instanceof BridgeInvokeError && error.code === "projectionPending")
+        return false;
       setError(String(error));
       return false;
     }

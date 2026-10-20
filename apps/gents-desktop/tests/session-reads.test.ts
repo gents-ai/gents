@@ -5,8 +5,8 @@ import type {
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
-import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
 import { projectSessionLoadingStatus } from "../src/lib/loadingStatus";
+import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
 import { setTimingForTests } from "../src/hooks/timing";
 import { createSessionReads } from "../src/hooks/sessionReads";
 import { createSelectionStore } from "../src/hooks/selectionStore";
@@ -114,11 +114,7 @@ describe("createSessionReads", () => {
         sessionLoad: reads.sessionStore.getState().load,
         operationalState: null,
       }),
-    ).toMatchObject({
-      phase: "loading",
-      title: "Waiting for session update",
-      action: null,
-    });
+    ).toBeNull();
     const refresh = reads.refreshSession("session-1");
     expect(reads.sessionStore.getState().load.phase).toBe("pending");
     arrive(tip);
@@ -656,5 +652,40 @@ describe("createSessionReads", () => {
     expect(
       readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
     ).toEqual(["other"]);
+  });
+});
+
+describe("history refresh observations", () => {
+  it("does not turn a pending older-page projection into a global error", async () => {
+    const tip = session(["k8"], {
+      totalItems: 2,
+      pageItems: 1,
+      hasOlder: true,
+      hasNewer: false,
+      oldestItemKey: "k8",
+      newestItemKey: "k8",
+    });
+    const setError = vi.fn();
+    const reads = readsFor(
+      {
+        fetchSessionSnapshot: vi
+          .fn()
+          .mockResolvedValueOnce(tip)
+          .mockRejectedValueOnce(
+            new BridgeInvokeError({
+              code: "projectionPending",
+              retryable: true,
+              message: "refresh is pending",
+              endpoint: null,
+            }),
+          ),
+      } as unknown as DesktopApiAdapter,
+      undefined,
+      setError,
+    );
+    await reads.refreshSession("session-1");
+    expect(await reads.loadOlderSessionTimeline()).toBe(false);
+    expect(readSession(reads.sessionStore)?.timelineItems).toEqual(tip.timelineItems);
+    expect(setError).not.toHaveBeenCalled();
   });
 });

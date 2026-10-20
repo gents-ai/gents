@@ -744,3 +744,60 @@ describe("session timeline page merging", () => {
     expect(merged.timelinePage?.hasOlder).toBe(false);
   });
 });
+
+describe("transcript cursor ownership", () => {
+  const page = {
+    totalItems: -1,
+    totalItemsExact: false,
+    pageItems: 1,
+    hasOlder: true,
+    hasNewer: false,
+    oldestItemKey: "tools-7",
+    newestItemKey: "live-assistant",
+  };
+  const overlay = {
+    kind: "liveAssistant" as const,
+    itemKey: "live-assistant",
+    content: "working",
+    reasoning: null,
+  };
+
+  it("keeps the backend cursor when a new tip contains only an overlay", () => {
+    const current = session(["k8"], { ...page, oldestItemKey: "k8" });
+    const tip = session([], page);
+    tip.timelineItems = [overlay];
+    expect(mergeSessionTipSnapshot(current, tip).timelinePage?.oldestItemKey).toBe(
+      "tools-7",
+    );
+  });
+
+  it("never uses a pending input as the anchor when trimming an expanded tip", () => {
+    const pending = {
+      kind: "pendingUserTurn" as const,
+      itemKey: "pending-r",
+      requestId: "r",
+      content: "queued",
+      lifecycleState: "pending",
+      selectedSkillIds: [],
+      foldedIntoRequestId: null,
+      origin: null,
+      createdAt: null,
+    };
+    const current = session(["k8"], { ...page, oldestItemKey: "k8" });
+    current.timelineItems.unshift(pending);
+    const tip = session(["k7", "k8"], { ...page, oldestItemKey: "k7" });
+    tip.timelineItems.splice(1, 0, pending);
+    const merged = mergeSessionTipSnapshot(current, tip);
+    expect(merged.timelinePage?.oldestItemKey).toBe("k8");
+    expect(merged.timelineItems[0]).toEqual(pending);
+  });
+
+  it("keeps the older page cursor when its first visible item is temporary", () => {
+    const current = session(["k8"], { ...page, oldestItemKey: "k8" });
+    const older = session(["k6"], { ...page, oldestItemKey: "k6", hasNewer: true });
+    older.timelineItems.unshift(overlay);
+    expect(
+      mergeOlderSessionTimelinePage(current, older).timelinePage?.oldestItemKey,
+    ).toBe("k6");
+  });
+});
