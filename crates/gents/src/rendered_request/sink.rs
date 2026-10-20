@@ -846,7 +846,7 @@ mod tests {
             ProvenanceManifest, CONTEXT_ACCOUNTING_VERSION,
         };
 
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         crate::config_client::ConfigAccess::write_local_response(
@@ -948,7 +948,7 @@ mod tests {
 
     #[tokio::test]
     async fn capture_writes_blocks_and_a_manifest_that_decode_back() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let rendered = rendered_turn(
@@ -986,7 +986,7 @@ mod tests {
 
     #[tokio::test]
     async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let text = capture_text(73, 8 * 1024);
@@ -1029,7 +1029,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_shared_prefix_writes_only_new_blocks_and_a_small_manifest() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
 
@@ -1097,7 +1097,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_reused_block_pins_the_existing_row_field_commit() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
 
@@ -1173,7 +1173,7 @@ mod tests {
 
     #[tokio::test]
     async fn same_capture_key_cannot_rebind_its_transport_route() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let mut first = rendered_turn(
@@ -1197,7 +1197,7 @@ mod tests {
 
     #[tokio::test]
     async fn re_delivering_a_capture_is_idempotent() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let rendered = rendered_turn(
@@ -1220,7 +1220,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_identical_captures_store_each_block_once() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
 
