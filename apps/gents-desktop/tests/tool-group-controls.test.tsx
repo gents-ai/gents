@@ -398,7 +398,7 @@ describe("canonical tool selections", () => {
     };
     const view = { ...deployment, tools: [configured] };
     const rendered = renderIn(app, <ToolsPanel deployment={view} item="tools-a" />);
-    await user.click(screen.getByRole("switch", { name: "Memory" }));
+    await user.click(screen.getByRole("switch", { name: "Context budget" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     const saved = api.saveToolsConfig.mock.calls[0][0].document;
     expect(saved.host.cli).toEqual([{ name: "git", timeout_secs: 12 }]);
@@ -408,7 +408,7 @@ describe("canonical tool selections", () => {
       <ToolsPanel deployment={{ ...view, tools: [saved] }} item="tools-a" />,
     );
     await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Memory" })).toBeChecked(),
+      expect(screen.getByRole("switch", { name: "Context budget" })).toBeChecked(),
     );
   });
 

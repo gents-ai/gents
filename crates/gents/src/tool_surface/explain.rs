@@ -10,8 +10,6 @@ use crate::toolset::{
 
 use super::{AgentToolSurfaceConfig, RuntimeToolAvailability, ToolPolicySurface, ToolSurface};
 
-const MEMORY_TOOL_NAME: &str = "memory";
-
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ToolSurfaceExplanation {
@@ -67,7 +65,6 @@ impl ToolSurfaceExplanation {
                 .iter()
                 .map(|tool| tool.name().to_string()),
         );
-        explain_memory(config, &mut builder);
         explain_builtin_reads(config, surface, &mut builder);
         builder.include_many(
             "write_tools",
@@ -344,30 +341,6 @@ fn explain_background(
     }
 }
 
-fn explain_memory(config: &AgentToolSurfaceConfig, builder: &mut ExplanationBuilder) {
-    if !config.memory_requested() {
-        builder.exclude("built_in_memory", MEMORY_TOOL_NAME);
-        return;
-    }
-
-    #[cfg(feature = "agent-memory")]
-    {
-        builder.include_many(
-            "built_in_memory",
-            [crate::toolset::MEMORY_TOOL_NAME.to_string()],
-        );
-    }
-
-    #[cfg(not(feature = "agent-memory"))]
-    {
-        builder.unavailable("built_in_memory", MEMORY_TOOL_NAME);
-        builder.warn(
-            "memory_requested_compiled_out",
-            "enable_memory is true, but this binary was built without the agent-memory feature.",
-        );
-    }
-}
-
 fn explain_builtin_reads(
     config: &AgentToolSurfaceConfig,
     surface: &ToolSurface,
@@ -510,14 +483,6 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
     summary.insert(
         "skills".to_string(),
         vec![format!("enabled:{}", policy.skills)],
-    );
-    summary.insert(
-        "built_in_memory".to_string(),
-        policy
-            .memory
-            .then_some(MEMORY_TOOL_NAME.to_string())
-            .into_iter()
-            .collect(),
     );
     summary.insert(
         "write_tools".to_string(),

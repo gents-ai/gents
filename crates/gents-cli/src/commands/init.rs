@@ -308,7 +308,6 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         "tool_package": format_tool_package(summary.tool_package),
         "tool_ceiling": format_tool_ceiling(summary.tool_ceiling),
         "tool_root": summary.tool_root,
-        "enable_memory": summary.enable_memory,
         "enable_defra_query": summary.enable_defra_query,
         "defra_query_collections": summary.defra_query_collections,
         "runtime_state_reset": runtime_state_reset,
@@ -907,7 +906,6 @@ async fn initialize_runtime_home(
         &tools_id,
         tool_package,
         pinned_tool_root,
-        args.enable_memory,
         enable_defra_query,
         args.defra_query_collections.clone(),
     );
@@ -1030,7 +1028,6 @@ async fn initialize_runtime_home(
         tool_package,
         tool_ceiling,
         tool_root: tool_root.map(|path| path.to_string_lossy().to_string()),
-        enable_memory: args.enable_memory,
         enable_defra_query,
         defra_query_collections: args.defra_query_collections.clone(),
         created_node: existing_node.is_none(),
@@ -1101,7 +1098,6 @@ fn tools_for_package(
     tools_id: &str,
     tool_package: ToolPackageArg,
     tool_root: Option<PathBuf>,
-    enable_memory: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
 ) -> Tools {
@@ -1162,7 +1158,6 @@ fn tools_for_package(
             enable_graph_tools: None,
             enable_goal_tools: privileged.then_some(true),
             enable_goal_creation: Some(false),
-            enable_memory: Some(enable_memory),
             enable_session_history_tool: None,
             enable_schema_tool: None,
             enable_p2p_tool: None,
@@ -1291,13 +1286,12 @@ fn resolve_init_tool_package(
 
 fn validate_init_tool_flags(args: &InitArgs, tool_package: ToolPackageArg) -> Result<()> {
     if args.identity_only
-        && (args.enable_memory
-            || args.enable_defra_query
+        && (args.enable_defra_query
             || args.disable_defra_query
             || !args.defra_query_collections.is_empty())
     {
         anyhow::bail!(
-            "--enable-memory, --enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no Tools document is written"
+            "--enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no Tools document is written"
         );
     }
     if !args.defra_query_collections.is_empty() {
@@ -1883,7 +1877,6 @@ mod tests {
             tool_package: None,
             engineer: false,
             tool_root: None,
-            enable_memory: false,
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),

@@ -7,6 +7,7 @@ const REMOVED_COLLECTIONS: &[&str] = &[
     "BearerPairingReady",
     "ConsumedInviteNonce",
     "ReciprocalConversationIntent",
+    "NodeMemory",
 ];
 
 #[test]
@@ -31,6 +32,7 @@ fn removed_authority_collections_are_absent_from_schema_and_replication_inventor
         "bearer_pairing_ready.graphql",
         "consumed_invite_nonce.graphql",
         "reciprocal_conversation_intent.graphql",
+        "node_memory.graphql",
     ] {
         assert!(
             !schema_root.join(file).exists(),

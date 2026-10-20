@@ -15,8 +15,6 @@ pub const NODE_READINESS: &str = include_str!("../schemas/agent/node_readiness.g
 pub const NODE_DIRECTORY_ENTRY_NAME: &str = "NodeDirectoryEntry";
 pub const NODE_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/node_directory_entry.graphql");
-pub const NODE_MEMORY_NAME: &str = "NodeMemory";
-pub const NODE_MEMORY: &str = include_str!("../schemas/agent/node_memory.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
@@ -172,7 +170,6 @@ pub const ALL: &[&str] = &[
     NODE_RUNTIME,
     NODE_READINESS,
     NODE_DIRECTORY_ENTRY,
-    NODE_MEMORY,
     TOOLS,
     SKILL,
     DATASTORE_TOOL_SURFACE,
@@ -247,7 +244,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NODE_RUNTIME_NAME,
     NODE_READINESS_NAME,
     NODE_DIRECTORY_ENTRY_NAME,
-    NODE_MEMORY_NAME,
     TOOLS_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
@@ -315,7 +311,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     NODE_DIRECTORY_ENTRY_NAME,
-    NODE_MEMORY_NAME,
     AGENT_REQUEST_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,

@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: the `memory` tool, the `agent-memory` feature, the
+  `Tools.built_ins.enable_memory` setting, `gents init --enable-memory`, and the
+  `NodeMemory` collection are removed. The whole database is memory: agents
+  author their own schemas for what they need to remember. Tools documents
+  that still set `enable_memory` are rejected, and existing homes keep any
+  `NodeMemory` collection unmanaged and untouched.
+
 ## 0.21.0-rc0 - 2026-10-17
 
 - `agent_list` now returns startup targets only. `agent_session_list` discovers

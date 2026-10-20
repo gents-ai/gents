@@ -1,10 +1,6 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
-#[cfg(feature = "agent-memory")]
-pub use gents_protocol::schemas::NODE_MEMORY as NODE_MEMORY_SCHEMA;
-#[cfg(not(feature = "agent-memory"))]
-pub use gents_protocol::schemas::NODE_MEMORY as NODE_MEMORY_SCHEMA;
 pub use gents_protocol::schemas::{
     AGENT as AGENT_SCHEMA, AGENT_MESSAGE as AGENT_MESSAGE_SCHEMA,
     AGENT_OUTPUT_SEGMENT as AGENT_OUTPUT_SEGMENT_SCHEMA, AGENT_REQUEST as AGENT_REQUEST_SCHEMA,

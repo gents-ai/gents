@@ -18,7 +18,6 @@ def Surface.meet (a b : Surface) : Surface :=
   , goalCreate := a.goalCreate && b.goalCreate
   , defraQuery := a.defraQuery && b.defraQuery
   , selfConfig := a.selfConfig && b.selfConfig
-  , memory := a.memory && b.memory
   , schemaManagement := a.schemaManagement && b.schemaManagement
   , p2pRead := a.p2pRead && b.p2pRead
   , p2pMutate := a.p2pMutate && b.p2pMutate
@@ -108,14 +107,6 @@ theorem effective_selfConfigCategories_subset_agent (k : ToolId) :
     runtime.selfConfigCategories k h
   exact EndpointScope.meet_permits_left unitVM agent.selfConfigCategories
     ceiling.selfConfigCategories k hin
-
-theorem effective_memory_le_ceiling :
-    (effective agent ceiling runtime).memory = true → ceiling.memory = true := by
-  exact fun h => bool_and_right (bool_and_left h)
-
-theorem effective_memory_le_agent :
-    (effective agent ceiling runtime).memory = true → agent.memory = true := by
-  exact fun h => bool_and_left (bool_and_left h)
 
 theorem effective_schemaManagement_le_ceiling :
     (effective agent ceiling runtime).schemaManagement = true → ceiling.schemaManagement = true := by

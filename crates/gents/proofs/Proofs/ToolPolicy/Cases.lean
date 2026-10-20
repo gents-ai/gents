@@ -16,7 +16,6 @@ structure SurfaceView where
   goalCreate : Bool
   defraQuery : Bool
   selfConfig : Bool
-  memory : Bool
   schemaManagement : Bool
   p2pRead : Bool
   p2pMutate : Bool
@@ -229,7 +228,6 @@ def surface (file : FileCap) (bash : BashPolicy)
   , goalCreate := ordinary
   , defraQuery := defraQuery
   , selfConfig := defraQuery
-  , memory := ordinary
   , schemaManagement := ordinary
   , p2pRead := ordinary
   , p2pMutate := ordinary
@@ -258,7 +256,6 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String)
   , goalCreate := s.goalCreate
   , defraQuery := s.defraQuery
   , selfConfig := s.selfConfig
-  , memory := s.memory
   , schemaManagement := s.schemaManagement
   , p2pRead := s.p2pRead
   , p2pMutate := s.p2pMutate
@@ -399,8 +396,7 @@ def agentEachCategory : Surface :=
 
 def ceilingClampsEachCategory : Surface :=
   { wideOpen with
-    memory := false
-  , lsp := false
+    lsp := false
   , schemaManagement := false
   , p2pRead := false
   , p2pMutate := false

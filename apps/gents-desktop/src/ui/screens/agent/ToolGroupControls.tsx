@@ -323,7 +323,6 @@ export function ToolGroupControls({
           ["enable_graph_tools", "Graph tools"],
           ["enable_goal_tools", "Read and update goals"],
           ["enable_goal_creation", "Create goals"],
-          ["enable_memory", "Memory"],
           ["enable_session_history_tool", "Session history", true],
           ["enable_context_budget", "Context budget"],
         ])}

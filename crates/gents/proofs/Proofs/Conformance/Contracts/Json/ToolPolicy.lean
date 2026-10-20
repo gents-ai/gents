@@ -73,7 +73,6 @@ def surfaceViewJson (v : SurfaceView) : String :=
     ++ "\"goal_create\":" ++ boolJson v.goalCreate ++ ","
     ++ "\"defra_query\":" ++ boolJson v.defraQuery ++ ","
     ++ "\"self_config\":" ++ boolJson v.selfConfig ++ ","
-    ++ "\"memory\":" ++ boolJson v.memory ++ ","
     ++ "\"schema_management\":" ++ boolJson v.schemaManagement ++ ","
     ++ "\"p2p_read\":" ++ boolJson v.p2pRead ++ ","
     ++ "\"p2p_mutate\":" ++ boolJson v.p2pMutate ++ ","

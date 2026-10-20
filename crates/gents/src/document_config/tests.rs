@@ -435,14 +435,6 @@ fn reserved_names_cover_native_and_meta_tools() {
     assert!(!is_reserved_builtin_tool_name("request_action"));
 }
 
-#[cfg(feature = "agent-memory")]
-#[test]
-fn memory_tool_name_is_reserved() {
-    assert!(is_reserved_builtin_tool_name(
-        crate::toolset::MEMORY_TOOL_NAME
-    ));
-}
-
 #[test]
 fn write_tools_deserialize_trims_whitespace() {
     let json = serde_json::json!([{

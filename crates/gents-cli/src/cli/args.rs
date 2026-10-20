@@ -1731,12 +1731,6 @@ pub(crate) struct InitArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Enable the feature-gated per-agent memory tool in the default Tools"
-    )]
-    pub(crate) enable_memory: bool,
-    #[arg(
-        long,
-        default_value_t = false,
         help = "Disable the read-only defra_query tool even when the tool package enables it (only the introspection package does; defra_query is otherwise opt-in)"
     )]
     pub(crate) disable_defra_query: bool,

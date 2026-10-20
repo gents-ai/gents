@@ -382,11 +382,6 @@ impl AgentBuilder {
         self
     }
 
-    pub fn enable_memory(mut self, enable_memory: bool) -> Self {
-        self.pending_agent.tool_selection.enable_memory = enable_memory;
-        self
-    }
-
     pub fn enable_session_history_tool(mut self, enable_session_history_tool: bool) -> Self {
         self.pending_agent
             .tool_selection

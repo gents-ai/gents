@@ -53,8 +53,6 @@ use crate::toolset::{
     build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig,
     ToolSet, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
-#[cfg(feature = "agent-memory")]
-use crate::toolset::{build_memory_tool, MEMORY_TOOL_NAME};
 
 const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
@@ -70,7 +68,6 @@ pub struct ToolSurface {
     agent_tools: AgentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
-    pub(super) enable_memory: bool,
     pub(super) enable_context_budget_tool: bool,
     pub(super) enable_session_history_tool: bool,
     pub(super) enable_schema_tool: bool,
@@ -252,10 +249,6 @@ impl ToolSurface {
         names.extend(agent_tool_names(&self.agent_tools));
         names.extend(background_tool_names(&self.background_tools));
         names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
-        #[cfg(feature = "agent-memory")]
-        if self.enable_memory {
-            names.push(MEMORY_TOOL_NAME.to_string());
-        }
         if self.enable_context_budget_tool {
             names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
         }
@@ -341,13 +334,6 @@ impl ToolSurface {
         tools.extend(build_background_tools(self.background_tools.clone()));
         for tool in &self.custom_tools {
             tools.push(tool.build()?);
-        }
-        #[cfg(feature = "agent-memory")]
-        if self.enable_memory {
-            tools.push(build_memory_tool(
-                runtime.node.clone(),
-                runtime.node_did.clone(),
-            ));
         }
         if self.enable_context_budget_tool {
             tools.push(build_context_budget_tool(
@@ -531,7 +517,6 @@ impl std::fmt::Debug for ToolSurface {
                     .map(|tool| tool.name())
                     .collect::<Vec<_>>(),
             )
-            .field("enable_memory", &self.enable_memory)
             .field(
                 "enable_context_budget_tool",
                 &self.enable_context_budget_tool,

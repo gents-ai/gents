@@ -14,7 +14,6 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) goal_create: bool,
     pub(crate) defra_query: bool,
     pub(crate) self_config: bool,
-    pub(crate) memory: bool,
     pub(crate) schema_management: bool,
     pub(crate) p2p_read: bool,
     pub(crate) p2p_mutate: bool,

@@ -30,7 +30,6 @@ pub struct AgentToolSurfaceConfig {
     agent_tools: AgentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
-    enable_memory: bool,
     enable_context_budget_tool: bool,
     enable_session_history_tool: bool,
     enable_schema_tool: bool,
@@ -78,7 +77,6 @@ impl AgentToolSurfaceConfig {
             agent_tools: AgentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
-            enable_memory: false,
             enable_context_budget_tool: true,
             enable_session_history_tool: true,
             enable_schema_tool: false,
@@ -217,7 +215,6 @@ impl AgentToolSurfaceConfig {
             remote_tools,
             required_mcp_service_ids,
             backgroundable_tool_names,
-            enable_memory,
             enable_session_history_tool: _,
             p2p_collections: _,
             enable_schema_tool: _,
@@ -356,7 +353,6 @@ impl AgentToolSurfaceConfig {
                 timeouts: timeouts.background.clone(),
             },
             custom_tools,
-            enable_memory: static_policy.memory && enable_memory,
             enable_context_budget_tool: static_policy.context_budget && enable_context_budget,
             enable_session_history_tool: static_policy.session_history,
             enable_schema_tool: static_policy.schema_management,
@@ -413,10 +409,6 @@ impl AgentToolSurfaceConfig {
 
     pub fn goal_creation_requested(&self) -> bool {
         self.enable_goal_creation
-    }
-
-    pub(crate) fn memory_requested(&self) -> bool {
-        self.enable_memory
     }
 
     pub(crate) fn defra_query_requested(&self) -> bool {
@@ -539,7 +531,6 @@ impl AgentToolSurfaceConfig {
             agent_tools,
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
-            enable_memory: effective_policy.memory && self.enable_memory,
             enable_context_budget_tool: effective_policy.context_budget
                 && self.enable_context_budget_tool,
             enable_session_history_tool: effective_policy.session_history,
@@ -749,7 +740,6 @@ impl std::fmt::Debug for AgentToolSurfaceConfig {
                     .map(|tool| tool.name())
                     .collect::<Vec<_>>(),
             )
-            .field("enable_memory", &self.enable_memory)
             .field(
                 "enable_context_budget_tool",
                 &self.enable_context_budget_tool,

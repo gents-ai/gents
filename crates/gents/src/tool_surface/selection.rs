@@ -142,7 +142,6 @@ pub struct ResolvedToolSelection {
     pub remote_tools: Option<crate::document_config::RemoteTools>,
     pub required_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
-    pub enable_memory: bool,
     pub enable_session_history_tool: bool,
     pub enable_schema_tool: bool,
     pub enable_p2p_tool: bool,
@@ -187,7 +186,6 @@ impl Default for ResolvedToolSelection {
             remote_tools: None,
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: true,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -323,9 +321,6 @@ impl ResolvedToolSelection {
             remote_tools: tools.remote.clone(),
             required_mcp_service_ids,
             backgroundable_tool_names,
-            enable_memory: built_ins
-                .and_then(|built| built.enable_memory)
-                .unwrap_or(false),
             enable_schema_tool: built_ins
                 .and_then(|built| built.enable_schema_tool)
                 .unwrap_or(false),

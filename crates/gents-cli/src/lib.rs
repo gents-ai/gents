@@ -118,7 +118,7 @@ Examples:
   gents init --write
   gents init --yolo
   gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
-  gents init --enable-memory --defra-query-collection AgentRequest
+  gents init --enable-defra-query --defra-query-collection AgentRequest
   gents init --identity-only
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
   gents init --identity-only --identity-backend macos-secure-enclave --secure-enclave-label LABEL

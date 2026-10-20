@@ -19,7 +19,7 @@ enable_goal_tools?: boolean | null,
 /**
  * Additional opt-in for model-facing goal creation. Unset is disabled.
  */
-enable_goal_creation?: boolean | null, enable_memory?: boolean | null,
+enable_goal_creation?: boolean | null,
 /**
  * The `sessions` read tool. Unset is enabled: compaction stubs name its
  * `output` read as the way to recover a trimmed tool result.

@@ -75,7 +75,6 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -163,7 +162,6 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -234,7 +232,6 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -295,7 +292,6 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -355,7 +351,6 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -414,7 +409,6 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -474,7 +468,6 @@ fn containing_selection_root_clamps_to_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -546,7 +539,6 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -603,7 +595,6 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -658,7 +649,6 @@ fn selection_without_root_inherits_operator_root() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -726,7 +716,6 @@ fn selection_cli_tools_require_ceiling_entries() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -791,7 +780,6 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -859,7 +847,6 @@ fn selection_mcp_service_allowlist_is_deduped() {
             ],
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -1002,7 +989,6 @@ fn background_tool_allowlist_registers_r6_tools() {
                 "bash_unrestricted".to_string(),
                 "bash_unrestricted".to_string(),
             ],
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -1058,7 +1044,6 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: vec!["read_file".to_string()],
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -1122,7 +1107,6 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            enable_memory: false,
             enable_session_history_tool: false,
             enable_schema_tool: false,
             enable_p2p_tool: false,
@@ -1600,8 +1584,7 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
 }
 
 #[test]
-fn memory_tool_defaults_disabled() {
-    assert!(!ResolvedToolSelection::default().enable_memory);
+fn optional_built_in_tool_defaults() {
     assert!(ResolvedToolSelection::default().enable_session_history_tool);
     assert!(!AgentToolSurfaceConfig::meta_only().goal_creation_requested());
     assert!(!AgentToolSurfaceConfig::meta_only()
@@ -2293,7 +2276,7 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
             {"mcp_service_id":"registry","tool_names":["read"]},
             {"mcp_service_id":"observability","tool_names":["query"]}]},
         "agents":{"target_ids":["worker","inactive","remote"],"enabled":true},
-        "built_ins":{"enable_memory":true,"enable_context_budget":true},
+        "built_ins":{"enable_context_budget":true},
         "datastore":{"enable_defra_query":true,"defra_query_collections":["AgentRequest","AgentResponse"]}
     }));
     let targets: Vec<crate::document_config::AgentTargetDocument> = [
@@ -2391,25 +2374,6 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
         "meta_mcp",
         "call_tool"
     ));
-
-    #[cfg(feature = "agent-memory")]
-    assert!(explanation_category_contains(
-        &explanation.included,
-        "built_in_memory",
-        "memory"
-    ));
-    #[cfg(not(feature = "agent-memory"))]
-    {
-        assert!(explanation_category_contains(
-            &explanation.unavailable,
-            "built_in_memory",
-            "memory"
-        ));
-        assert!(explanation_has_warning(
-            &explanation,
-            "memory_requested_compiled_out"
-        ));
-    }
 }
 
 #[test]
@@ -2513,47 +2477,6 @@ fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
         .unavailable
         .get("meta_mcp")
         .is_some_and(|names| names.contains(&"call_tool".to_string())));
-}
-
-#[cfg(feature = "agent-memory")]
-#[tokio::test]
-async fn memory_tool_requires_selection_opt_in() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-
-    let disabled = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            enable_memory: false,
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
-    )
-    .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
-    .await
-    .unwrap();
-    assert!(!disabled
-        .tool_names()
-        .contains(&crate::toolset::MEMORY_TOOL_NAME.to_string()));
-
-    let enabled = AgentToolSurfaceConfig::from_selection(
-        "ops",
-        ResolvedToolSelection {
-            enable_memory: true,
-            ..Default::default()
-        },
-        &ToolCeiling::meta_only(),
-        Vec::new(),
-    )
-    .unwrap()
-    .resolve(&node, "did:key:z-test-agent", &Default::default())
-    .await
-    .unwrap();
-    assert!(enabled
-        .tool_names()
-        .contains(&crate::toolset::MEMORY_TOOL_NAME.to_string()));
 }
 
 #[tokio::test]

@@ -53,7 +53,6 @@ structure Surface where
   goalCreate : Bool
   defraQuery : Bool
   selfConfig : Bool
-  memory : Bool
   schemaManagement : Bool
   /-- Native P2P observations require explicit node-management authority. -/
   p2pRead : Bool

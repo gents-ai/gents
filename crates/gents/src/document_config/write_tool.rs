@@ -430,7 +430,6 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         crate::goal::CREATE_GOAL_TOOL_NAME,
         crate::goal::GET_GOAL_TOOL_NAME,
         crate::goal::UPDATE_GOAL_TOOL_NAME,
-        "memory",
     ];
 
     crate::toolset::NativeTool::ALL_NAMES.contains(&name)

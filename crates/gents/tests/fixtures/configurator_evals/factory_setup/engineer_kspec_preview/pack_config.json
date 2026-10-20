@@ -41,7 +41,6 @@
         "enable_graph_tools": true,
         "enable_goal_tools": true,
         "enable_goal_creation": false,
-        "enable_memory": false,
         "enable_session_history_tool": true,
         "enable_schema_tool": true,
         "enable_context_budget": true

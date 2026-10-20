@@ -13,8 +13,6 @@ pub mod edit_match;
 mod file_tools;
 mod goal;
 pub(crate) mod lsp;
-#[cfg(feature = "agent-memory")]
-mod memory;
 mod native_runner;
 pub use native_runner::enable_self_runner;
 pub(crate) mod session_history;
@@ -69,8 +67,6 @@ pub use lsp::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, result_looks_failed,
     result_path_matches, LspAction, LspMutationSource,
 };
-#[cfg(feature = "agent-memory")]
-pub use memory::{build_memory_tool, MEMORY_TOOL_NAME};
 pub use session_history::{
     build_session_history_tool, load_pinned_request_context_observation,
     load_request_context_observation, load_session_context_details, load_session_history_snapshot,

@@ -524,8 +524,6 @@ pub use runtime_snapshot::{
     ResolvedEventTrigger, ResolvedSchedule, ResolvedTask, ScheduleCadence,
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
-#[cfg(feature = "agent-memory")]
-pub use schema::NODE_MEMORY_SCHEMA;
 pub use schema::{
     ensure_runtime_schemas, AGENT_MESSAGE_SCHEMA, AGENT_OUTPUT_SEGMENT_SCHEMA,
     AGENT_REQUEST_SCHEMA, AGENT_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
