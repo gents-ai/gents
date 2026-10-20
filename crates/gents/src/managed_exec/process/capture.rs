@@ -137,7 +137,9 @@ async fn read_capped<R>(
         let exited_before_read = child_exited.load(std::sync::atomic::Ordering::Acquire);
         let read_started = Instant::now();
         let next = if exited_before_read {
-            match tokio::task::unconstrained(reader.read(&mut buf)).now_or_never() {
+            match tokio::task::unconstrained(read_retry_interrupted(&mut reader, &mut buf))
+                .now_or_never()
+            {
                 Some(result) => result,
                 None => {
                     let remaining = POST_EXIT_DRAIN_READ_BUDGET.saturating_sub(post_exit_read_time);
@@ -145,11 +147,21 @@ async fn read_capped<R>(
                         lock_output(&output).truncated = true;
                         break;
                     }
-                    match tokio::time::timeout(remaining, reader.read(&mut buf)).await {
+                    match tokio::time::timeout(
+                        remaining,
+                        read_retry_interrupted(&mut reader, &mut buf),
+                    )
+                    .await
+                    {
                         Ok(result) => result,
                         Err(_) => {
                             post_exit_read_time = POST_EXIT_DRAIN_READ_BUDGET;
-                            match tokio::task::unconstrained(reader.read(&mut buf)).now_or_never() {
+                            match tokio::task::unconstrained(read_retry_interrupted(
+                                &mut reader,
+                                &mut buf,
+                            ))
+                            .now_or_never()
+                            {
                                 Some(result) => result,
                                 None => {
                                     lock_output(&output).truncated = true;
@@ -164,7 +176,7 @@ async fn read_capped<R>(
             tokio::select! {
                 biased;
                 _ = exit_notify.notified() => continue,
-                result = reader.read(&mut buf) => result,
+                result = read_retry_interrupted(&mut reader, &mut buf) => result,
             }
         };
         let read = match next {
@@ -202,6 +214,23 @@ async fn read_capped<R>(
     }
 }
 
+/// Interrupted reads transfer no bytes and do not establish an I/O failure.
+/// Yield between retries so cancellation and the existing drain deadline remain
+/// observable even when a reader is repeatedly interrupted.
+async fn read_retry_interrupted<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    buf: &mut [u8],
+) -> std::io::Result<usize> {
+    loop {
+        match reader.read(buf).await {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                tokio::task::yield_now().await;
+            }
+            result => return result,
+        }
+    }
+}
+
 fn lock_output(output: &Mutex<OutputCapture>) -> std::sync::MutexGuard<'_, OutputCapture> {
     output
         .lock()
@@ -223,9 +252,97 @@ pub(super) async fn join_capture_after_child_exit(task: CaptureTask) -> OutputCa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use std::pin::Pin;
     use std::task::{Context, Poll};
     use tokio::io::ReadBuf;
+
+    struct ReadSteps(VecDeque<Result<&'static [u8], std::io::ErrorKind>>);
+
+    impl AsyncRead for ReadSteps {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            match self.0.pop_front().unwrap_or(Ok(b"")) {
+                Ok(bytes) => {
+                    buf.put_slice(bytes);
+                    Poll::Ready(Ok(()))
+                }
+                Err(kind) => Poll::Ready(Err(kind.into())),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn interrupted_pipe_reads_preserve_output_and_eof() {
+        for exited in [false, true] {
+            let output = Arc::new(Mutex::new(OutputCapture {
+                bytes: Vec::new(),
+                truncated: false,
+            }));
+            read_capped(
+                ReadSteps(VecDeque::from([
+                    Err(std::io::ErrorKind::Interrupted),
+                    Ok(b"captured".as_slice()),
+                    Err(std::io::ErrorKind::Interrupted),
+                    Ok(b"".as_slice()),
+                ])),
+                1024,
+                None,
+                Arc::clone(&output),
+                Arc::new(std::sync::atomic::AtomicBool::new(exited)),
+                Arc::new(Notify::new()),
+            )
+            .await;
+            let output = lock_output(&output);
+            assert_eq!(output.bytes, b"captured", "child exited: {exited}");
+            assert!(!output.truncated, "child exited: {exited}");
+        }
+    }
+
+    struct InterruptedForever(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl AsyncRead for InterruptedForever {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Poll::Ready(Err(std::io::ErrorKind::Interrupted.into()))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repeated_interruptions_do_not_extend_the_post_exit_deadline() {
+        let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let task = spawn_optional_capped(Some(InterruptedForever(Arc::clone(&polls))), 1024, None);
+        let output = tokio::spawn(join_capture_after_child_exit(task));
+        while polls.load(std::sync::atomic::Ordering::Relaxed) < 2 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(POST_EXIT_DRAIN_READ_BUDGET).await;
+        let output = output.await.unwrap();
+        assert!(output.bytes.is_empty());
+        assert!(output.truncated);
+    }
+
+    #[tokio::test]
+    async fn an_io_failure_after_output_keeps_the_capture_incomplete() {
+        let task = spawn_optional_capped(
+            Some(ReadSteps(VecDeque::from([
+                Ok(b"captured".as_slice()),
+                Err(std::io::ErrorKind::BrokenPipe),
+            ]))),
+            1024,
+            None,
+        );
+        let output = join_capture_after_child_exit(task).await;
+        assert_eq!(output.bytes, b"captured");
+        assert!(output.truncated);
+    }
 
     #[cfg(unix)]
     #[tokio::test]
