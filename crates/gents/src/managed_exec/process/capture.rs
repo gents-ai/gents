@@ -321,6 +321,10 @@ mod tests {
         let task = spawn_optional_capped(Some(InterruptedForever(Arc::clone(&polls))), 1024, None);
         let output = tokio::spawn(join_capture_after_child_exit(task));
         while polls.load(std::sync::atomic::Ordering::Relaxed) < 2 {
+            assert!(
+                !output.is_finished(),
+                "capture stopped before retrying the interrupted read"
+            );
             tokio::task::yield_now().await;
         }
         tokio::time::advance(POST_EXIT_DRAIN_READ_BUDGET).await;
