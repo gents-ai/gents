@@ -179,6 +179,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: PluginCommand,
     },
+    #[command(about = "List and inspect the UX plugins the desktop loads from this home")]
+    Ux {
+        #[command(subcommand)]
+        command: UxCommand,
+    },
     #[command(about = "Run and observe installed graphs")]
     Graph {
         #[command(subcommand)]
@@ -402,6 +407,11 @@ pub(crate) struct PackScaffoldArgs {
         help = "Plugin language for the plugin-tool template; defaults to rust"
     )]
     pub(crate) language: Option<String>,
+    #[arg(
+        long,
+        help = "Also scaffold a UX plugin (ux/<name>/plugin.js): a nav row, an agent section and a ::<name> directive"
+    )]
+    pub(crate) ux: bool,
 }
 
 #[derive(clap::Args)]
@@ -1218,6 +1228,36 @@ pub(crate) enum PluginCommand {
         #[command(subcommand)]
         command: PluginDirsCommand,
     },
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum UxCommand {
+    /// List every UX plugin on disk: the dev folder and installed packs.
+    List(UxListArgs),
+    /// Print one UX plugin's module as the desktop would receive it.
+    Module(UxModuleArgs),
+    /// Run the static lint on a plugin.js file, as `gents pack check` does.
+    Lint(UxLintArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct UxListArgs {
+    #[arg(long, help = "Home to list from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct UxModuleArgs {
+    #[arg(help = "A listing id: <name> for a dev plugin, <ns>/<pack>/<name> for a pack one")]
+    pub(crate) id: String,
+    #[arg(long, help = "Home to read from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct UxLintArgs {
+    #[arg(help = "A plugin.js file")]
+    pub(crate) file: PathBuf,
 }
 
 #[derive(clap::Subcommand)]

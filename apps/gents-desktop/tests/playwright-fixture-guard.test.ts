@@ -25,6 +25,11 @@ describe("Playwright fixture guard", () => {
       if (importsPlaywrightValues(source)) {
         violations.push(`${file.path}: import Playwright values from "./desktopTest"`);
       }
+      if (addsInitScript(source)) {
+        violations.push(
+          `${file.path}: an init script runs in the plugin frames too; seed storage with seedLocalStorage from "./desktopTest"`,
+        );
+      }
     }
 
     expect(violations).toEqual([]);
@@ -61,6 +66,10 @@ function importsDesktopFixture(source: string) {
   return /from\s+["'](?:\.\/desktopTest|\.\.\/playwright\/desktopTest)["']/.test(
     source,
   );
+}
+
+function addsInitScript(source: string) {
+  return /\.addInitScript\(/.test(source);
 }
 
 function importsPlaywrightValues(source: string) {

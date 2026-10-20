@@ -57,6 +57,7 @@ pub async fn install<F: Future<Output = Result<()>>>(
                     })
                     .collect(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                ux: manifest.metadata.ux.clone(),
                 installed_via: None,
             };
             if let Err(error) = super::write_home_install(home, &record) {

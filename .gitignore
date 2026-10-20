@@ -1,7 +1,7 @@
 /target
 /target-check/
 /apps/gents-desktop/src-tauri/binaries/gents-*
-/.DS_Store
+.DS_Store
 /crates/gents/proofs/.lake
 /crates/gents/proofs/build
 /vendor/

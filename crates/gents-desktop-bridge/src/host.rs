@@ -548,6 +548,14 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::Retry {
+                request_id,
+                node_did,
+            } => encode(
+                crate::commands::retry_request(&self.core, &request_id, Some(&node_did))
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::SessionGoal(args) => encode(
                 crate::commands::session_goal(&self.core, &args.node_did, &args.session_id)
                     .await

@@ -284,7 +284,7 @@ pub async fn create_request(
     .await
 }
 
-async fn create_session(
+pub async fn create_session(
     core: &Arc<ClientCore>,
     node_did: &str,
     session_id: &str,

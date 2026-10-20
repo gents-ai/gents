@@ -6,6 +6,8 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { useApp, useView } from "@/app/AppContext";
 import { PanelMenu } from "@/app/PanelMenu";
 import { PaneBar } from "@/app/PaneBar";
+import { Slot } from "@/contrib/react/slot";
+import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
 import {
   useHomeDid,
   useInterruptVisible,
@@ -196,6 +198,7 @@ export function OpenSession() {
                     </div>
                   </div>
                 )}
+                <Slot area={SESSION_HEADER_ACTIONS_AREA} />
                 <PanelMenu routeName="session" />
               </PaneBar>
               <div className="flex items-start justify-between gap-4">

@@ -102,11 +102,13 @@ pub(crate) fn utf8_page<'a>(
     })
 }
 
+// `row` is the result index: a caller that did not select `_docID` has no
+// other way to put the recovered value back where it came from.
 pub(super) fn recovery_metadata(rows: &Value) -> Vec<Value> {
-    rows.as_array().into_iter().flatten().flat_map(|row| {
+    rows.as_array().into_iter().flatten().enumerate().flat_map(|(index, row)| {
         row.as_object().into_iter().flatten().filter_map(move |(field, value)| {
             let text = value.as_str()?;
-            (text.len() > MAX_FIELD_STRING_BYTES).then(|| json!({"doc_id":row["_docID"],"field":field,"total_bytes":text.len(),"field_page":{"doc_id":row["_docID"],"field":field,"offset_bytes":0}}))
+            (text.len() > MAX_FIELD_STRING_BYTES).then(|| json!({"row":index,"doc_id":row["_docID"],"field":field,"total_bytes":text.len(),"field_page":{"doc_id":row["_docID"],"field":field,"offset_bytes":0}}))
         })
     }).collect()
 }

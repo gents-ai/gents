@@ -9,11 +9,14 @@ import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
+import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
+import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
   useNodeCount,
   useOnline,
   useRecentSessions,
+  useSelectedNode,
   useSyncHealth,
   useWorkingNode,
 } from "@/hooks/useClient";
@@ -70,6 +73,28 @@ export function NavPanel({
   const working = useWorkingNode();
   const nodeCount = useNodeCount();
   const syncHealth = useSyncHealth();
+  const selected = useSelectedNode();
+  const primary = useNavItems("primary");
+  const footer = useNavItems("footer");
+  const navContext: NavContext = {
+    mailboxCount,
+    selectedNodeDid: selected?.nodeDid ?? null,
+  };
+  /* a row a UX plugin contributed, drawn like the app's own; its
+     predicates are evaluated apart and its icon drawn behind a boundary,
+     so one bad row costs that row; a row with nowhere to go right now is
+     not drawn */
+  const contributed = (item: NavItem) => {
+    const { to, active, count } = navRowState(item, route, navContext);
+    if (!to) return null;
+    return (
+      <ContribBoundary key={item.id} id={item.id} variant="chip">
+        <Item to={href(to)} active={active} count={count} icon={item.icon}>
+          {item.label}
+        </Item>
+      </ContribBoundary>
+    );
+  };
   const currentSession = route.name === "session" ? route.sessionId : null;
   const workingCurrent =
     working !== null && route.name === "agent" && route.nodeDid === working.nodeDid;
@@ -156,6 +181,7 @@ export function NavPanel({
       >
         Sessions
       </Item>
+      {primary.map(contributed)}
       {recent.length > 0 && (
         <>
           <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
@@ -206,6 +232,7 @@ export function NavPanel({
           </div>
         )}
         <div className="mx-3 h-px bg-border" />
+        {footer.map(contributed)}
         <Item
           to={href({ name: "nodes" })}
           active={route.name === "nodes" || route.name === "agents"}

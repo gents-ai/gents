@@ -442,6 +442,8 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
+        crate::local_runtime::ensure_captured_input_supported(peer_record.as_ref(), &options.input)
+            .await?;
         let (signer, admission, requester_did) = self
             .request_authority(node_did, peer_record.as_ref())
             .await?;
@@ -449,6 +451,7 @@ impl ClientCore {
         match mutations::submit_request(
             &self.node,
             snapshot.as_ref(),
+            &self.session_queue_access(node_did),
             session_id,
             node_did,
             &requester_did,
@@ -1493,6 +1496,11 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
+        crate::local_runtime::ensure_captured_input_supported(
+            peer_record.as_ref(),
+            &parent.input.clone().unwrap_or_default(),
+        )
+        .await?;
         let (signer, admission, requester_did) = self
             .request_authority(node_did, peer_record.as_ref())
             .await?;

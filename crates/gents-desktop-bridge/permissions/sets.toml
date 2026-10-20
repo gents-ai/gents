@@ -104,6 +104,20 @@ description = "Installed packs, registry search and package pages, the signed-in
 permissions = ["allow-desktop-pack-installed", "allow-desktop-pack-search", "allow-desktop-pack-info", "allow-desktop-pack-whoami", "allow-desktop-pack-plugin-slots", "allow-desktop-pack-wire-sources"]
 
 [[set]]
+identifier = "ux-plugins-read"
+description = "The ux plugins on disk and each one's module, for the desktop loader"
+permissions = [
+  "allow-desktop-ux-plugins-list",
+  "allow-desktop-ux-plugin-source",
+  "allow-desktop-ux-data-surfaces",
+]
+
+[[set]]
+identifier = "ux-plugins-call"
+description = "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares"
+permissions = ["allow-desktop-plugin-call", "allow-desktop-ux-data-call"]
+
+[[set]]
 identifier = "packs-admin"
 description = "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry"
 permissions = ["allow-desktop-pack-install", "allow-desktop-pack-update", "allow-desktop-pack-remove", "allow-desktop-pack-login", "allow-desktop-pack-logout", "allow-desktop-pack-plugin-bind", "allow-desktop-pack-wire"]
@@ -256,6 +270,8 @@ permissions = [
   "external-links",
   "packs-read",
   "packs-admin",
+  "ux-plugins-read",
+  "ux-plugins-call",
   "allowed-dirs-read",
   "allowed-dirs-admin",
 ]

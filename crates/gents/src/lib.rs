@@ -68,6 +68,8 @@ pub mod plugin;
 pub mod plugin_job;
 pub mod provider_http;
 pub(crate) mod provider_input;
+pub mod ux_data;
+pub mod ux_plugin;
 pub use gents_loop::provider_input::ProviderInputProfile;
 pub mod provider_budget {
     pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};

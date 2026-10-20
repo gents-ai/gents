@@ -7,6 +7,7 @@ import {
   type DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
+import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
 
 import {
   adoptNewChatFolder,
@@ -241,6 +242,7 @@ export function createChatActions({
     retryMessage,
     renameSession,
     interruptRequest,
+    controlJob: (request: DesktopJobControlRequest) => api.jobControl(request),
     setChatFolder,
   };
 }

@@ -74,6 +74,23 @@ pub fn build_pack(
     if manifest.metadata.kind == crate::pack::PackKind::Graph {
         build_graph_plans(dir, &manifest)?;
     }
+    // A file-produced UX plugin the webview would refuse never gets packed;
+    // an .afb-produced one is linted when its producer runs.
+    let refused: Vec<String> = crate::ux_plugin::lint_pack_dir(dir, &manifest.metadata.ux)?
+        .into_iter()
+        .filter(|(_, findings)| !findings.is_empty())
+        .map(|(name, findings)| {
+            format!(
+                "ux plugin {name:?}: {}",
+                crate::ux_plugin::lint::describe(&findings)
+            )
+        })
+        .collect();
+    anyhow::ensure!(
+        refused.is_empty(),
+        "the static lint refuses the pack's ux plugins:\n{}",
+        refused.join("\n")
+    );
 
     let out_dir = match out.and_then(Path::parent) {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),

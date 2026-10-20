@@ -47,6 +47,7 @@ pub(crate) async fn import(args: PackImportArgs) -> Result<()> {
             namespace: args.namespace.clone(),
             template: Some(PackTemplate::Assets),
             language: None,
+            ux: false,
         },
     )?;
 

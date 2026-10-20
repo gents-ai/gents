@@ -322,7 +322,7 @@ impl Tool for AgentSessionReadTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows work in flight, queued steering and the Goal. Truncation is reported; tool arguments and reasoning are omitted.".to_owned(),
+            description: "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows the active request or, if none, the latest one: work in flight, queued steering and the Goal. Truncation is reported; tool arguments and reasoning are omitted.".to_owned(),
             parameters: serde_json::json!({
                 "type": "object", "additionalProperties": false,
                 "required": ["session_id"],

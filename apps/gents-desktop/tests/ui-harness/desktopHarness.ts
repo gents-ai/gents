@@ -948,6 +948,23 @@ export function createDesktopUiHarness(
     async subscribePluginApprovals() {},
     async unsubscribePluginApprovals() {},
     async decidePluginApproval() {},
+    /* no runtime doors in the harness: the shell lists nothing and a plugin
+       that reaches the bridge is told so */
+    async listUxPlugins() {
+      return { plugins: [] };
+    },
+    async readUxPluginSource() {
+      throw new Error("UX plugin sources are unavailable in this fixture.");
+    },
+    async callPackPlugin() {
+      throw new Error("Pack plugin calls are unavailable in this fixture.");
+    },
+    async callUxData() {
+      throw new Error("UX data calls are unavailable in this fixture.");
+    },
+    async listUxDataSurfaces() {
+      return { surfaces: [] };
+    },
     ...(scenario === "empty-fleet"
       ? ({
           async managedServerStatus() {

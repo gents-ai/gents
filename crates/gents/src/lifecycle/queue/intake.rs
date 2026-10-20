@@ -83,7 +83,7 @@ pub(crate) async fn steering_snapshot(
         }
         inputs.push(gents_loop::loop_stream::FoldedPrompt {
             key: folded_input_key(&id),
-            message: gents_protocol::message::Message::user(request.content),
+            message: request.input.authored_message(&request.content)?,
         });
     }
     Ok(gents_loop::loop_stream::SteeringSnapshot {

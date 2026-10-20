@@ -404,7 +404,10 @@ async fn declared_write_tool_call_fires_event_trigger() {
     let (handle, shutdown_tx) =
         boot_agent_with_action_trigger(&db, "b6-tooldriven", task_id, trigger_id).await;
 
-    let tool = BoundedWriteTool::new(db.node.clone(), request_action_decl());
+    let tool = BoundedWriteTool::new(
+        gents::ConfigAccess::local(db.node.clone()),
+        request_action_decl(),
+    );
     assert_eq!(
         Tool::name(&tool),
         "request_action",

@@ -3,6 +3,7 @@ import { createHostAccessCommands } from "./hostAccess.js";
 import { createDesktopInvoker } from "./invoke.js";
 import { createManagedServerCommands } from "./managedServer.js";
 import { createPackCommands } from "./packs.js";
+import { createUxPluginCommands } from "./uxPlugins.js";
 import { createProviderAccountCommands } from "./providerAccounts.js";
 import type { DesktopApiAdapter } from "./types.js";
 
@@ -215,6 +216,7 @@ export function createDesktopApiAdapter(
     ...createProviderAccountCommands(invokeDesktop),
     ...createPackCommands(invokeDesktop),
     ...createHostAccessCommands(invokeDesktop),
+    ...createUxPluginCommands(invokeDesktop),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop("desktop_inference_profile_save", {
         request,

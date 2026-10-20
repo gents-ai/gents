@@ -771,6 +771,48 @@ fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::R
         }
         None => push_text(fields, "none"),
     }
+    if !input.captured_context.is_empty() {
+        push_text(fields, "captured-context");
+        push_text(fields, &input.captured_context.len().to_string());
+        for context in &input.captured_context {
+            push_captured_context(fields, context);
+        }
+    }
+}
+
+fn push_captured_context(
+    fields: &mut Vec<Vec<u8>>,
+    context: &crate::request_input::CapturedContext,
+) {
+    push_text(fields, context.kind.as_str());
+    push_text(fields, context.source.as_str());
+    push_text(fields, &context.captured_at);
+    push_input_option(fields, context.uri.as_deref());
+    push_input_option(fields, context.terminal_name.as_deref());
+    push_input_option(fields, context.workspace_uri.as_deref());
+    push_input_option(
+        fields,
+        context
+            .version
+            .map(|version| version.to_string())
+            .as_deref(),
+    );
+    push_text(fields, if context.unsaved { "true" } else { "false" });
+    match context.range {
+        Some(range) => {
+            push_text(fields, "some");
+            for coordinate in [
+                range.start.line,
+                range.start.character,
+                range.end.line,
+                range.end.character,
+            ] {
+                push_text(fields, &coordinate.to_string());
+            }
+        }
+        None => push_text(fields, "none"),
+    }
+    push_text(fields, &context.content);
 }
 
 fn serialize_fields(fields: &[Vec<u8>]) -> Vec<u8> {

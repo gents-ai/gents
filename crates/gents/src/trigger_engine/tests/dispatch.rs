@@ -32,7 +32,12 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
         .await;
 
     assert!(matches!(result, FireResult::Fired { .. }), "{result:?}");
-    assert_eq!(materializer.calls()[0].2, "work on release for runtime");
+    assert_eq!(
+        materializer.calls()[0].2,
+        format!(
+            "Scheduled task instructions (rendered from saved configuration):\n\nwork on release for runtime"
+        )
+    );
     assert_eq!(
         materializer.goal_objectives(),
         vec![Some(format!(
@@ -364,6 +369,8 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
     assert!(matches!(same_run, FireResult::Skipped { .. }));
     assert!(matches!(other_run, FireResult::Fired { .. }));
     assert_eq!(materializer.calls().len(), 1);
+    // Event prompts must not receive the scheduled-configuration label.
+    assert_eq!(materializer.calls()[0].2, "run run-a");
     let mut changed = make_intent("run-a");
     changed.durable_fire_key =
         super::super::durable_fire_key("event-group", &["run-a:new-membership"]);

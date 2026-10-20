@@ -17,7 +17,7 @@ import {
 import { href, navigate } from "@/lib/router";
 import { useFleet } from "@/hooks/useFleet";
 import { nodeOf } from "../../../hooks/fleetStore";
-import { isListed, SECTIONS } from "./sections";
+import { isListed, useAgentSections } from "./sections";
 
 export function AgentScreen({
   nodeDid,
@@ -34,6 +34,7 @@ export function AgentScreen({
       ?.querySelector("[data-slot=scroll-area-viewport]")
       ?.scrollTo({ top: 0 });
   }, [nodeDid, section, item]);
+  const sections = useAgentSections();
   const deployment = useFleet((s) => nodeOf(s, nodeDid));
   if (!deployment) {
     return (
@@ -42,9 +43,9 @@ export function AgentScreen({
       </p>
     );
   }
-  const current = SECTIONS.find((s) => s.id === section) ?? null;
+  const current = sections.find((s) => s.id === section) ?? null;
   const entry = current && !isListed(current) ? current.under : section;
-  const listed = SECTIONS.filter(isListed);
+  const listed = sections.filter(isListed);
   const groups = [...new Set(listed.map((s) => s.group))];
   const Panel = current?.Panel;
   return (

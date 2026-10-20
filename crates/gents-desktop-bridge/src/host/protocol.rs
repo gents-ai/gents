@@ -10,7 +10,8 @@ use crate::types::{
 
 /// Change the version for incompatible framing or operation semantics.
 /// Additional commands are negotiated through the initialization inventory.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// Typed captures require a host that preserves their submitted snapshots.
+pub const PROTOCOL_VERSION: u32 = 4;
 /// The private store-key channel completes before ordinary host framing begins.
 /// Its failures use the canonical bridge error contract and never raw causes.
 pub const EDITOR_STORE_BOOTSTRAP_VERSION: u32 = 2;
@@ -213,6 +214,13 @@ pub enum ClientCommand {
     },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
+    #[serde(rename = "desktop_request_retry")]
+    Retry {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+    },
     #[serde(rename = "desktop_pending_queue_edit")]
     EditPending { request: PendingQueueEditRequest },
     #[serde(rename = "desktop_pending_message_steer")]
@@ -269,6 +277,7 @@ impl ClientCommand {
         "desktop_session_goal",
         "desktop_goal_control",
         "desktop_chat_send",
+        "desktop_request_retry",
         "desktop_pending_queue_edit",
         "desktop_pending_message_steer",
         "desktop_session_fork_before_message",

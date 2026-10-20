@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-plugin-call"
+description = "Enables the desktop_plugin_call command without any pre-configured scope."
+commands.allow = ["desktop_plugin_call"]
+
+[[permission]]
+identifier = "deny-desktop-plugin-call"
+description = "Denies the desktop_plugin_call command without any pre-configured scope."
+commands.deny = ["desktop_plugin_call"]
