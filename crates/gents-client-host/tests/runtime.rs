@@ -28,6 +28,8 @@ mod configured_actions;
 mod editor_history;
 #[path = "support/editor_retry.rs"]
 mod editor_retry;
+#[path = "support/editor_review.rs"]
+mod editor_review;
 #[path = "support/editor_workspace.rs"]
 mod editor_workspace;
 #[allow(dead_code)]
@@ -57,6 +59,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRetry,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorReview,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
     Goal,
 }
@@ -68,6 +72,7 @@ impl Journey {
             Self::EditorSteering => Some("steering"),
             Self::EditorHistory => Some("history"),
             Self::EditorRetry => Some("retry"),
+            Self::EditorReview => Some("review"),
             Self::EditorWorkspace => Some("workspace"),
             _ => None,
         }
@@ -204,6 +209,30 @@ async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> Re
 }
 
 #[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_reviews_retained_file_images_without_reading_the_working_copy() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorReview)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-review-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
 fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
     let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
@@ -243,6 +272,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorReview) {
+                if let Some(action) = editor_review::reply(request) {
+                    return action;
+                }
+            }
             if matches!(journey, Journey::EditorRetry) {
                 if let Some(action) = editor_retry::reply(request, &provider_retry_attempts) {
                     return action;
@@ -1122,6 +1156,44 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 .await?;
         std::fs::write(
             root.join("editor-workspace-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+    }
+    if matches!(journey, Journey::EditorReview) {
+        editor_review::prepare(root)?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        id += 1;
+        let result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "review",
+        )
+        .await;
+        std::fs::write(
+            root.join("editor-review-provider.json"),
+            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        copy_editor_evidence(root, "editor-review-provider.json")?;
+        result?;
+        let evidence = editor_review::verify(
+            &mut client,
+            &mut id,
+            &access,
+            root,
+            node_did,
+            session,
+            &client_did,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-review-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }
