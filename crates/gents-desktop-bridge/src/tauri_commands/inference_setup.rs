@@ -622,7 +622,7 @@ mod provider_account_tests {
     }
 
     async fn serving_node() -> std::sync::Arc<gents::defra_node::EmbeddedNode> {
-        let node = gents::defra_node::EmbeddedNode::builder()
+        let node = crate::tests::support::node_builder()
             .build()
             .await
             .expect("embedded node");
@@ -1196,7 +1196,7 @@ mod provider_account_tests {
         let address = std::net::TcpListener::bind("127.0.0.1:0")
             .and_then(|listener| listener.local_addr())
             .expect("free port");
-        let runtime = gents::defra_node::EmbeddedNode::builder()
+        let runtime = crate::tests::support::node_builder()
             .with_http(gents::defra_node::HttpConfig::with_addr(address))
             .build()
             .await

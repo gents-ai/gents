@@ -444,7 +444,7 @@ mod tests {
         for case in cases {
             let dir = tempfile::tempdir().unwrap();
             let node = Arc::new(
-                EmbeddedNode::builder()
+                crate::tests::support::node_builder()
                     .data_path(dir.path().join("node"))
                     .build()
                     .await

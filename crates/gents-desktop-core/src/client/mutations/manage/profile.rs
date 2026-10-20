@@ -158,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn model_selection_preserves_shared_consumers_and_reuses_profiles() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:model-selection";
         gents::ensure_node(&node, owner).await?;
@@ -356,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn profile_save_validates_bounds_and_resolves_backend_in_exact_owner_scope() -> Result<()>
     {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:owner", "did:test:other"] {
             gents::ensure_node(&node, owner).await?;

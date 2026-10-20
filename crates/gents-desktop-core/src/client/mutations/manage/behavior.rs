@@ -99,7 +99,7 @@ mod tests {
 
     #[tokio::test]
     async fn context_delete_removes_the_scoped_document() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:context-delete";
         gents::ensure_node(&node, owner).await?;
@@ -130,7 +130,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_and_profile_deletion_obey_canonical_owned_references() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["did:test:alpha", "did:test:beta"] {

@@ -207,7 +207,7 @@ mod tests {
     use std::sync::Arc;
 
     async fn fixture() -> Result<ConfigAccess> {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let config = serde_json::from_value(json!({
             "node": {"node_did":"did:test:editor"},

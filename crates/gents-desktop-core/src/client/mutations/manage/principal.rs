@@ -293,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_replacement_keeps_authored_metadata_and_scoped_default_binding() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let config: gents::document_config::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":"did:test:other"},
@@ -339,7 +339,7 @@ mod tests {
     }
     #[tokio::test]
     async fn setting_the_default_enables_it_and_recovers_a_stored_disabled_default() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:default";
         let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
@@ -402,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn component_apply_is_partial_atomic_scoped_and_preserves_node() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:components";
         let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
@@ -521,7 +521,7 @@ mod tests {
     async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> Result<()>
     {
         use gents::config_client::patch::SelfConfigTarget;
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:patch";
         for scope in [owner, "did:test:other-patch"] {

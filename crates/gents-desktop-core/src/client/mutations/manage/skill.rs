@@ -62,7 +62,7 @@ mod tests {
     #[tokio::test]
     async fn skill_delete_rejects_context_references_without_detaching_or_cross_owner_effects(
     ) -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:skill-a", "did:test:skill-b"] {
             gents::ensure_node(&node, owner).await?;

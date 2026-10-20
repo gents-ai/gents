@@ -84,7 +84,7 @@ mod tests {
     #[tokio::test]
     async fn backend_save_preserves_catalog_and_scoped_delete_rejects_retained_profile(
     ) -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:owner", "did:test:other"] {
             gents::ensure_node(&node, owner).await?;

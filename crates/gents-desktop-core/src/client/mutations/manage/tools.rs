@@ -120,7 +120,7 @@ mod tests {
     #[tokio::test]
     async fn tools_replacement_revokes_groups_and_service_delete_checks_retained_refs() -> Result<()>
     {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:owner", "did:test:other"] {
             gents::ensure_node(&node, owner).await?;

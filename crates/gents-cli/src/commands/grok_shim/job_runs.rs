@@ -806,7 +806,6 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::Duration;
-    use defra_node::EmbeddedNode;
     use gents::plugin_job::view::{JobFilter, StateFilter};
     use gents_protocol::job::JobReadError;
 
