@@ -23,6 +23,15 @@ async fn signed_row(
     selection: FileImageSelection,
 ) -> (FileImageDemand, Value) {
     let demand = demand(identity.did());
+    let row = signed_demand_row(identity, &demand, selection).await;
+    (demand, row)
+}
+
+async fn signed_demand_row(
+    identity: &KeyIdentity,
+    demand: &FileImageDemand,
+    selection: FileImageSelection,
+) -> Value {
     let mut row = json!({});
     for (field, value) in demand.reference_fields() {
         row[field] = json!(value);
@@ -54,7 +63,7 @@ async fn signed_row(
     row["processed_at"] = json!(receipt.processed_at);
     row["outcome_signer_did"] = json!(receipt.signer_did);
     row["outcome_signature"] = json!(bs58::encode(receipt.signature).into_string());
-    (demand, row)
+    row
 }
 
 #[tokio::test]
@@ -137,4 +146,107 @@ async fn file_image_review_admission_reuses_only_the_exact_reference() {
         1
     );
     node.shutdown().await;
+}
+
+#[tokio::test]
+async fn explicit_file_review_retry_preserves_refusals_and_resumes_verified_delivery() {
+    let root = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(root.path().join("node.key"), None).unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(root.path().join("db"))
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    gents::ensure_runtime_schemas(&node).await.unwrap();
+    let access = ConfigAccess::local(node.clone());
+    let original = demand(identity.did());
+    admit_image_demand(&node, &original).await.unwrap();
+    let refused = signed_demand_row(&identity, &original, FileImageSelection::Rejected).await;
+    write_receipt(&access, &original, &refused).await;
+    assert_eq!(
+        resumable_image_demand(&access, &original, &identity)
+            .await
+            .unwrap(),
+        original
+    );
+
+    let mut retry = original.clone();
+    retry.admission.request_key = original.derive_retry_request_key("explicit-click");
+    for _ in 0..2 {
+        admit_image_demand(&node, &retry).await.unwrap();
+    }
+    assert_eq!(
+        resumable_image_demand(&access, &original, &identity)
+            .await
+            .unwrap(),
+        retry
+    );
+    let selected = FileImageSelection::Selected {
+        document: "physical-image".into(),
+    };
+    let served = signed_demand_row(&identity, &retry, selected.clone()).await;
+    write_receipt(&access, &retry, &served).await;
+    let mut later_pending = original.clone();
+    later_pending.admission.request_key = original.derive_retry_request_key("other-click");
+    admit_image_demand(&node, &later_pending).await.unwrap();
+    assert_eq!(
+        resumable_image_demand(&access, &original, &identity)
+            .await
+            .unwrap(),
+        retry
+    );
+    let response = access.execute(&demand_query(&original)).await.unwrap();
+    assert_eq!(
+        verified_receipt(
+            demand_row(&response).unwrap().unwrap(),
+            &original,
+            &identity
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .selection(),
+        &FileImageSelection::Rejected
+    );
+
+    let mut foreign = original.clone();
+    foreign.tool_call_doc_id = "another-tool".into();
+    foreign.admission.request_key = foreign.derive_request_key();
+    assert_eq!(
+        resumable_image_demand(&access, &foreign, &identity)
+            .await
+            .unwrap(),
+        foreign
+    );
+    let mut tampered = served;
+    tampered["outcome_signature"] = json!(bs58::encode([0u8; 64]).into_string());
+    write_receipt(&access, &retry, &tampered).await;
+    assert!(resumable_image_demand(&access, &original, &identity)
+        .await
+        .is_err());
+    node.shutdown().await;
+}
+
+async fn write_receipt(access: &ConfigAccess, demand: &FileImageDemand, row: &Value) {
+    let response = access.execute(&demand_query(demand)).await.unwrap();
+    let document = demand_row(&response).unwrap().unwrap()["_docID"]
+        .as_str()
+        .unwrap();
+    let mut input = row.clone();
+    for (field, _) in demand.reference_fields() {
+        input.as_object_mut().unwrap().remove(field);
+    }
+    let variables = json!({"document": document, "input": input});
+    access.transact_write("test.file_review.receipt", |txn| {
+        let variables = &variables;
+        Box::pin(async move {
+            txn.execute_with_variables(
+                "mutation($document: ID!, $input: FileImageHydrationRequestMutationInputArg!) { update_FileImageHydrationRequest(docID: $document, input: $input) { _docID } }",
+                variables,
+            ).await
+        })
+    }).await.unwrap();
 }

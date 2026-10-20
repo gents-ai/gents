@@ -25,11 +25,13 @@ impl ClientCore {
         session_id: &str,
         request_id: &str,
         tool_call_doc_id: &str,
+        retry_id: Option<&str>,
     ) -> Result<Option<ToolFileChanges>> {
         let node_did = normalize_required("node_did", node_did)?;
         let session_id = normalize_required("session_id", session_id)?;
         let request_id = normalize_required("request_id", request_id)?;
         let tool_call_doc_id = normalize_required("tool_call_doc_id", tool_call_doc_id)?;
+        let retry_id = retry_id.map(uuid::Uuid::parse_str).transpose()?;
         let Some(projection) = self
             .refresh_local_request(node_did, session_id, Some(request_id), None, &[])
             .await?
@@ -79,8 +81,21 @@ impl ClientCore {
             request_doc_id: request_doc_id.into(),
             tool_call_doc_id: tool_call_doc_id.into(),
         };
-        demand.admission.request_key = demand.derive_request_key();
+        demand.admission.request_key = match retry_id {
+            Some(id) => demand.derive_retry_request_key(&id.to_string()),
+            None => demand.derive_request_key(),
+        };
         demand.validate_reference()?;
+        if retry_id.is_none() {
+            let access = self
+                .store_access
+                .lock()
+                .await
+                .as_ref()
+                .context("local store access is unavailable")?
+                .clone();
+            demand = resumable_image_demand(&access, &demand, &self.node_identity).await?;
+        }
         self.remote_file_images(demand).await
     }
 
@@ -150,6 +165,66 @@ impl ClientCore {
         tokio::time::timeout(std::time::Duration::from_secs(30), read).await
             .context("File review is waiting for the runtime. Open the changes again when the connection is ready.")?
     }
+}
+
+async fn resumable_image_demand(
+    access: &ConfigAccess,
+    original: &FileImageDemand,
+    identity: &dyn NodeIdentity,
+) -> Result<FileImageDemand> {
+    let fields = original
+        .reference_fields()
+        .into_iter()
+        .filter(|(field, _)| *field != "request_key")
+        .map(|(field, value)| format!(r#"{field}: {{ _eq: "{}" }}"#, escape_graphql_string(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        r#"{{ FileImageHydrationRequest(filter: {{ {fields}, status: {{ _in: ["pending", "served"] }} }}) {{ {DEMAND_FIELDS} }} }}"#,
+    );
+    let response = access.execute(&query).await?;
+    let rows = response["data"]["FileImageHydrationRequest"]
+        .as_array()
+        .context("file review lookup omitted demand rows")?;
+    let mut candidates = Vec::new();
+    let mut selected_document = None;
+    for row in rows {
+        let mut demand = original.clone();
+        demand.admission.request_key = row["request_key"]
+            .as_str()
+            .context("file review demand omitted its request key")?
+            .into();
+        demand.validate_reference()?;
+        let receipt = verified_receipt(row, &demand, identity).await?;
+        let rank = match receipt.as_ref().map(VerifiedFileImageReceipt::selection) {
+            Some(FileImageSelection::Selected { document }) => {
+                if let Some(previous) = &selected_document {
+                    anyhow::ensure!(
+                        previous == document,
+                        "file review receipts selected conflicting images"
+                    );
+                }
+                selected_document = Some(document.clone());
+                0
+            }
+            Some(FileImageSelection::Missing) => 1,
+            None => 2,
+            Some(FileImageSelection::Rejected) => {
+                anyhow::bail!("file review lookup returned a rejected demand")
+            }
+        };
+        candidates.push((rank, demand));
+    }
+    candidates.sort_by(|(left_rank, left), (right_rank, right)| {
+        left_rank
+            .cmp(right_rank)
+            .then_with(|| left.admission.request_key.cmp(&right.admission.request_key))
+    });
+    Ok(candidates
+        .into_iter()
+        .next()
+        .map(|(_, demand)| demand)
+        .unwrap_or_else(|| original.clone()))
 }
 
 fn demand_query(demand: &FileImageDemand) -> String {
