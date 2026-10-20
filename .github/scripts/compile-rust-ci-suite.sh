@@ -65,14 +65,6 @@ if [[ "${mode}" != "build" ]]; then
   exit 2
 fi
 
-# The support shard deliberately reuses a target directory across checkouts:
-# Cargo's mtime fast path can accept a stale local crate when a checkout adds a
-# new module. Preserve dependency artifacts, but always rebuild workspace
-# members in this shard with its direct rustc wrapper.
-if [[ "${suite}" == "support" ]]; then
-  cargo clean --workspace
-fi
-
 cargo_args=()
 for package in "${packages[@]}"; do
   cargo_args+=(-p "${package}")
