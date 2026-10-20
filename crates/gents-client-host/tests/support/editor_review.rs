@@ -206,3 +206,340 @@ pub async fn verify(
         "scopedDeliveryReceipt":true, "exactImageIdentity":true, "demandReused":true}),
     )
 }
+
+#[allow(clippy::too_many_arguments)]
+pub async fn verify_permission_recovery(
+    client: &mut Attachment,
+    id: &mut u32,
+    access: &ConfigAccess,
+    root: &Path,
+    node_home: &Path,
+    author: &str,
+    baseline: &Value,
+    verifier: &dyn gents::NodeIdentity,
+) -> Result<Value> {
+    use gents_protocol::file_image_hydration::FileImageDemand;
+    use gents_protocol::session_hydration::HydrationRequest;
+    use std::time::Duration;
+
+    const BLOCKED_RETRY: &str = "56eba703-e534-43b5-980c-203f37523811";
+    const RESTORED_RETRY: &str = "4be6aa69-c87a-44bb-a946-2452ac3a283b";
+    let physical = field(baseline, "physicalTool")?;
+    let receipts = review_receipts(access, physical).await?;
+    ensure!(receipts.len() == 1, "initial review has multiple demands");
+    let original = receipts[0].clone();
+    let demand = FileImageDemand {
+        admission: HydrationRequest {
+            request_key: field(&original, "request_key")?.into(),
+            peer_id: field(&original, "peer_id")?.into(),
+            requester_did: author.into(),
+            node_did: field(&original, "node_did")?.into(),
+            session_id: field(baseline, "sessionId")?.into(),
+        },
+        request_doc_id: field(&original, "request_doc_id")?.into(),
+        tool_call_doc_id: physical.into(),
+    };
+    for (name, value) in demand.reference_fields() {
+        ensure!(
+            original[name].as_str() == Some(value),
+            "initial receipt changed {name}"
+        );
+    }
+    let enrollment = access.execute(&format!(
+        r#"{{ NetworkEnrollmentRequest(filter: {{ candidate_did: {{ _eq: "{}" }}, owner_agent: {{ _eq: "{}" }} }}) {{ request_id candidate_peer }} }}"#,
+        escape_graphql_string(author), escape_graphql_string(&demand.admission.node_did),
+    )).await?;
+    let enrollments = enrollment["data"]["NetworkEnrollmentRequest"]
+        .as_array()
+        .context("initial enrollment rows")?;
+    ensure!(enrollments.len() == 1, "initial enrollment is ambiguous");
+    let old_request = field(&enrollments[0], "request_id")?;
+    ensure!(
+        enrollments[0]["candidate_peer"] == demand.admission.peer_id,
+        "review peer differs from enrollment"
+    );
+    enrollment_decision(root, node_home, "revoke", old_request).await?;
+    wait_review_route(client, id, &demand.admission.node_did, false).await?;
+
+    verify_model_receipt(verifier, &original, &demand).await?;
+    let args = json!({
+        "nodeDid": demand.admission.node_did, "sessionId": demand.admission.session_id,
+        "requestId": baseline["requestId"], "toolCallDocId": physical,
+    });
+    let cached = client
+        .try_call(*id, "desktop_tool_file_changes", args.clone())
+        .await?;
+    *id += 1;
+    ensure!(
+        cached["tool_call_doc_id"] == physical
+            && cached["version"] == gents_protocol::file_changes::FILE_CHANGES_VERSION,
+        "revocation hid an already retained image"
+    );
+    let mut blocked_args = args.clone();
+    blocked_args["retryId"] = json!(BLOCKED_RETRY);
+    let blocked = client
+        .try_call_with_timeout(
+            *id,
+            "desktop_tool_file_changes",
+            blocked_args,
+            Duration::from_secs(45),
+        )
+        .await;
+    *id += 1;
+    let error = blocked.expect_err("revoked enrollment must not serve a fresh review demand");
+    ensure!(
+        error
+            .message
+            .contains("File review is waiting for the runtime")
+            || error.message.contains("Runtime rejected file review"),
+        "revoked review failed for an unrelated reason: {error}"
+    );
+    let blocked_key = demand.derive_retry_request_key(BLOCKED_RETRY);
+    let denied = review_receipts(access, physical)
+        .await?
+        .into_iter()
+        .find(|row| row["request_key"] == blocked_key);
+    if let Some(row) = &denied {
+        let mut blocked_demand = demand.clone();
+        blocked_demand.admission.request_key = blocked_key.clone();
+        verify_model_receipt(verifier, row, &blocked_demand).await?;
+        ensure!(
+            row["status"] == "rejected",
+            "revoked review acquired a terminal delivery: {row}"
+        );
+        ensure!(
+            row["observation_doc_id"].is_null(),
+            "revoked review named an image"
+        );
+    }
+
+    let status_url = field(
+        &serde_json::from_slice::<Value>(&std::fs::read(node_home.join("runtime.json"))?)?,
+        "graphql",
+    )?
+    .to_owned();
+    let server = status_url
+        .strip_suffix("/api/v0/graphql")
+        .context("runtime status base")?;
+    let pending = client
+        .call(
+            *id,
+            "desktop_peer_enroll_status",
+            json!({"request":{"serverAddress":server}}),
+        )
+        .await;
+    *id += 1;
+    let next_request = field(&pending, "requestId")?;
+    ensure!(
+        next_request != old_request,
+        "reenrollment reused the revoked request"
+    );
+    wait_enrollment_arrival(access, next_request).await?;
+    enrollment_decision(root, node_home, "approve", next_request).await?;
+    wait_review_route(client, id, &demand.admission.node_did, true).await?;
+    let mut restored_args = args.clone();
+    restored_args["retryId"] = json!(RESTORED_RETRY);
+    let restored = client
+        .try_call_with_timeout(
+            *id,
+            "desktop_tool_file_changes",
+            restored_args.clone(),
+            Duration::from_secs(45),
+        )
+        .await?;
+    *id += 1;
+    ensure!(
+        restored == cached,
+        "reenrollment changed the retained images"
+    );
+    let replayed = client
+        .call(*id, "desktop_tool_file_changes", restored_args)
+        .await;
+    *id += 1;
+    ensure!(
+        replayed == restored,
+        "explicit retry replay changed retained images"
+    );
+    let resumed = client.call(*id, "desktop_tool_file_changes", args).await;
+    *id += 1;
+    ensure!(
+        resumed == restored,
+        "normal reopening did not resume verified review"
+    );
+    let receipts = review_receipts(access, physical).await?;
+    let restored_key = demand.derive_retry_request_key(RESTORED_RETRY);
+    let matches: Vec<_> = receipts
+        .iter()
+        .filter(|row| row["request_key"] == restored_key)
+        .collect();
+    ensure!(
+        matches.len() == 1 && matches[0]["status"] == "served",
+        "explicit retry was not served exactly once"
+    );
+    let mut retried = demand.clone();
+    retried.admission.request_key = restored_key;
+    verify_model_receipt(verifier, matches[0], &retried).await?;
+    for (name, value) in retried.reference_fields() {
+        ensure!(
+            matches[0][name].as_str() == Some(value),
+            "restored receipt changed {name}"
+        );
+    }
+    ensure!(
+        matches[0]["observation_doc_id"] == original["observation_doc_id"],
+        "retry selected another image"
+    );
+    ensure!(
+        receipts.iter().any(|row| row == &original),
+        "retry changed the original receipt"
+    );
+    if let Some(denied) = &denied {
+        ensure!(
+            receipts.iter().any(|row| row == denied),
+            "reenrollment reset a signed refusal"
+        );
+    }
+    ensure!(
+        std::fs::read_to_string(root.join(FILE))? == LATER,
+        "permission recovery changed the working copy"
+    );
+    Ok(json!({
+        "baseline":baseline, "revokedRequest":old_request, "restoredRequest":next_request,
+        "revokedFreshReviewRefused":true, "revokedReadError":error.message,
+        "cachedImageReadableAfterRevocation":true, "signedRefusalObserved":denied.is_some(),
+        "freshRetryServed":true, "retryReplayReused":true, "normalReopenResumed":true,
+        "originalReceiptPreserved":true, "workingCopyPreserved":true,
+    }))
+}
+
+fn field<'a>(row: &'a Value, name: &str) -> Result<&'a str> {
+    row[name]
+        .as_str()
+        .with_context(|| format!("review fixture omitted {name}"))
+}
+
+async fn review_receipts(access: &ConfigAccess, physical: &str) -> Result<Vec<Value>> {
+    let response = access
+        .execute(&format!(
+            r#"{{ FileImageHydrationRequest(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{
+        request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id
+        status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature
+    }} }}"#,
+            escape_graphql_string(physical)
+        ))
+        .await?;
+    Ok(response["data"]["FileImageHydrationRequest"]
+        .as_array()
+        .context("review receipts")?
+        .clone())
+}
+
+async fn enrollment_decision(root: &Path, home: &Path, action: &str, request: &str) -> Result<()> {
+    let cli = super::support::native_binary("gents")?;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new(cli)
+            .current_dir(root)
+            .args(["p2p", "enrollment", action, request, "--home"])
+            .arg(home)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await??;
+    ensure!(
+        result.status.success(),
+        "enrollment {action} failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    Ok(())
+}
+
+async fn wait_review_route(
+    client: &mut Attachment,
+    id: &mut u32,
+    node: &str,
+    ready: bool,
+) -> Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let snapshot = client.snapshot(*id).await;
+            *id += 1;
+            let deployment = snapshot["client"]["deployments"]
+                .as_array()
+                .context("client deployments")?
+                .iter()
+                .find(|row| row["nodeDid"] == node);
+            if deployment.is_some_and(|row| row["chatSafe"] == true) == ready {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("client did not observe the enrollment change")?
+}
+
+async fn wait_enrollment_arrival(access: &ConfigAccess, request: &str) -> Result<()> {
+    let query = format!(
+        r#"{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(request)
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let response = access.execute(&query).await?;
+            if response["data"]["NetworkEnrollmentRequest"]
+                .as_array()
+                .is_some_and(|rows| rows.len() == 1)
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("runtime did not observe reenrollment")?
+}
+
+async fn verify_model_receipt(
+    verifier: &dyn gents::NodeIdentity,
+    row: &Value,
+    demand: &gents_protocol::file_image_hydration::FileImageDemand,
+) -> Result<()> {
+    use gents_protocol::file_image_hydration::{
+        FileImageHydrationReceipt, FileImageSelection, FILE_IMAGE_RECEIPT_VERSION,
+    };
+    for (name, expected) in demand.reference_fields() {
+        ensure!(
+            row[name].as_str() == Some(expected),
+            "review receipt changed {name}"
+        );
+    }
+    let selection = match field(row, "status")? {
+        "rejected" => {
+            ensure!(
+                row["observation_doc_id"].is_null(),
+                "refusal named an observation"
+            );
+            FileImageSelection::Rejected
+        }
+        "served" => match &row["observation_doc_id"] {
+            Value::Null => FileImageSelection::Missing,
+            Value::String(document) => FileImageSelection::Selected {
+                document: document.clone(),
+            },
+            _ => anyhow::bail!("invalid retained observation identity"),
+        },
+        status => anyhow::bail!("review receipt is not terminal: {status}"),
+    };
+    let receipt = FileImageHydrationReceipt {
+        version: FILE_IMAGE_RECEIPT_VERSION,
+        demand: demand.clone(),
+        selection,
+        detail: field(row, "status_detail")?.into(),
+        processed_at: field(row, "processed_at")?.into(),
+        signer_did: field(row, "outcome_signer_did")?.into(),
+        signature: bs58::decode(field(row, "outcome_signature")?).into_vec()?,
+    };
+    gents::tool_call_lifecycle::VerifiedFileImageReceipt::verify(receipt, demand, verifier).await?;
+    Ok(())
+}

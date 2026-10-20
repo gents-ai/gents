@@ -61,6 +61,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReview,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorReviewPermissions,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
     Goal,
 }
@@ -73,6 +75,7 @@ impl Journey {
             Self::EditorHistory => Some("history"),
             Self::EditorRetry => Some("retry"),
             Self::EditorReview => Some("review"),
+            Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorWorkspace => Some("workspace"),
             _ => None,
         }
@@ -233,6 +236,30 @@ async fn editor_reviews_retained_file_images_without_reading_the_working_copy() 
 }
 
 #[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_retries_recorded_file_review_after_reenrollment() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorReviewPermissions)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-review-permissions-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
 fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
     let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
@@ -272,7 +299,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
-            if matches!(journey, Journey::EditorReview) {
+            if matches!(
+                journey,
+                Journey::EditorReview | Journey::EditorReviewPermissions
+            ) {
                 if let Some(action) = editor_review::reply(request) {
                     return action;
                 }
@@ -1159,7 +1189,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }
-    if matches!(journey, Journey::EditorReview) {
+    if matches!(
+        journey,
+        Journey::EditorReview | Journey::EditorReviewPermissions
+    ) {
         editor_review::prepare(root)?;
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
         ensure!(
@@ -1176,7 +1209,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &host_binary,
             session,
             provider.endpoint(),
-            "review",
+            journey
+                .editor_scenario()
+                .context("recorded review journey")?,
         )
         .await;
         std::fs::write(
@@ -1200,6 +1235,23 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-review-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
+        if matches!(journey, Journey::EditorReviewPermissions) {
+            let permissions = editor_review::verify_permission_recovery(
+                &mut client,
+                &mut id,
+                &access,
+                root,
+                &node_home,
+                &client_did,
+                &evidence,
+                &identity,
+            )
+            .await?;
+            std::fs::write(
+                root.join("editor-review-permissions-canonical.json"),
+                serde_json::to_vec_pretty(&permissions)?,
+            )?;
+        }
     }
     if matches!(journey, Journey::EditorRetry) {
         std::fs::write(
