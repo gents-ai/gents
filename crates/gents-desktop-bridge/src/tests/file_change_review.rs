@@ -60,7 +60,7 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     )
     .await
     .unwrap();
-    assert_eq!(result, Some(expected));
+    assert_eq!(result, Some(expected.clone()));
     let other = seed_job_row(&core, session, "foreign-call", "completed", &progress, None).await;
     seed_admission(&core, session, &other, "foreign-call", 2).await;
     assert!(crate::commands::tool_file_changes(
@@ -94,6 +94,59 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
             Ok(Some(_))
         ));
     }
+    let access = ConfigAccess::local(core.node_arc());
+    let observation = access.execute(&format!(
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
+        escape_graphql_string(&physical),
+    )).await.unwrap();
+    let original = &observation["data"]["ToolFileChange"][0];
+    let mutation = format!(
+        r#"mutation {{ update_ToolFileChange(docID: "{}", input: {{ session_id: "another-session" }}) {{ _docID }} }}"#,
+        escape_graphql_string(original["_docID"].as_str().unwrap()),
+    );
+    assert!(access
+        .write("test.file_review.immutable", &mutation)
+        .await
+        .is_err());
+    assert_eq!(
+        crate::commands::tool_file_changes(
+            &core,
+            OPERATOR.into(),
+            session.into(),
+            request.clone(),
+            physical.clone(),
+        )
+        .await
+        .unwrap(),
+        Some(expected)
+    );
+
+    let mut foreign = original.clone();
+    foreign.as_object_mut().unwrap().remove("_docID");
+    foreign["requester_did"] = serde_json::json!("did:key:another-requester");
+    let variables = serde_json::json!({"input": foreign});
+    access.transact_write("test.file_review.ambiguous", |txn| {
+        let variables = &variables;
+        Box::pin(async move {
+            txn.execute_with_variables(
+                "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+                variables,
+            ).await
+        })
+    }).await.unwrap();
+    let error = crate::commands::tool_file_changes(
+        &core,
+        OPERATOR.into(),
+        session.into(),
+        request,
+        physical,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("ambiguous observations"),
+        "{error:#}"
+    );
     core.shutdown().await.unwrap();
 }
 
@@ -135,14 +188,22 @@ async fn seed_review(
         }],
     };
     let access = ConfigAccess::local(core.node_arc());
-    let mutation = format!(
-        r#"mutation($changes: JSON) {{ update_AgentToolCall(docID: "{}", input: {{ file_changes: $changes }}) {{ _docID }} }}"#,
-        escape_graphql_string(&physical),
-    );
-    let variables = serde_json::json!({"changes": expected});
+    let binding = access
+        .execute(&format!(
+            r#"{{ AgentToolCall(docID: "{}") {{ request_doc_id }} }}"#,
+            escape_graphql_string(&physical),
+        ))
+        .await
+        .unwrap();
+    let mutation = "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }";
+    let variables = serde_json::json!({"input": {
+        "tool_call_doc_id": physical, "request_doc_id": binding["data"]["AgentToolCall"][0]["request_doc_id"],
+        "node_did": OPERATOR, "session_id": session, "requester_did": OPERATOR,
+        "file_changes": expected,
+    }});
     access
         .transact_write("test.file_review.images", |txn| {
-            let (mutation, variables) = (&mutation, &variables);
+            let (mutation, variables) = (mutation, &variables);
             Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
         })
         .await

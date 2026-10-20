@@ -129,15 +129,17 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     call.complete(&output).await.unwrap();
     let row = ConfigAccess::local(admission.node.clone())
         .execute(&format!(
-            "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state file_changes }} }}",
-            escape_graphql_string(&doc_id)
+            "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state }} ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ file_changes }} }}",
+            escape_graphql_string(&doc_id), escape_graphql_string(&doc_id)
         ))
         .await
-        .unwrap()["data"]["AgentToolCall"][0]
-        .clone();
-    assert_eq!(row["lifecycle_state"], "completed");
-    assert_eq!(row["file_changes"]["tool_call_doc_id"], doc_id);
-    let change = &row["file_changes"]["changes"][0];
+        .unwrap()["data"].clone();
+    assert_eq!(row["AgentToolCall"][0]["lifecycle_state"], "completed");
+    assert_eq!(
+        row["ToolFileChange"][0]["file_changes"]["tool_call_doc_id"],
+        doc_id
+    );
+    let change = &row["ToolFileChange"][0]["file_changes"]["changes"][0];
     assert_eq!(change["root"], root_path.to_str().unwrap());
     assert_eq!(change["path"], "file.bin");
     assert_eq!(decoded_image(&change["before"]), [0, 255, 128]);
@@ -154,7 +156,7 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     .unwrap();
     assert_eq!(
         serde_json::to_value(&retained).unwrap(),
-        row["file_changes"]
+        row["ToolFileChange"][0]["file_changes"]
     );
     for (request, node, session, requester) in [
         (
@@ -384,29 +386,26 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
         .to_string()
         .contains("another physical tool"));
     let query = format!(
-        "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state file_changes }} }}",
-        escape_graphql_string(&doc_id)
+        "{{ AgentToolCall(docID: \"{}\") {{ lifecycle_state }} ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: \"{}\" }} }}) {{ file_changes }} }}",
+        escape_graphql_string(&doc_id), escape_graphql_string(&doc_id)
     );
     let access = ConfigAccess::local(admission.node.clone());
-    let row = access.execute(&query).await.unwrap()["data"]["AgentToolCall"][0].clone();
-    assert_eq!(row["lifecycle_state"], "running");
-    assert!(row["file_changes"].is_null());
+    let row = access.execute(&query).await.unwrap()["data"].clone();
+    assert_eq!(row["AgentToolCall"][0]["lifecycle_state"], "running");
+    assert_eq!(row["ToolFileChange"].as_array().unwrap().len(), 0);
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     let mut competing = call.clone();
     call.fail("write failed", FailureClass::ToolReturnedError)
         .await
         .unwrap();
-    let row = access.execute(&query).await.unwrap()["data"]["AgentToolCall"][0].clone();
-    assert_eq!(row["lifecycle_state"], "failed");
-    let change = &row["file_changes"]["changes"][0];
+    let row = access.execute(&query).await.unwrap()["data"].clone();
+    assert_eq!(row["AgentToolCall"][0]["lifecycle_state"], "failed");
+    let change = &row["ToolFileChange"][0]["file_changes"]["changes"][0];
     assert_eq!(decoded_image(&change["before"]), b"original");
     assert_eq!(change["after"]["reason"], "mutationIncomplete");
     std::fs::write(&path, "later user edit").unwrap();
     competing.complete("write failed").await.unwrap();
-    assert_eq!(
-        access.execute(&query).await.unwrap()["data"]["AgentToolCall"][0],
-        row
-    );
+    assert_eq!(access.execute(&query).await.unwrap()["data"], row);
     assert_eq!(std::fs::read(&path).unwrap(), b"later user edit");
     admission.node.shutdown().await;
     std::fs::remove_dir_all(admission.path).unwrap();

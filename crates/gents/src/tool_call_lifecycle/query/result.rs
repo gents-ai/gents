@@ -132,25 +132,33 @@ pub async fn load_tool_call_file_changes(
     if !state.is_terminal() {
         return Ok(None);
     }
-    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-    let response = access.execute(&format!(
-        r#"{{ AgentToolCall(docID: "{}", filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID file_changes }} }}"#,
-        escape_graphql_string(tool_call_doc_id),
-        escape_graphql_string(request_doc_id),
-    )).await?;
-    let rows = response["data"]["AgentToolCall"]
-        .as_array()
-        .context("file change lookup omitted physical tool rows")?;
-    anyhow::ensure!(
-        rows.len() == 1 && rows[0]["_docID"].as_str() == Some(tool_call_doc_id),
-        "file changes lost their physical tool binding"
-    );
-    match rows[0].get("file_changes").filter(|value| !value.is_null()) {
-        Some(value) => {
-            crate::toolset::FileChanges::decode(tool_call_doc_id, value.clone()).map(Some)
-        }
-        None => Ok(None),
+    if access
+        .collection_version(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
     }
+    let response = access.execute(&format!(
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ request_doc_id node_did session_id requester_did file_changes }} }}"#,
+        escape_graphql_string(tool_call_doc_id),
+    )).await?;
+    let rows = response["data"]["ToolFileChange"]
+        .as_array()
+        .context("file change lookup omitted observations")?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    anyhow::ensure!(rows.len() == 1, "file changes have ambiguous observations");
+    let row = &rows[0];
+    anyhow::ensure!(
+        row["request_doc_id"].as_str() == Some(request_doc_id)
+            && row["node_did"].as_str() == Some(node_did)
+            && row["session_id"].as_str() == Some(session_id)
+            && row["requester_did"].as_str() == requester_did,
+        "file changes crossed their physical tool scope"
+    );
+    crate::toolset::FileChanges::decode(tool_call_doc_id, row["file_changes"].clone()).map(Some)
 }
 
 pub async fn load_tool_call_result(

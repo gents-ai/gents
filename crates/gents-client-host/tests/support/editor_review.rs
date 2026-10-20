@@ -99,7 +99,7 @@ pub async fn verify(
         request.requester_did.as_deref() == Some(author),
         "review authority changed"
     );
-    let query = format!("{{ AgentToolCall(filter: {{ request_doc_id: {{_eq: \"{}\"}} }}) {{ _docID lifecycle_state file_changes }} }}",
+    let query = format!("{{ AgentToolCall(filter: {{ request_doc_id: {{_eq: \"{}\"}} }}) {{ _docID lifecycle_state }} }}",
         escape_graphql_string(request.doc_id.as_deref().context("physical review request")?));
     let calls = access.execute(&query).await?;
     let calls = calls["data"]["AgentToolCall"]
@@ -112,6 +112,17 @@ pub async fn verify(
     let physical = calls[0]["_docID"]
         .as_str()
         .context("physical review tool")?;
+    let retained = access.execute(&format!(
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ file_changes }} }}"#,
+        escape_graphql_string(physical),
+    )).await?;
+    let observations = retained["data"]["ToolFileChange"]
+        .as_array()
+        .context("retained file observations")?;
+    ensure!(
+        observations.len() == 1,
+        "review must retain exactly one file observation"
+    );
     let images = client
         .call(
             *id,
@@ -124,7 +135,7 @@ pub async fn verify(
         .await;
     *id += 1;
     ensure!(
-        images == calls[0]["file_changes"],
+        images == observations[0]["file_changes"],
         "client transport changed retained images"
     );
     ensure!(

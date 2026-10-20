@@ -48,23 +48,43 @@ async fn retain_file_changes(
         "file changes belong to another physical tool"
     );
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
-    let mutation = format!(
-        r#"mutation($changes: JSON) {{ update_AgentToolCall(docID: "{}", filter: {{
-        request_doc_id: {{ _eq: "{}" }}, {scope}
-    }}, input: {{ file_changes: $changes }}) {{ _docID }} }}"#,
-        escape_graphql_string(tool_call_doc_id),
-        escape_graphql_string(request_doc_id),
-    );
-    let result = txn
-        .execute_with_variables(&mutation, &serde_json::json!({"changes": changes}))
-        .await?;
+    let binding = txn.execute(&format!(
+        r#"{{ AgentToolCall(docID: "{}", filter: {{ request_doc_id: {{ _eq: "{}" }}, {scope} }}) {{ _docID }} }}"#,
+        escape_graphql_string(tool_call_doc_id), escape_graphql_string(request_doc_id),
+    )).await?;
     anyhow::ensure!(
-        result["data"]["update_AgentToolCall"]
-            .as_array()
-            .is_some_and(
-                |rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(tool_call_doc_id)
-            ),
+        binding["data"]["AgentToolCall"].as_array().is_some_and(
+            |rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(tool_call_doc_id)
+        ),
         "file changes lost their physical tool binding"
+    );
+    let input = serde_json::json!({
+        "tool_call_doc_id": tool_call_doc_id, "request_doc_id": request_doc_id,
+        "node_did": node_did, "session_id": session_id,
+        "requester_did": requester_did, "file_changes": changes,
+    });
+    let existing = txn.execute(&format!(
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
+        escape_graphql_string(tool_call_doc_id),
+    )).await?;
+    let rows = existing["data"]["ToolFileChange"]
+        .as_array()
+        .context("file change lookup omitted observations")?;
+    if !rows.is_empty() {
+        anyhow::ensure!(
+            rows.len() == 1 && rows[0] == input,
+            "file changes conflict with an existing observation"
+        );
+        return Ok(());
+    }
+    let result = txn.execute_with_variables(
+        "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+        &serde_json::json!({"input": input}),
+    ).await?;
+    anyhow::ensure!(
+        crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
+            .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some()),
+        "file change observation was not retained"
     );
     Ok(())
 }
