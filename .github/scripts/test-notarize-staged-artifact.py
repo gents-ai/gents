@@ -57,6 +57,8 @@ case "$1" in
     fi
     echo "Authority=Developer ID Application: Test (NXJ753WW5X)" >&2
     echo "TeamIdentifier=${SHIM_TEAM:-NXJ753WW5X}" >&2
+    echo "Format=${SHIM_FORMAT:-Mach-O thin (arm64)}" >&2
+    echo "CDHash=${SHIM_CDHASH-595a5f783971fe0d9271b8357395d52114f51438}" >&2
     exit 0 ;;
   -d)
     prefix="${2#--extract-certificates=}"
@@ -115,8 +117,10 @@ case "$sub" in
     exit 0 ;;
   log)
     [[ -n "${SHIM_LOG_RC:-}" ]] && { echo "boom" >&2; exit "$SHIM_LOG_RC"; }
-    printf '{"jobId":"%s","status":"%s","sha256":"%s","issues":null}' \
-      "${SHIM_LOG_JOB:-$id}" "${SHIM_STATUS:-Accepted}" "${SHIM_LOG_SHA:-$ARTIFACT_SHA256}" > "${args[${#args[@]}-1]}"
+    tickets='[{"path":"gents","digestAlgorithm":"SHA-256","cdhash":"'"${SHIM_TICKET_CDHASH:-595a5f783971fe0d9271b8357395d52114f51438}"'","arch":"arm64"}]'
+    [[ -n "${SHIM_TICKET_NONE:-}" ]] && tickets='[]'
+    printf '{"jobId":"%s","status":"%s","sha256":"%s","issues":null,"ticketContents":%s}' \
+      "${SHIM_LOG_JOB:-$id}" "${SHIM_STATUS:-Accepted}" "${SHIM_LOG_SHA:-$ARTIFACT_SHA256}" "$tickets" > "${args[${#args[@]}-1]}"
     exit 0 ;;
 esac
 exit 97
@@ -796,6 +800,116 @@ class ResumeTests(Harness):
         self.assertEqual(len(self.called("notarytool submit")), 1)
 
 
+CLI_CDHASH = "595a5f783971fe0d9271b8357395d52114f51438"
+
+
+class CliTests(Harness):
+    CLI = {"ARTIFACT_KIND": "cli", "SHIM_IDENT": "gents", "EXPECTED_CLI_NAME": "gents", "EXPECTED_CLI_IDENTIFIER": "gents"}
+
+    def setUp(self):
+        super().setUp()
+        self.binary = b"\xcf\xfa\xed\xfe fake signed mach-o, never executed\n"
+        src = self.tmp / "clisrc"
+        src.mkdir()
+        (src / "gents").write_bytes(self.binary)
+        (src / "gents").chmod(0o755)
+        zip_path = self.tmp / "cli.zip"
+        subprocess.run(["ditto", "-c", "-k", str(src / "gents"), str(zip_path)], check=True)
+        with zipfile.ZipFile(zip_path) as zf:
+            self.assertEqual(zf.namelist(), ["gents"])  # ditto layout the runbook relies on
+        self.cli_sha = self.stage(zip_path.read_bytes())
+
+    def run_cli(self, sha=None, **overrides):
+        env = dict(self.CLI)
+        env.update(overrides)
+        return self.run_phases(sha=sha or self.cli_sha, **env)
+
+    def test_cli_submit_success_without_stapling(self):
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.called("stapler"), [])
+        self.assertEqual(self.called("spctl"), [])
+        self.assertEqual(len(self.called("notarytool submit")), 1)
+        out = self.run_dir / "out"
+        self.assertEqual((out / "gents").read_bytes(), self.binary)  # byte-for-byte unchanged
+        self.assertEqual(
+            (out / "SHA256SUMS").read_text().split()[0], hashlib.sha256(self.binary).hexdigest()
+        )
+        self.assertIn(f"accepted-{SUBMISSION}.json", self.state_files(self.cli_sha))
+        self.assertIn(CLI_CDHASH, result.stdout)
+        verified = json.loads((self.run_dir / "verified.json").read_text())
+        self.assertEqual(verified["artifact_kind"], "cli")
+        self.assertEqual(verified["cdhash"], CLI_CDHASH)
+
+    def test_cli_ticket_not_covering_cdhash_fails_closed(self):
+        result = self.run_cli(SHIM_TICKET_CDHASH="f" * 40)
+        self.assertEqual(result.returncode, 12)
+        self.assertIn("does not cover", result.stderr)
+        self.assertFalse((self.run_dir / "out" / "gents").exists())
+
+    def test_cli_missing_ticket_contents_fails_closed(self):
+        result = self.run_cli(SHIM_TICKET_NONE="1")
+        self.assertEqual(result.returncode, 12)
+        self.assertFalse((self.run_dir / "out" / "gents").exists())
+
+    def test_cli_resume_never_submits(self):
+        result = self.run_cli(mode="resume", submission_id=SUBMISSION)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.called("notarytool submit"), [])
+
+    def test_cli_signature_failures_before_credentials(self):
+        for override in (
+            {"SHIM_IDENT": "com.source-inc.gents"},
+            {"SHIM_FORMAT": "app bundle with Mach-O thin (arm64)"},
+            {"SHIM_CDHASH": ""},
+            {"SHIM_CDHASH": "XYZ"},
+            {"SHIM_TEAM": "OTHERTEAM1"},
+            {"SHIM_NO_RUNTIME": "1"},
+        ):
+            with self.subTest(override=override):
+                result = self.run_cli(**override)
+                self.assertEqual(result.returncode, 5, result.stderr)
+                self.assertEqual(result.phase, "verify")
+        self.assert_no_credentials_used()
+
+    def assert_cli_rejected(self, build):
+        sha = self.stage_zip(build)
+        result = self.run_cli(sha=sha)
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assert_no_credentials_used()
+
+    def test_cli_archive_two_entries(self):
+        self.assert_cli_rejected(lambda zf: (_zip_entry(zf, "gents", b"x"), _zip_entry(zf, "extra", b"y")))
+
+    def test_cli_archive_wrong_name(self):
+        self.assert_cli_rejected(lambda zf: _zip_entry(zf, "other", b"x"))
+
+    def test_cli_archive_nested_path(self):
+        self.assert_cli_rejected(lambda zf: _zip_entry(zf, "dir/gents", b"x"))
+
+    def test_cli_archive_symlink(self):
+        self.assert_cli_rejected(lambda zf: _zip_entry(zf, "gents", b"/bin/sh", mode=0o120755))
+
+    def test_cli_archive_directory(self):
+        self.assert_cli_rejected(lambda zf: _zip_entry(zf, "gents/", mode=0o040755))
+
+    def test_app_zip_rejected_as_cli(self):
+        result = self.run_phases(**self.CLI)  # the default .app fixture
+        self.assertEqual(result.returncode, 4)
+        self.assert_no_credentials_used()
+
+    def test_invalid_kind(self):
+        self.assertEqual(self.run_cli(ARTIFACT_KIND="dmg").returncode, 2)
+
+    def test_kind_mismatch_between_phases(self):
+        self.assertEqual(self.run_cli(phases=("verify",)).returncode, 0)
+        self.run_counter -= 1  # same run directory, as later steps of one run
+        env_app = dict(self.CLI, ARTIFACT_KIND="app")
+        result = self.run_phases(sha=self.cli_sha, phases=("submit",), **env_app)
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(self.called("notarytool"), [])
+
+
 class WorkflowStaticTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -815,7 +929,16 @@ class WorkflowStaticTests(unittest.TestCase):
 
     def test_dispatch_only_with_expected_inputs(self):
         self.assertEqual(list(self.on.keys()), ["workflow_dispatch"])
-        self.assertEqual(set(self.on["workflow_dispatch"]["inputs"]), {"artifact_sha256", "mode", "submission_id"})
+        inputs = self.on["workflow_dispatch"]["inputs"]
+        self.assertEqual(set(inputs), {"artifact_sha256", "artifact_kind", "mode", "submission_id"})
+        self.assertEqual(inputs["artifact_kind"]["options"], ["app", "cli"])
+        self.assertEqual(inputs["artifact_kind"]["default"], "app")
+
+    def test_artifact_kind_passed_to_every_phase(self):
+        for step_id in ("verify", "submit", "complete"):
+            self.assertEqual(self.step(step_id)["env"]["ARTIFACT_KIND"], "${{ inputs.artifact_kind }}")
+        self.assertEqual(self.wf["env"]["EXPECTED_CLI_NAME"], "gents")
+        self.assertEqual(self.wf["env"]["EXPECTED_CLI_IDENTIFIER"], "gents")
 
     def test_permissions_minimal(self):
         self.assertEqual(self.wf["permissions"], {"contents": "read"})

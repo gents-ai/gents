@@ -139,6 +139,32 @@ def tree_check(extract_dir, root):
                     raise Refused("extracted symlink escapes the app root")
 
 
+def zip_inspect_cli(path, name):
+    """A CLI archive must hold exactly one regular file named `name`."""
+    if not name or "/" in name or name in (".", ".."):
+        raise Refused("expected CLI name is invalid")
+    with zipfile.ZipFile(path) as archive:
+        infos = archive.infolist()
+        if len(infos) != 1:
+            raise Refused("CLI archive must contain exactly one entry")
+        info = infos[0]
+        if info.filename != name:
+            raise Refused("CLI archive entry has an unexpected name")
+        if stat.S_IFMT(info.external_attr >> 16) != stat.S_IFREG:
+            raise Refused("CLI archive entry is not a regular file")
+        if info.file_size <= 0 or info.file_size > MAX_TOTAL_BYTES:
+            raise Refused("CLI archive entry has an invalid size")
+    print(name)
+
+
+def tree_check_cli(extract_dir, name):
+    if sorted(os.listdir(extract_dir)) != [name]:
+        raise Refused("extraction produced unexpected top-level entries")
+    mode = os.lstat(os.path.join(extract_dir, name)).st_mode
+    if not stat.S_ISREG(mode):
+        raise Refused("extracted CLI is not a regular file")
+
+
 # ----------------------------------------------------------- notary JSON
 def history_matches(path, name):
     """Strict history parse; print `id status createdDate` for name matches."""
@@ -204,6 +230,28 @@ def log_check(path, expected_id, expected_sha256):
         print(len(issues))
     else:
         raise Refused("log issues field malformed")
+
+
+CDHASH_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def log_ticket_check(path, cdhash):
+    """Require Apple's log ticketContents to cover this exact code directory."""
+    cdhash = cdhash.lower()
+    if not CDHASH_RE.match(cdhash):
+        raise Refused("expected cdhash is malformed")
+    data = _load(path)
+    tickets = data.get("ticketContents") if isinstance(data, dict) else None
+    if not isinstance(tickets, list) or not tickets:
+        raise Refused("log has no ticketContents")
+    for entry in tickets:
+        if not isinstance(entry, dict):
+            raise Refused("log ticketContents entry is not an object")
+        value = entry.get("cdhash")
+        if isinstance(value, str) and value.lower() == cdhash:
+            print(cdhash)
+            return
+    raise Refused("log ticketContents does not cover the verified cdhash")
 
 
 def json_field(path, field):
@@ -342,6 +390,9 @@ def print_safe(value):
 COMMANDS = {
     "zip-inspect": (zip_inspect, 1),
     "tree-check": (tree_check, 2),
+    "zip-inspect-cli": (zip_inspect_cli, 2),
+    "tree-check-cli": (tree_check_cli, 2),
+    "log-ticket-check": (log_ticket_check, 2),
     "history-matches": (history_matches, 2),
     "submit-id": (submit_id, 1),
     "info-check": (info_check, 3),

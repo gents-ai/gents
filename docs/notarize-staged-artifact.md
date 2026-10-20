@@ -102,6 +102,34 @@ The workflow runs as one job with these steps, in order:
    `${RUNNER_TEMP}/notarize-<run_id>-<attempt>`, unique per attempt; verify
    refuses to reuse one.
 
+## Bare executables (`artifact_kind=cli`)
+
+Use `artifact_kind=cli` for a Developer-ID-signed command-line executable.
+The default is `app`. The app path is unchanged by this option.
+
+- **Staging.** Zip the single binary with `ditto -c -k gents gents.zip`; the
+  archive must contain exactly one entry, named `gents`.
+- **Archive checks.** The single entry must be a regular file named `gents`.
+  Directories, symlinks, extra entries and nested paths are rejected.
+- **Signature checks.** Strict `codesign`, identifier `gents`,
+  TeamIdentifier `NXJ753WW5X`, the hardened runtime, the pinned leaf
+  certificate, and `Format=Mach-O`. The verify step records the executable's
+  SHA-256 and its CDHash.
+- **Stapling.** Bare executables cannot carry a stapled ticket. Instead,
+  `complete` requires everything the app path requires (Accepted, Apple's log
+  binding the job id and the full archive SHA-256), and in addition requires
+  the log's `ticketContents` to contain the verified CDHash. It fails closed
+  if `ticketContents` is missing or does not match. It then re-verifies the
+  signature and the executable's SHA-256 and copies the executable
+  **byte-for-byte unchanged** to the output, with its own `SHA256SUMS`.
+- **Gatekeeper.** Gatekeeper fetches the ticket online the first time a
+  quarantined copy runs. Offline first launches of quarantined copies cannot
+  be validated.
+- **Pinning the executable.** The staged zip's SHA-256 depends on the zip's
+  timestamps. The executable's SHA-256 is the stable identity, so compare the
+  printed executable SHA-256 and the output `SHA256SUMS` against the build
+  receipt before publishing.
+
 ## Data handling
 
 - **Credentials** live only in the submit and complete steps. Each step
@@ -224,5 +252,4 @@ What this guarantees, and what it does not:
 - A raw `.zip` cannot be stapled. The stapled `.app` is re-zipped, so the
   output zip's SHA-256 differs from the input's.
 - No DMG handling.
-- No bare-binary (CLI) notarization.
 - No publishing.
