@@ -12,7 +12,7 @@ async fn generated_request_closures_use_exact_database_dependencies() {
     let contract = gents_lean_contract::load_contract_snapshot::<Value>()
         .expect("executed Lean request closure contract");
     let cases = contract["client_request_closure_cases"].as_array().unwrap();
-    let node = Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::client::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();
@@ -173,7 +173,7 @@ async fn independent_scopes_share_bounded_query_batches() {
 
 #[tokio::test]
 async fn partial_twin_seed_keeps_the_full_projection_order() {
-    let node = Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::client::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();

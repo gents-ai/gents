@@ -441,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn reopening_completed_request_reads_only_its_prompt_and_active_reads_stay_request_scoped(
     ) {
-        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
@@ -769,7 +769,7 @@ mod tests {
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();

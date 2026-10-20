@@ -4,7 +4,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[tokio::test]
 async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_without_history() {
-    let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::client::schema::ensure_runtime_schemas(&node)
         .await
         .unwrap();

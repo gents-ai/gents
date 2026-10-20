@@ -5,3 +5,15 @@ pub mod inference;
 pub mod local_runtime;
 pub mod preference;
 pub mod remote_admin;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    pub(crate) fn node_builder() -> defra_node::NodeBuilder {
+        use gents::NodeIdentity as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let identity =
+            gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+    }
+}
