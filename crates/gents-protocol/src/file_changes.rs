@@ -1,0 +1,59 @@
+use serde::{Deserialize, Serialize};
+
+/// Retention is bounded independently of the bytes a native mutator may edit.
+/// An unavailable image prevents restoration without preventing the mutation.
+pub const MAX_FILE_IMAGE_BYTES: u64 = 1024 * 1024;
+pub const FILE_CHANGES_VERSION: u32 = 1;
+
+/// Host observations on an accepted physical tool document, committed beside
+/// its winning terminal. Retained bytes are never provider-facing tool output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolFileChanges {
+    pub version: u32,
+    pub tool_call_doc_id: String,
+    pub changes: Vec<FileChangeImages>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileChangeImages {
+    /// Resolved tool root at mutation time. Placement and request-resource
+    /// checks remain with their existing owners; this path is an observation.
+    pub root: String,
+    pub path: String,
+    pub before: FileImage,
+    pub after: FileImage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum FileImage {
+    Missing,
+    File {
+        content_hash: String,
+        data: String,
+        permissions: FilePermissions,
+        links: Option<u64>,
+    },
+    Unavailable {
+        reason: ImageFailure,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImageFailure {
+    ReadFailed,
+    ChangedDuringRead,
+    TooLarge,
+    UnsupportedEntry,
+    MutationIncomplete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilePermissions {
+    pub readonly: bool,
+    pub unix_mode: Option<u32>,
+}
