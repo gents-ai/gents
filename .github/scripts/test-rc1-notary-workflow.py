@@ -11,6 +11,9 @@ this is a static analysis of the committed YAML plus the helper script.
 from __future__ import annotations
 
 import re
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -168,17 +171,35 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertNotIn("submission-attempt.json", self.raw)
         self.assertNotIn("receipts", self.raw)
 
-    def test_self_test_step_runs_the_auth_and_workflow_suites(self):
+    def test_runtime_runs_only_stdlib_auth_suite(self):
         guard = self.wf["jobs"]["repository-guard"]["steps"]
         test_steps = [s for s in guard
                       if "test-rc1-notary-auth.py" in (s.get("run") or "")]
         self.assertEqual(len(test_steps), 1,
                          "guard job must run the auth helper behavioral suite")
         run = test_steps[0]["run"]
-        self.assertIn("test-rc1-notary-workflow.py", run)
+        self.assertNotIn("test-rc1-notary-workflow.py", run)
         self.assertNotIn("test-rc1-notary-verify.py", run,
                          "removed verify suite must no longer be referenced")
         self.assertNotIn("rc1-notary-verify.py", run)
+
+    def test_preflight_without_development_tools(self):
+        steps = self.wf["jobs"]["repository-guard"]["steps"]
+        run = next(s["run"] for s in steps if s.get("name", "").startswith("Preflight control"))
+        with tempfile.TemporaryDirectory() as directory:
+            # Only required command lookup entries; no ShellCheck, jq or PyYAML.
+            os.symlink("/bin/sh", Path(directory) / "sh")
+            python = Path(directory) / "python3"
+            python.write_text("#!/bin/sh\nexit 91\n")  # must not import YAML
+            python.chmod(0o700)
+            result = subprocess.run(["/bin/bash", "-c", run], cwd=WORKFLOW.parents[2],
+                                    env={"PATH": directory}, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            python.unlink()
+            missing = subprocess.run(["/bin/bash", "-c", run], cwd=WORKFLOW.parents[2],
+                                     env={"PATH": directory}, capture_output=True, text=True)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("python3", missing.stdout)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,6 @@
 name: RC1 existing-artifact notary auth (CI control)
 
-# Auth-only control-plane workflow for the fixed RC1 candidate from
-# gents-ai/gents build run 39302246819 at application source SHA
-# 08edd1bdfedca73fa28e648e4781ae03aeacf5e6. It performs exactly one thing: a
+# Candidate-independent authentication control plane. Performs a
 # read-only `xcrun notarytool history` probe proving the App Store Connect
 # notary credential path works. There is deliberately NO submission, NO
 # stapling, NO release/tag write, NO product build, and NO artifact download
@@ -26,8 +24,6 @@ defaults:
 
 env:
   GENTS_REPO: gents-ai/gents
-  GENTS_SOURCE_SHA: 08edd1bdfedca73fa28e648e4781ae03aeacf5e6
-  GENTS_BUILD_RUN_ID: "39302246819"
 
 jobs:
   repository-guard:
@@ -105,20 +101,18 @@ jobs:
           # Fail fast (before any Apple/notary contact is possible) if the
           # control-plane tools this auth-only workflow depends on are
           # missing from the runner image.
-          for tool in shellcheck python3; do
+          for tool in sh python3; do
             command -v "${tool}" >/dev/null 2>&1 \
               || { echo "::error::required control tool '${tool}' not found on runner"; exit 1; }
           done
-          python3 -c 'import yaml' 2>/dev/null \
-            || { echo "::error::python3 PyYAML module not available (workflow tests require it)"; exit 1; }
-          shellcheck -s sh .github/scripts/rc1-notary-auth.sh
+          # ShellCheck and YAML structure checks are review-time checks,
+          # not runtime dependencies of this credential probe.
           sh -n .github/scripts/rc1-notary-auth.sh
 
       - name: Run notary control self-tests
         run: |
           set -euo pipefail
           python3 .github/scripts/test-rc1-notary-auth.py
-          python3 .github/scripts/test-rc1-notary-workflow.py
 
   notary-auth-preflight:
     name: Notary auth-only preflight (history)
