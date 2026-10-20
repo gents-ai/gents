@@ -515,7 +515,9 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         },
     )
     .await;
+    const WAKE_INPUT_MARKER: &str = "Review the background execution results above.";
     prepared.backend.enable_dynamic_followups("continue");
+    prepared.backend.enable_dynamic_followups(WAKE_INPUT_MARKER);
     configure_agent_tools(
         &db.node,
         db.node_identity.did(),
@@ -594,7 +596,8 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                     .await
                     .iter()
                     .any(|message| message.message_key.starts_with("background-completion-notification:"))
-                && runtime.backend.observed_requests("continue") >= 3
+                && runtime.backend.observed_requests("continue") == 2
+                && runtime.backend.observed_requests(WAKE_INPUT_MARKER) == 1
                 && background_wake_retry_rows(&db.node, session_id)
                     .await
                     .iter()
