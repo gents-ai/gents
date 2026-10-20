@@ -5,9 +5,9 @@ use sha2::{Digest, Sha256};
 use crate::enrollment::canonical_domain_payload;
 use crate::session_hydration::HydrationRequest;
 
-pub const FILE_IMAGE_RECEIPT_VERSION: u8 = 1;
+pub const FILE_IMAGE_RECEIPT_VERSION: u8 = 2;
 const KEY_DOMAIN: &str = "gents-file-image-demand-v1";
-const RECEIPT_DOMAIN: &str = "gents-file-image-receipt-v1";
+const RECEIPT_DOMAIN: &str = "gents-file-image-receipt-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +68,8 @@ impl FileImageDemand {
 
 /// The node signs the complete demand and exact observation selection. An
 /// acknowledged absence is distinct from an unverified or undelivered image.
+/// Version 2 authorizes the named requester to install a local reader relation
+/// on the exact selected observation, under the signer's existing ownership.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileImageHydrationReceipt {

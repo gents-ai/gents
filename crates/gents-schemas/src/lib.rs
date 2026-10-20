@@ -35,6 +35,11 @@ pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
 pub const TOOL_FILE_CHANGE_NAME: &str = "ToolFileChange";
 pub const TOOL_FILE_CHANGE: &str = include_str!("../schemas/agent/tool_file_change.graphql");
+pub const TOOL_FILE_CHANGE_POLICY: &str =
+    include_str!("../schemas/agent/tool_file_change_policy.yaml");
+pub const TOOL_FILE_CHANGE_POLICY_ID: &str =
+    "2e14bb0746cf90a5e955db6b9bb5d9098f6aa0776849c8bcb68db4dd1e67ea82";
+pub const TOOL_FILE_CHANGE_POLICY_RESOURCE: &str = "file_images";
 pub const AGENT_OUTPUT_SEGMENT_NAME: &str = "AgentOutputSegment";
 pub const AGENT_OUTPUT_SEGMENT: &str =
     include_str!("../schemas/agent/agent_output_segment.graphql");

@@ -1,0 +1,11 @@
+name: Gents retained file images
+resources:
+  - name: file_images
+    relations:
+      - name: reader
+        types: [actor]
+    permissions:
+      - name: read
+        expr: reader
+      - name: update
+      - name: delete

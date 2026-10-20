@@ -46,7 +46,7 @@ fn receipt_payload_binds_every_reference_and_outcome_field() {
     ] {
         let mut changed = value.clone();
         *changed.pointer_mut(path).unwrap() = if path == "/version" {
-            serde_json::json!(2)
+            serde_json::json!(FILE_IMAGE_RECEIPT_VERSION + 1)
         } else {
             serde_json::json!("changed")
         };
@@ -71,6 +71,9 @@ fn receipt_payload_binds_every_reference_and_outcome_field() {
 fn malformed_receipts_are_not_valid_terminal_observations() {
     let original = receipt();
     let mut invalid = Vec::new();
+    let mut changed = original.clone();
+    changed.version = 1;
+    invalid.push(changed);
     let mut changed = original.clone();
     changed.signer_did = "other-node".into();
     invalid.push(changed);
