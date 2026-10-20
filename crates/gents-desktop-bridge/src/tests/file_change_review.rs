@@ -6,16 +6,17 @@ use gents_protocol::file_changes::{
 };
 use gents_protocol::job::{JobBudget, JobProgress, JobState};
 
-use super::operations_job_control::seed_admission;
-use super::support::{boot_core, create_session, seed_job_row, OPERATOR};
+use super::operations_job_control::seed_admission_for_node;
+use super::support::{create_session, seed_job_row_for_node, OPERATOR};
 
 #[tokio::test]
 async fn file_change_review_reads_the_bound_request_without_touching_a_local_checkout() {
-    let (core, _dir) = boot_core().await;
+    let (core, _dir) = boot_review_core().await;
+    let node = core.node_identity().did().to_owned();
     let session = "file-review-session";
     let call = "file-review-call";
     let request = format!("req-{call}");
-    create_session(&core, OPERATOR, session, None).await;
+    create_session(&core, &node, session, None).await;
     let (physical, expected) = seed_review(
         &core,
         session,
@@ -53,42 +54,68 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     };
     let result = crate::commands::tool_file_changes(
         &core,
-        OPERATOR.into(),
+        node.clone(),
         session.into(),
         request.clone(),
         physical.clone(),
+        None,
     )
     .await
     .unwrap();
     assert_eq!(result, Some(expected.clone()));
-    let other = seed_job_row(&core, session, "foreign-call", "completed", &progress, None).await;
-    seed_admission(&core, session, &other, "foreign-call", 2).await;
     assert!(crate::commands::tool_file_changes(
         &core,
-        OPERATOR.into(),
-        session.into(),
-        "req-foreign-call".into(),
-        physical.clone()
-    )
-    .await
-    .is_err());
-    assert!(crate::commands::tool_file_changes(
-        &core,
-        OPERATOR.into(),
+        node.clone(),
         session.into(),
         request.clone(),
-        call.into()
+        physical.clone(),
+        Some("not-a-uuid".into()),
     )
     .await
     .is_err());
-    for (node, other_session) in [("foreign-node", session), (OPERATOR, "foreign-session")] {
+    let other = seed_job_row_for_node(
+        &core,
+        &node,
+        session,
+        "foreign-call",
+        "completed",
+        &progress,
+        None,
+    )
+    .await;
+    seed_admission_for_node(&core, &node, session, &other, "foreign-call", 2).await;
+    assert!(crate::commands::tool_file_changes(
+        &core,
+        node.clone(),
+        session.into(),
+        "req-foreign-call".into(),
+        physical.clone(),
+        None,
+    )
+    .await
+    .is_err());
+    assert!(crate::commands::tool_file_changes(
+        &core,
+        node.clone(),
+        session.into(),
+        request.clone(),
+        call.into(),
+        None,
+    )
+    .await
+    .is_err());
+    for (target, other_session) in [
+        ("foreign-node", session),
+        (node.as_str(), "foreign-session"),
+    ] {
         assert!(!matches!(
             crate::commands::tool_file_changes(
                 &core,
-                node.into(),
+                target.into(),
                 other_session.into(),
                 request.clone(),
-                physical.clone()
+                physical.clone(),
+                None,
             )
             .await,
             Ok(Some(_))
@@ -111,10 +138,11 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     assert_eq!(
         crate::commands::tool_file_changes(
             &core,
-            OPERATOR.into(),
+            node.clone(),
             session.into(),
             request.clone(),
             physical.clone(),
+            None,
         )
         .await
         .unwrap(),
@@ -136,10 +164,11 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     }).await.unwrap();
     let error = crate::commands::tool_file_changes(
         &core,
-        OPERATOR.into(),
+        node.clone(),
         session.into(),
         request,
         physical,
+        None,
     )
     .await
     .unwrap_err();
@@ -175,8 +204,10 @@ async fn seed_review(
         observed_terminal_children: 0,
         revision: 1,
     };
-    let physical = seed_job_row(core, session, call, "completed", &progress, None).await;
-    seed_admission(core, session, &physical, call, 1).await;
+    let node = core.node_identity().did();
+    let physical =
+        seed_job_row_for_node(core, node, session, call, "completed", &progress, None).await;
+    seed_admission_for_node(core, node, session, &physical, call, 1).await;
     let expected = ToolFileChanges {
         version: FILE_CHANGES_VERSION,
         tool_call_doc_id: physical.clone(),
@@ -198,7 +229,7 @@ async fn seed_review(
     let mutation = "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }";
     let variables = serde_json::json!({"input": {
         "tool_call_doc_id": physical, "request_doc_id": binding["data"]["AgentToolCall"][0]["request_doc_id"],
-        "node_did": OPERATOR, "session_id": session, "requester_did": OPERATOR,
+        "node_did": node, "session_id": session, "requester_did": OPERATOR,
         "file_changes": expected,
     }});
     access
@@ -219,10 +250,11 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
     use std::{sync::Arc, time::Duration};
     use tokio_util::{codec::LengthDelimitedCodec, sync::CancellationToken};
 
-    let (core, _dir) = boot_core().await;
+    let (core, _dir) = boot_review_core().await;
+    let node = core.node_identity().did().to_owned();
     let session = "file-review-maximum";
     let call = "maximum-file-call";
-    create_session(&core, OPERATOR, session, None).await;
+    create_session(&core, &node, session, None).await;
     let image = |triplet: &str, tail: &str, hash: &str| FileImage::File {
         content_hash: format!("sha256:{hash}"),
         data: triplet.repeat(MAX_FILE_IMAGE_BYTES as usize / 3) + tail,
@@ -273,8 +305,9 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
             serde_json::to_vec(&serde_json::json!({
                 "kind": "call", "id": 1, "command": {
                     "name": "desktop_tool_file_changes", "args": {
-                        "nodeDid": OPERATOR, "sessionId": session,
+                        "nodeDid": node, "sessionId": session,
                         "requestId": format!("req-{call}"), "toolCallDocId": physical,
+                        "retryId": "59761a54-a2e2-4bb1-9a08-ec0df44fd4c1",
                     },
                 },
             }))
@@ -287,6 +320,7 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
             let frame = client.next().await.unwrap().unwrap();
             let response: serde_json::Value = serde_json::from_slice(&frame).unwrap();
             if response["kind"] == "response" {
+                assert!(response["error"].is_null(), "{response}");
                 assert!(frame.len() > MAX_FILE_IMAGE_BYTES as usize * 2);
                 break response;
             }
@@ -304,4 +338,45 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
     drop(client);
     task.await.unwrap().unwrap();
     core.shutdown().await.unwrap();
+}
+
+async fn boot_review_core() -> (
+    std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    tempfile::TempDir,
+) {
+    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+    let directory = tempfile::tempdir().unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let core = std::sync::Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(directory.path().join("client")),
+            ClientCoreOptions {
+                http_addr: Some(address),
+                ..ClientCoreOptions::local_simulated_route()
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    let endpoint = format!("http://{address}/api/v0/graphql");
+    let runtime_home = directory.path().join("runtime");
+    std::fs::create_dir(&runtime_home).unwrap();
+    std::fs::write(runtime_home.join("runtime.json"), serde_json::to_vec(&serde_json::json!({
+        "node_name": "file-review-fixture", "node_did": core.node_identity().did(), "graphql": endpoint,
+    })).unwrap()).unwrap();
+    core.add_local_standard_peer_route_for_test(
+        "File review fixture",
+        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+        core.node_identity().did(),
+        &endpoint,
+        runtime_home.to_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(core
+        .operator_observation_graphql(core.node_identity().did())
+        .is_some());
+    (core, directory)
 }

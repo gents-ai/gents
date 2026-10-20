@@ -61,6 +61,17 @@ pub(super) async fn seed_admission(
     call: &str,
     sequence: u32,
 ) {
+    seed_admission_for_node(core, OPERATOR, session_id, row_doc_id, call, sequence).await;
+}
+
+pub(super) async fn seed_admission_for_node(
+    core: &Arc<ClientCore>,
+    node_did: &str,
+    session_id: &str,
+    row_doc_id: &str,
+    call: &str,
+    sequence: u32,
+) {
     let access = ConfigAccess::local(core.node_arc());
     let read = format!(
         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
@@ -96,7 +107,7 @@ pub(super) async fn seed_admission(
     let generation = format!("cli-job-fixture:{request_doc_id}");
     let created_at = "2026-06-01T10:00:00Z";
     let segment = OutputSegment {
-        node_did: OPERATOR.into(),
+        node_did: node_did.into(),
         requester_did: Some(OPERATOR.into()),
         session_id: session_id.into(),
         request_doc_id: request_doc_id.clone(),
@@ -149,13 +160,13 @@ pub(super) async fn seed_admission(
             .expect("segment doc id");
     let message = TranscriptMessage {
         message_key: gents::session::sequence_message_key(
-            OPERATOR,
+            node_did,
             session_id,
             Some(OPERATOR),
             sequence,
         ),
         session_id: session_id.into(),
-        node_did: OPERATOR.into(),
+        node_did: node_did.into(),
         requester_did: Some(OPERATOR.into()),
         request_doc_id: Some(request_doc_id),
         publication: MessagePublication::RequestExecution {
