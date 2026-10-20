@@ -36,6 +36,7 @@ import { fleetNodes } from "./ui/lib/scope";
 import { useFollowRoute } from "./ui/hooks/useFollowRoute";
 import { defaultAgentOf } from "./ui/lib/agents";
 import { isLocalNode, nodeSetUp } from "./ui/lib/firstRun";
+import { useUxHost } from "./ui/hooks/useUxHost";
 import { useHistoryInputs } from "./ui/lib/history-inputs";
 import {
   bindNav,
@@ -49,6 +50,7 @@ import { useSwipeNav } from "./ui/lib/swipe-nav";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
 import { AgentsScreen } from "./ui/screens/AgentsScreen";
 import { MailboxScreen } from "./ui/screens/MailboxScreen";
+import { PluginPageScreen } from "./ui/screens/PluginPageScreen";
 import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { SessionScreen } from "./ui/screens/SessionScreen";
 import { SessionsScreen } from "./ui/screens/SessionsScreen";
@@ -111,6 +113,8 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
   useMobileVisualViewport();
   usePlatformSetup();
   useManagedServerTrayControls(app);
+  /* the UX plugin host and its doors: reads the stores, re-renders nothing */
+  useUxHost(app, bridge.listenToUpdates);
   return null;
 }
 
@@ -224,6 +228,8 @@ function RouteScreen({ route }: { route: Route }) {
           item={route.item}
         />
       );
+    case "plugin":
+      return <PluginPageScreen pluginId={route.pluginId} />;
   }
 }
 

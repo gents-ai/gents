@@ -1,0 +1,17 @@
+{
+  "manifest_version": 1,
+  "name": "board_docs",
+  "version": "0.1.0",
+  "description": "The board's documents: a BoardTask and a BoardMove collection, and the `board` surface whose four tools are the only way a page or a model reads and writes them.",
+  "namespace": "examples",
+  "authors": ["gents"],
+  "tags": ["example", "ux", "board"],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "schemas/board.graphql"
+  ],
+  "config": "pack_config.json",
+  "schemas": ["schemas/board.graphql"]
+}

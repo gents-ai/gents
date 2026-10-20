@@ -24,6 +24,13 @@ fn store_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
     Ok(store_dir(home).join(format!("{digest_hex}.afb")))
 }
 
+/// Where the bytes of an installed plugin live, for a caller that names
+/// the artifact to the desktop (a ux plugin produced by it) without
+/// reading it here.
+pub fn artifact_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
+    store_path(home, digest_hex)
+}
+
 fn checked_component(kind: &str, value: &str) -> Result<()> {
     anyhow::ensure!(
         !value.is_empty()

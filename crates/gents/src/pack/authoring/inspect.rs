@@ -133,6 +133,7 @@ mod tests {
                 namespace: "acme".into(),
                 template: Some(super::super::template::Template::Minimal),
                 language: None,
+                ux: false,
             },
         )
         .unwrap();

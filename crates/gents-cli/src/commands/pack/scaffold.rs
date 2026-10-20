@@ -69,6 +69,7 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
             template,
             kind: shared_kind(args.kind),
             language: args.language.clone(),
+            ux: args.ux,
         },
     )?;
     let template = match report.template {
@@ -110,6 +111,7 @@ mod tests {
             namespace: "acme".into(),
             template: Some(template),
             language: None,
+            ux: false,
         }
     }
 

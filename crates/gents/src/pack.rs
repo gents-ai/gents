@@ -18,8 +18,8 @@ mod provenance;
 #[cfg(test)]
 mod publication_contract_tests;
 pub use home_install::{
-    forget_home_install, list_home_installs, read_home_install, record_after_install,
-    write_home_install, HomePackInstall, InstalledVia,
+    forget_home_install, list_home_installs, list_readable_home_installs, read_home_install,
+    record_after_install, write_home_install, HomePackInstall, InstalledVia,
 };
 pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
@@ -76,6 +76,13 @@ pub struct PackMetadata {
     pub inference_slots: Vec<PackInferenceSlot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PackPlugin>,
+    /// The UX plugins this pack ships: modules the desktop webview loads,
+    /// each a nav row, a page, a header action or a transcript directive.
+    /// A UX plugin is an asset, never a document: it writes nothing to the
+    /// agent's store and runs with the webview's authority, gated by what
+    /// it declares here (see [`PackUxPlugin`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ux: Vec<PackUxPlugin>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +278,228 @@ pub struct PluginLimits {
 }
 
 pub const MAX_TOOL_INSTRUCTIONS_BYTES: usize = 64 * 1024;
+
+/// Where a UX plugin's files must live inside a pack, by convention
+/// (`ux/<name>/plugin.js`). Checked in [`PackUxPlugin::validate`].
+pub const UX_PLUGIN_PREFIX: &str = "ux/";
+
+/// The desktop surfaces a UX plugin may contribute to. Mirrors
+/// `KNOWN_AREAS` in the desktop's `contrib/types.ts`; a manifest naming an
+/// area outside this list is refused at the pack rather than at load.
+pub const UX_PLUGIN_AREAS: &[&str] = &[
+    "nav",
+    "agent.sections",
+    "session.header.actions",
+    "transcript.directives",
+    "plugin.pages",
+];
+
+/// One UX plugin a pack ships: a module the desktop webview evaluates.
+///
+/// Exactly one of `entry` (a file in the pack, under `ux/`) or `plugin`
+/// (the name of one of this pack's `.afb` plugins, whose stdout for the
+/// input `{"role":"ux"}` is `{"module":"<esm>","css":"<optional>"}`)
+/// produces the module. Whichever produced it, the module passes the same
+/// gate: an import allowlist and the declared-contributions check.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackUxPlugin {
+    /// Unique within the pack; the desktop shows it as `<ns>/<pack>/<name>`.
+    pub name: String,
+    /// What it adds, in the words the UX Plugins panel shows.
+    pub description: String,
+    /// A plain ESM file (no build) or a prebuilt bundle, under `ux/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    /// An optional stylesheet installed beside the module, under `ux/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub css: Option<String>,
+    /// One of this pack's `plugins[]` whose run produces the module.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    /// What the plugin may register; the desktop refuses anything else.
+    pub contributes: UxContributions,
+    /// Whether it registers on install when the user has not chosen.
+    /// Absent means yes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_enabled: Option<bool>,
+    /// The datastore tools its pages may run, by surface: the host refuses
+    /// any (surface, tool) pair not named here (`crate::ux_data`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data: Vec<UxDataSurface>,
+}
+
+/// One `DatastoreToolSurface` a UX plugin's pages may call into, by the
+/// surface's id on the agent's node, narrowed to the named tools.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UxDataSurface {
+    pub surface: String,
+    pub tools: Vec<String>,
+}
+
+/// Longest surface id a manifest may name.
+pub const MAX_UX_DATA_SURFACE_ID_LEN: usize = 128;
+
+/// A tool name a manifest may name: `[a-z][a-z0-9_]{0,63}`, the shape a
+/// `DatastoreToolSurface` entry's `tool_name` takes.
+pub fn is_valid_ux_data_tool_name(name: &str) -> bool {
+    name.len() <= 64 && is_valid_pack_name(name)
+}
+
+/// What a UX plugin declares it contributes: the gate the desktop's
+/// plugin context enforces on every `register` call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct UxContributions {
+    /// Area ids, each one of [`UX_PLUGIN_AREAS`].
+    #[serde(default)]
+    pub areas: Vec<String>,
+    /// Transcript directive names the plugin may claim (`::name{...}`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directives: Vec<String>,
+}
+
+/// A directive name a manifest may declare: `[a-z][a-z0-9-]{0,63}`,
+/// the same shape the desktop parser accepts.
+pub fn is_valid_directive_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= 64
+        && bytes.next().is_some_and(|b| b.is_ascii_lowercase())
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+impl PackUxPlugin {
+    /// The rules a UX plugin has to satisfy at the pack. `plugin_names` is
+    /// the pack's declared `.afb` plugins, for the `plugin` producer.
+    pub fn validate(&self, plugin_names: &BTreeSet<&str>) -> Result<()> {
+        anyhow::ensure!(
+            is_valid_pack_name(&self.name),
+            "ux plugin name must be snake_case: {:?}",
+            self.name
+        );
+        anyhow::ensure!(
+            !self.description.trim().is_empty(),
+            "ux plugin {:?} needs a description; it is what the UX Plugins panel shows",
+            self.name
+        );
+        match (&self.entry, &self.plugin) {
+            (Some(entry), None) => {
+                anyhow::ensure!(
+                    is_distributable_asset_path(entry),
+                    "unsafe ux plugin entry path: {entry:?}"
+                );
+                anyhow::ensure!(
+                    entry.starts_with(UX_PLUGIN_PREFIX) && entry.ends_with(".js"),
+                    "ux plugin {:?} entry must be a .js file under {UX_PLUGIN_PREFIX}, got {entry:?}",
+                    self.name
+                );
+            }
+            (None, Some(plugin)) => {
+                anyhow::ensure!(
+                    plugin_names.contains(plugin.as_str()),
+                    "ux plugin {:?} names the plugin {plugin:?}, which this pack does not declare",
+                    self.name
+                );
+                anyhow::ensure!(
+                    self.css.is_none(),
+                    "ux plugin {:?} is produced by a plugin, which emits its own css; drop the css field",
+                    self.name
+                );
+            }
+            (Some(_), Some(_)) => {
+                anyhow::bail!(
+                    "ux plugin {:?} declares both entry and plugin; exactly one produces the module",
+                    self.name
+                )
+            }
+            (None, None) => anyhow::bail!(
+                "ux plugin {:?} declares neither entry nor plugin; one must produce the module",
+                self.name
+            ),
+        }
+        if let Some(css) = &self.css {
+            anyhow::ensure!(
+                is_distributable_asset_path(css)
+                    && css.starts_with(UX_PLUGIN_PREFIX)
+                    && css.ends_with(".css"),
+                "ux plugin {:?} css must be a .css file under {UX_PLUGIN_PREFIX}, got {css:?}",
+                self.name
+            );
+        }
+        anyhow::ensure!(
+            !self.contributes.areas.is_empty(),
+            "ux plugin {:?} must declare at least one area it contributes to",
+            self.name
+        );
+        for area in &self.contributes.areas {
+            anyhow::ensure!(
+                UX_PLUGIN_AREAS.contains(&area.as_str()),
+                "ux plugin {:?} declares the area {area:?}, which the desktop does not have; known \
+                 areas: {}",
+                self.name,
+                UX_PLUGIN_AREAS.join(", ")
+            );
+        }
+        for directive in &self.contributes.directives {
+            anyhow::ensure!(
+                is_valid_directive_name(directive),
+                "ux plugin {:?} declares the directive {directive:?}; a directive name is \
+                 lowercase letters, digits and dashes, starting with a letter",
+                self.name
+            );
+        }
+        anyhow::ensure!(
+            self.contributes.directives.is_empty()
+                || self
+                    .contributes
+                    .areas
+                    .iter()
+                    .any(|a| a == "transcript.directives"),
+            "ux plugin {:?} declares directives but not the transcript.directives area",
+            self.name
+        );
+        let mut surfaces = BTreeSet::new();
+        for declared in &self.data {
+            let surface = declared.surface.as_str();
+            anyhow::ensure!(
+                !surface.is_empty()
+                    && !surface.chars().any(char::is_whitespace)
+                    && surface.len() <= MAX_UX_DATA_SURFACE_ID_LEN,
+                "ux plugin {:?} declares the data surface {surface:?}; a surface id is non-empty, \
+                 has no whitespace and is at most {MAX_UX_DATA_SURFACE_ID_LEN} characters",
+                self.name
+            );
+            anyhow::ensure!(
+                surfaces.insert(surface),
+                "ux plugin {:?} declares the data surface {surface:?} twice",
+                self.name
+            );
+            anyhow::ensure!(
+                !declared.tools.is_empty(),
+                "ux plugin {:?} declares the data surface {surface:?} with no tools; name the \
+                 tools its pages may run",
+                self.name
+            );
+            let mut tools = BTreeSet::new();
+            for tool in &declared.tools {
+                anyhow::ensure!(
+                    is_valid_ux_data_tool_name(tool),
+                    "ux plugin {:?} declares the tool {tool:?} on data surface {surface:?}; a tool \
+                     name is lowercase letters, digits and underscores, starting with a letter, \
+                     at most 64 characters",
+                    self.name
+                );
+                anyhow::ensure!(
+                    tools.insert(tool.as_str()),
+                    "ux plugin {:?} declares the tool {tool:?} on data surface {surface:?} twice",
+                    self.name
+                );
+            }
+        }
+        Ok(())
+    }
+}
 
 pub fn tool_instructions(plugin: &str, bytes: &[u8]) -> Result<String> {
     anyhow::ensure!(
@@ -727,6 +956,36 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
         "a plugins pack must declare at least one plugin"
     );
 
+    // Only a pack that installs as a home file record (assets, plugins) is
+    // scanned for UX plugins; a documents or graph pack installs into a
+    // node, where its ux[] would never be listed.
+    anyhow::ensure!(
+        manifest.metadata.ux.is_empty()
+            || matches!(manifest.metadata.kind, PackKind::Assets | PackKind::Plugins),
+        "ux plugins ship in an assets or plugins pack; a {:?} pack is never listed for them",
+        manifest.metadata.kind
+    );
+    let mut ux_names = BTreeSet::new();
+    for ux in &manifest.metadata.ux {
+        ux.validate(&plugin_names)?;
+        anyhow::ensure!(
+            ux_names.insert(ux.name.as_str()),
+            "pack declares the ux plugin {:?} twice",
+            ux.name
+        );
+        // A UX plugin's files travel as declared assets like a plugin's
+        // artifact, so the pack digest covers the code the webview runs.
+        for (what, path) in [("entry", &ux.entry), ("css", &ux.css)] {
+            if let Some(path) = path {
+                anyhow::ensure!(
+                    unique.contains(path),
+                    "pack declares the ux plugin {:?} but not its {what} {path:?} as an asset",
+                    ux.name
+                );
+            }
+        }
+    }
+
     let mut slot_names = BTreeSet::new();
     let mut slot_agents = BTreeSet::new();
     for slot in &manifest.metadata.inference_slots {
@@ -1125,6 +1384,362 @@ mod tests {
                 case["expected"].as_bool().unwrap(),
                 "{case}"
             );
+        }
+    }
+
+    /* ---- ux plugins ---- */
+
+    fn valid_ux() -> PackUxPlugin {
+        PackUxPlugin {
+            name: "board".to_owned(),
+            description: "A board page".to_owned(),
+            entry: Some("ux/board/plugin.js".to_owned()),
+            css: None,
+            plugin: None,
+            contributes: UxContributions {
+                areas: vec!["nav".to_owned(), "agent.sections".to_owned()],
+                directives: vec![],
+            },
+            default_enabled: None,
+            data: vec![],
+        }
+    }
+
+    fn no_plugins() -> BTreeSet<&'static str> {
+        BTreeSet::new()
+    }
+
+    fn with_data(data: Vec<UxDataSurface>) -> PackUxPlugin {
+        PackUxPlugin { data, ..valid_ux() }
+    }
+
+    fn surface(surface: &str, tools: &[&str]) -> UxDataSurface {
+        UxDataSurface {
+            surface: surface.to_owned(),
+            tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_ux_data_declaration_round_trips_and_an_absent_one_is_not_written() {
+        let plugin = with_data(vec![
+            surface("board", &["list_tasks", "add_task"]),
+            surface("notes", &["list_notes"]),
+        ]);
+        plugin.validate(&no_plugins()).expect("declared surfaces");
+        let json = serde_json::to_value(&plugin).unwrap();
+        assert_eq!(
+            json["data"],
+            serde_json::json!([
+                { "surface": "board", "tools": ["list_tasks", "add_task"] },
+                { "surface": "notes", "tools": ["list_notes"] },
+            ])
+        );
+        let back: PackUxPlugin = serde_json::from_value(json).unwrap();
+        assert_eq!(back, plugin);
+
+        let bare = serde_json::to_value(valid_ux()).unwrap();
+        assert!(
+            bare.get("data").is_none(),
+            "an empty data list is not written out"
+        );
+        let back: PackUxPlugin = serde_json::from_value(bare).unwrap();
+        assert!(back.data.is_empty());
+
+        let unknown: Result<UxDataSurface> = serde_json::from_value(serde_json::json!({
+            "surface": "board", "tools": ["list_tasks"], "collection": "Task"
+        }))
+        .map_err(Into::into);
+        assert!(
+            unknown.is_err(),
+            "a data surface takes surface and tools only"
+        );
+    }
+
+    #[test]
+    fn ux_data_surfaces_and_tools_are_checked_by_name() {
+        let error = with_data(vec![surface("board", &["List-Tasks"])])
+            .validate(&no_plugins())
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("\"List-Tasks\""), "{error}");
+        assert!(error.contains("\"board\""), "{error}");
+        assert!(error.contains("starting with a letter"), "{error}");
+        for bad in ["", "9tasks", "a b", &"a".repeat(65)] {
+            assert!(
+                with_data(vec![surface("board", &[bad])])
+                    .validate(&no_plugins())
+                    .is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        with_data(vec![surface(
+            "board",
+            &["a", "list_tasks_2", &"a".repeat(64)],
+        )])
+        .validate(&no_plugins())
+        .expect("snake_case tool names up to 64 characters");
+
+        let error = with_data(vec![
+            surface("board", &["list_tasks"]),
+            surface("board", &["add_task"]),
+        ])
+        .validate(&no_plugins())
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("data surface \"board\" twice"),
+            "{error:#}"
+        );
+
+        let error = with_data(vec![surface("board", &["list_tasks", "list_tasks"])])
+            .validate(&no_plugins())
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("tool \"list_tasks\" on data surface \"board\" twice"),
+            "{error:#}"
+        );
+
+        let error = with_data(vec![surface("board", &[])])
+            .validate(&no_plugins())
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("data surface \"board\" with no tools"),
+            "{error:#}"
+        );
+
+        for bad in ["", "my board", "board\n", &"s".repeat(129)] {
+            let error = with_data(vec![surface(bad, &["list_tasks"])])
+                .validate(&no_plugins())
+                .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("a surface id is non-empty"),
+                "{bad:?}: {error:#}"
+            );
+        }
+        with_data(vec![surface(&"s".repeat(128), &["list_tasks"])])
+            .validate(&no_plugins())
+            .expect("128 characters is the ceiling");
+    }
+
+    #[test]
+    fn a_ux_plugin_needs_exactly_one_producer() {
+        valid_ux()
+            .validate(&no_plugins())
+            .expect("entry alone is fine");
+        let both = PackUxPlugin {
+            plugin: Some("gen".to_owned()),
+            ..valid_ux()
+        };
+        let error = both.validate(&BTreeSet::from(["gen"])).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("both entry and plugin"),
+            "{error:#}"
+        );
+        let neither = PackUxPlugin {
+            entry: None,
+            ..valid_ux()
+        };
+        let error = neither.validate(&no_plugins()).unwrap_err();
+        assert!(format!("{error:#}").contains("neither"), "{error:#}");
+    }
+
+    #[test]
+    fn a_ux_entry_lives_under_ux_and_is_a_js_file() {
+        for entry in [
+            "plugins/board.js",
+            "ux/board/plugin.ts",
+            "ux/Board/plugin.js",
+            "../x.js",
+        ] {
+            let plugin = PackUxPlugin {
+                entry: Some(entry.to_owned()),
+                ..valid_ux()
+            };
+            assert!(
+                plugin.validate(&no_plugins()).is_err(),
+                "{entry} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn an_afb_produced_ux_plugin_names_a_declared_plugin_and_ships_no_css() {
+        let produced = PackUxPlugin {
+            entry: None,
+            plugin: Some("report_ui".to_owned()),
+            ..valid_ux()
+        };
+        produced
+            .validate(&BTreeSet::from(["report_ui"]))
+            .expect("declared");
+        let error = produced.validate(&no_plugins()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("does not declare"),
+            "{error:#}"
+        );
+        let styled = PackUxPlugin {
+            css: Some("ux/report/plugin.css".to_owned()),
+            ..produced
+        };
+        let error = styled.validate(&BTreeSet::from(["report_ui"])).unwrap_err();
+        assert!(format!("{error:#}").contains("css"), "{error:#}");
+    }
+
+    #[test]
+    fn ux_areas_and_directives_are_checked_by_name() {
+        let unknown_area = PackUxPlugin {
+            contributes: UxContributions {
+                areas: vec!["statusbar.right".to_owned()],
+                directives: vec![],
+            },
+            ..valid_ux()
+        };
+        let error = unknown_area.validate(&no_plugins()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("statusbar.right"),
+            "{error:#}"
+        );
+        assert!(format!("{error:#}").contains("known areas"), "{error:#}");
+
+        let no_areas = PackUxPlugin {
+            contributes: UxContributions::default(),
+            ..valid_ux()
+        };
+        assert!(no_areas.validate(&no_plugins()).is_err());
+
+        let bad_directive = PackUxPlugin {
+            contributes: UxContributions {
+                areas: vec!["transcript.directives".to_owned()],
+                directives: vec!["Board".to_owned()],
+            },
+            ..valid_ux()
+        };
+        assert!(bad_directive.validate(&no_plugins()).is_err());
+
+        let directive_without_area = PackUxPlugin {
+            contributes: UxContributions {
+                areas: vec!["nav".to_owned()],
+                directives: vec!["board".to_owned()],
+            },
+            ..valid_ux()
+        };
+        let error = directive_without_area.validate(&no_plugins()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("transcript.directives"),
+            "{error:#}"
+        );
+
+        let good = PackUxPlugin {
+            contributes: UxContributions {
+                areas: vec!["transcript.directives".to_owned()],
+                directives: vec!["board".to_owned(), "board-2".to_owned()],
+            },
+            ..valid_ux()
+        };
+        good.validate(&no_plugins())
+            .expect("declared directives in a declared area");
+    }
+
+    fn documents_manifest(dependencies: Vec<&str>) -> PackManifest {
+        serde_json::from_value(serde_json::json!({
+            "manifest_version": 1,
+            "name": "dep_test",
+            "version": "1.0.0",
+            "description": "a test documents pack",
+            "authors": ["gents"],
+            "kind": "documents",
+            "assets": ["README.md", "pack_config.json"],
+            "config": "pack_config.json",
+            "dependencies": dependencies,
+        }))
+        .unwrap()
+    }
+
+    fn ux_pack(ux: Vec<serde_json::Value>, assets: Vec<&str>) -> PackManifest {
+        serde_json::from_value(serde_json::json!({
+            "manifest_version": 1,
+            "name": "boardpack",
+            "version": "1.0.0",
+            "description": "a board",
+            "authors": ["tests"],
+            "kind": "plugins",
+            "assets": assets,
+            "plugins": [serde_json::to_value(valid_plugin()).unwrap()],
+            "ux": ux,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_manifest_requires_ux_files_to_be_declared_assets_and_unique_names() {
+        let ux = serde_json::to_value(valid_ux()).unwrap();
+        validate_pack_manifest(&ux_pack(
+            vec![ux.clone()],
+            vec![
+                "README.md",
+                "plugins/format_check.afb",
+                "ux/board/plugin.js",
+            ],
+        ))
+        .expect("entry declared as an asset");
+
+        let error = validate_pack_manifest(&ux_pack(
+            vec![ux.clone()],
+            vec!["README.md", "plugins/format_check.afb"],
+        ))
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("not its entry"), "{error:#}");
+
+        let error = validate_pack_manifest(&ux_pack(
+            vec![ux.clone(), ux],
+            vec![
+                "README.md",
+                "plugins/format_check.afb",
+                "ux/board/plugin.js",
+            ],
+        ))
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("twice"), "{error:#}");
+    }
+
+    #[test]
+    fn ux_plugins_ship_only_in_a_pack_that_installs_as_a_home_record() {
+        let ux = serde_json::to_value(valid_ux()).unwrap();
+        let mut manifest = documents_manifest(vec![]);
+        manifest.metadata.ux = vec![serde_json::from_value(ux).unwrap()];
+        manifest
+            .metadata
+            .assets
+            .push("ux/board/plugin.js".to_owned());
+        let error = validate_pack_manifest(&manifest).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("assets or plugins pack"),
+            "{error:#}"
+        );
+        manifest.metadata.ux.clear();
+        validate_pack_manifest(&manifest).expect("a documents pack without ux is unchanged");
+    }
+
+    #[test]
+    fn an_older_manifest_without_ux_still_parses_and_a_record_round_trips() {
+        let manifest = ux_pack(vec![], vec!["README.md", "plugins/format_check.afb"]);
+        assert!(manifest.metadata.ux.is_empty());
+        let json = serde_json::to_value(&manifest).unwrap();
+        assert!(
+            json.get("ux").is_none(),
+            "an empty ux list is not written out"
+        );
+        let back: PackManifest = serde_json::from_value(json).unwrap();
+        assert!(back.metadata.ux.is_empty());
+    }
+
+    #[test]
+    fn directive_names_follow_the_desktop_parser() {
+        for ok in ["a", "board", "board-2", "x9"] {
+            assert!(is_valid_directive_name(ok), "{ok}");
+        }
+        for bad in ["", "Board", "9x", "a_b", "a b", &"a".repeat(65)] {
+            assert!(!is_valid_directive_name(bad), "{bad:?}");
         }
     }
 }

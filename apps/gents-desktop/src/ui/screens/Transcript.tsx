@@ -254,8 +254,8 @@ function Reply({
 
 function ReplyText({ content, live }: { content: string; live: boolean }) {
   const [revealing] = useState(live);
-  if (!revealing) return <Markdown>{content}</Markdown>;
-  return <StreamText text={content} />;
+  if (!revealing) return <Markdown directives>{content}</Markdown>;
+  return <StreamText text={content} directives />;
 }
 
 function ResponseActions({ text }: { text: string }) {

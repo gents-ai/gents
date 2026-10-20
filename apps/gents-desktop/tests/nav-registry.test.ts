@@ -1,0 +1,137 @@
+/* The nav registry holds the rows a UX plugin contributes; the app's own
+   rows (New session, Mailbox, Sessions, Nodes) are placed by hand in Rail
+   and NavPanel, so the registry starts empty and the contract under test
+   is ordering, replacement and disposal. */
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  navItems,
+  navRowState,
+  registerNavItem,
+  type NavItem,
+} from "@/app/navRegistry";
+import { createUxContext } from "@/contrib/plugin";
+import { NAV_AREA } from "@/contrib/types";
+import type { Route } from "@/lib/router";
+
+const disposers: Array<() => void> = [];
+afterEach(() => {
+  disposers.splice(0).forEach((dispose) => dispose());
+});
+
+function byId(id: string): NavItem {
+  const item = navItems().find((item) => item.id === id);
+  if (!item) throw new Error(`no nav item ${id}`);
+  return item;
+}
+
+const mailbox: Route = { name: "mailbox" };
+const agent: Route = { name: "agent", nodeDid: "did:x", section: "board:page" };
+
+const make = (id: string, extra: Partial<NavItem> = {}): NavItem => ({
+  id,
+  label: id,
+  icon: null,
+  to: mailbox,
+  active: () => false,
+  placement: "primary",
+  ...extra,
+});
+
+describe("nav registry", () => {
+  it("starts empty: the app's own rows are not registry rows", () => {
+    expect(navItems()).toEqual([]);
+  });
+
+  it("orders by `order`, then registration, and disposes cleanly", () => {
+    disposers.push(registerNavItem(make("z", { order: 15 })));
+    disposers.push(registerNavItem(make("a", { order: 15 })));
+    disposers.push(registerNavItem(make("first", { order: -1 })));
+
+    const ids = navItems().map((item) => item.id);
+    expect(ids).toEqual(["first", "z", "a"]);
+    expect(navItems()).toBe(navItems());
+
+    disposers.splice(0).forEach((dispose) => dispose());
+    expect(navItems()).toEqual([]);
+  });
+
+  it("keys a plugin's row on its namespaced contribution id, whatever the payload says", () => {
+    const ctx = createUxContext("acme", { onDispose: (d) => disposers.push(d) });
+    const other = createUxContext("beta", { onDispose: (d) => disposers.push(d) });
+    ctx.register({ id: "nav", area: NAV_AREA, data: make("dup") });
+    other.register({ id: "nav", area: NAV_AREA, data: make("dup") });
+    expect(navItems().map((item) => item.id)).toEqual(["acme:nav", "beta:nav"]);
+  });
+
+  it("resolves a row's destination from the context, hiding one with nowhere to go", () => {
+    disposers.push(
+      registerNavItem(
+        make("ctx", {
+          to: (ctx) =>
+            ctx.selectedNodeDid ? { ...agent, nodeDid: ctx.selectedNodeDid } : null,
+        }),
+      ),
+    );
+    disposers.push(
+      registerNavItem(
+        make("throws", {
+          to: () => {
+            throw new Error("no");
+          },
+        }),
+      ),
+    );
+    disposers.push(
+      registerNavItem(make("bad", { to: () => ({ name: "nowhere" }) as never })),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const route: Route = { name: "sessions" };
+    const none = { mailboxCount: 0, selectedNodeDid: null };
+    expect(navRowState(byId("ctx"), route, none).to).toBeNull();
+    expect(
+      navRowState(byId("ctx"), route, { ...none, selectedNodeDid: "did:x" }).to,
+    ).toEqual({
+      ...agent,
+      nodeDid: "did:x",
+    });
+    expect(navRowState(byId("throws"), route, none).to).toBeNull();
+    expect(navRowState(byId("bad"), route, none).to).toBeNull();
+    expect(navRowState(byId("ctx"), agent, none).active).toBe(false);
+  });
+
+  it("keeps a row's active predicate, badge and placement", () => {
+    disposers.push(
+      registerNavItem(
+        make("board", {
+          to: agent,
+          active: (r) => r.name === "agent" && r.section === "board:page",
+          count: (ctx) => ctx.mailboxCount,
+          placement: "footer",
+        }),
+      ),
+    );
+    const row = byId("board");
+    expect(row.active(agent)).toBe(true);
+    expect(row.active(mailbox)).toBe(false);
+    expect(row.count?.({ mailboxCount: 3, selectedNodeDid: null })).toBe(3);
+    expect(row.placement).toBe("footer");
+  });
+
+  it("replaces on re-register and a stale disposer is inert", () => {
+    const original = make("same", { label: "One" });
+    const dispose1 = registerNavItem(original);
+    expect(byId("same").label).toBe("One");
+    const dispose2 = registerNavItem({ ...original, label: "Two" });
+    dispose1();
+    expect(byId("same").label).toBe("Two");
+    dispose2();
+    expect(navItems().find((item) => item.id === "same")).toBeUndefined();
+  });
+
+  it("drops a malformed payload rather than crashing the rail", () => {
+    disposers.push(registerNavItem(make("ok")));
+    disposers.push(registerNavItem({ id: "broken", label: "x" } as unknown as NavItem));
+    expect(navItems().map((item) => item.id)).toEqual(["ok"]);
+  });
+});

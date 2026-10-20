@@ -449,8 +449,11 @@ impl ToolSurface {
                         .context("missing notification policy")?,
                 )) as Box<dyn ToolDyn>);
             } else {
-                let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone())
-                    .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
+                let tool = BoundedWriteTool::new(
+                    crate::config_client::ConfigAccess::local(runtime.node.clone()),
+                    decl.clone(),
+                )
+                .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
                 tool.ensure_well_formed().map_err(|error| {
                     anyhow::anyhow!(
                         "write tool `{}` on collection `{}`: {error:#}. Declared by datastore surface `{}`; inspect with config datastore get, then use datastore update to correct its fields or schema collection update to correct the existing collection",
@@ -461,9 +464,12 @@ impl ToolSurface {
             }
         }
         for decl in &self.query_tools {
-            let tool = BoundedQueryTool::new(runtime.node.clone(), decl.clone())
-                .with_actor(datastore_actor.clone().expect("query actor was validated"))
-                .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
+            let tool = BoundedQueryTool::new(
+                crate::config_client::ConfigAccess::local(runtime.node.clone()),
+                decl.clone(),
+            )
+            .with_actor(datastore_actor.clone().expect("query actor was validated"))
+            .declared_by(self.surface_of_tool.get(&decl.tool_name).cloned());
             if !tool.is_well_formed() {
                 anyhow::bail!(
                     "query tool `{}` reached registration with an invalid declaration",

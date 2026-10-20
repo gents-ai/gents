@@ -1,13 +1,14 @@
-use std::sync::Arc;
-
-use anyhow::{anyhow, bail, Result};
-use defra_node::EmbeddedNode;
+use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::{json, Map, Value};
 
+use crate::config_client::ConfigAccess;
 use crate::document_config::QueryToolDecl;
 use crate::llm::tool::{Tool, ToolDefinition};
 
 use super::query::{self, CollectionScope, DefraQueryParams, MAX_LIMIT};
+
+/// the same bound the `query` tool's `find` holds; deeper pages need a narrower filter
+pub const MAX_OFFSET: u32 = 100_000;
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_query_bound";
 
@@ -38,22 +39,28 @@ pub struct BoundedQueryParams(pub Map<String, Value>);
 
 #[derive(Clone)]
 pub struct BoundedQueryTool {
-    node: Arc<EmbeddedNode>,
+    access: ConfigAccess,
     decl: QueryToolDecl,
     surface_id: Option<String>,
     actor: Option<::identity::Did>,
 }
 
 impl BoundedQueryTool {
-    pub fn new(node: Arc<EmbeddedNode>, decl: QueryToolDecl) -> Self {
+    /// `access` is where the rows are read and whose principal reads
+    /// them: the embedded node, or a served node's GraphQL endpoint acting
+    /// as its DID.
+    pub fn new(access: ConfigAccess, decl: QueryToolDecl) -> Self {
         Self {
-            node,
+            access,
             decl,
             surface_id: None,
             actor: None,
         }
     }
 
+    /// The ACP actor an embedded read runs as. A GraphQL endpoint already
+    /// acts as its own principal, so a tool over one refuses the call
+    /// rather than read as a DID it cannot sign for.
     pub fn with_actor(mut self, actor: ::identity::Did) -> Self {
         self.actor = Some(actor);
         self
@@ -70,7 +77,8 @@ impl BoundedQueryTool {
 
     pub(crate) async fn validate_schema(&self) -> Result<()> {
         self.ensure_well_formed()?;
-        let fields = crate::config_client::ConfigAccess::local(self.node.clone())
+        let fields = self
+            .access
             .collection_fields(&self.decl.collection)
             .await?
             .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
@@ -95,18 +103,18 @@ impl BoundedQueryTool {
             );
         }
         anyhow::ensure!(
-            !self
-                .decl
-                .filter_fields
-                .iter()
-                .any(|field| matches!(field.name.trim(), "fields" | "limit" | "field_page")),
+            !self.decl.filter_fields.iter().any(|field| matches!(
+                field.name.trim(),
+                "fields" | "limit" | "offset" | "order" | "field_page"
+            )),
             "filter field collides with a reserved query argument"
         );
         crate::document_config::reject_protected_collection_name(&self.decl.collection)
     }
 
     async fn filter_parameters(&self) -> Result<Map<String, Value>> {
-        let version = crate::config_client::ConfigAccess::local(self.node.clone())
+        let version = self
+            .access
             .collection_version(&self.decl.collection)
             .await?
             .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
@@ -222,9 +230,72 @@ impl BoundedQueryTool {
         }
     }
 
+    fn resolve_offset(&self, args: &Map<String, Value>) -> Result<u32> {
+        match args.get("offset") {
+            None | Some(Value::Null) => Ok(0),
+            Some(Value::Number(number)) => {
+                let Some(offset) = number.as_u64().and_then(|value| u32::try_from(value).ok())
+                else {
+                    bail!(
+                        "tool `{}` offset must be a non-negative integer",
+                        self.decl.tool_name
+                    );
+                };
+                ensure!(
+                    offset <= MAX_OFFSET,
+                    "tool `{}` offset exceeds {MAX_OFFSET}; narrow the filter",
+                    self.decl.tool_name
+                );
+                Ok(offset)
+            }
+            Some(_) => bail!(
+                "tool `{}` offset must be a non-negative integer",
+                self.decl.tool_name
+            ),
+        }
+    }
+
+    // An order names only fields the tool may project: ordering by a hidden
+    // field would reveal it one comparison at a time.
+    fn resolve_order(&self, args: &Map<String, Value>) -> Result<Option<Value>> {
+        let Some(order) = args.get("order").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        let entries: Vec<&Value> = match order {
+            Value::Object(_) => vec![order],
+            Value::Array(entries) => entries.iter().collect(),
+            _ => bail!(
+                "tool `{}` order must be an object or array of single-field objects",
+                self.decl.tool_name
+            ),
+        };
+        for entry in &entries {
+            let Some((field, _)) = entry
+                .as_object()
+                .filter(|v| v.len() == 1)
+                .and_then(|v| v.iter().next())
+            else {
+                bail!(
+                    "tool `{}` order entries name one field each, ASC or DESC",
+                    self.decl.tool_name
+                );
+            };
+            ensure!(
+                field == "_docID" || self.decl.fields.iter().any(|allowed| allowed == field),
+                "tool `{}` cannot order by `{field}`; allowed: {}",
+                self.decl.tool_name,
+                self.decl.fields.join(", ")
+            );
+        }
+        Ok(Some(order.clone()))
+    }
+
     fn resolve_filter(&self, args: &Map<String, Value>) -> Result<Option<Value>> {
         for key in args.keys() {
-            if key == "fields" || key == "limit" || key == "field_page" {
+            if matches!(
+                key.as_str(),
+                "fields" | "limit" | "offset" | "order" | "field_page"
+            ) {
                 continue;
             }
             if let Some(fill) = self
@@ -339,6 +410,25 @@ impl Tool for BoundedQueryTool {
                 )
             }),
         );
+        properties.insert(
+            "offset".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 0,
+                "description": format!(
+                    "Rows to skip before the page (default 0, at most {MAX_OFFSET}). A full page carries next_offset; pass it back for the next page."
+                )
+            }),
+        );
+        properties.insert(
+            "order".to_string(),
+            json!({
+                "description": format!(
+                    "Sort as an object or array of single-field objects with ASC or DESC, over: {}. _docID breaks ties, so pages do not overlap.",
+                    self.decl.fields.join(", ")
+                )
+            }),
+        );
         let mut required = Vec::new();
         match self.filter_parameters().await {
             Ok(filters) => properties.extend(filters),
@@ -381,6 +471,8 @@ impl Tool for BoundedQueryTool {
         let fields = self.resolve_projection(&args.0)?;
         let filter = self.resolve_filter(&args.0)?;
         let limit = self.resolve_limit(&args.0)?;
+        let offset = self.resolve_offset(&args.0)?;
+        let order = self.resolve_order(&args.0)?;
         let params = DefraQueryParams {
             collection: self.decl.collection.clone(),
             filter,
@@ -391,31 +483,48 @@ impl Tool for BoundedQueryTool {
         let mut command: super::QueryParams = params.into();
         if let Some(page) = args.0.get("field_page") {
             command.options.insert("field_page".into(), page.clone());
-        }
-        let result = if let Some(actor) = &self.actor {
-            crate::config_client::ConfigAccess::transact_local_readonly(
-                &self.node,
-                Some(actor.clone()),
-                "bounded_application_query",
-                |txn| Box::pin(super::execute_command(txn, &command, &scope)),
-            )
-            .await?
         } else {
-            super::execute_command(
-                &crate::config_client::ConfigAccess::local(self.node.clone()),
-                &command,
-                &scope,
-            )
-            .await?
+            if offset > 0 {
+                command.options.insert("offset".into(), json!(offset));
+            }
+            if let Some(order) = order {
+                command.options.insert("order".into(), order);
+            }
+        }
+        let result = match (&self.access, &self.actor) {
+            (ConfigAccess::Local(local), Some(actor)) => {
+                ConfigAccess::transact_local_readonly(
+                    local.node(),
+                    Some(actor.clone()),
+                    "bounded_application_query",
+                    |txn| Box::pin(super::execute_command(txn, &command, &scope)),
+                )
+                .await?
+            }
+            (ConfigAccess::Graphql(_), Some(_)) => {
+                return Err(anyhow!(
+                    "query tool `{}` is actor-scoped, which needs the embedded node; a GraphQL \
+                     endpoint reads as its own principal",
+                    self.decl.tool_name
+                )
+                .into())
+            }
+            // One request, no snapshot: a field page whose value changed
+            // since the previous page is caught by its `expected_hash`.
+            (_, None) => super::execute_command(&self.access, &command, &scope).await?,
         };
         let mut payload = result;
         let count = payload["returned_count"].as_u64().unwrap_or(0);
         if payload.get("results").is_some() {
             payload["count"] = json!(count);
         }
-        if count as u32 == limit {
+        // A full page may be the last one; the next offset says where the
+        // following page starts and the caller stops at the first short one.
+        if count as u32 == limit && args.0.get("field_page").is_none() {
+            payload["next_offset"] = json!(offset + count as u32);
             payload["limit_note"] = json!(format!(
-                "Result set hit the {limit}-row cap; raise limit or narrow the filter if more rows exist."
+                "Result set hit the {limit}-row cap; continue with offset {} or narrow the filter.",
+                offset + count as u32
             ));
         }
         crate::tool_output::render(
@@ -424,6 +533,7 @@ impl Tool for BoundedQueryTool {
                 "results",
                 "field_page",
                 "count",
+                "next_offset",
                 "field_recovery",
                 "limit_note",
             ],
@@ -434,9 +544,12 @@ impl Tool for BoundedQueryTool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
     use crate::llm::tool::Tool;
+    use defra_node::EmbeddedNode;
 
     #[tokio::test]
     async fn native_scalar_filters_match_lean_admission() {
@@ -473,7 +586,7 @@ mod tests {
                 other => panic!("unknown kind {other:?}"),
             };
             let tool = BoundedQueryTool::new(
-                node.clone(),
+                ConfigAccess::local(node.clone()),
                 QueryToolDecl {
                     tool_name: "read_scalar".into(),
                     collection: "ScalarRecord".into(),
@@ -565,7 +678,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        let tool = BoundedQueryTool::new(node.clone(), decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node.clone()), decl());
         crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             None, tokio_util::sync::CancellationToken::new(), None, None, None,
             Some("run-42".into()), Default::default(), false, async {
@@ -573,6 +686,7 @@ mod tests {
                 assert_eq!(initial["truncated"], true);
                 assert_eq!(initial["field_recovery"][0]["total_bytes"], text.len());
                 assert_eq!(initial["field_recovery"][0]["doc_id"], doc);
+                assert_eq!(initial["field_recovery"][0]["row"], 0);
                 assert!(initial["results"][0].get("_docID").is_none());
                 assert!(initial["total_bytes"].as_u64().unwrap() > text.len() as u64);
                 let mut offset=0; let mut hash=None; let mut recovered=String::new();
@@ -606,10 +720,11 @@ mod tests {
             .unwrap();
         let mut declaration = decl();
         declaration.filter_fields.clear();
-        let tool = BoundedQueryTool::new(Arc::clone(&node), declaration).with_actor(
-            ::identity::Did::new("did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR")
-                .unwrap(),
-        );
+        let tool = BoundedQueryTool::new(ConfigAccess::local(Arc::clone(&node)), declaration)
+            .with_actor(
+                ::identity::Did::new("did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR")
+                    .unwrap(),
+            );
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             Tool::call(&tool, BoundedQueryParams(Map::new())),
@@ -626,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn queries_only_the_correlated_run() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(Arc::clone(&node), decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(Arc::clone(&node)), decl());
         let out =
             crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                 None,
@@ -652,7 +767,7 @@ mod tests {
     #[tokio::test]
     async fn hides_filled_filter_and_rejects_model_override() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(node, decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl());
         let definition = Tool::definition(&tool, String::new()).await;
         let properties = definition.parameters["properties"].as_object().unwrap();
         assert!(properties.contains_key("fields"));
@@ -670,7 +785,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_fields_outside_the_allowlist() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(node, decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl());
         let mut args = Map::new();
         args.insert("fields".into(), json!(["_docID"]));
         crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
@@ -697,7 +812,7 @@ mod tests {
         let node = node_with_findings().await;
         let mut protected = decl();
         protected.collection = gents_protocol::schemas::EVAL_VERDICT_NAME.into();
-        let tool = BoundedQueryTool::new(node, protected);
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), protected);
         assert!(!tool.is_well_formed());
         let err = Tool::call(&tool, BoundedQueryParams(Map::new()))
             .await
@@ -708,7 +823,8 @@ mod tests {
     #[tokio::test]
     async fn projection_fields_do_not_grant_filter_arguments() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(node, decl()).declared_by(Some("findings".into()));
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl())
+            .declared_by(Some("findings".into()));
         let args = serde_json::from_value(json!({"title":"graphql"})).unwrap();
         let error = Tool::call(&tool, BoundedQueryParams(args))
             .await
@@ -728,7 +844,7 @@ mod tests {
     async fn rejects_number_for_native_string_filter() {
         let node = node_with_findings().await;
         let tool = BoundedQueryTool::new(
-            node,
+            ConfigAccess::local(node),
             QueryToolDecl {
                 tool_name: "query_candidate_finding".into(),
                 collection: "CandidateFinding".into(),
@@ -749,10 +865,138 @@ mod tests {
         assert!(err.to_string().contains("String"), "{err}");
     }
 
+    async fn node_with_many_findings(rows: usize) -> Arc<EmbeddedNode> {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        node.add_schema(
+            "type CandidateFinding { run_id: String finding_id: String title: String }",
+        )
+        .await
+        .unwrap();
+        for index in 0..rows {
+            node.execute(&format!(
+                r#"mutation {{ add_CandidateFinding(input: {{ run_id: "run-42", finding_id: "f{index:03}", title: "t{index:03}" }}) {{ _docID }} }}"#
+            ))
+            .await;
+        }
+        node
+    }
+
+    fn titles(payload: &Value) -> Vec<String> {
+        payload["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["finding_id"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// the finding tool without a runtime-filled filter: pages need no request context
+    fn plain_decl() -> QueryToolDecl {
+        QueryToolDecl {
+            filter_fields: Vec::new(),
+            ..decl()
+        }
+    }
+
+    async fn call_unscoped(tool: &BoundedQueryTool, args: Value) -> Result<Value> {
+        let text = Tool::call(tool, BoundedQueryParams(args.as_object().unwrap().clone()))
+            .await
+            .map_err(|error| anyhow!("{error}"))?;
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    #[tokio::test]
+    async fn pages_through_the_cap_with_offset_and_a_stable_order() {
+        let node = node_with_many_findings(7).await;
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), plain_decl());
+        let first = call_unscoped(
+            &tool,
+            json!({"fields":["finding_id"],"limit":3,"order":{"finding_id":"ASC"}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(titles(&first), ["f000", "f001", "f002"]);
+        assert_eq!(first["count"], 3);
+        assert_eq!(first["next_offset"], 3);
+        assert!(first["limit_note"].as_str().unwrap().contains("offset 3"));
+        let second = call_unscoped(
+            &tool,
+            json!({"fields":["finding_id"],"limit":3,"offset":3,"order":{"finding_id":"ASC"}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(titles(&second), ["f003", "f004", "f005"]);
+        assert_eq!(second["next_offset"], 6);
+        let last = call_unscoped(
+            &tool,
+            json!({"fields":["finding_id"],"limit":3,"offset":6,"order":{"finding_id":"ASC"}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(titles(&last), ["f006"]);
+        assert_eq!(last["count"], 1);
+        assert!(last.get("next_offset").is_none(), "{last}");
+        assert!(last.get("limit_note").is_none(), "{last}");
+        let descending = call_unscoped(
+            &tool,
+            json!({"fields":["finding_id"],"limit":2,"order":[{"finding_id":"DESC"}]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(titles(&descending), ["f006", "f005"]);
+        let past_the_end = call_unscoped(
+            &tool,
+            json!({"fields":["finding_id"],"limit":3,"offset":40}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(past_the_end["count"], 0);
+        assert!(past_the_end.get("next_offset").is_none());
+    }
+
+    #[tokio::test]
+    async fn refuses_an_order_outside_the_allowlist_and_a_bad_offset() {
+        let node = node_with_many_findings(1).await;
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), plain_decl());
+        let hidden = call_unscoped(&tool, json!({"order":{"_version":"ASC"}}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(hidden.contains("cannot order by `_version`"), "{hidden}");
+        let shape = call_unscoped(&tool, json!({"order":"finding_id"}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            shape.contains("order must be an object or array"),
+            "{shape}"
+        );
+        let negative = call_unscoped(&tool, json!({"offset":-1}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            negative.contains("offset must be a non-negative integer"),
+            "{negative}"
+        );
+        let deep = call_unscoped(&tool, json!({"offset": MAX_OFFSET + 1}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(deep.contains("offset exceeds 100000"), "{deep}");
+        let by_doc_id = call_unscoped(
+            &tool,
+            json!({"fields":["finding_id"],"order":{"_docID":"ASC"}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_doc_id["count"], 1);
+    }
+
     #[tokio::test]
     async fn rejects_zero_limit() {
         let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(node, decl());
+        let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl());
         let mut args = Map::new();
         args.insert("limit".into(), json!(0));
         let err =

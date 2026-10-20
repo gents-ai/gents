@@ -5,7 +5,7 @@ import { createStore } from "zustand/vanilla";
 
 import { useRoute } from "@/lib/router";
 import { browserStorage } from "@/lib/storage";
-import type { Route } from "@gents/shell";
+import type { Route } from "@/lib/router";
 
 export type DockState = {
   open: boolean;

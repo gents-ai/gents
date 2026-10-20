@@ -7,6 +7,8 @@ import { NodeAvatar } from "@/screens/AgentAvatar";
 import { NodeHoverCard } from "@/screens/HoverCards";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
+import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
+import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
   useOnline,
@@ -112,6 +114,27 @@ function RailSyncDot() {
 
 export function Rail({ route, settings }: { route: Route; settings: ReactNode }) {
   const mailboxCount = useMailboxCount();
+  const selected = useSelectedNode();
+  const primary = useNavItems("primary");
+  const footer = useNavItems("footer");
+  const navContext: NavContext = {
+    mailboxCount,
+    selectedNodeDid: selected?.nodeDid ?? null,
+  };
+  /* a row a UX plugin contributed: its predicates are evaluated apart and
+     its icon drawn behind a boundary, so one bad row costs that row; a row
+     with nowhere to go right now is not drawn */
+  const contributed = (item: NavItem) => {
+    const { to, active, count } = navRowState(item, route, navContext);
+    if (!to) return null;
+    return (
+      <ContribBoundary key={item.id} id={item.id} variant="chip">
+        <RailItem label={item.label} to={to} active={active} count={count}>
+          {item.icon}
+        </RailItem>
+      </ContribBoundary>
+    );
+  };
   return (
     <nav className="flex h-full flex-col items-center gap-2 pt-3">
       <RailNode route={route} />
@@ -141,9 +164,11 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
       >
         <ScrollText className="size-4" />
       </RailItem>
+      {primary.map(contributed)}
       <div className="mt-auto flex flex-col items-center gap-1 pb-[17px]">
         <RailSyncDot />
         <div className="h-px w-8 bg-border" />
+        {footer.map(contributed)}
         <RailItem
           label="Nodes"
           to={{ name: "nodes" }}
