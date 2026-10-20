@@ -10,7 +10,13 @@ use gents_protocol::row::AgentRequestRow;
 async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("principal.key"), None).unwrap();
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     node.add_schema("type ResumedGoalOutput { run_id: String @index summary: String }")
         .await

@@ -208,7 +208,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         store::grant_on_install(home.path(), &plugin.namespace, &plugin.declaration, true).unwrap();
     store::write_record(home.path(), &plugin).unwrap();
     let plugins = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
     access
