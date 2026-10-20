@@ -1,0 +1,137 @@
+name: Publish staged macOS prerelease (CI control)
+
+# Publishes a macOS prerelease from the outputs of two successful
+# notarize-staged-artifact.yml runs (app and CLI), with no build. All GitHub
+# writes use this workflow's GITHUB_TOKEN; GitHub does not start new workflow
+# runs for events created with GITHUB_TOKEN (except workflow_dispatch and
+# repository_dispatch), so creating the tag does not start the tag-triggered
+# release rebuild workflows. The script verifies that after publishing.
+# Assets are verified while the release is still a draft, and only then
+# published. An existing tag or release is never modified. See
+# docs/publish-staged-prerelease.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Prerelease tag to create (vX.Y.Z-rcN). Must not exist yet.
+        required: true
+        type: string
+      target_sha:
+        description: Full 40-hex commit SHA the tag will point at.
+        required: true
+        type: string
+      app_notarize_run_id:
+        description: Successful notarize-staged-artifact run id for the desktop app.
+        required: true
+        type: string
+      cli_notarize_run_id:
+        description: Successful notarize-staged-artifact run id for the CLI.
+        required: true
+        type: string
+      app_asset_sha256:
+        description: Pinned SHA-256 of the notarized, stapled app zip (from that run's SHA256SUMS).
+        required: true
+        type: string
+      cli_binary_sha256:
+        description: Pinned SHA-256 of the notarized CLI executable.
+        required: true
+        type: string
+      provenance_note:
+        description: Optional one-paragraph source provenance statement for the release notes.
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: publish-staged-prerelease
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GENTS_REPO: gents-ai/gents
+
+jobs:
+  publish:
+    name: Verify notarized outputs and publish prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Job-level trusted context guard (pre-checkout)
+        env:
+          TRUSTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "::error::Only workflow_dispatch events are accepted."
+            exit 1
+          fi
+          if [[ "${GITHUB_REPOSITORY}" != "${GENTS_REPO}" ]]; then
+            echo "::error::Expected repository ${GENTS_REPO}, got ${GITHUB_REPOSITORY}."
+            exit 1
+          fi
+          if [[ -z "${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Default branch was empty; refusing to proceed."
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != "refs/heads/${TRUSTED_DEFAULT_BRANCH}" ]]; then
+            echo "::error::Only 'refs/heads/${TRUSTED_DEFAULT_BRANCH}' is trusted, got '${GITHUB_REF}'."
+            exit 1
+          fi
+          if [[ -n "${GITHUB_HEAD_REF:-}" ]]; then
+            echo "::error::Head ref '${GITHUB_HEAD_REF}' present; refusing."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 (peeled commit)
+        with:
+          persist-credentials: false
+
+      - name: Collect and verify notarized outputs (read-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          APP_NOTARIZE_RUN_ID: ${{ inputs.app_notarize_run_id }}
+          CLI_NOTARIZE_RUN_ID: ${{ inputs.cli_notarize_run_id }}
+          APP_ASSET_SHA256: ${{ inputs.app_asset_sha256 }}
+          CLI_BINARY_SHA256: ${{ inputs.cli_binary_sha256 }}
+          PROVENANCE_NOTE: ${{ inputs.provenance_note }}
+          PUBLISH_WORK_DIR: ${{ runner.temp }}/publish-${{ github.run_id }}-${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/publish_staged_prerelease.py collect
+
+      - name: Upload collected assets and notes (evidence)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (peeled commit)
+        with:
+          name: publish-staged-prerelease-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/publish-${{ github.run_id }}-${{ github.run_attempt }}/assets
+            ${{ runner.temp }}/publish-${{ github.run_id }}-${{ github.run_attempt }}/notes.md
+            ${{ runner.temp }}/publish-${{ github.run_id }}-${{ github.run_attempt }}/manifest.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Create draft, verify digests, publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          APP_NOTARIZE_RUN_ID: ${{ inputs.app_notarize_run_id }}
+          CLI_NOTARIZE_RUN_ID: ${{ inputs.cli_notarize_run_id }}
+          APP_ASSET_SHA256: ${{ inputs.app_asset_sha256 }}
+          CLI_BINARY_SHA256: ${{ inputs.cli_binary_sha256 }}
+          PROVENANCE_NOTE: ${{ inputs.provenance_note }}
+          PUBLISH_WORK_DIR: ${{ runner.temp }}/publish-${{ github.run_id }}-${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/publish_staged_prerelease.py publish
