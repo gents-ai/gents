@@ -144,6 +144,25 @@ The default is `app`. The app path is unchanged by this option.
   printed executable SHA-256 and the output `SHA256SUMS` against the build
   receipt before publishing.
 
+### Candidate evidence: `v0.21.0-rc1` CLI (`039e2299`)
+
+Read from the authentic candidate binary with `codesign -dv --verbose=4`,
+`lipo -archs` and `shasum -a 256`, without re-signing or executing it:
+
+| Field | Value |
+|---|---|
+| File SHA-256 | `ca2e3ebcf6e6e1e572a88268488564dbd12a2dcbab9fcadc17f4ca59bd4ee2ad` |
+| `Identifier` | `gents` |
+| `Format` | `Mach-O thin (arm64)`; `lipo -archs` prints `arm64` |
+| `CDHash` | `595a5f783971fe0d9271b8357395d52114f51438` |
+| `TeamIdentifier` | `NXJ753WW5X` (leaf certificate SHA-256 `ffe16122…1baf`) |
+| Flags | hardened runtime; timestamped 2026-10-19 18:45:57 local |
+
+The file SHA-256 matches the build receipt
+`rc1-hotfix-signed-cli-verification.json`. The candidate's desktop app
+executables (`gents-desktop-tauri`, bundled `gents`, `bridge_runner`) are
+also thin arm64, and the app contains no frameworks or dylibs.
+
 ## Data handling
 
 - **Credentials** live only in the submit and complete steps. Each step
@@ -236,12 +255,26 @@ What this guarantees, and what it does not:
    ssh studio-1 "chmod 0444 /Users/admin/gents-notary-inbox/${SHA}.zip && shasum -a 256 /Users/admin/gents-notary-inbox/${SHA}.zip"
    ```
 
+   For a CLI, zip the single binary instead (no `--keepParent`, no
+   `--sequesterRsrc`); the archive must contain exactly one entry, `gents`:
+
+   ```sh
+   ditto -c -k gents gents-cli.zip
+   SHA=$(shasum -a 256 gents-cli.zip | cut -d' ' -f1)
+   ```
+
+   and stage it the same way.
+
 2. **Dispatch once** from the default branch:
 
    ```sh
    gh workflow run notarize-staged-artifact.yml --ref main \
-     -f artifact_sha256="$SHA" -f mode=submit
+     -f artifact_sha256="$SHA" -f artifact_kind=app -f mode=submit
    ```
+
+   For the CLI, use `-f artifact_kind=cli`. Afterwards, compare the
+   executable SHA-256 and CDHash printed by `verify` (and the output
+   `SHA256SUMS`) with the candidate evidence above before publishing.
 
 3. **If anything is ambiguous after a submission id was announced**, resume.
    Ambiguous means a timeout, In Progress, runner loss, or any failure in
@@ -249,7 +282,8 @@ What this guarantees, and what it does not:
 
    ```sh
    gh workflow run notarize-staged-artifact.yml --ref main \
-     -f artifact_sha256="$SHA" -f mode=resume -f submission_id=<id>
+     -f artifact_sha256="$SHA" -f artifact_kind=<app|cli> \
+     -f mode=resume -f submission_id=<id>
    ```
 
 4. **If submit was recorded as uncertain** (no id announced):
