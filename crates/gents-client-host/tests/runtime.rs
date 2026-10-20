@@ -24,6 +24,8 @@ use console::ConsoleChild as Child;
 
 #[path = "support/configured_actions.rs"]
 mod configured_actions;
+#[path = "support/editor_goal_recovery.rs"]
+mod editor_goal_recovery;
 #[path = "support/editor_history.rs"]
 mod editor_history;
 #[path = "support/editor_retry.rs"]
@@ -53,6 +55,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorHistory,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorGoalRecovery,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRetry,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
@@ -65,6 +69,7 @@ impl Journey {
             Self::Editor => Some("full"),
             Self::EditorSteering => Some("steering"),
             Self::EditorHistory => Some("history"),
+            Self::EditorGoalRecovery => Some("goals"),
             Self::EditorRetry => Some("retry"),
             Self::EditorWorkspace => Some("workspace"),
             _ => None,
@@ -208,6 +213,30 @@ async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> Re
 }
 
 #[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorGoalRecovery)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-goal-recovery-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
 fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
     let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
@@ -239,6 +268,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let provider_gate = gate.clone();
     let retry_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let provider_retry_attempts = Arc::clone(&retry_attempts);
+    let goal_recovery = Arc::new(editor_goal_recovery::Provider::default());
+    let provider_goal_recovery = Arc::clone(&goal_recovery);
     let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let goal_provider_gate = editor_goal_gate.clone();
     let goal_provider_hold = root.join("hold-goal-provider");
@@ -253,6 +284,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorGoalRecovery) {
+                if let Some(action) = provider_goal_recovery.reply(request, &emitted) {
+                    return action;
+                }
+            }
             if matches!(journey, Journey::EditorRetry) {
                 if let Some(action) = editor_retry::reply(request, &provider_retry_attempts) {
                     return action;
@@ -567,7 +603,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         } else {
             "Return the fixture response.".to_owned()
         };
-    let receipt = if matches!(journey, Journey::Goal) {
+    let receipt = if matches!(journey, Journey::Goal | Journey::EditorGoalRecovery) {
         client.call(id, "desktop_goal_control", json!({"request": {
             "nodeDid":node_did, "agentId":agent_id,
             "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
@@ -689,6 +725,20 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
         id += 1;
+    }
+    if matches!(journey, Journey::EditorGoalRecovery) {
+        wait_goal(&mut client, &mut id, node_did, session, "active").await?;
+        gents::goal::set_goal_from_access(
+            &access,
+            node_did,
+            session,
+            None,
+            Some(gents::goal::GoalStatus::Blocked),
+            None,
+            None,
+        )
+        .await?;
+        wait_goal(&mut client, &mut id, node_did, session, "blocked").await?;
     }
     if matches!(journey, Journey::Goal) {
         let mut view = wait_goal(&mut client, &mut id, node_did, session, "active").await?;
@@ -1188,6 +1238,66 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 .await?;
         std::fs::write(
             root.join("editor-workspace-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+    }
+    if matches!(journey, Journey::EditorGoalRecovery) {
+        std::fs::write(
+            root.join("editor-goal-recovery-fixture.json"),
+            serde_json::to_vec(&json!({
+                "draft":editor_goal_recovery::DRAFT, "captured":editor_goal_recovery::CAPTURED,
+                "resuming":editor_goal_recovery::RESUMING, "wrapup":editor_goal_recovery::WRAPUP,
+                "title":editor_goal_recovery::TITLE,
+            }))?,
+        )?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        id += 1;
+        let release = root.join("finish-recovered-goal-provider");
+        let held = Arc::clone(&goal_recovery);
+        let _release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if release.is_file() {
+                    held.release();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+        let editor_result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "goals",
+        )
+        .await;
+        std::fs::write(
+            root.join("editor-goal-recovery-provider.json"),
+            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        if root.join("editor-artifacts-path").is_file() {
+            copy_editor_evidence(root, "editor-goal-recovery-provider.json")?;
+        }
+        editor_result?;
+        let observation =
+            wait_goal(&mut client, &mut id, node_did, session, "budget_limited").await?;
+        let evidence = editor_goal_recovery::verify(
+            &access,
+            &provider,
+            root,
+            node_did,
+            session,
+            &client_did,
+            observation,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-goal-recovery-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }
