@@ -1,7 +1,8 @@
 use super::*;
 use crate::agent::p2p_reconcile::file_image_hydration::{
-    completed_image_selection, image_delivery_target, select_file_images, FileImageDemand,
-    FileImageObservation, FileImageScope, FileImageSelection, FileImageTool,
+    completed_image_selection, image_attempt_delivery_target, record_image_outcome,
+    select_file_images, FileImageDemand, FileImageObservation, FileImageScope, FileImageSelection,
+    FileImageTool,
 };
 use crate::config_client::ConfigAccess;
 use crate::tool_call_lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
@@ -17,6 +18,7 @@ struct ImageDemandRow {
 #[async_trait]
 trait ImageRequestStore: Send + Sync {
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>>;
+    async fn prior(&self, row: &ImageDemandRow) -> Result<Option<FileImageHydrationReceipt>>;
     async fn admission(&self, demand: &FileImageDemand) -> Result<LoadedHydrationAdmission>;
     async fn selection(
         &self,
@@ -66,6 +68,10 @@ async fn serve_image(
     row: &ImageDemandRow,
 ) -> Result<()> {
     let demand = &row.demand;
+    let prior = store.prior(row).await?;
+    if let Some(receipt) = &prior {
+        return store.commit(row, &receipt.selection, &receipt.detail).await;
+    }
     let admission = store.admission(demand).await?;
     if demand.validate_reference().is_err()
         || matches!(
@@ -88,7 +94,11 @@ async fn serve_image(
         .context("image demand has no authenticated enrollment fence")?;
     let selection = store.selection(demand, &admission.catalog).await?;
     let before = store.authorized(demand, &fence).await?;
-    let delivered = match image_delivery_target(&selection, before) {
+    let delivered = match image_attempt_delivery_target(
+        prior.as_ref().map(|receipt| &receipt.selection),
+        &selection,
+        before,
+    ) {
         Some(document) => {
             deliver_with_bounded_retry(
                 delivery,
@@ -170,6 +180,13 @@ struct PendingImageRow {
 
 #[async_trait]
 impl ImageRequestStore for GraphqlHydrationStore {
+    async fn prior(&self, row: &ImageDemandRow) -> Result<Option<FileImageHydrationReceipt>> {
+        let response = ConfigAccess::local(self.node.clone())
+            .execute(&recorded_image_query(row))
+            .await?;
+        decode_recorded_image_receipt(&response, row, self.identity.as_ref()).await
+    }
+
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>> {
         let query = format!(
             r#"{{ FileImageHydrationRequest(filter: {{
@@ -293,19 +310,87 @@ impl ImageRequestStore for GraphqlHydrationStore {
         );
         receipt.signature = self.identity.sign(&receipt.signing_payload()?).await?;
         receipt.validate_shape()?;
-        let mutation = terminal_image_mutation(row, &receipt)?;
-        let response = ConfigAccess::write_local_response(
+        let row = row.clone();
+        let identity = self.identity.clone();
+        ConfigAccess::transact_local_write(
             &self.node,
+            None,
             "p2p.commit_file_image_receipt",
-            &mutation,
+            move |txn| {
+                let row = row.clone();
+                let candidate = receipt.clone();
+                let identity = identity.clone();
+                Box::pin(async move {
+                    let response = txn.execute(&recorded_image_query(&row)).await?;
+                    let prior = decode_recorded_image_receipt(&response, &row, identity.as_ref()).await?;
+                    let outcome = record_image_outcome(
+                        prior.as_ref().map(|receipt| &receipt.selection),
+                        &candidate.selection,
+                        HydrationTerminalWriteResult::Committed,
+                    ).context("file-image transaction did not select an outcome")?;
+                    let new_outcome = prior.is_none();
+                    let receipt = prior.unwrap_or(candidate);
+                    anyhow::ensure!(receipt.selection == outcome, "file-image receipt changed its recorded outcome");
+                    if new_outcome {
+                        txn.execute_with_variables(
+                            "mutation($input: FileImageHydrationReceiptMutationInputArg!) { create_FileImageHydrationReceipt(input: $input) { _docID } }",
+                            &serde_json::json!({"input": {
+                                "request_key": receipt.demand.admission.request_key,
+                                "node_did": receipt.signer_did,
+                                "receipt": serde_json::to_value(&receipt)?,
+                            }}),
+                        ).await?;
+                    }
+                    let response = txn.execute(&terminal_image_mutation(&row, &receipt)?).await?;
+                    anyhow::ensure!(
+                        response["data"]["update_FileImageHydrationRequest"].as_array().is_some_and(|rows| rows.len() == 1),
+                        "file-image receipt lost its pending-row compare-and-set"
+                    );
+                    Ok(())
+                })
+            },
         )
-        .await?;
-        anyhow::ensure!(
-            rows::<serde_json::Value>(&response, "update_FileImageHydrationRequest")?.len() == 1,
-            "file-image receipt lost its pending-row compare-and-set"
-        );
-        Ok(())
+        .await
     }
+}
+
+fn recorded_image_query(row: &ImageDemandRow) -> String {
+    format!(
+        r#"{{ FileImageHydrationReceipt(filter: {{ request_key: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}) {{ receipt }} }}"#,
+        escape_graphql_string(&row.demand.admission.request_key),
+        escape_graphql_string(&row.demand.admission.node_did),
+    )
+}
+
+async fn decode_recorded_image_receipt(
+    response: &serde_json::Value,
+    row: &ImageDemandRow,
+    identity: &dyn NodeIdentity,
+) -> Result<Option<FileImageHydrationReceipt>> {
+    let rows = response["data"]["FileImageHydrationReceipt"]
+        .as_array()
+        .context("file-image receipt query omitted its rows")?;
+    anyhow::ensure!(rows.len() <= 1, "recorded file-image outcome is ambiguous");
+    let Some(stored) = rows.first() else {
+        return Ok(None);
+    };
+    let receipt: FileImageHydrationReceipt = serde_json::from_value(stored["receipt"].clone())?;
+    receipt.validate_shape()?;
+    anyhow::ensure!(
+        receipt.demand == row.demand && receipt.signer_did == identity.did(),
+        "recorded file-image receipt crossed source or demand scope"
+    );
+    anyhow::ensure!(
+        identity
+            .verify(
+                &receipt.signer_did,
+                &receipt.signing_payload()?,
+                &receipt.signature
+            )
+            .await?,
+        "recorded file-image receipt has an invalid source signature"
+    );
+    Ok(Some(receipt))
 }
 
 fn terminal_image_mutation(

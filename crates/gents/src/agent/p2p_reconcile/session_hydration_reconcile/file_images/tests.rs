@@ -1,6 +1,8 @@
 mod live;
+mod storage;
 
 use super::*;
+use crate::agent::p2p_reconcile::file_image_hydration::image_delivery_target;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Mutex,
@@ -18,6 +20,9 @@ struct Store {
 
 #[async_trait]
 impl ImageRequestStore for Store {
+    async fn prior(&self, _: &ImageDemandRow) -> Result<Option<FileImageHydrationReceipt>> {
+        Ok(None)
+    }
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>> {
         Ok(vec![self.demand.clone()])
     }

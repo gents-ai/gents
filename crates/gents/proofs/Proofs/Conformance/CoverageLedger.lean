@@ -1347,6 +1347,12 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::file_image_hydration::tests::generated_completion_cases_gate_delivery_and_receipts"
       "Checks the native delivery target and durable terminal decision. Physical transport, live enrollment fences and receipt publication retain their existing owners and need integrated qualification.")
       "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_attempt_cases"
+      "FileImageAttemptCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_attempt_cases_preserve_terminal_outcomes_and_prevent_redelivery"
+      "Drives recorded-outcome selection and replay delivery suppression. Source-signed immutable storage, transaction rollback and actual peer replay remain native refinement obligations.")
+      "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "file_review_subscription_cases"
       "FileReviewSubscriptionCases"

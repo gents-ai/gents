@@ -113,6 +113,29 @@ pub fn image_delivery_target(selection: &FileImageSelection, authorized: bool) -
     }
 }
 
+pub fn image_attempt_delivery_target<'a>(
+    prior: Option<&FileImageSelection>,
+    selection: &'a FileImageSelection,
+    authorized: bool,
+) -> Option<&'a str> {
+    if prior.is_some() {
+        None
+    } else {
+        image_delivery_target(selection, authorized)
+    }
+}
+
+pub fn record_image_outcome(
+    prior: Option<&FileImageSelection>,
+    candidate: &FileImageSelection,
+    write: super::session_hydration::HydrationTerminalWriteResult,
+) -> Option<FileImageSelection> {
+    prior.cloned().or_else(|| {
+        (write == super::session_hydration::HydrationTerminalWriteResult::Committed)
+            .then(|| candidate.clone())
+    })
+}
+
 pub fn completed_image_selection(
     selection: &FileImageSelection,
     before_delivery: bool,

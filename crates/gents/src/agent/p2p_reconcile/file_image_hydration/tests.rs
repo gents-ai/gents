@@ -211,3 +211,38 @@ fn generated_completion_cases_gate_delivery_and_receipts() {
         );
     }
 }
+
+#[test]
+fn generated_attempt_cases_preserve_terminal_outcomes_and_prevent_redelivery() {
+    use super::super::session_hydration::HydrationTerminalWriteResult;
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Case {
+        prior: Option<FileImageSelection>,
+        candidate: FileImageSelection,
+        authorized: bool,
+        write: String,
+        target: Option<String>,
+        expected: Option<FileImageSelection>,
+    }
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases: Vec<Case> =
+        serde_json::from_value(snapshot["file_image_attempt_cases"].clone()).unwrap();
+    assert_eq!(cases.len(), 72);
+    for case in cases {
+        let write = match case.write.as_str() {
+            "committed" => HydrationTerminalWriteResult::Committed,
+            "failed" => HydrationTerminalWriteResult::Failed,
+            "notAttempted" => HydrationTerminalWriteResult::NotAttempted,
+            other => panic!("unexpected receipt write {other}"),
+        };
+        assert_eq!(
+            image_attempt_delivery_target(case.prior.as_ref(), &case.candidate, case.authorized),
+            case.target.as_deref(),
+        );
+        assert_eq!(
+            record_image_outcome(case.prior.as_ref(), &case.candidate, write),
+            case.expected,
+        );
+    }
+}

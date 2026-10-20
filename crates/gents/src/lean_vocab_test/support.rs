@@ -88,6 +88,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) file_image_hydration_route_cases: Vec<serde_json::Value>,
     pub(crate) file_review_subscription_cases: Vec<serde_json::Value>,
     pub(crate) file_image_hydration_completion_cases: Vec<serde_json::Value>,
+    pub(crate) file_image_attempt_cases: Vec<serde_json::Value>,
     pub(crate) stored_file_image_access_cases: Vec<serde_json::Value>,
     pub(crate) file_image_read_grant_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,

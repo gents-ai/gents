@@ -700,6 +700,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_image_hydration_completion_cases,
         ),
         (
+            "file_image_attempt_cases",
+            "FileImageAttemptCases",
+            &snapshot.file_image_attempt_cases,
+        ),
+        (
             "stored_file_image_access_cases",
             "StoredFileImageAccessCases",
             &snapshot.stored_file_image_access_cases,

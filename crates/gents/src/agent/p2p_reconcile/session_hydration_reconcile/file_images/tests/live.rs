@@ -26,6 +26,7 @@ use tokio::sync::Notify;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PauseAt {
     Selection,
+    Acknowledged,
     Delivered,
 }
 
@@ -53,6 +54,9 @@ struct ObservedStore {
 
 #[async_trait]
 impl ImageRequestStore for ObservedStore {
+    async fn prior(&self, row: &ImageDemandRow) -> Result<Option<FileImageHydrationReceipt>> {
+        self.inner.prior(row).await
+    }
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>> {
         self.inner.pending_images().await
     }
@@ -95,6 +99,9 @@ struct ObservedDelivery {
     inner: EmbeddedHydrationDelivery,
     gate: Arc<Gate>,
     calls: AtomicUsize,
+    recipient: Arc<EmbeddedNode>,
+    source_did: String,
+    expected_changes: Value,
 }
 
 #[async_trait]
@@ -102,8 +109,69 @@ impl HydrationDelivery for ObservedDelivery {
     async fn push_documents_to_peer(&self, peer: &str, target: DeliveryTarget<'_>) -> Result<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.inner.push_documents_to_peer(peer, target).await?;
-        self.gate.pause(PauseAt::Delivered).await;
+        self.gate.pause(PauseAt::Acknowledged).await;
+        if self.gate.at == PauseAt::Delivered {
+            let DeliveryTarget::FileImage(image) = target else {
+                anyhow::bail!("file review delivered an unexpected collection")
+            };
+            self.wait_materialized(image).await?;
+            self.gate.pause(PauseAt::Delivered).await;
+        }
         Ok(())
+    }
+}
+
+impl ObservedDelivery {
+    /// Selective head acknowledgments also cover durable pending DAG imports.
+    /// Observe the exact image as its creator before fencing materialized delivery.
+    async fn wait_materialized(&self, image: &str) -> Result<()> {
+        let query = format!(
+            r#"{{ ToolFileChange(docID: "{}") {{ _docID file_changes }} }}"#,
+            escape_graphql_string(image),
+        );
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let owner = self
+                    .recipient
+                    .document_acp()
+                    .get_doc_owner(
+                        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+                        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
+                        image,
+                    )
+                    .await?;
+                if let Some(owner) = owner {
+                    anyhow::ensure!(
+                        owner.to_string() == self.source_did,
+                        "imported image has an unexpected creator: {owner}"
+                    );
+                    let result = ConfigAccess::transact_local_readonly(
+                        &self.recipient,
+                        Some(self.source_did.parse()?),
+                        "test.file_review.observe_import",
+                        |txn| {
+                            let query = query.clone();
+                            Box::pin(async move { txn.execute(&query).await })
+                        },
+                    )
+                    .await?;
+                    let rows = result["data"]["ToolFileChange"]
+                        .as_array()
+                        .context("imported file image rows")?;
+                    anyhow::ensure!(rows.len() <= 1, "imported image became ambiguous");
+                    if let Some(row) = rows.first() {
+                        anyhow::ensure!(
+                            row["_docID"] == image && row["file_changes"] == self.expected_changes,
+                            "import changed the retained image"
+                        );
+                        return Ok(());
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .context("acknowledged file image did not materialize")?
     }
 }
 
@@ -224,7 +292,7 @@ async fn wait_admitted(store: &GraphqlHydrationStore, demand: &FileImageDemand) 
     .context("native enrollment and pairing did not admit file review")?
 }
 
-async fn exercise_revocation(at: PauseAt) -> Result<()> {
+async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     let directory = tempfile::tempdir()?;
     let source: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
         directory.path().join("source.key"),
@@ -435,6 +503,9 @@ async fn exercise_revocation(at: PauseAt) -> Result<()> {
         },
         gate: gate.clone(),
         calls: AtomicUsize::new(0),
+        recipient: client_node.clone(),
+        source_did: source.did().into(),
+        expected_changes: serde_json::to_value(&changes)?,
     };
     let sweep = reconcile_images(&store, &delivery);
     tokio::pin!(sweep);
@@ -486,6 +557,18 @@ async fn exercise_revocation(at: PauseAt) -> Result<()> {
                 "revocation delivered a previously unseen image"
             );
         }
+        PauseAt::Acknowledged => {
+            anyhow::ensure!(
+                checks == [true, false] && delivery.calls.load(Ordering::SeqCst) > 0,
+                "post-acknowledgment revocation was not observed"
+            );
+            if let Some(owner) = owner {
+                anyhow::ensure!(
+                    owner.to_string() == source.did(),
+                    "acknowledged image changed native creator ownership: {owner}"
+                );
+            }
+        }
         PauseAt::Delivered => {
             anyhow::ensure!(
                 checks == [true, false],
@@ -494,7 +577,7 @@ async fn exercise_revocation(at: PauseAt) -> Result<()> {
             anyhow::ensure!(
                 delivery.calls.load(Ordering::SeqCst) > 0
                     && owner.as_ref().map(ToString::to_string).as_deref() == Some(source.did()),
-                "delivery did not preserve native creator ownership"
+                "delivery did not preserve native creator ownership: {owner:?}"
             );
         }
     }
@@ -525,6 +608,58 @@ async fn exercise_revocation(at: PauseAt) -> Result<()> {
         restored != enrollment,
         "reenrollment reused the revoked request"
     );
+    if reset_refusal {
+        wait_admitted(&store.inner, &demand).await?;
+        let client_refusal = receipt_row(&client_node, &demand, "rejected").await?;
+        anyhow::ensure!(
+            client_refusal == refused,
+            "client did not receive the refusal"
+        );
+        ConfigAccess::write_local(
+            &client_node,
+            "test.file_review.reset_refusal",
+            &format!(
+                r#"mutation {{ update_FileImageHydrationRequest(docID: "{}", input: {{
+                    status: "pending", status_detail: null, observation_doc_id: null,
+                    processed_at: null, outcome_signer_did: null, outcome_signature: null
+                }}) {{ _docID }} }}"#,
+                escape_graphql_string(&demand_doc),
+            ),
+        )
+        .await?;
+        push_documents_to_peer(
+            &client_node,
+            &source_peer,
+            vec![defra_p2p_adapter::P2pDocumentRequest {
+                collection: "FileImageHydrationRequest".into(),
+                doc_id: demand_doc.clone(),
+            }],
+        )
+        .await?;
+        receipt_row(&source_node, &demand, "pending").await?;
+        let deliveries_before_replay = delivery.calls.load(Ordering::SeqCst);
+        let checks_before_replay = store.checks.lock().unwrap().len();
+        reconcile_images(&store, &delivery).await?;
+        anyhow::ensure!(
+            delivery.calls.load(Ordering::SeqCst) == deliveries_before_replay
+                && store.checks.lock().unwrap().len() == checks_before_replay,
+            "replaying a recorded refusal reauthorized or redelivered its attempt"
+        );
+        let result = ConfigAccess::local(source_node.clone())
+            .execute(&format!(
+                r#"{{ FileImageHydrationRequest(docID: "{}") {{
+                    _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id
+                    status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature
+                }} }}"#,
+                escape_graphql_string(&demand_doc),
+            ))
+            .await?;
+        anyhow::ensure!(
+            result["data"]["FileImageHydrationRequest"][0] == refused,
+            "resetting a client-owned demand replaced its signed refusal: {}",
+            result["data"]["FileImageHydrationRequest"][0],
+        );
+    }
     let mut retry = demand.clone();
     retry.admission.request_key = retry.derive_retry_request_key(&uuid::Uuid::new_v4().to_string());
     wait_admitted(&store.inner, &retry).await?;
@@ -549,10 +684,16 @@ async fn exercise_revocation(at: PauseAt) -> Result<()> {
             },
         "retry selected another observation"
     );
-    anyhow::ensure!(
-        receipt.grant_local_read(client_node.clone()).await?,
-        "served retry did not grant read"
-    );
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if receipt.grant_local_read(client_node.clone()).await? {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .context("served retry image did not become readable")??;
     let retained = ConfigAccess::local(client_node.clone()).execute(&format!(
         r#"{{ ToolFileChange(docID: "{}") {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(&image),
@@ -596,7 +737,7 @@ async fn exercise_revocation(at: PauseAt) -> Result<()> {
 async fn revocation_after_selection_prevents_unseen_image_delivery() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(120),
-        exercise_revocation(PauseAt::Selection),
+        exercise_revocation(PauseAt::Selection, false),
     )
     .await?
 }
@@ -606,7 +747,25 @@ async fn revocation_after_delivery_preserves_refusal_until_a_fresh_authorized_re
 {
     tokio::time::timeout(
         Duration::from_secs(120),
-        exercise_revocation(PauseAt::Delivered),
+        exercise_revocation(PauseAt::Delivered, false),
+    )
+    .await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resetting_a_client_demand_cannot_replace_a_signed_refusal() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        exercise_revocation(PauseAt::Selection, true),
+    )
+    .await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revocation_after_acknowledgment_preserves_refusal_until_a_fresh_retry() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        exercise_revocation(PauseAt::Acknowledged, false),
     )
     .await?
 }
