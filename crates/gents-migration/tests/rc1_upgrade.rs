@@ -59,11 +59,11 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
     let data = read.data.unwrap();
     assert_eq!(
         data["InferenceProfile"][0]["_docID"],
-        identities["create_InferenceProfile"][0]["_docID"]
+        identities["create_InferenceProfile"]["_docID"]
     );
     assert_eq!(
         data["AgentToolCall"][0]["_docID"],
-        identities["create_AgentToolCall"][0]["_docID"]
+        identities["create_AgentToolCall"]["_docID"]
     );
     assert_eq!(data["InferenceProfile"][0]["context_window"], 65536);
     assert_eq!(data["InferenceProfile"][0]["max_output_tokens"], 4096);
