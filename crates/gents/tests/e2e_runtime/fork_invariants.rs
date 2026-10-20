@@ -256,8 +256,12 @@ async fn fork_via_http_uses_same_header_contract() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
+    let directory = tempfile::tempdir().unwrap();
+    let identity =
+        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(gents::NodeIdentity::did(&identity))
             .with_http(defra_node::HttpConfig::with_addr(address))
             .build()
             .await
