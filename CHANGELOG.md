@@ -135,6 +135,11 @@ source consistency checks, not a separate runtime compatibility version.
 - `gents job list`, `show` and `stop`, the Grok pager's workflow runs and
   `/workflow` commands no longer fail with `duplicate slot attempt` after one
   workflow script has run twice on a node; each run lists its own children.
+- A workflow job resume that names no job row now fails with
+  `plugin_job_resume_unknown`, and one that names a row a later resume already
+  continued fails with `plugin_job_resume_not_head` and names the newest row's
+  address as the next call, instead of `plugin_job_policy_denied`. Refusals the
+  job policy makes keep `plugin_job_policy_denied`.
 
 ## 0.21.0-rc0 - 2026-10-17
 

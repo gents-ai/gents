@@ -790,7 +790,13 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     let again = step
         .call_as("call-3", r#"{"argv": ["resume", "root"]}"#)
         .await;
-    assert_eq!(again["code"], "plugin_job_policy_denied", "{again}");
+    assert_eq!(again["code"], "plugin_job_resume_not_head", "{again}");
+    let address = format!("{}:call-2", step.session_id);
+    assert_eq!(
+        again["next"],
+        format!("Next: `{TOOL} resume {address}`"),
+        "{again}"
+    );
     failed(&step.row_of("call-3").await, "policyDenied");
     step.finish().await;
 }

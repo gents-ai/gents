@@ -451,8 +451,8 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        13,
-        "Lean pins thirteen admission rows in `admission_regressions`"
+        18,
+        "Lean pins eighteen admission rows in `admission_regressions`"
     );
     let mut names = BTreeSet::new();
     for case in cases {
@@ -1157,7 +1157,7 @@ fn generated_plugin_job_wire_cases_round_trip_protocol_types() {
     assert_eq!(
         kinds,
         BTreeMap::from([
-            ("job_outcome", 7),
+            ("job_outcome", 9),
             ("job_step_input", 3),
             ("job_step_output", 9),
             ("job_view", 1),

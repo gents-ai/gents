@@ -92,6 +92,20 @@ structure AdmissionCase where
   job : Job
   out : StepOutput
 
+/-- A completed, pinned prior row `row-0` of the caller's session, the chain
+head only when `head`. -/
+private def resumeContext (head : Bool) : StepContext :=
+  let prior : Job := { pinned [] 0 0 with root := "row-0", rowDoc := "row-0", state := .completed }
+  { context with
+    resumeTarget := fun d =>
+      if d == "row-0" then some (context.callerScope, true, prior, prior) else none
+  , resumeIsHead := fun d => head && d == "row-0"
+  , resumeFacts := { facts with resumeOf := some "row-0" } }
+
+private def resumeOf (row : DocId) : StepOutput :=
+  .suspend .pause none noExtras (some guestPin)
+    (some { rowDoc := row, engineCurrent := false, answer := none, budget := none })
+
 def admissionCases : List AdmissionCase :=
   [ ⟨"panel_one_refused_target_admits_none", context, pinned [] 0 0,
       effects [spawn "1:a" targetA, spawn "2:c" targetC]⟩
@@ -125,7 +139,11 @@ def admissionCases : List AdmissionCase :=
       stepZero, effects [spawn "1:a" targetA] (some guestPin)⟩
   , ⟨"scratch_then_complete_admitted", context, pinned [] 0 0,
       .result { writes := 1, scratch := ["runs/call-1/report.md"], progress := false } [] none
-        none⟩ ]
+        none⟩
+  , ⟨"resume_of_chain_head_admitted", resumeContext true, stepZero, resumeOf "row-0"⟩
+  , ⟨"resume_of_unknown_row_refused", resumeContext true, stepZero, resumeOf "row-9"⟩
+  , ⟨"resume_of_continued_row_refused", resumeContext false, stepZero, resumeOf "row-0"⟩ ]
+
 
 private def observation : SpawnKey → Recovery.KillObservation := fun _ => .causedLiveLocal
 
@@ -153,7 +171,10 @@ theorem admission_regressions :
       , (some "plugin_job_stalled", none, 0)
       , (some "background_tool_budget_exceeded", none, 0)
       , (none, some (.running, 1, 1), 0)
-      , (none, some (.completed, 0, 0), 0) ] := by native_decide
+      , (none, some (.completed, 0, 0), 0)
+      , (none, some (.completed, 0, 0), 0)
+      , (some "plugin_job_resume_unknown", none, 0)
+      , (some "plugin_job_resume_not_head", none, 0) ] := by native_decide
 
 private def targetJson (t : Target) : Json :=
   Json.mkObj [("node", toJson t.1), ("agent", toJson t.2)]
@@ -1368,10 +1389,10 @@ private def viewJson : Json :=
     ("created_at", toJson (1000 : Nat)), ("adopted_at", toJson p.adoptedAt),
     ("completed_at", toJson (2000 : Nat))]
 
-/-- The seven host terminal codes; `.terminal` has none. -/
+/-- The nine host terminal codes; `.terminal` has none. -/
 def hostCodes : List String :=
   ([.terminal, .notAvailable, .engineChanged, .policyDenied, .stalled, .depthExceeded, .timedOut,
-    .stepFailed] : List Refusal).filterMap Refusal.code
+    .stepFailed, .resumeUnknown, .resumeNotHead] : List Refusal).filterMap Refusal.code
 
 /-- The origin, the verified script's digest, the echoed control kind, whether
 `root_call` is echoed, the `jobs[]` states and the mount trust hints. -/
@@ -1393,7 +1414,7 @@ theorem wire_regressions :
     hostCodes =
       [ "plugin_job_not_available", "plugin_job_engine_changed", "plugin_job_policy_denied"
       , "plugin_job_stalled", "plugin_job_depth_exceeded", "plugin_job_timed_out"
-      , "plugin_job_step_failed" ] ∧
+      , "plugin_job_step_failed", "plugin_job_resume_unknown", "plugin_job_resume_not_head" ] ∧
     inputSamples.map inputVerdict =
       [ ⟨some .installed, some "source-1", none, false, [], [true, false]⟩
       , ⟨none, none, some "answer", true, [], []⟩

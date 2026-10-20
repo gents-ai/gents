@@ -203,6 +203,7 @@ pub async fn run_step0(
             &installed,
             &runtime.home,
             matches!(output, JobStepOutput::Effects { .. }),
+            None,
         );
         return refuse(lifecycle, class, refusal.code(), &message, &next).await;
     }
@@ -432,7 +433,8 @@ pub fn split_address(address: &str) -> Option<(String, String)> {
 
 /// What the adoption transaction decided.
 enum Adopted {
-    Refused(Refusal),
+    /// With the address of the row that resumed the named resume target.
+    Refused(Refusal, Option<String>),
     Settled {
         lifecycle: ToolCallLifecycle,
         terminal: PluginJobTerminal,
@@ -634,9 +636,12 @@ pub async fn adopt_step0(
                     };
                     ctx.adoption_facts = facts.clone();
                     ctx.resume_facts = facts;
+                    let mut resumed_by = None;
                     if let Some(resume) = resume {
-                        ctx.resume_targets =
-                            vec![resume_target_in_txn(txn, coordinate, &resume.row_doc_id).await?];
+                        let (target, by) =
+                            resume_target_in_txn(txn, coordinate, &resume.row_doc_id).await?;
+                        ctx.resume_targets = vec![target];
+                        resumed_by = by;
                         ctx.resume_facts.resume_of = Some(resume.row_doc_id.clone());
                         if let Err(refusal) = validate_resume(
                             txn,
@@ -648,7 +653,7 @@ pub async fn adopt_step0(
                         )
                         .await?
                         {
-                            return Ok(Adopted::Refused(refusal));
+                            return Ok(Adopted::Refused(refusal, resumed_by));
                         }
                     }
                     let mut out = output.clone();
@@ -672,7 +677,7 @@ pub async fn adopt_step0(
                     let row = read_step_row_in_txn(txn, row_doc_id).await?;
                     let adoption = match adopt(&ctx, &view, &row, &out) {
                         Ok(adoption) => adoption,
-                        Err(refusal) => return Ok(Adopted::Refused(refusal.refusal)),
+                        Err(refusal) => return Ok(Adopted::Refused(refusal.refusal, resumed_by)),
                     };
                     let pin = adoption
                         .row
@@ -810,9 +815,16 @@ pub async fn adopt_step0(
         .await?
     };
     match adopted {
-        Adopted::Refused(refusal) => {
-            let (class, message, next) =
-                step0_refusal(refusal, binding, installed, &runtime.home, false);
+        Adopted::Refused(refusal, resumed_by) => {
+            let resume = out_resume(output).map(|resume| resume.row_doc_id.as_str());
+            let (class, message, next) = step0_refusal(
+                refusal,
+                binding,
+                installed,
+                &runtime.home,
+                false,
+                resume.map(|row| (row, resumed_by.as_deref())),
+            );
             refuse(lifecycle, class, refusal.code(), &message, &next).await
         }
         Adopted::Settled {
@@ -864,13 +876,15 @@ async fn refuse(
     Ok(payload)
 }
 
-/// The failure class, message and next call of a step 0 refusal.
+/// The failure class, message and next call of a step 0 refusal. `resume` is
+/// the row a step-0 resume named and the address of the row that resumed it.
 fn step0_refusal(
     refusal: Refusal,
     binding: &JobBinding,
     installed: &InstalledPlugin,
     home: &Path,
     effects: bool,
+    resume: Option<(&str, Option<&str>)>,
 ) -> (FailureClass, String, String) {
     let tool = binding.tool_name.as_str();
     let coordinate = binding.plugin.plugin.as_str();
@@ -895,6 +909,26 @@ fn step0_refusal(
             format!("{tool} cannot be admitted because the parent request has reached the concurrent background capacity ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT})"),
             format!("Next: wait for a background completion notification, then retry `{tool}`"),
         ),
+        Refusal::ResumeUnknown => (
+            FailureClass::PolicyDenied,
+            format!(
+                "no job row {} exists to resume",
+                resume.map_or("", |(row, _)| row)
+            ),
+            format!("Next: `{tool} resume <address>` with the address the run's receipt printed"),
+        ),
+        Refusal::ResumeNotHead => match resume {
+            Some((row, Some(address))) => (
+                FailureClass::PolicyDenied,
+                format!("{row} was already resumed by {address}; only a run's newest row resumes"),
+                format!("Next: `{tool} resume {address}`"),
+            ),
+            _ => (
+                FailureClass::PolicyDenied,
+                "that row was already resumed; only a run's newest row resumes".to_owned(),
+                format!("Next: `{tool} resume <address>` with the newest row's address"),
+            ),
+        },
         Refusal::PolicyDenied if effects => (
             FailureClass::PolicyDenied,
             "step 0 effects require a pin".to_owned(),
