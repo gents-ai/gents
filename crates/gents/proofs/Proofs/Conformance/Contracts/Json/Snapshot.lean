@@ -509,6 +509,8 @@ def snapshotJson : String :=
       ++ Conformance.FileImageHydrationContracts.subscriptionCasesJson ++ ","
     ++ "\"file_image_hydration_completion_cases\":"
       ++ Conformance.FileImageHydrationContracts.completionCasesJson ++ ","
+    ++ "\"stored_file_image_access_cases\":"
+      ++ Conformance.FileImageHydrationContracts.storageCasesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
     ++ "\"workspace_cases\":"

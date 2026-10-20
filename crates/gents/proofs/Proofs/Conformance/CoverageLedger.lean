@@ -1331,6 +1331,12 @@ def caseCoverage : List CoverageEntry :=
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "stored_file_image_access_cases"
+      "StoredFileImageAccessCases"
+      "agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_keeps_unselected_images_and_collection_interest_local"
+      "Drives native document ACP on the source and recipient, and attempts a direct pull from an unrelated transport peer. Fresh enrollment remains the delivery owner's obligation.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_image_hydration_completion_cases"
       "FileImageHydrationCompletionCases"
       "agent::p2p_reconcile::file_image_hydration::tests::generated_completion_cases_gate_delivery_and_receipts"

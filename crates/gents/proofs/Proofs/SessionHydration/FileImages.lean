@@ -1,6 +1,34 @@
 import Proofs.SessionHydration.State
+import Proofs.Identity.Permission
 
 namespace SessionHydration.FileImages
+
+inductive StoragePermission where
+  | read
+  deriving DecidableEq, Repr
+
+/-- Each replica registers its branchable image collection with its own native
+node DID and an owner-only DefraDB policy. DefraDB's branchable read guard checks
+that collection object when a replicated document has no local registration.
+Transport enrollment never grants read access to the stored copy. Revocation
+prevents future delivery; it cannot retract bytes already delivered to an owner. -/
+def storageReadGrants (owner : Identity.DID) : Identity.GrantStore StoragePermission :=
+  ⟨fun actor _ => !owner.isEmpty && actor == owner⟩
+
+def storedImageReadable (owner : Identity.DID) (actor : Option Identity.DID) : Bool :=
+  actor.any (fun did => (storageReadGrants owner).granted did .read)
+
+theorem anonymous_cannot_read_stored_image (owner : Identity.DID) :
+    storedImageReadable owner none = false := by
+  rfl
+
+theorem foreign_actor_cannot_read_stored_image (owner actor : Identity.DID)
+    (h : actor ≠ owner) : storedImageReadable owner (some actor) = false := by
+  simp [storedImageReadable, storageReadGrants, h]
+
+theorem storage_owner_can_read (owner : Identity.DID) (h : owner.isEmpty = false) :
+    storedImageReadable owner (some owner) = true := by
+  simp [storedImageReadable, storageReadGrants, h]
 
 structure Demand where
   admission : Request
