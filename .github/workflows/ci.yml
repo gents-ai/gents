@@ -30,7 +30,6 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-  CARGO_TARGET_ROOT: ${{ vars.CARGO_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
@@ -41,6 +40,8 @@ env:
   # The host service and clients normalize every registered checkout root.
   SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
+  # Compile locally instead of failing the job if the host server drops a request.
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
   repository-guard:
@@ -138,45 +139,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Keep each suite on one runner process so both the host-local
-          # sccache and that process's linked Cargo artifacts stay warm. Pair
-          # a heavy suite with a lighter one on each physical Studio.
+          # Keep each suite on one runner process so the host-local sccache
+          # stays warm for its crates. Pair a heavy suite with a lighter one
+          # on each physical Studio.
           - suite: runtime
             host: studio-1
             slot: ci-runtime
-            cargo_incremental: "1"
-            # sccache rejects rustc incremental mode rather than passing it
-            # through, so the persistent target tree owns these rebuilds.
-            rustc_wrapper: .github/scripts/rustc-direct.sh
           - suite: support
             host: studio-1
             slot: ci-support
-            cargo_incremental: "1"
-            # Shared sccache can return a stale module graph when a checkout
-            # adds a Rust module. The persistent target still keeps external
-            # dependencies warm after the support script cleans workspace
-            # members, so compile local crates directly for correctness.
-            rustc_wrapper: .github/scripts/rustc-direct.sh
           - suite: desktop
             host: studio-2
             slot: ci-desktop
-            cargo_incremental: "1"
-            rustc_wrapper: .github/scripts/rustc-direct.sh
           - suite: cli
             host: studio-2
             slot: ci-cli
-            cargo_incremental: "1"
-            rustc_wrapper: .github/scripts/rustc-direct.sh
-    # A cold runner instance must compile and link every Rust target. Each
-    # runner process owns a durable target directory; the short support suite
-    # also uses the host-shared sccache service.
+    # Each job starts from an empty RUNNER_TEMP target tree; the size-capped
+    # host sccache service supplies cached rlibs. Binaries, test harnesses,
+    # proc macros, and build scripts are not cacheable and relink every run.
     timeout-minutes: 180
-    env:
-      # RUSTC_WRAPPER controls this Cargo process; the config-form override is
-      # inherited by recursive Cargo invocations from build scripts.
-      CARGO_BUILD_RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
-      CARGO_INCREMENTAL: ${{ matrix.cargo_incremental }}
-      RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -427,7 +408,7 @@ jobs:
         # first red binary hides every later one (how a broken test binary
         # masked the trace-export suite for days — see #1139).
         # Compiler tests spawn Cargo in temporary plugin source directories.
-        # Do not leak the outer job's shared target directory into those child
+        # Do not leak the outer job's target directory into those child
         # builds: Afterburner reads their standard, source-local target output.
         run: |
           env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
@@ -442,9 +423,7 @@ jobs:
           cargo check -p gents-desktop-tauri --lib --target aarch64-apple-ios-sim
 
       - name: Show Rust build cache stats
-        # The three heavy suites use runner-local incremental state. Keep one
-        # cache-health report for the support shard and non-CI Studio users.
-        if: always() && matrix.suite == 'support'
+        if: always()
         run: .github/scripts/show-sccache-stats.sh
 
   lean-proofs:
