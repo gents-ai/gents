@@ -118,7 +118,7 @@ pub async fn verify(
         "a repeated retry created a different successor"
     );
     for (scope, request) in [
-        ("did:key:wrong-node", parent.request_id.as_str()),
+        (author, parent.request_id.as_str()),
         (node, child.request_id.as_str()),
     ] {
         let refusal = client

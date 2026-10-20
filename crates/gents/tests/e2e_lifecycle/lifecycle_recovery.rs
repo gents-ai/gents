@@ -515,7 +515,9 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         },
     )
     .await;
+    const WAKE_INPUT_MARKER: &str = "Review the background execution results above.";
     prepared.backend.enable_dynamic_followups("continue");
+    prepared.backend.enable_dynamic_followups(WAKE_INPUT_MARKER);
     configure_agent_tools(
         &db.node,
         db.node_identity.did(),
@@ -583,7 +585,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     std::fs::write(&process_gate, b"release\n").expect("release held background process");
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let successor = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             let request = db.node.execute(
                 r#"{ AgentRequest(filter: { request_id: { _eq: "failed-wake-backoff" } }, limit: 1) { request_id lifecycle_state } }"#,
@@ -594,7 +596,8 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                     .await
                     .iter()
                     .any(|message| message.message_key.starts_with("background-completion-notification:"))
-                && runtime.backend.observed_requests("continue") >= 3
+                && runtime.backend.observed_requests("continue") == 2
+                && runtime.backend.observed_requests(WAKE_INPUT_MARKER) == 1
                 && background_wake_retry_rows(&db.node, session_id)
                     .await
                     .iter()
@@ -608,8 +611,44 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     })
-    .await
-    .expect("failed wake did not retain canonical background completion notification with its successor wake in inference");
+    .await;
+    if let Err(error) = successor {
+        let rows = background_wake_retry_rows(&db.node, session_id).await;
+        let notifications = fetch_message_snapshots_for_session(&db.node, session_id)
+            .await
+            .into_iter()
+            .map(|message| message.message_key)
+            .collect::<Vec<_>>();
+        let tools = fetch_tool_call_snapshots_for_session(&db.node, session_id)
+            .await
+            .into_iter()
+            .map(|call| {
+                serde_json::json!({
+                    "name":call.tool_name, "state":call.lifecycle_state,
+                })
+            })
+            .collect::<Vec<_>>();
+        let inputs = runtime
+            .backend
+            .observed_completion_bodies()
+            .into_iter()
+            .map(|body| {
+                body["messages"]
+                    .as_array()
+                    .and_then(|messages| {
+                        messages
+                            .iter()
+                            .rev()
+                            .find(|message| message["role"] == "user")
+                    })
+                    .map(|message| message["content"].clone())
+            })
+            .collect::<Vec<_>>();
+        panic!("failed wake did not retain its notification and processing successor: {error}; requests={}; messages={notifications:?}; tools={tools:?}; provider_inputs={inputs:?}; provider_calls={}",
+            serde_json::to_string(&rows).expect("encode wake diagnostics"),
+            runtime.backend.observed_requests("continue"),
+        );
+    }
     runtime.shutdown().await;
 
     let wake_rows_before = background_wake_retry_rows(&db.node, session_id).await;

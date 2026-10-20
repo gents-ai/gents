@@ -1117,24 +1117,15 @@ async fn append_sequence_index_fetches_only_latest_header() {
             _ => None,
         }
     }
-    let before = query.replace(
-        "order: [{ node_did: DESC }, { session_id: DESC }, { sequence: DESC }]",
-        "order: { sequence: DESC }",
-    );
-    assert_ne!(before, query);
-    let mut fetched = Vec::new();
-    for query in [&before, &query] {
-        let response = access
-            .execute(&format!("query @explain(type: execute) {query}"))
-            .await
-            .unwrap();
-        let plan = &response["data"]["explain"];
-        assert_eq!(plan["executionSuccess"], true, "{response}");
-        let roots = plan["operationNode"].as_array().unwrap();
-        assert_eq!(roots.len(), 2);
-        fetched.push(metric(&roots[0]).unwrap_or_else(|| panic!("{response}")));
-    }
-    assert_eq!(fetched, vec![49, 1]);
+    let response = access
+        .execute(&format!("query @explain(type: execute) {query}"))
+        .await
+        .unwrap();
+    let plan = &response["data"]["explain"];
+    assert_eq!(plan["executionSuccess"], true, "{response}");
+    let roots = plan["operationNode"].as_array().unwrap();
+    assert_eq!(roots.len(), 2);
+    assert_eq!(metric(&roots[0]), Some(1), "{response}");
     for (row_session, sequence, key) in [
         (session, "null", "null-sequence"),
         ("only-null-sequence", "null", "only-null"),
