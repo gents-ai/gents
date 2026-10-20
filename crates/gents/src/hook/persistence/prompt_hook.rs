@@ -434,7 +434,7 @@ impl DefraSessionHook {
             lc.stage_plugin_receipt(
                 self.background_live_outputs.registry.plugin_receipt(&tool_call_doc_id).await
             );
-            lc.stage_plugin_writes(
+            lc.stage_deferred_writes(
                 self.background_live_outputs.registry.deferred_writes(&tool_call_doc_id).await
             );
 

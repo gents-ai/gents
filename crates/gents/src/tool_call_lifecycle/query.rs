@@ -1,8 +1,8 @@
 mod accepted;
 mod result;
 pub use result::{
-    load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
-    render_tool_result, CanonicalToolCallPresentation,
+    load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
+    load_tool_call_result, render_tool_result, CanonicalToolCallPresentation,
 };
 pub(crate) use result::{
     load_tool_call_arguments_in_txn, load_tool_call_read, load_tool_call_read_in_txn,
@@ -363,6 +363,7 @@ impl ToolCallLifecycle {
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
             plugin_writes: None,
+            file_changes: None,
             spawned_by_tool_call_doc_id,
             plugin_effect,
             doc_id: Some(row.doc_id),

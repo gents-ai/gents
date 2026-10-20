@@ -222,7 +222,7 @@ pub async fn run_step0(
             )
             .await;
         };
-        lifecycle.stage_plugin_writes(Some(DeferredToolWrites::new(PluginToolWrites {
+        lifecycle.stage_deferred_writes(Some(DeferredToolWrites::new(PluginToolWrites {
             grant,
             writes: writes.to_vec(),
         })));

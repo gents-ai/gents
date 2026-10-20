@@ -1977,7 +1977,7 @@ mod tool_writes {
             pending.downcast_ref::<&'static str>(),
             Some(&"independent host observation"),
         );
-        call.stage_plugin_writes(Some(pending));
+        call.stage_deferred_writes(Some(pending));
         if transient_terminal {
             crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
         }

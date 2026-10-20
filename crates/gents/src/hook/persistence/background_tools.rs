@@ -291,7 +291,7 @@ impl DefraSessionHook {
                     .plugin_receipt(&execution_tool_doc_id)
                     .await,
             );
-            lifecycle.stage_plugin_writes(
+            lifecycle.stage_deferred_writes(
                 live_outputs
                     .registry
                     .deferred_writes(&execution_tool_doc_id)

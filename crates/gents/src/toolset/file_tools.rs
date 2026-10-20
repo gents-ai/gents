@@ -1,3 +1,5 @@
+pub(crate) mod change_capture;
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -92,20 +94,7 @@ pub(crate) fn content_hash(bytes: &[u8]) -> String {
 pub(crate) fn file_content_hash(path: &Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read as _;
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let mut file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "the mutation target is not a regular file",
-        ));
-    }
+    let mut file = open_regular_file(path)?;
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 16 * 1024];
     loop {
@@ -119,6 +108,24 @@ pub(crate) fn file_content_hash(path: &Path) -> std::io::Result<String> {
         hash.update(&buffer[..read]);
     }
     Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+pub(crate) fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the mutation target is not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 /// Per-path serialization for file mutators (edit_file read → hash-check →
@@ -659,22 +666,31 @@ impl Tool for WriteFileTool {
             args.overwrite,
         )
         .await?;
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::write(&path, args.content.as_bytes()).await?;
-        let mut bytes_written = args.content.len();
-        let mut written_hash = content_hash(args.content.as_bytes());
-        let mut note = None;
-        if let Some(writethrough) = &self.writethrough {
-            note = writethrough
-                .after_mutation_under_lock(&path, crate::toolset::lsp::MutationKind::Write)
-                .await;
-            if let Ok(bytes) = tokio::fs::read(&path).await {
-                bytes_written = bytes.len();
-                written_hash = content_hash(&bytes);
+        let capture = change_capture::FileChangeCapture::start(&self.context.root(), &path).await;
+        let mutation = async {
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
             }
+            tokio::fs::write(&path, args.content.as_bytes()).await?;
+            let mut bytes_written = args.content.len();
+            let mut written_hash = content_hash(args.content.as_bytes());
+            let mut note = None;
+            if let Some(writethrough) = &self.writethrough {
+                note = writethrough
+                    .after_mutation_under_lock(&path, crate::toolset::lsp::MutationKind::Write)
+                    .await;
+                if let Ok(bytes) = tokio::fs::read(&path).await {
+                    bytes_written = bytes.len();
+                    written_hash = content_hash(&bytes);
+                }
+            }
+            Ok::<_, ToolError>((bytes_written, written_hash, note))
         }
+        .await;
+        if let Some(capture) = capture {
+            capture.finish().await;
+        }
+        let (bytes_written, written_hash, mut note) = mutation?;
         drop(_guard);
         if let Some(writethrough) = &self.writethrough {
             let diag = writethrough
@@ -875,22 +891,32 @@ impl Tool for EditFileTool {
                 let post_edit_hash = content_hash(post_text.as_bytes());
                 let mut edit_note = None;
                 if !args.dry_run {
-                    tokio::fs::write(&path, post_text.as_bytes()).await?;
-                    let verify = tokio::fs::read(&path).await?;
-                    if verify != post_text.as_bytes() {
-                        return Err(anyhow!(
-                            "post-write verification failed for {display}: the bytes on disk do not match the edited content"
-                        )
-                        .into());
-                    }
-                    if let Some(writethrough) = &self.writethrough {
-                        edit_note = writethrough
-                            .after_mutation_under_lock(
-                                &path,
-                                crate::toolset::lsp::MutationKind::Edit,
+                    let capture =
+                        change_capture::FileChangeCapture::start(&self.context.root(), &path).await;
+                    let mutation = async {
+                        tokio::fs::write(&path, post_text.as_bytes()).await?;
+                        let verify = tokio::fs::read(&path).await?;
+                        if verify != post_text.as_bytes() {
+                            return Err(anyhow!(
+                                "post-write verification failed for {display}: the bytes on disk do not match the edited content"
                             )
-                            .await;
+                            .into());
+                        }
+                        if let Some(writethrough) = &self.writethrough {
+                            edit_note = writethrough
+                                .after_mutation_under_lock(
+                                    &path,
+                                    crate::toolset::lsp::MutationKind::Edit,
+                                )
+                                .await;
+                        }
+                        Ok::<_, ToolError>(())
                     }
+                    .await;
+                    if let Some(capture) = capture {
+                        capture.finish().await;
+                    }
+                    mutation?;
                     drop(_guard);
                     if let Some(writethrough) = &self.writethrough {
                         let diag = writethrough

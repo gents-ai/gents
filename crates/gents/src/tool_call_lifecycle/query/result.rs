@@ -105,6 +105,54 @@ pub(crate) struct CanonicalToolCallRead {
     pub(crate) raw_result: Option<String>,
 }
 
+/// Resolves the physical admission and exact request scope before fetching
+/// retained file bytes. Ordinary tool-result reads do not load these images.
+pub async fn load_tool_call_file_changes(
+    access: &ConfigAccess,
+    tool_call_doc_id: &str,
+    request_doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<gents_protocol::file_changes::ToolFileChanges>> {
+    let (call, _, _, _) = load_accepted_tool_call(
+        ReadSource::Access(access),
+        tool_call_doc_id,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await?;
+    anyhow::ensure!(
+        call.request_doc_id.as_deref() == Some(request_doc_id),
+        "file changes crossed the selected request scope"
+    );
+    let state = ToolCallState::from_persisted(&call.lifecycle_state)
+        .context("file changes have an invalid tool lifecycle state")?;
+    if !state.is_terminal() {
+        return Ok(None);
+    }
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let response = access.execute(&format!(
+        r#"{{ AgentToolCall(docID: "{}", filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID file_changes }} }}"#,
+        escape_graphql_string(tool_call_doc_id),
+        escape_graphql_string(request_doc_id),
+    )).await?;
+    let rows = response["data"]["AgentToolCall"]
+        .as_array()
+        .context("file change lookup omitted physical tool rows")?;
+    anyhow::ensure!(
+        rows.len() == 1 && rows[0]["_docID"].as_str() == Some(tool_call_doc_id),
+        "file changes lost their physical tool binding"
+    );
+    match rows[0].get("file_changes").filter(|value| !value.is_null()) {
+        Some(value) => {
+            crate::toolset::FileChanges::decode(tool_call_doc_id, value.clone()).map(Some)
+        }
+        None => Ok(None),
+    }
+}
+
 pub async fn load_tool_call_result(
     access: &ConfigAccess,
     tool_call_doc_id: &str,
