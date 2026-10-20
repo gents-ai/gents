@@ -83,6 +83,21 @@ impl EmbeddedRemoteP2pAdmin {
         .await
     }
 
+    /// Exact document heads, without requiring unrelated branchable collection heads.
+    pub async fn document_heads_acknowledged(
+        &self,
+        peer_id: &str,
+        collection: &str,
+        doc_ids: &[String],
+    ) -> RemoteP2pAdminResult<Vec<bool>> {
+        let p2p = self.p2p()?;
+        self.run(
+            "document_heads_acknowledged",
+            p2p.document_heads_acknowledged(peer_id, collection, doc_ids),
+        )
+        .await
+    }
+
     /// The `(doc_id, requester_did)` documents of `collection` whose current
     /// heads every replicator carrying them acknowledged: those scoped to the
     /// requester and those carrying the whole collection. A document no
@@ -394,23 +409,15 @@ fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
 pub(super) async fn push_documents_to_peer(
     node: &Arc<EmbeddedNode>,
     peer_id: &str,
-    documents: &std::collections::BTreeSet<super::session_hydration::HydrationDocument>,
+    documents: Vec<P2pDocumentRequest>,
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
     let p2p = crate::identity::node_p2p(node)
         .context("embedded node has no P2P transport for hydration delivery")?;
-    let docs = documents
-        .iter()
-        .map(|document| P2pDocumentRequest {
-            collection: super::session_hydration::hydration_collection_name(document.collection)
-                .to_string(),
-            doc_id: document.doc_id.clone(),
-        })
-        .collect::<Vec<_>>();
     timeout(
         DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
-        p2p.push_documents_to_peer(peer_id, docs),
+        p2p.push_documents_to_peer(peer_id, documents),
     )
     .await
     .with_context(|| format!("push hydration documents to peer {peer_id} timed out"))?
@@ -1454,6 +1461,147 @@ mod tests {
             "filtered tool-call replay should not leak non-matching rows"
         );
 
+        sender.shutdown().await;
+        receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn explicit_file_image_push_keeps_unselected_images_and_collection_interest_local() {
+        let keys = tempfile::tempdir().unwrap();
+        let sender_identity =
+            KeyIdentity::load_or_create(keys.path().join("sender.key"), None).unwrap();
+        let receiver_identity =
+            KeyIdentity::load_or_create(keys.path().join("receiver.key"), None).unwrap();
+        assert_ne!(sender_identity.did(), receiver_identity.did());
+        let sender_test = runtime_test_node_with_identity(&sender_identity).await;
+        let receiver_test = runtime_test_node_with_identity(&receiver_identity).await;
+        let sender = &sender_test.node;
+        let receiver = &receiver_test.node;
+        let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
+        let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
+        let sender_addresses = wait_for_peer_info(&sender_admin).await;
+        let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
+        sender_admin.connect(&receiver_addresses).await.unwrap();
+        wait_for_active_peer(&sender_admin).await;
+        wait_for_active_peer(&receiver_admin).await;
+        receiver_admin
+            .add_replicator(
+                &sender_addresses,
+                &["FileImageHydrationRequest".into()],
+                &PairingFilters::default(),
+            )
+            .await
+            .unwrap();
+        let mut selected = String::new();
+        for tool in ["selected-tool", "unselected-tool"] {
+            let images = serde_json::json!({
+                "version": 1, "tool_call_doc_id": tool, "changes": [{
+                    "root": "/recorded", "path": "edited.txt", "before": {"kind": "missing"},
+                    "after": {"kind": "unavailable", "reason": "tooLarge"}
+                }]
+            });
+            let variables = serde_json::json!({"input": {
+                "tool_call_doc_id": tool, "request_doc_id": "request",
+                "node_did": sender_identity.did(), "requester_did": receiver_identity.did(),
+                "session_id": "session", "file_changes": images,
+            }});
+            let response = crate::config_client::ConfigAccess::transact_local_write(
+                sender, None, "test.file_images.seed", move |txn| {
+                    let variables = variables.clone();
+                    Box::pin(async move { txn.execute_with_variables(
+                        "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+                        &variables,
+                    ).await })
+                },
+            ).await.unwrap();
+            if tool == "selected-tool" {
+                selected = crate::graphql::created_doc_id(&response, "ToolFileChange").unwrap();
+            }
+        }
+        let receiver_access = crate::config_client::ConfigAccess::local(receiver.clone());
+        assert!(receiver_access
+            .execute("{ ToolFileChange { _docID } }")
+            .await
+            .unwrap()["data"]["ToolFileChange"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let peer_id = receiver.p2p().unwrap().local_peer_id().await.unwrap();
+        push_documents_to_peer(
+            sender,
+            &peer_id,
+            vec![P2pDocumentRequest {
+                collection: "ToolFileChange".into(),
+                doc_id: selected.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            sender_admin
+                .document_heads_acknowledged(
+                    &peer_id,
+                    "ToolFileChange",
+                    std::slice::from_ref(&selected)
+                )
+                .await
+                .unwrap(),
+            [false]
+        );
+        sender_admin
+            .add_replicator(
+                &receiver_addresses,
+                &["FileImageHydrationRequest".into()],
+                &PairingFilters::default(),
+            )
+            .await
+            .unwrap();
+        push_documents_to_peer(
+            sender,
+            &peer_id,
+            vec![P2pDocumentRequest {
+                collection: "ToolFileChange".into(),
+                doc_id: selected.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            sender_admin
+                .document_heads_acknowledged(
+                    &peer_id,
+                    "ToolFileChange",
+                    std::slice::from_ref(&selected)
+                )
+                .await
+                .unwrap(),
+            [true]
+        );
+        wait_for_value(
+            receiver,
+            "ToolFileChange",
+            "tool_call_doc_id",
+            "selected-tool",
+        )
+        .await;
+        let result = receiver_access
+            .execute("{ ToolFileChange { _docID tool_call_doc_id file_changes } }")
+            .await
+            .unwrap();
+        let rows = result["data"]["ToolFileChange"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["_docID"], selected);
+        assert_eq!(rows[0]["file_changes"]["tool_call_doc_id"], "selected-tool");
+        assert!(sender_admin
+            .list_p2p_collections()
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(receiver_admin
+            .list_p2p_collections()
+            .await
+            .unwrap()
+            .is_empty());
         sender.shutdown().await;
         receiver.shutdown().await;
     }
