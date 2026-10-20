@@ -889,7 +889,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tx_tests {
     use super::*;
     use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
