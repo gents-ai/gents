@@ -1,4 +1,10 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import type { OptimisticPendingTurn } from "../../chat-shell.js";
 import type {
@@ -14,6 +20,7 @@ export type ChatTranscriptPanelProps = {
   selectedSessionId: string | null;
   session: DesktopSessionSnapshot | null;
   optimisticPendingTurn?: OptimisticPendingTurn | null;
+  activity?: ReactNode;
   onEditUserMessage?: (
     item: Extract<RenderedTimelineItem, { kind: "userMessage" }>,
   ) => void;
@@ -76,6 +83,7 @@ export function ChatTranscriptPanel({
   selectedSessionId,
   session,
   optimisticPendingTurn,
+  activity,
   onEditUserMessage,
   onRetryMessage,
   retryUnavailableHint,
@@ -130,6 +138,7 @@ export function ChatTranscriptPanel({
         requestId: optimisticPendingTurn.requestId,
         content: optimisticPendingTurn.content,
         selectedSkillIds: optimisticPendingTurn.selectedSkillIds,
+        capturedContext: optimisticPendingTurn.capturedContext,
         lifecycleState: optimisticPendingTurn.lifecycleState,
         foldedIntoRequestId: null,
         origin: null,
@@ -283,6 +292,7 @@ export function ChatTranscriptPanel({
     transcriptChange,
     timelineItems.length,
     session?.turnState,
+    activity,
   ]);
 
   useLayoutEffect(() => {
@@ -491,7 +501,7 @@ export function ChatTranscriptPanel({
             scrollElement={transcriptPanel}
             requestCancelCause={requestOutcome?.cancelCause}
           />
-          {showThinking ? (
+          {activity === undefined && showThinking ? (
             <div className="turn-block">
               <article
                 className="message-card thinking-card"
@@ -557,6 +567,7 @@ export function ChatTranscriptPanel({
               </article>
             </div>
           ) : null}
+          {activity}
           <div className="transcript-end-anchor" />
         </div>
       ) : selectedSessionId ? (
