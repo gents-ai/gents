@@ -1280,11 +1280,14 @@ private def wireOutputJson (s : OutputSample) : Json :=
       listField "interrupt" (e.interrupts.map fun slot => Json.mkObj [("slot", toJson slot)]) ++
       ridersJson s e.extras))]
 
-/-- One `jobs[]` row: its persisted state and terminal note. -/
+/-- One `jobs[]` row: its persisted state and terminal note, its pin's
+adoption time, and the row its pin resumes. -/
 structure RowSample where
   (rowDoc toolCall handle : String)
   state : RowState
   note : TerminalNote
+  adoptedAt : Nat
+  resumeOf : Option DocId
 
 structure InputSample where
   name : String
@@ -1313,9 +1316,9 @@ def inputSamples : List InputSample :=
   , ⟨"paused_row_jobs_and_child_states",
       pinned [child "1:a" .live, child "2:b" .completed, child "3:c" .failed,
         child "4:d" .interrupted, child "5:e" .other] 5 4,
-      2, [], [⟨"row-p", "call-p", "flow-p", .completed, .paused (some .user)⟩,
-        ⟨"row-w", "call-w", "flow-w", .completed, .awaitingUser⟩,
-        ⟨"row-c", "call-c", "flow-c", .completed, .none⟩], []⟩ ]
+      2, [], [⟨"row-p", "call-p", "flow-p", .completed, .paused (some .user), 1000, none⟩,
+        ⟨"row-w", "call-w", "flow-w", .completed, .awaitingUser, 2000, none⟩,
+        ⟨"row-c", "call-c", "flow-p", .completed, .none, 3000, some "row-p"⟩], []⟩ ]
 
 private def verified (s : InputSample) : Option VerifiedScript :=
   s.job.pin.bind fun p => verifiedScript p s.step verifiedSource
@@ -1353,9 +1356,10 @@ private def wireInputJson (s : InputSample) : Json :=
      ("children", Json.mkObj (j.children.map fun ch => (ch.key.slot, childViewJson ch))),
      ("control", toJson (echo.control.map wireEchoJson)),
      ("scratch", Json.mkObj (s.scratch.map fun (n, v) => (n, toJson v))),
-     ("jobs", toJson (s.jobs.map fun r => Json.mkObj [("row_doc_id", toJson r.rowDoc),
+     ("jobs", toJson (s.jobs.map fun r => Json.mkObj ([("row_doc_id", toJson r.rowDoc),
         ("tool_call_id", toJson r.toolCall), ("handle", toJson r.handle),
-        ("state", jobStateJson (JobState.of r.state r.note))]))])
+        ("state", jobStateJson (JobState.of r.state r.note)),
+        ("adopted_at", toJson r.adoptedAt)] ++ optField "resume_of" (r.resumeOf.map toJson))))])
 
 /-- A row driven from a child session, whose id contains `:`. -/
 private def viewJob : Job :=
