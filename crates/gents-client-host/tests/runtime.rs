@@ -26,6 +26,8 @@ use console::ConsoleChild as Child;
 mod configured_actions;
 #[path = "support/editor_history.rs"]
 mod editor_history;
+#[path = "support/editor_retry.rs"]
+mod editor_retry;
 #[path = "support/editor_workspace.rs"]
 mod editor_workspace;
 #[allow(dead_code)]
@@ -53,6 +55,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorHistory,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorRetry,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
     Goal,
 }
@@ -63,6 +67,7 @@ impl Journey {
             Self::Editor => Some("full"),
             Self::EditorSteering => Some("steering"),
             Self::EditorHistory => Some("history"),
+            Self::EditorRetry => Some("retry"),
             Self::EditorWorkspace => Some("workspace"),
             _ => None,
         }
@@ -175,6 +180,30 @@ async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result
 }
 
 #[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorRetry)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-retry-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
 fn copy_editor_evidence(root: &Path, name: &str) -> Result<()> {
     let artifacts = std::fs::read_to_string(root.join("editor-artifacts-path"))?;
     let artifacts = std::fs::canonicalize(artifacts)?;
@@ -204,6 +233,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let goal_provider_gate = editor_goal_gate.clone();
     let goal_provider_hold = root.join("hold-goal-provider");
+    let retry_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider_retry_attempts = Arc::clone(&retry_attempts);
     let provider = FakeLlm::start_with_models(
         if journey.editor_scenario().is_some() {
             &["editor-fixture", "editor-fixture-alternate"]
@@ -212,6 +243,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorRetry) {
+                if let Some(action) = editor_retry::reply(request, &provider_retry_attempts) {
+                    return action;
+                }
+            }
             if matches!(journey, Journey::EditorHistory) {
                 if let Some(reply) = editor_history::reply(&request) {
                     return ChatAction::Sse(fake_llm::completion_text_sse(&reply));
@@ -1086,6 +1122,45 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 .await?;
         std::fs::write(
             root.join("editor-workspace-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+    }
+    if matches!(journey, Journey::EditorRetry) {
+        std::fs::write(
+            root.join("editor-retry-fixture.json"),
+            serde_json::to_vec(&json!({
+                "prompt":editor_retry::PROMPT,
+                "reply":editor_retry::REPLY,
+                "captured":editor_retry::CAPTURED,
+            }))?,
+        )?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        id += 1;
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "retry",
+        )
+        .await?;
+        let evidence = editor_retry::verify(
+            &mut client,
+            &mut id,
+            &access,
+            &provider,
+            root,
+            node_did,
+            session,
+            &client_did,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-retry-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }

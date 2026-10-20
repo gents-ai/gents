@@ -13,6 +13,7 @@ use tokio::sync::{oneshot, Notify};
 
 pub enum ChatAction {
     Sse(String),
+    HttpError(StatusCode, String),
     DelayThenSse(Duration, String),
     WaitThenSse(Arc<tokio::sync::Semaphore>, String),
     GatedSse(
@@ -208,6 +209,7 @@ async fn handle_chat(
 
     match (state.responder)(&request_json) {
         ChatAction::Sse(body) => sse_response(body),
+        ChatAction::HttpError(status, body) => json_response(status, body),
         ChatAction::GatedSse(first, gate, rest, emitted) => {
             let stopped = state.stopped.clone();
             let chunks = futures_util::stream::unfold(
