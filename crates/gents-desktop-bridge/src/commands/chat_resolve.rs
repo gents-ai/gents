@@ -6,7 +6,9 @@
 //! reconciles that exact request rather than minting a new one.
 
 use anyhow::Result;
-use gents_desktop_core::client::{ClientCore, SubmissionOutcomeUnknown, SubmittedRequest};
+use gents_desktop_core::client::{
+    ClientCore, DeliveryUnconfirmed, SubmissionOutcomeUnknown, SubmittedRequest,
+};
 
 use crate::types::{ChatSendOutcome, ChatSendRequest, ChatSendResult};
 
@@ -21,15 +23,30 @@ pub(super) fn resolve_target(request: &ChatSendRequest) -> Option<&str> {
 
 /// Report a submission, turning an unknown owner outcome into a typed result.
 pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult> {
-    match submitted {
-        Ok(receipt) => Ok(receipt.into()),
-        Err(error) => match error.downcast::<SubmissionOutcomeUnknown>() {
-            Ok(unknown) => Ok(ChatSendResult::with_outcome(
+    let error = match submitted {
+        Ok(receipt) => return Ok(receipt.into()),
+        Err(error) => error,
+    };
+    let error = match error.downcast::<SubmissionOutcomeUnknown>() {
+        Ok(unknown) => {
+            return Ok(ChatSendResult::with_outcome(
                 unknown.pending.result,
                 ChatSendOutcome::DeliveryUnknown,
-            )),
-            Err(error) => Err(error),
-        },
+            ))
+        }
+        Err(error) => error,
+    };
+    match error.downcast::<DeliveryUnconfirmed>() {
+        Ok(unconfirmed) => Ok(ChatSendResult::with_outcome(
+            SubmittedRequest {
+                request_id: unconfirmed.request_id,
+                session_id: unconfirmed.session_id,
+                node_did: unconfirmed.node_did,
+                agent_id: None,
+            },
+            ChatSendOutcome::DeliveryUnknown,
+        )),
+        Err(error) => Err(error),
     }
 }
 

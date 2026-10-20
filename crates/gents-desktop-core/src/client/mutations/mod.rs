@@ -8,8 +8,8 @@ pub use chat::{
     submit_task_request, SubmitRequestOptions, SubmittedRequest,
 };
 pub use chat::{
-    resolve_unresolved_submission, submitted_request_exists, SubmissionOutcomeUnknown,
-    UnresolvedSubmission,
+    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
+    SubmissionOutcomeUnknown, UnresolvedSubmission,
 };
 pub use manage::{
     apply_config_components_on, delete_agent_context_on, delete_agent_on, delete_event_source_on,

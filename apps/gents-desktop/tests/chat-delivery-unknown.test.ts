@@ -90,26 +90,31 @@ describe("chat send with an unknown delivery outcome", () => {
     expect(loadUnresolvedSubmissions()).toEqual([]);
   });
 
-  it("keeps blocking a fresh resend across a reload until delivery is decided", async () => {
+  it("keeps the identity unresolved after a reload when the owner shows no request", async () => {
     const first = harness(vi.fn().mockResolvedValueOnce(unknownOutcome));
     await first.actions.sendMessage("hello owner");
 
-    // A new action owner models a reload: only the persisted identity survives.
-    const sendChatMessage = vi.fn().mockResolvedValueOnce({
-      ...unknownOutcome,
-      agentId: null,
-      outcome: "notDelivered",
-    });
+    // A new action owner models a reload: only the persisted identity survives,
+    // and an absent owner receipt cannot prove the original never commits.
+    const sendChatMessage = vi
+      .fn()
+      .mockResolvedValue({ ...unknownOutcome, agentId: null });
     const reloaded = harness(sendChatMessage);
     await reloaded.actions.sendMessage("hello owner");
+    await reloaded.actions.sendMessage("hello owner");
 
-    expect(sendChatMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ resolveRequestId: "request-unknown" }),
-    );
-    expect(reloaded.reportFailure).toHaveBeenCalledWith(
+    expect(sendChatMessage).toHaveBeenCalledTimes(2);
+    for (const [call] of sendChatMessage.mock.calls)
+      expect(call).toEqual(
+        expect.objectContaining({ resolveRequestId: "request-unknown" }),
+      );
+    expect(reloaded.reportFailure).toHaveBeenCalledWith(DELIVERY_UNKNOWN_HINT);
+    expect(reloaded.reportFailure).not.toHaveBeenCalledWith(
       EARLIER_SEND_NOT_DELIVERED_HINT,
     );
-    expect(loadUnresolvedSubmissions()).toEqual([]);
+    expect(loadUnresolvedSubmissions()).toEqual([
+      expect.objectContaining({ requestId: "request-unknown" }),
+    ]);
   });
 
   it("sends different content normally", async () => {

@@ -4,12 +4,12 @@ mod session;
 
 pub use gents::interrupt_request;
 pub use request::{
-    resend_request, retry_request, submit_request, submit_task_request, SubmitRequestOptions,
-    SubmittedRequest,
+    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
+    SubmissionOutcomeUnknown, UnresolvedSubmission,
 };
 pub use request::{
-    resolve_unresolved_submission, submitted_request_exists, SubmissionOutcomeUnknown,
-    UnresolvedSubmission,
+    resend_request, retry_request, submit_request, submit_task_request, SubmitRequestOptions,
+    SubmittedRequest,
 };
 pub use session::rename_session;
 

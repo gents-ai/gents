@@ -156,8 +156,8 @@ export function createChatActions({
       });
       if (earlier) forgetUnresolvedSubmission(earlier.requestId);
       if (result.outcome === "notDelivered") {
-        // The earlier signed request is gone (for example after a restart)
-        // and the owner never received it, so a fresh send is now safe.
+        // The owner definitely rejected the retained, byte-identical signed
+        // request, so it was not delivered.
         if (!selection.acceptsIntent(store, intentGeneration)) return null;
         chat.resetWorkflow(stores.chat);
         reportFailure(EARLIER_SEND_NOT_DELIVERED_HINT);

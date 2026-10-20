@@ -998,6 +998,6 @@ mod tests;
 mod receipt;
 
 pub use receipt::{
-    resolve_unresolved_submission, submitted_request_exists, SubmissionOutcomeUnknown,
-    UnresolvedSubmission,
+    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
+    SubmissionOutcomeUnknown, UnresolvedSubmission,
 };

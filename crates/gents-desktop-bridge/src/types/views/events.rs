@@ -48,7 +48,8 @@ pub struct ChatSendResult {
 pub enum ChatSendOutcome {
     /// The owner may hold the request; resend must reconcile this identity.
     DeliveryUnknown,
-    /// The owner never received the request; a fresh send is safe.
+    /// The owner definitely rejected the retained, byte-identical signed
+    /// request, so it was not delivered.
     NotDelivered,
 }
 

@@ -3,12 +3,14 @@
 //! The signed request of an ambiguous owner write is retained in memory so a
 //! later reconciliation replays identical bytes and never mints a new identity.
 //! After a restart the payload is gone; the desktop UI keeps the identity, and
-//! reconciliation then falls back to proving presence or absence by request id.
+//! reconciliation can only prove presence by request id. Absence proves
+//! nothing (the original write may still be in flight), so the identity stays
+//! unresolved.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::super::super::mutations::{
-    resolve_unresolved_submission, submitted_request_exists, SubmissionOutcomeUnknown,
+    reconcile_unretained_submission, resolve_unresolved_submission, SubmissionOutcomeUnknown,
     SubmittedRequest,
 };
 use super::{observe_submitted_request, ClientCore};
@@ -38,9 +40,10 @@ impl ClientCore {
     /// Reconcile an earlier send whose owner outcome was unknown.
     ///
     /// Returns `Ok(Some(_))` once the owner holds the original request, and
-    /// `Ok(None)` when the owner proves it never received it (a fresh send is
-    /// then safe). `SubmissionOutcomeUnknown` is returned again when the
-    /// outcome still cannot be determined.
+    /// `Ok(None)` only when the owner definitely rejected the retained,
+    /// byte-identical signed request. `SubmissionOutcomeUnknown` (payload
+    /// retained) or `DeliveryUnconfirmed` (payload no longer retained) is
+    /// returned when the outcome still cannot be determined.
     pub async fn resolve_chat_submission(
         &self,
         node_did: &str,
@@ -96,24 +99,15 @@ impl ClientCore {
                     agent_id: None,
                 })
             }
-            None => {
-                let present = submitted_request_exists(
+            None => Some(
+                reconcile_unretained_submission(
                     &self.session_queue_access(node_did),
                     node_did,
                     session_id,
                     request_id,
                 )
-                .await
-                .with_context(|| {
-                    format!("checking whether earlier send {request_id} reached its owner")
-                })?;
-                present.then(|| SubmittedRequest {
-                    request_id: request_id.to_string(),
-                    session_id: session_id.to_string(),
-                    node_did: node_did.to_string(),
-                    agent_id: None,
-                })
-            }
+                .await?,
+            ),
         };
         let Some(receipt) = resolved else {
             return Ok(None);

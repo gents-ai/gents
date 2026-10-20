@@ -65,6 +65,31 @@ impl std::fmt::Display for SubmissionOutcomeUnknown {
 
 impl std::error::Error for SubmissionOutcomeUnknown {}
 
+/// An earlier send whose delivery cannot be decided without its signed
+/// payload (for example after a restart).
+///
+/// Carries identity only. An absent owner receipt does not prove the original
+/// will never commit, because that write may still be in flight, so callers
+/// must keep this identity unresolved instead of allowing a fresh send.
+#[derive(Debug)]
+pub struct DeliveryUnconfirmed {
+    pub request_id: String,
+    pub session_id: String,
+    pub node_did: String,
+}
+
+impl std::fmt::Display for DeliveryUnconfirmed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "delivery of request {} in session {} is unconfirmed: it may still be delivered; check the session before resending",
+            self.request_id, self.session_id
+        )
+    }
+}
+
+impl std::error::Error for DeliveryUnconfirmed {}
+
 /// Error context attached to every receipt read, so an unreadable receipt is
 /// recognisable after `write_with_receipt` wraps it.
 const RECEIPT_READ_CONTEXT: &str = "reading owner signed submission receipt";
@@ -217,12 +242,36 @@ fn reports_existing_request(error: &anyhow::Error) -> bool {
     })
 }
 
-/// Whether the owner holds a request with this exact identity in its scope.
+/// Reconcile an earlier unknown send whose signed payload is no longer retained.
 ///
-/// Used when the signed payload of an unknown send is no longer retained (for
-/// example after a restart): presence proves delivery, absence proves the
-/// earlier attempt never committed, because owner writes are atomic.
-pub async fn submitted_request_exists(
+/// A visible owner request with this identity proves delivery. Absence, or an
+/// unreadable lookup, proves nothing: the original write may still be in
+/// flight. Both return [`DeliveryUnconfirmed`] so the identity stays
+/// unresolved and no fresh request is minted.
+pub async fn reconcile_unretained_submission(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    request_id: &str,
+) -> Result<SubmittedRequest> {
+    match submitted_request_exists(access, node_did, session_id, request_id).await {
+        Ok(true) => Ok(SubmittedRequest {
+            request_id: request_id.to_string(),
+            session_id: session_id.to_string(),
+            node_did: node_did.to_string(),
+            agent_id: None,
+        }),
+        Ok(false) | Err(_) => Err(DeliveryUnconfirmed {
+            request_id: request_id.to_string(),
+            session_id: session_id.to_string(),
+            node_did: node_did.to_string(),
+        }
+        .into()),
+    }
+}
+
+/// Whether the owner currently shows a request with this identity in its scope.
+async fn submitted_request_exists(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
@@ -587,5 +636,71 @@ mod tests {
             error.downcast_ref::<SubmissionOutcomeUnknown>().is_some(),
             "an existing-request rejection with no visible receipt may still be delivered: {error:#}"
         );
+    }
+
+    #[tokio::test]
+    async fn unretained_absent_receipt_stays_unknown_and_sends_nothing() {
+        let server = MockServer::start().await;
+        mount_receipt(&server, Vec::new()).await;
+        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+        let result = test_result();
+
+        let error = reconcile_unretained_submission(
+            &access,
+            &result.node_did,
+            &result.session_id,
+            &result.request_id,
+        )
+        .await
+        .expect_err("an absent receipt does not prove the original never commits");
+
+        let unconfirmed = error
+            .downcast_ref::<DeliveryUnconfirmed>()
+            .unwrap_or_else(|| panic!("absence must stay unresolved: {error:#}"));
+        assert_eq!(unconfirmed.request_id, result.request_id);
+        assert_eq!(unconfirmed.session_id, result.session_id);
+        assert!(
+            create_requests(&server).await.is_empty(),
+            "reconciliation must not create a fresh request"
+        );
+    }
+
+    #[tokio::test]
+    async fn unretained_unreadable_receipt_stays_unknown() {
+        let server = MockServer::start().await;
+        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+        let result = test_result();
+
+        let error = reconcile_unretained_submission(
+            &access,
+            &result.node_did,
+            &result.session_id,
+            &result.request_id,
+        )
+        .await
+        .expect_err("an unreadable receipt proves nothing");
+
+        assert!(error.downcast_ref::<DeliveryUnconfirmed>().is_some());
+    }
+
+    #[tokio::test]
+    async fn unretained_present_receipt_resolves_to_original_identity() {
+        let server = MockServer::start().await;
+        let result = test_result();
+        mount_receipt(&server, vec![json!({"request_id": result.request_id})]).await;
+        let access = test_access(&format!("{}/api/v0/graphql", server.uri()));
+
+        let resolved = reconcile_unretained_submission(
+            &access,
+            &result.node_did,
+            &result.session_id,
+            &result.request_id,
+        )
+        .await
+        .expect("a visible owner request proves delivery");
+
+        assert_eq!(resolved.request_id, result.request_id);
+        assert_eq!(resolved.session_id, result.session_id);
+        assert_eq!(resolved.node_did, result.node_did);
     }
 }
