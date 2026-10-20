@@ -13,7 +13,7 @@ use gents_protocol::session_hydration::HydrationRequest;
 use serde_json::Value;
 
 use super::bootstrap::normalize_required;
-use super::writes::find_request_in_scope;
+use super::writes::{ensure_peer_chat_ready_at, find_request_in_scope};
 use super::ClientCore;
 
 const DEMAND_FIELDS: &str = "_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature";
@@ -114,12 +114,24 @@ impl ClientCore {
             .as_ref()
             .context("local store access is unavailable")?
             .clone();
-        admit_image_demand(&self.node, &demand).await?;
+        let mut sync = self.sync_state.subscribe();
+        let mut observed_demand = false;
         let read = async {
             loop {
                 let response = access.execute(&demand_query(&demand)).await?;
-                let row = demand_row(&response)?.context("file review demand disappeared")?;
-                if let Some(receipt) = verified_receipt(row, &demand, &self.node_identity).await? {
+                let row = demand_row(&response)?;
+                anyhow::ensure!(
+                    row.is_some() || !observed_demand,
+                    "file review demand disappeared"
+                );
+                let receipt = match row {
+                    Some(row) => {
+                        observed_demand = true;
+                        verified_receipt(row, &demand, &self.node_identity).await?
+                    }
+                    None => None,
+                };
+                if let Some(receipt) = receipt {
                     match receipt.selection() {
                         FileImageSelection::Rejected => {
                             anyhow::bail!("Runtime rejected file review: {}", receipt.detail())
@@ -156,10 +168,21 @@ impl ClientCore {
                         }
                     }
                 }
-                changes
-                    .recv()
-                    .await
-                    .context("file review observation subscription closed")?;
+                let records = self.sync_state.records();
+                let peer = records
+                    .iter()
+                    .find(|record| record.node_did == demand.admission.node_did);
+                ensure_peer_chat_ready_at(&demand.admission.node_did, peer, chrono::Utc::now())
+                    .context("Reconnect this runtime to load new file versions.")?;
+                if row.is_none() {
+                    admit_image_demand(&self.node, &demand).await?;
+                    observed_demand = true;
+                    continue;
+                }
+                tokio::select! {
+                    event = changes.recv() => { event.context("file review observation subscription closed")?; }
+                    update = sync.changed() => { update.context("file review route observation closed")?; }
+                }
             }
         };
         tokio::time::timeout(std::time::Duration::from_secs(30), read).await

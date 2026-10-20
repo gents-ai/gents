@@ -250,3 +250,107 @@ async fn write_receipt(access: &ConfigAccess, demand: &FileImageDemand, row: &Va
         })
     }).await.unwrap();
 }
+
+#[tokio::test]
+async fn inactive_file_review_preserves_attempts_without_new_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let core = std::sync::Arc::new(
+        ClientCore::start_with_paths_and_options(
+            crate::client::DesktopPaths::from_root(root.path().join("client")),
+            crate::client::ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap(),
+    );
+    let initial = demand("unconfigured-runtime");
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        core.remote_file_images(initial),
+    )
+    .await
+    .expect("inactive route must fail before the delivery timeout")
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Reconnect this runtime to load new file versions."
+    );
+    let response = ConfigAccess::local(core.node_arc())
+        .execute("{ FileImageHydrationRequest { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(response["data"]["FileImageHydrationRequest"], json!([]));
+    let pending = demand("unconfigured-runtime");
+    admit_image_demand(&core.node_arc(), &pending)
+        .await
+        .unwrap();
+    let access = ConfigAccess::local(core.node_arc());
+    let before = access.execute(&demand_query(&pending)).await.unwrap();
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        core.remote_file_images(pending.clone()),
+    )
+    .await
+    .expect("inactive pending delivery must fail promptly")
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Reconnect this runtime to load new file versions."
+    );
+    let after = access.execute(&demand_query(&pending)).await.unwrap();
+    assert_eq!(before, after);
+
+    let signer = KeyIdentity::load_or_create(root.path().join("source.key"), None).unwrap();
+    let mut refused = demand(signer.did());
+    refused.admission.requester_did = core.node_identity().did().into();
+    refused.admission.request_key = refused.derive_request_key();
+    admit_image_demand(&core.node_arc(), &refused)
+        .await
+        .unwrap();
+    let receipt = signed_demand_row(&signer, &refused, FileImageSelection::Rejected).await;
+    write_receipt(&access, &refused, &receipt).await;
+    let before = access.execute(&demand_query(&refused)).await.unwrap();
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        core.remote_file_images(refused.clone()),
+    )
+    .await
+    .expect("a signed refusal must remain observable without an active route")
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Runtime rejected file review: not authorized"
+    );
+    let after = access.execute(&demand_query(&refused)).await.unwrap();
+    assert_eq!(before, after);
+
+    let mut selected = refused.clone();
+    selected.admission.request_key =
+        selected.derive_retry_request_key("8ff1b22a-9d76-4c48-a3c3-0e177b5423cf");
+    admit_image_demand(&core.node_arc(), &selected)
+        .await
+        .unwrap();
+    let receipt = signed_demand_row(
+        &signer,
+        &selected,
+        FileImageSelection::Selected {
+            document: "undelivered-image".into(),
+        },
+    )
+    .await;
+    write_receipt(&access, &selected, &receipt).await;
+    let before = access.execute(&demand_query(&selected)).await.unwrap();
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        core.remote_file_images(selected.clone()),
+    )
+    .await
+    .expect("an undelivered selected image must not wait on an inactive route")
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Reconnect this runtime to load new file versions."
+    );
+    let after = access.execute(&demand_query(&selected)).await.unwrap();
+    assert_eq!(before, after);
+    core.shutdown().await.unwrap();
+}
