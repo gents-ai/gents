@@ -5,6 +5,7 @@ mod lens;
 mod materialize;
 mod registry;
 mod report;
+mod upgrades;
 
 pub use engine::{
     ensure_migrations, ensure_migrations_arc, ensure_migrations_dynamic,
