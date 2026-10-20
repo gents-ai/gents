@@ -125,7 +125,8 @@ def step? {Generation : Type} [DecidableEq Generation]
       match pre.lease with
       | .active owner duration explicitDeadline =>
           if boundary = .mutationWriteGate ∧ owner = generation then
-            some { pre with lease := .recoverable owner duration explicitDeadline }
+            if explicitDeadline ≤ pre.now then some pre
+            else some { pre with lease := .recoverable owner duration explicitDeadline }
           else none
       | _ => none
   | .recoverExpired boundary expected generation duration explicitDeadline =>
