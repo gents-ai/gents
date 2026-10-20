@@ -151,6 +151,9 @@ pub const NETWORK_ENROLLMENT_ROUTE_RECEIPT: &str =
 pub const ENROLLMENT_OPERATOR_NONCE_NAME: &str = "EnrollmentOperatorNonce";
 pub const ENROLLMENT_OPERATOR_NONCE: &str =
     include_str!("../schemas/agent/enrollment_operator_nonce.graphql");
+pub const FILE_IMAGE_HYDRATION_REQUEST_NAME: &str = "FileImageHydrationRequest";
+pub const FILE_IMAGE_HYDRATION_REQUEST: &str =
+    include_str!("../schemas/agent/file_image_hydration_request.graphql");
 pub const SESSION_HYDRATION_REQUEST_NAME: &str = "SessionHydrationRequest";
 pub const SESSION_HYDRATION_REQUEST: &str =
     include_str!("../schemas/agent/session_hydration_request.graphql");
@@ -230,6 +233,7 @@ pub const ALL: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
     SESSION_HYDRATION_REQUEST,
+    FILE_IMAGE_HYDRATION_REQUEST,
     AGENT_SESSION_INPUT_EDIT,
     AGENT_SESSION_GOAL_CONTROL,
     GOAL_OBSERVATION,
@@ -306,6 +310,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
+    FILE_IMAGE_HYDRATION_REQUEST_NAME,
     AGENT_SESSION_INPUT_EDIT_NAME,
     AGENT_SESSION_GOAL_CONTROL_NAME,
     GOAL_OBSERVATION_NAME,
@@ -328,7 +333,6 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
-    TOOL_FILE_CHANGE_NAME,
     COMPACTION_ENTRY_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
@@ -341,6 +345,15 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     WORKSPACE_RECEIPT_NAME,
     CALLBACK_RESULT_NAME,
 ];
+
+/// Whole-collection subscriptions would bypass the file-review selection
+/// boundary. These records use filtered control routes or document-scoped push.
+pub const EXPLICIT_DELIVERY_COLLECTION_NAMES: &[&str] =
+    &[TOOL_FILE_CHANGE_NAME, FILE_IMAGE_HYDRATION_REQUEST_NAME];
+
+pub fn requires_explicit_delivery(name: &str) -> bool {
+    EXPLICIT_DELIVERY_COLLECTION_NAMES.contains(&name)
+}
 
 /// Sensitive runtime facts that stay on the runtime node; every broad
 /// replication catalog filters these names explicitly.

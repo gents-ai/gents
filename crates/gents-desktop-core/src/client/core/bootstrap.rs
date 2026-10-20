@@ -606,7 +606,13 @@ mod tests {
         let baseline = gents_migration::DEFAULT_BASELINE
             .iter()
             .copied()
-            .filter(|entry| entry.name != gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+            .filter(|entry| {
+                ![
+                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+                    gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+                ]
+                .contains(&entry.name)
+            })
             .collect::<Vec<_>>();
         let registry = gents_migration::Registry {
             baseline: &baseline,
@@ -711,6 +717,11 @@ mod tests {
             }
             assert!(access
                 .collection_version(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+                .await
+                .unwrap()
+                .is_some());
+            assert!(access
+                .collection_version(gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME)
                 .await
                 .unwrap()
                 .is_some());

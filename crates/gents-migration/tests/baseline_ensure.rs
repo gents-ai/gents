@@ -558,7 +558,13 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
     let baseline = gents_migration::DEFAULT_BASELINE
         .iter()
         .copied()
-        .filter(|entry| entry.name != gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .filter(|entry| {
+            ![
+                gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+                gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+            ]
+            .contains(&entry.name)
+        })
         .collect::<Vec<_>>();
     let registry = Registry {
         baseline: &baseline,
@@ -607,9 +613,13 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         .await
         .unwrap();
     let report = ensure_migrations(&node).await.unwrap();
-    assert_eq!(report.baseline_registered, 1);
+    assert_eq!(report.baseline_registered, 2);
     assert!(node
         .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .unwrap()
+        .is_some());
+    assert!(node
+        .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME)
         .unwrap()
         .is_some());
     for (name, version) in versions {
