@@ -92,10 +92,14 @@ describe("PacksPanel Enable for agent", () => {
     await user.click(await screen.findByRole("button", { name: "Enable for agent" }));
     const dialog = await screen.findByRole("dialog");
     await within(dialog).findByText("Max spawns: 12");
-    expect(within(dialog).getByText("Targets: fixture/worker, fixture/reviewer")).toBeTruthy();
+    expect(
+      within(dialog).getByText("Targets: fixture/worker, fixture/reviewer"),
+    ).toBeTruthy();
     expect(within(dialog).getByText("Max live: 3")).toBeTruthy();
     expect(within(dialog).getByText("Dynamic scripts: check")).toBeTruthy();
-    expect(within(dialog).getByText("Dynamic targets: fixture/dynamic_worker")).toBeTruthy();
+    expect(
+      within(dialog).getByText("Dynamic targets: fixture/dynamic_worker"),
+    ).toBeTruthy();
     expect(within(dialog).getByText("Trusted packs: fixture/trusted")).toBeTruthy();
     expect(within(dialog).getByText("Project roots: /work/project")).toBeTruthy();
     expect(
@@ -140,7 +144,9 @@ describe("PacksPanel Enable for agent", () => {
   it("a content pack wires the engine with targets-from, installing the engine first", async () => {
     const user = userEvent.setup();
     installPack
-      .mockRejectedValueOnce(new Error("the plugin asks for authority; pass --grant-authority"))
+      .mockRejectedValueOnce(
+        new Error("the plugin asks for authority; pass --grant-authority"),
+      )
       .mockResolvedValueOnce(undefined);
     show(["fixture/content"], {
       plugins: [],
@@ -148,7 +154,9 @@ describe("PacksPanel Enable for agent", () => {
     });
     await user.click(await screen.findByRole("button", { name: "Enable for agent" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Installs gents/rhai_workflows first")).toBeTruthy();
+    expect(
+      within(dialog).getByText("Installs gents/rhai_workflows first"),
+    ).toBeTruthy();
     expect(wirePack).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Install" }));
     await within(dialog).findByText(/--grant-authority/);
@@ -190,7 +198,8 @@ describe("PacksPanel Enable for agent", () => {
         changed: [],
         job: null,
         warnings: [],
-        next_call: "gents pack wire fixture/job_fixture --agent default --targets-from <pack>",
+        next_call:
+          "gents pack wire fixture/job_fixture --agent default --targets-from <pack>",
       },
     }));
     show(["fixture/job_pack"], jobPack);

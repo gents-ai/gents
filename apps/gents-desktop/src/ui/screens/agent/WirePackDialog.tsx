@@ -128,7 +128,10 @@ export function WirePackDialog({
               <Field>
                 <FieldLabel htmlFor="wire-agent">Agent</FieldLabel>
                 <Select
-                  items={agents.map((a) => ({ value: a.agentId, label: a.displayName }))}
+                  items={agents.map((a) => ({
+                    value: a.agentId,
+                    label: a.displayName,
+                  }))}
                   value={agentId}
                   onValueChange={(v) => v && setAgentId(v)}
                 >
@@ -152,9 +155,16 @@ export function WirePackDialog({
                       <li>Max spawns: {job.max_spawns}</li>
                       <li>Max live: {job.max_live}</li>
                       <li>Dynamic scripts: {job.policy.dynamic}</li>
-                      <li>Dynamic targets: {job.policy.dynamic_targets.join(", ") || "none"}</li>
-                      <li>Trusted packs: {job.policy.trusted_packs.join(", ") || "none"}</li>
-                      <li>Project roots: {job.policy.project_roots.join(", ") || "none"}</li>
+                      <li>
+                        Dynamic targets:{" "}
+                        {job.policy.dynamic_targets.join(", ") || "none"}
+                      </li>
+                      <li>
+                        Trusted packs: {job.policy.trusted_packs.join(", ") || "none"}
+                      </li>
+                      <li>
+                        Project roots: {job.policy.project_roots.join(", ") || "none"}
+                      </li>
                     </>
                   ) : (
                     preview.report.next_call && <li>{preview.report.next_call}</li>
