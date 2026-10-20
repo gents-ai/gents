@@ -735,6 +735,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_completion_cases_gate_delivery_and_receipts",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::file_image_hydration::tests::generated_attempt_cases_preserve_terminal_outcomes_and_prevent_redelivery",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/file_image_hydration/tests.rs",
+            module_path: "agent::p2p_reconcile::file_image_hydration::tests",
+            function: "generated_attempt_cases_preserve_terminal_outcomes_and_prevent_redelivery",
+        },
+        ConformanceConsumer::RustTest {
             id: "client::schema::tests::generated_file_review_rules_exclude_whole_collection_delivery",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/schema.rs",
