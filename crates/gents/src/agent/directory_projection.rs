@@ -575,7 +575,7 @@ mod tests {
     async fn graphql_tick_is_write_free_fixpoint_for_runtime_updated_at_format() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(tempdir.path().join("data"))
                 .build()
                 .await?,
@@ -663,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn graphql_tick_projects_enabled_agents_and_retracts_removed_nodes() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let seed = r#"mutation {
             local_node: create_Node(input: { node_did: "did:key:local", display_name: "Local",
@@ -725,7 +725,7 @@ mod source_partition_regression_tests {
     async fn graphql_tick_preserves_foreign_row_with_same_node_did() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(tempdir.path().join("data"))
                 .build()
                 .await?,

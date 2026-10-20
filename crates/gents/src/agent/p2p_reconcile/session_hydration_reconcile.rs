@@ -1661,7 +1661,7 @@ mod tests {
 
     #[tokio::test]
     async fn hydration_catalog_filter_is_accepted_by_real_schema() {
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = crate::test_support::node_builder().build().await.unwrap();
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let admission = hydration_admission_query("session-1", "peer-1");
         let response = node.execute(&admission).await;

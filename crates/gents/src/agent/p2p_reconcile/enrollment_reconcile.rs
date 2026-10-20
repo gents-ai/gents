@@ -1304,7 +1304,7 @@ mod tests {
         let member: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
         );
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();

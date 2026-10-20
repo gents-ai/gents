@@ -276,7 +276,13 @@ mod tests {
     async fn incomplete_intent_does_not_block_the_unverified_command_sweep() {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let mut command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,

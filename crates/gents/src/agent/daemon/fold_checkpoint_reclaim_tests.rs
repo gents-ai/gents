@@ -77,7 +77,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         let data_path =
             std::env::temp_dir().join(format!("daemon-fold-checkpoint-{}", uuid::Uuid::new_v4()));
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(&data_path)
                 .build()
                 .await
@@ -422,7 +422,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         let data_path =
             std::env::temp_dir().join(format!("daemon-retry-selection-{}", uuid::Uuid::new_v4()));
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(&data_path)
                 .build()
                 .await

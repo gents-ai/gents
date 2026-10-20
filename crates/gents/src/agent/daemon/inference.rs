@@ -1429,7 +1429,7 @@ pub(super) mod tests {
         let data_path =
             std::env::temp_dir().join(format!("daemon-requester-lineage-{}", uuid::Uuid::new_v4()));
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(&data_path)
                 .build()
                 .await
@@ -1860,7 +1860,7 @@ pub(super) mod tests {
             uuid::Uuid::new_v4()
         ));
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(&data_path)
                 .build()
                 .await
@@ -2018,7 +2018,7 @@ pub(super) mod tests {
             uuid::Uuid::new_v4()
         ));
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(&data_path)
                 .build()
                 .await

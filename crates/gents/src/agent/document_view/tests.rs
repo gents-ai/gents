@@ -8,7 +8,7 @@ use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::tool_surface::ToolCeiling;
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+    Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
 fn created_skill_doc_id(data: Option<&serde_json::Value>) -> Option<String> {

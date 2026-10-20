@@ -1423,7 +1423,7 @@ mod startup_slot_failure_policy_tests {
 
     #[tokio::test]
     async fn aborted_staged_generation_does_not_release_active_startup_obligation() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let (status_owner, runtime_status) =
             RuntimeStatusHandle::start(node.clone(), "did:test:startup-generation-barrier");
@@ -1465,7 +1465,7 @@ mod startup_slot_failure_policy_tests {
 
     #[tokio::test]
     async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let (status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
             node.clone(),
@@ -1601,7 +1601,7 @@ mod lifecycle_coordinator_tests {
 
     #[tokio::test]
     async fn admission_gate_waits_for_durable_ready_retry_ack() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let writer = Arc::new(FailFirstReadyWriter {
             calls: AtomicUsize::new(0),
@@ -1643,7 +1643,7 @@ mod lifecycle_coordinator_tests {
 
     #[tokio::test]
     async fn shutdown_wins_over_a_late_startup_barrier_release() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let status = RuntimeStatusHandle::new(node.clone(), "did:test:lifecycle-race");
         status.initialize_startup("general").await.unwrap();
