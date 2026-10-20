@@ -13,6 +13,29 @@ pub mod budget;
 pub mod replay_frontier;
 pub mod routing_affinity;
 
+/// Native capture metadata belongs to immutable documents. Convert each typed
+/// snapshot to provider text before request accounting and durable HTTP capture;
+/// never send the storage marker as an opaque provider parameter.
+pub fn captured_context_for_provider(
+    mut message: gents_protocol::message::Message,
+) -> Result<gents_protocol::message::Message> {
+    use gents_protocol::message::{Message, UserContent};
+    use gents_protocol::request_input::CapturedContext;
+    if let Message::User { content } = &mut message {
+        for part in content {
+            if let UserContent::Document(document) = part {
+                if let Some(context) = CapturedContext::from_document(document)? {
+                    *part = UserContent::text(format!(
+                        "Editor context (captured text; URI identifies its editor location):\n{}",
+                        serde_json::to_string(&context)?,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(message)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]

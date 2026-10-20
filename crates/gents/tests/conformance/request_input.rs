@@ -2,6 +2,21 @@ use super::*;
 use gents_protocol::request_input::RequestInput;
 
 #[test]
+fn captured_input_compatibility_matches_the_executable_owner() {
+    for case in &lean_contract_snapshot().request_input_cases {
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        assert_eq!(
+            input.captured_input_compatible(case["runtime_input_version"].as_u64()),
+            case["expected_captured_input_compatible"]
+                .as_bool()
+                .unwrap(),
+            "{}: runtime input compatibility",
+            case["name"],
+        );
+    }
+}
+
+#[test]
 fn runtime_continuation_inputs_match_the_lean_owner() {
     for case in &lean_contract_snapshot().request_input_cases {
         let name = case["name"].as_str().unwrap();
@@ -158,6 +173,79 @@ fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
                 .is_ok(),
             case["expected_workspace_accepted"].as_bool().unwrap(),
             "{name}: actual workspace source owner"
+        );
+    }
+}
+
+#[test]
+fn captured_context_structure_matches_the_executable_input_owner() {
+    let cases = &lean_contract_snapshot().request_input_cases;
+    assert!(cases
+        .iter()
+        .any(|case| case["name"] == "captured-selection"));
+    for case in cases {
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        assert_eq!(
+            input
+                .captured_context
+                .iter()
+                .all(|context| context.is_well_formed()),
+            case["expected_captures_well_formed"].as_bool().unwrap(),
+            "{}: actual captured-context structural owner",
+            case["name"],
+        );
+    }
+}
+
+#[test]
+fn captured_native_documents_and_provider_parts_match_the_model() {
+    use gents_protocol::message::{Message, UserContent};
+    for case in &lean_contract_snapshot().request_input_cases {
+        let name = case["name"].as_str().unwrap();
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        assert_eq!(
+            input.has_authored_input(case["authored_text"].as_str().unwrap()),
+            case["expected_has_authored_input"].as_bool().unwrap(),
+            "{name}: user input presence"
+        );
+        let native = input
+            .authored_message(case["authored_text"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&native).unwrap(),
+            case["expected_native_input"],
+            "{name}"
+        );
+        let contexts = gents_protocol::request_input::CapturedContext::from_message(&native);
+        let provider = gents_loop::provider_input::captured_context_for_provider(native);
+        if case["expected_provider_parts"].is_null() {
+            assert!(contexts.is_err(), "{name}: invalid document capture");
+            assert!(
+                provider.is_err(),
+                "{name}: invalid capture crossed provider boundary"
+            );
+            continue;
+        }
+        assert_eq!(
+            contexts.unwrap(),
+            input.captured_context,
+            "{name}: immutable document codec"
+        );
+        let provider = provider.unwrap();
+        let Message::User { content } = provider else {
+            panic!("{name}: provider changed the role")
+        };
+        let texts = content
+            .into_iter()
+            .map(|part| match part {
+                UserContent::Text(text) => text.text,
+                _ => panic!("{name}: captured metadata escaped the provider boundary"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            serde_json::to_value(texts).unwrap(),
+            case["expected_provider_parts"],
+            "{name}"
         );
     }
 }

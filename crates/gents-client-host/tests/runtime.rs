@@ -218,6 +218,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             if matches!(journey, Journey::EditorWorkspace)
                 && request["messages"]
                     .to_string()
+                    .contains(editor_workspace::CAPTURED.trim())
+                && !request["messages"]
+                    .to_string()
+                    .contains(editor_workspace::PROMPT)
+            {
+                return ChatAction::Sse(fake_llm::completion_text_sse(
+                    editor_workspace::ATTACHMENT_ONLY_REPLY,
+                ));
+            }
+            if matches!(journey, Journey::EditorWorkspace)
+                && request["messages"]
+                    .to_string()
                     .contains(editor_workspace::PROMPT)
             {
                 return ChatAction::Sse(fake_llm::completion_text_sse(editor_workspace::REPLY));
@@ -1017,6 +1029,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let evidence = verify_editor_steering(
             &access,
             &provider,
+            root,
             node_did,
             session,
             &original_doc_id,
@@ -1248,6 +1261,7 @@ async fn run_editor_journey(
 async fn verify_editor_steering(
     access: &gents::ConfigAccess,
     provider: &FakeLlm,
+    root: &Path,
     node_did: &str,
     session: &str,
     original_doc_id: &str,
@@ -1290,6 +1304,29 @@ async fn verify_editor_steering(
     };
     let queued = input(QueueDelivery::Queue).context("original queued input")?;
     let steered = input(QueueDelivery::Steer).context("promoted input")?;
+    let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-steering-ui.json"))?)?;
+    let captured = &queued
+        .input
+        .as_ref()
+        .context("queued input")?
+        .captured_context;
+    ensure!(
+        captured.len() == 1
+            && steered.input.as_ref().map(|input| &input.captured_context) == Some(captured),
+        "Steer changed or dropped the queued capture"
+    );
+    let capture = serde_json::to_value(&captured[0])?;
+    ensure!(
+        capture["content"] == "queued captured unsaved context\n"
+            && capture["uri"] == ui["contextUri"]
+            && capture["kind"] == "selection"
+            && capture["source"] == "editor"
+            && capture["unsaved"] == true
+            && capture["version"].as_u64().is_some_and(|v| v > 1)
+            && capture["range"]["start"] == json!({"line":0,"character":0})
+            && capture["range"]["end"] == json!({"line":1,"character":0}),
+        "Steer did not retain the submitted editor observations"
+    );
     ensure!(
         active.lifecycle_state == Some(RequestLifecycleState::Completed)
             && queued.lifecycle_state == Some(RequestLifecycleState::Superseded)
@@ -1331,6 +1368,30 @@ async fn verify_editor_steering(
                 == 1,
         "the provider must receive the promoted input exactly once: {requests:?}"
     );
+    let capture_count = |body: &Value| {
+        body["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|message| message["role"] == "user")
+            .filter_map(|message| message["content"].as_array())
+            .flatten()
+            .filter_map(|part| part["text"].as_str())
+            .filter_map(|text| {
+                text.strip_prefix(
+                    "Editor context (captured text; URI identifies its editor location):\n",
+                )
+            })
+            .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+            .filter(|value| value == &capture)
+            .count()
+    };
+    let captured_parts = capture_count(steered_rounds[0]);
+    let all_captured_parts = requests.iter().map(capture_count).sum::<usize>();
+    ensure!(
+        captured_parts == 1 && all_captured_parts == 1,
+        "the provider lost, duplicated or received the capture before Steer"
+    );
     Ok(json!({
         "nodeDid": node_did, "sessionId": session, "authorDid": client_did,
         "activeRequestDocId": original_doc_id, "queuedRequestDocId": queued.doc_id,
@@ -1341,6 +1402,7 @@ async fn verify_editor_steering(
         "renderedRequests": rendered, "providerInputOccurrences": provider_input_occurrences,
         "providerRequests": requests.len(),
         "verifiedSignatures": rows.len(),
+        "context": capture, "providerCaptureOccurrences": all_captured_parts,
     }))
 }
 

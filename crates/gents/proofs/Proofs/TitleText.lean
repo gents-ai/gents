@@ -1,4 +1,5 @@
 import Proofs.GoalAutomation
+import Proofs.Enrollment.CapturedContext
 import Lean
 
 namespace TitleText
@@ -61,6 +62,23 @@ def prompt (request : String) (recent : List String) : String :=
   let excerpt := String.mk (normalized.toList.take 600)
   let titles := if recent.isEmpty then "none" else String.intercalate "\n" ((recent.take 5).map (fun title => "- " ++ title))
   "First user request:\n" ++ excerpt ++ "\n\nRecent session titles to avoid repeating:\n" ++ titles
+
+/-- Title input comes from the verified parent's frozen invocation. Captured
+text supplies context when prose is empty; it never replaces the authored
+message or reopens a source URI. The existing prompt owner bounds the excerpt. -/
+def inputText (prose : String) (contexts : List Enrollment.CapturedContext) : String :=
+  if !(trim prose).isEmpty || contexts.isEmpty then prose
+  else
+    let captured := String.intercalate "\n\n" (contexts.map (·.content))
+    if (trim captured).isEmpty then "Attached context" else captured
+
+theorem plain_input_text_is_preserved (prose : String) : inputText prose [] = prose := by
+  simp [inputText]
+
+theorem authored_prose_precedes_capture_text (prose : String)
+    (contexts : List Enrollment.CapturedContext) (h : (trim prose).isEmpty = false) :
+    inputText prose contexts = prose := by
+  simp [inputText, h]
 
 /-- A user-authored name remains exact, including intentional punctuation and spacing. -/
 def display (generatedSource : Bool) (text : String) : String :=

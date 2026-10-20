@@ -10,3 +10,5 @@ export {
   TranscriptNavigationProvider,
   type TranscriptNavigation,
 } from "./components/transcript/TranscriptNavigation.js";
+
+export { CapturedContextItems } from "./components/transcript/CapturedContextItems.js";

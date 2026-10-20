@@ -4,6 +4,7 @@ import type {
   RequestOriginView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
+import { CapturedContextItems } from "./CapturedContextItems.js";
 import { requestProgressPresentation } from "../../chat-shell.js";
 
 import { CancelCauseBadge, CancelCauseDetails } from "../cancelUx/index.js";
@@ -85,7 +86,7 @@ export function UserMessageItem({
           <MessageTime value={item.timestamp} />
           {item.kind === "userMessage" &&
           item.reconstruction.state === "ready" &&
-          content &&
+          (content || item.capturedContext?.length) &&
           onEdit ? (
             <button
               type="button"
@@ -114,7 +115,12 @@ export function UserMessageItem({
         <div className="message-content">
           <MessageAvailability reconstruction={item.reconstruction} />
           {item.reconstruction.state === "ready" ? (
-            <MarkdownContent value={content} />
+            <>
+              {content && <MarkdownContent value={content} />}
+              {item.kind === "userMessage" && (
+                <CapturedContextItems contexts={item.capturedContext ?? []} />
+              )}
+            </>
           ) : null}
         </div>
       </article>
@@ -175,7 +181,10 @@ export function PendingUserTurnItem({ item }: { item: PendingUserTurn }) {
           ) : null}
         </div>
         <div className="message-content">
-          <MarkdownContent value={normalizeTranscriptText(item.content)} />
+          {item.content && (
+            <MarkdownContent value={normalizeTranscriptText(item.content)} />
+          )}
+          <CapturedContextItems contexts={item.capturedContext ?? []} />
         </div>
       </article>
     </div>

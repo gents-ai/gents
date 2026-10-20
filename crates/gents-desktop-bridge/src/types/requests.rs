@@ -82,6 +82,9 @@ pub struct ChatSendRequest {
     pub content: String,
     #[serde(default)]
     #[ts(optional = nullable)]
+    pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
     pub delivery: Option<gents_protocol::request_input::QueueDelivery>,
     #[serde(default)]
     #[ts(optional = nullable)]

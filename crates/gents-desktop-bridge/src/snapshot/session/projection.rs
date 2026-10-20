@@ -570,9 +570,9 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 dependency_denials,
             );
             let (
-                reconstructed,
-                reconstruction_state,
-                reconstruction_error,
+                mut reconstructed,
+                mut reconstruction_state,
+                mut reconstruction_error,
                 denied_dependency_doc_id,
             ) = match projection {
                 CanonicalMessageProjection::Ready(message) => {
@@ -593,6 +593,19 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                     Some(error.to_string()),
                     None,
                 ),
+            };
+            let captured_context = match reconstructed
+                .as_ref()
+                .map(gents_protocol::request_input::CapturedContext::from_message)
+                .transpose()
+            {
+                Ok(context) => context.unwrap_or_default(),
+                Err(error) => {
+                    reconstructed = None;
+                    reconstruction_state = ReconstructionState::Invalid;
+                    reconstruction_error = Some(error.to_string());
+                    Vec::new()
+                }
             };
             let runtime_context = gents_protocol::output::origin::resolve_origin(
                 &observed_messages,
@@ -656,6 +669,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 display_content: presentation.as_ref().and_then(|presentation| {
                     normalize_optional(Some(presentation.body_markdown.as_str()))
                 }),
+                captured_context: (!captured_context.is_empty()).then_some(captured_context),
                 reasoning: presentation.as_ref().and_then(|presentation| {
                     presentation
                         .reasoning_markdown
