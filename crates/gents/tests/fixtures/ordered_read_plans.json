@@ -201,7 +201,7 @@
     "read": {
       "path": "crates/gents-desktop-core/src/client/query/session_transcript.rs",
       "collection": "AgentMessage",
-      "arguments": "filter: { session_id: { _eq: \"$GENTS_escaped_session_id$\" }$GENTS_node_filter$$GENTS_requester_filter$$GENTS_message_sequence_filter$ }, order: [{ sequence: DESC }, { message_key: DESC }], limit: $GENTS_message_query_limit$"
+      "arguments": "filter: { session_id: { _eq: \"$GENTS_escaped_session_id$\" }$GENTS_node_filter$$GENTS_requester_filter$$GENTS_message_sequence_filter$ }, order: $GENTS_message_order$, limit: $GENTS_message_query_limit$"
     },
     "bindings": [
       {
@@ -209,14 +209,16 @@
         "node_filter": ", node_did: {_eq: \"probe\"}",
         "requester_filter": ", requester_did: {_eq: \"probe\"}",
         "message_sequence_filter": ", sequence: {_lt: 100}",
-        "message_query_limit": "1"
+        "message_query_limit": "1",
+        "message_order": "[{sequence: DESC}]"
       },
       {
         "escaped_session_id": "probe",
         "node_filter": "",
         "requester_filter": "",
         "message_sequence_filter": "",
-        "message_query_limit": "1"
+        "message_query_limit": "1",
+        "message_order": "[{sequence: DESC}, {message_key: DESC}]"
       }
     ]
   },
