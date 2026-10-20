@@ -110,7 +110,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
         let did = identity.did().to_string();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(node.as_ref()).await.unwrap();
         (node, did)
     }

@@ -12,7 +12,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     assert_eq!(case.preserved_foreign_owner_request_ids.len(), 1);
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path().join("db"))
             .build()
             .await

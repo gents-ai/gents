@@ -88,7 +88,7 @@ async fn run_echo_graph(
     digest: Option<&str>,
 ) -> (Arc<EmbeddedNode>, GraphRunReceipt, GraphRunView) {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node.add_schema(
         "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
@@ -209,7 +209,7 @@ async fn a_plugin_node_that_cannot_run_fails_the_run_with_its_reason() {
 #[tokio::test]
 async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node.add_schema(
         "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
@@ -316,7 +316,7 @@ async fn seed_interrupted_echo_invocation(
     (String, String),
 ) {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node.add_schema(
         "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
@@ -490,7 +490,7 @@ async fn interrupted_plugin_invocation_on_a_disabled_callback_is_not_rerun_when_
 #[tokio::test]
 async fn a_run_started_before_its_routes_are_noticed_still_runs() {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node.add_schema(
         "type EchoInput { graph_run_id: String @index(unique: true) payload: String }

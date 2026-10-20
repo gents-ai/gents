@@ -1445,7 +1445,13 @@ mod task_delivery_tests {
     async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         let identity_dir = tempfile::tempdir().unwrap();
         let _identity = pin_fixed_signing_identity(identity_dir.path());
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(PIN_FIXED_DID)
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let access = crate::config_client::ConfigAccess::local(node.clone());
         let identity = gents_protocol::trigger_delivery::FireIdentity {

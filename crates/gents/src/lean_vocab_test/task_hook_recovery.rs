@@ -25,17 +25,18 @@ pub(super) struct Fixture {
 impl Fixture {
     pub(super) async fn new() -> Self {
         let data = tempfile::tempdir().expect("node data directory");
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
+            KeyIdentity::load_or_create(data.path().join("agent.key"), None).expect("identity"),
+        );
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
                 .data_path(data.path())
                 .build()
                 .await
                 .expect("embedded node"),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(data.path().join("agent.key"), None).expect("identity"),
-        );
         crate::test_support::install_test_agent(&node, identity.did(), AGENT_ID).await;
         Self {
             node,

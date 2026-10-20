@@ -1036,7 +1036,7 @@ async fn graph_fixture_root_binding_survives_task_metadata_changes() {
     use crate::graph_package::GraphPackageInstallBindings;
     use crate::test_support::install_test_graph_package;
     use std::sync::Arc;
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let identity = runtime::graph_test_identity();
     crate::document_config::ensure_node(&node, identity.did())

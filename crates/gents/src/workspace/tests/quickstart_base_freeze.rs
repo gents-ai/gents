@@ -7,7 +7,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
 
     let fx = Fixture::new();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(fx._root.path().join("db"))
             .build()
             .await

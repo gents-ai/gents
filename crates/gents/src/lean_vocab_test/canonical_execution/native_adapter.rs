@@ -1379,7 +1379,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 None,
             )?);
             let node_did = identity.did().to_owned();
-            let node = Arc::new(EmbeddedNode::builder().build().await?);
+            let node = Arc::new(
+                EmbeddedNode::builder()
+                    .with_node_identity_did(identity.did())
+                    .build()
+                    .await?,
+            );
             crate::ensure_runtime_schemas(&node).await?;
             crate::test_support::install_test_agent(&node, &node_did, "general").await;
             let request_identity = |logical_id: String| crate::lifecycle::RequestIdentity {

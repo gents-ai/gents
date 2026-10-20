@@ -39,9 +39,15 @@ impl Fixture {
     async fn new(bound: bool, conflicting_input: bool) -> Self {
         use crate::graph_package::GraphPackageInstallBindings;
         use crate::test_support::install_test_graph_package;
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(&node).await.unwrap();
         let identity = super::super::runtime::graph_test_identity();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
         crate::document_config::ensure_node(&node, identity.did())
             .await
             .unwrap();
@@ -509,8 +515,8 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
             Ok(json!({"data":response.data.unwrap_or(Value::Null)}))
         }
     }
-    let left = fx.node.runner().begin_txn(false).await.unwrap();
-    let right = fx.node.runner().begin_txn(false).await.unwrap();
+    let left = fx.node.begin_transaction(false).await.unwrap();
+    let right = fx.node.begin_transaction(false).await.unwrap();
     let one = Native {
         node: &fx.node,
         handle: &left,
@@ -573,11 +579,10 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
         };
         assert!(created["_docID"].is_string());
     }
-    fx.node.runner().commit_txn(&left).await.unwrap();
+    fx.node.commit_transaction(&left).await.unwrap();
     let conflict = fx
         .node
-        .runner()
-        .commit_txn(&right)
+        .commit_transaction(&right)
         .await
         .expect_err("stale native publication must lose");
     assert!(
