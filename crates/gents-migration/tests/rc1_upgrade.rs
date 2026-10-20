@@ -29,11 +29,21 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
         "bafyreiexmbjxfqyg6yhjst6r746spzge27f6mhh2moyrkawbmvtvba4mbi"
     );
     let created = node.execute(r#"mutation {
-        create_InferenceProfile(input: {profile_id: "retained", node_did: "owner", context_window: 65536, max_output_tokens: 4096}) {_docID}
-        create_AgentToolCall(input: {tool_call_key: "retained", request_id: "request", status: "completed", latency_ms: 37}) {_docID}
+        add_InferenceProfile(input: {profile_id: "retained", node_did: "owner", context_window: 65536, max_output_tokens: 4096}) {_docID}
+        add_AgentToolCall(input: {tool_call_key: "retained", request_id: "request", status: "completed", latency_ms: 37}) {_docID}
     }"#).await;
     assert!(!created.has_errors(), "{created:?}");
     let identities = created.data.unwrap();
+    let [profile_id, tool_id] = ["add_InferenceProfile", "add_AgentToolCall"].map(|name| {
+        let rows = identities[name]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name} must return document rows: {identities:?}"));
+        assert_eq!(rows.len(), 1, "{name} must create exactly one document");
+        rows[0]["_docID"]
+            .as_str()
+            .expect("created document ID")
+            .to_owned()
+    });
     let report = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(report.steps_applied, 2);
     for (name, previous) in names.into_iter().zip(before) {
@@ -58,12 +68,12 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
     assert!(!read.has_errors(), "{read:?}");
     let data = read.data.unwrap();
     assert_eq!(
-        data["InferenceProfile"][0]["_docID"],
-        identities["create_InferenceProfile"]["_docID"]
+        data["InferenceProfile"][0]["_docID"].as_str(),
+        Some(profile_id.as_str())
     );
     assert_eq!(
-        data["AgentToolCall"][0]["_docID"],
-        identities["create_AgentToolCall"]["_docID"]
+        data["AgentToolCall"][0]["_docID"].as_str(),
+        Some(tool_id.as_str())
     );
     assert_eq!(data["InferenceProfile"][0]["context_window"], 65536);
     assert_eq!(data["InferenceProfile"][0]["max_output_tokens"], 4096);
