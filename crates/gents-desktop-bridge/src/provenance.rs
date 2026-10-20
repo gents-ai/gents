@@ -239,7 +239,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use gents::defra_node::EmbeddedNode;
     use gents::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
 
