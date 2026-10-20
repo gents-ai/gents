@@ -14,13 +14,13 @@ use serde::{Deserialize, Serialize};
 use super::admit::{
     resume_pin, resume_valid, root_call_of, HostFacts, Refusal, RootCall, StepChild, StepRow,
 };
-use super::driver::{read_step_row, read_step_row_in_txn, settle_plugin_job, Settlement};
+use super::driver::{read_step_row_in_txn, settle_plugin_job_in_txn, Settlement};
 use super::input::chain_of;
 use crate::background_tools::ProcessControlScope;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::plugin_job::keys::job_spawn_key;
-use crate::tool_call_lifecycle::{ToolCallLifecycle, ToolRowKind};
+use crate::tool_call_lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolRowKind};
 
 /// Why a job row is killed: a control, the deadline, or a fail-closed refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +89,7 @@ pub enum KillAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KillOutcome {
     pub row: StepRow,
+    pub won: bool,
     pub killed: Vec<(String, KillAction)>,
 }
 
@@ -110,10 +111,12 @@ pub fn kill_decision(
     if job.state != JobState::Running {
         return KillOutcome {
             row: job.clone(),
+            won: false,
             killed: Vec::new(),
         };
     }
     KillOutcome {
+        won: true,
         row: StepRow {
             state: cause.ends(),
             ..job.clone()
@@ -156,7 +159,7 @@ struct CausedRequest {
 
 /// The requests the row's live own children caused, by retry key.
 async fn caused_requests(
-    access: &ConfigAccess,
+    txn: &ConfigApplyTxn<'_>,
     job: &StepRow,
 ) -> Result<HashMap<String, CausedRequest>> {
     let keys: Vec<&str> = live_own_children(job)
@@ -165,7 +168,7 @@ async fn caused_requests(
     if keys.is_empty() {
         return Ok(HashMap::new());
     }
-    let response = access
+    let response = txn
         .execute(&format!(
             "{{ AgentRequest(filter: {{ retry_key: {{ _in: {} }} }}) {{ _docID retry_key node_did requester_did lifecycle_state }} }}",
             graphql_string_list_literal(keys)
@@ -186,15 +189,15 @@ async fn caused_requests(
 
 /// The requests the row's live own children caused and what each child's
 /// kill observes, by retry key: one observation per live own child.
-async fn observe_children(
-    access: &ConfigAccess,
+async fn observe_children_in_txn(
+    txn: &ConfigApplyTxn<'_>,
     job: &StepRow,
     node_did: &str,
 ) -> Result<(
     HashMap<String, CausedRequest>,
     HashMap<String, KillObservation>,
 )> {
-    let caused = caused_requests(access, job).await?;
+    let caused = caused_requests(txn, job).await?;
     let observed = live_own_children(job)
         .map(|child| {
             let observation = match caused.get(&child.retry_key) {
@@ -213,6 +216,21 @@ async fn observe_children(
         })
         .collect();
     Ok((caused, observed))
+}
+
+async fn observe_children(
+    access: &ConfigAccess,
+    job: &StepRow,
+    node_did: &str,
+) -> Result<(
+    HashMap<String, CausedRequest>,
+    HashMap<String, KillObservation>,
+)> {
+    access
+        .transact_readonly("plugin_job.observe_children", |txn| {
+            Box::pin(observe_children_in_txn(txn, job, node_did))
+        })
+        .await
 }
 
 /// What a kill of `job` observes about each live own child, by retry key.
@@ -236,8 +254,35 @@ pub async fn kill(
     job: &StepRow,
     cause: KillCause,
 ) -> Result<KillOutcome> {
-    let node_did = lifecycle.node_did().to_owned();
-    let (caused, observed) = observe_children(access, job, &node_did).await?;
+    let lifecycle_ref: &ToolCallLifecycle = lifecycle;
+    let (outcome, terminal) = access
+        .transact_write("plugin_job.kill", |txn| {
+            Box::pin(kill_in_txn(txn, lifecycle_ref, job, cause))
+        })
+        .await?;
+    if let Some(terminal) = terminal {
+        lifecycle.finish_plugin_job_row(terminal).await?;
+    }
+    Ok(outcome)
+}
+
+async fn kill_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    lifecycle: &ToolCallLifecycle,
+    job: &StepRow,
+    cause: KillCause,
+) -> Result<(KillOutcome, Option<PluginJobTerminal>)> {
+    if job.state != JobState::Running {
+        return Ok((
+            KillOutcome {
+                row: job.clone(),
+                won: false,
+                killed: Vec::new(),
+            },
+            None,
+        ));
+    }
+    let (caused, observed) = observe_children_in_txn(txn, job, lifecycle.node_did()).await?;
     let observe = |key: &str| {
         observed
             .get(key)
@@ -245,8 +290,34 @@ pub async fn kill(
             .unwrap_or(KillObservation::Unresolved)
     };
     let outcome = kill_decision(job, cause, &observe);
-    if outcome.row == *job {
-        return Ok(outcome);
+    let Some(terminal) =
+        settle_plugin_job_in_txn(txn, lifecycle, cause.settlement(), false).await?
+    else {
+        return Ok((
+            KillOutcome {
+                row: job.clone(),
+                won: false,
+                killed: Vec::new(),
+            },
+            None,
+        ));
+    };
+    if !terminal.won() {
+        let row = read_step_row_in_txn(
+            txn,
+            lifecycle
+                .doc_id()
+                .context("job row lacks physical identity")?,
+        )
+        .await?;
+        return Ok((
+            KillOutcome {
+                row,
+                won: false,
+                killed: Vec::new(),
+            },
+            Some(terminal),
+        ));
     }
     for (key, action) in &outcome.killed {
         let local = match action {
@@ -257,8 +328,8 @@ pub async fn kill(
         let Some(request) = caused.get(key) else {
             continue;
         };
-        let interrupted = crate::interrupt::interrupt_request_by_doc_id_with_access(
-            access,
+        let interrupted = crate::interrupt::interrupt_request_by_doc_id_in_txn(
+            txn,
             &request.doc_id,
             &request.node_did,
             request.requester_did.as_deref(),
@@ -274,8 +345,7 @@ pub async fn kill(
             ),
         }
     }
-    settle_plugin_job(lifecycle, cause.settlement()).await?;
-    Ok(outcome)
+    Ok((outcome, Some(terminal)))
 }
 
 /// Stops or pauses the job `scope`'s session started at `tool_call_id`.
@@ -314,26 +384,40 @@ pub async fn control(
         .doc_id()
         .ok_or_else(|| unavailable(anyhow::anyhow!("job row lacks physical identity")))?
         .to_owned();
-    let row = read_step_row(access, &doc_id).await.map_err(unavailable)?;
-    let observed = observe_live_children(access, &row, lifecycle.node_did())
+    let cause = match action {
+        JobControlKind::Stop => KillCause::Stop,
+        JobControlKind::Pause => KillCause::Pause,
+    };
+    let (killed, terminal) = access
+        .transact_write("plugin_job.control", |txn| {
+            let lifecycle = &lifecycle;
+            let doc_id = &doc_id;
+            Box::pin(async move {
+                let row = read_step_row_in_txn(txn, doc_id).await?;
+                kill_in_txn(txn, lifecycle, &row, cause).await
+            })
+        })
         .await
         .map_err(unavailable)?;
-    let observe = |key: &str| {
-        observed
-            .get(key)
-            .copied()
-            .unwrap_or(KillObservation::Unresolved)
-    };
-    let outcome = control_outcome(&row, action, &observe);
-    if matches!(outcome, JobControlOutcome::Applied { .. }) {
-        let cause = match action {
-            JobControlKind::Stop => KillCause::Stop,
-            JobControlKind::Pause => KillCause::Pause,
-        };
-        kill(access, &mut lifecycle, &row, cause)
+    if let Some(terminal) = terminal {
+        lifecycle
+            .finish_plugin_job_row(terminal)
             .await
             .map_err(unavailable)?;
     }
+    let outcome = if killed.won {
+        JobControlOutcome::Applied {
+            state: match action {
+                JobControlKind::Stop => JobState::Cancelled,
+                JobControlKind::Pause => JobState::Paused,
+            },
+            killed_children: killed.killed.len() as u32,
+        }
+    } else {
+        JobControlOutcome::AlreadyTerminal {
+            state: killed.row.state,
+        }
+    };
     Ok(outcome)
 }
 
@@ -638,6 +722,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rolling_back_a_kill_preserves_the_running_row_and_child_interrupts() {
+        let admission = job_row("control-kill-rollback").await;
+        let node_did = admission.tool.node_did().to_owned();
+        let live = caused(&admission, "a", &node_did, "processing").await;
+        let job = row(JobState::Running, vec![child("a", JobChildState::Live)]);
+        let access = access(&admission);
+        let result: Result<()> = access
+            .transact_write("test.control.kill_rollback", |txn| {
+                let (lifecycle, job) = (&admission.tool, &job);
+                Box::pin(async move {
+                    let (killed, terminal) =
+                        kill_in_txn(txn, lifecycle, job, KillCause::Stop).await?;
+                    assert!(killed.won);
+                    assert!(terminal.is_some_and(|terminal| terminal.won()));
+                    anyhow::bail!("abort the staged kill")
+                })
+            })
+            .await;
+        assert!(format!("{:#}", result.unwrap_err()).contains("abort the staged kill"));
+        assert_eq!(row_state(&admission).await, "running");
+        assert!(!interrupted(&admission, &live).await);
+        finish(admission).await;
+    }
+
+    #[tokio::test]
     async fn kill_for_each_cause_interrupts_live_local_children_and_ends_the_row_now() {
         let cases = [
             (KillCause::Stop, "cancelled", "status", "cancelled"),
@@ -729,6 +838,7 @@ mod tests {
             outcome,
             KillOutcome {
                 row: job,
+                won: false,
                 killed: Vec::new()
             }
         );
@@ -823,6 +933,7 @@ mod tests {
                 kill_decision(&job, cause, &|_| KillObservation::CausedLiveLocal),
                 KillOutcome {
                     row: job.clone(),
+                    won: false,
                     killed: Vec::new()
                 }
             );

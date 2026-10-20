@@ -347,3 +347,32 @@ describe("session loading projection", () => {
     expect(project()).toBeNull();
   });
 });
+
+describe("background projection refresh", () => {
+  it("keeps a visible conversation quiet while a newer projection is pending", () => {
+    expect(
+      project({
+        sessionLoad: {
+          ...loaded,
+          phase: "pending",
+          found: null,
+          error: "refresh is pending",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps initial projection loading visible", () => {
+    expect(
+      project({
+        session: null,
+        sessionLoad: {
+          ...loaded,
+          phase: "pending",
+          found: null,
+          error: "refresh is pending",
+        },
+      }),
+    ).toMatchObject({ title: "Waiting for session update", action: null });
+  });
+});

@@ -5,7 +5,7 @@ const GROUPED_PROFILE: gents_loop::provider_input::ProviderInputProfile =
 
 pub(super) fn generated_compaction_reducer_cases_pin_contract() {
     let cases = lean_compaction_reducer_cases();
-    assert_eq!(cases.len(), 17);
+    assert_eq!(cases.len(), 20);
 
     let expected_names = [
         "identity_reducer_is_no_op",
@@ -25,6 +25,9 @@ pub(super) fn generated_compaction_reducer_cases_pin_contract() {
         "summarize_cannot_split_a_leading_turn",
         "provider_view_is_idempotent",
         "provider_view_drops_orphaned_result",
+        "closed_turn_allows_projection_after_unresolved_history",
+        "open_raw_tail_blocks_projected_prefix",
+        "unpublished_closed_turn_blocks_projected_prefix",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -107,6 +110,12 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
     assert!(case.legal, "compaction case {} should be legal", case.name);
 
     let input = compaction_messages_for_case(case);
+    assert_eq!(
+        gents::compaction::session_prefix_is_stable(&input) && case.publication_ready,
+        case.projected_prefix_ready,
+        "{}: session compaction uses the modeled published provider-prefix boundary",
+        case.name,
+    );
     assert_eq!(
         input.len(),
         case.pre_message_count,
@@ -273,7 +282,31 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
 }
 
 fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCase) -> Vec<Message> {
-    compaction_messages_for_count(case.pre_message_count)
+    case.input_rows
+        .iter()
+        .map(|row| match row {
+            lean_vocab_test::LeanCompactionInputRow::Ordinary { role, text } => {
+                compaction_text_message(role, text)
+            }
+            lean_vocab_test::LeanCompactionInputRow::AssistantToolCalls { role, call_ids } => {
+                assert_eq!(role, "assistant");
+                Message::Assistant {
+                    id: None,
+                    content: call_ids
+                        .iter()
+                        .flat_map(|call_id| match compaction_tool_call_message(call_id) {
+                            Message::Assistant { content, .. } => content,
+                            _ => unreachable!(),
+                        })
+                        .collect(),
+                }
+            }
+            lean_vocab_test::LeanCompactionInputRow::ToolResult { role, call_id } => {
+                assert_eq!(role, "user");
+                compaction_tool_result_message(call_id, "large tool payload")
+            }
+        })
+        .collect()
 }
 
 pub(super) fn compaction_messages_for_count(count: usize) -> Vec<Message> {

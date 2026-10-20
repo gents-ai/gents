@@ -394,12 +394,25 @@ def auxiliaryOutputCaseJson
     ",\"public_view\":" ++ outputViewJson (StreamingResponse.project observation) ++
     "}}"
 
+def compactionInputRowJson (row : Transcript.MessageRow) : String :=
+  let role := match row.role with | .user => "user" | .assistant => "assistant"
+  let body := match row.kind with
+    | .ordinary => "\"kind\":\"ordinary\",\"text\":" ++ jsonString s!"ordinary-{row.messageId}"
+    | .assistantToolCalls calls =>
+        "\"kind\":\"assistant_tool_calls\",\"call_ids\":" ++
+          jsonArray ((calls.sort (· ≤ ·)).map (fun call => jsonString (Compaction.fixtureNativeCallKey call)))
+    | .toolResult call _ =>
+        "\"kind\":\"tool_result\",\"call_id\":" ++ jsonString (Compaction.fixtureNativeCallKey call)
+  "{\"role\":" ++ jsonString role ++ "," ++ body ++ "}"
+
 def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"group\":" ++ jsonString witness.group ++ ","
     ++ "\"reducer\":" ++ jsonString witness.reducer ++ ","
     ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"input_rows\":" ++ jsonArray (witness.inputRows.map compactionInputRowJson) ++ ","
+    ++ "\"projected_prefix_ready\":" ++ boolString witness.projectedPrefixReady ++ ","
     ++ "\"pre_message_count\":" ++ toString witness.preMessageCount ++ ","
     ++ "\"post_message_count\":" ++ toString witness.postMessageCount ++ ","
     ++ "\"preserves_pairs\":" ++ boolString witness.preservesPairs ++ ","

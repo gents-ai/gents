@@ -34,8 +34,8 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
 };
 use tokio::runtime::{Builder, Runtime};
+use tracing::instrument::Instrument as _;
 use tracing::{error_span, info, info_span};
-use tracing_futures::Instrument as _;
 use tracing_subscriber::EnvFilter;
 
 use super::{ClientConfig, Endpoint, EndpointConfig, RecvStream, SendStream, TransportConfig};
@@ -127,6 +127,37 @@ async fn close_endpoint() {
             panic!("unexpected success");
         }
     }
+}
+
+#[test]
+fn endpoint_shutdown_wakes_waiters() {
+    let runtime = rt_basic();
+    let (endpoint, _connecting) = {
+        let _guard = runtime.enter();
+        let endpoint = endpoint();
+        let connecting = endpoint
+            .connect(endpoint.local_addr().unwrap(), "localhost")
+            .unwrap();
+        (endpoint, connecting)
+    };
+
+    // `wait_*` should never resolve on its own, because we never drive the connection.
+    // So it should only resolve because the endpoint driver was dropped.
+    let mut draining = pin!(endpoint.wait_all_draining());
+    let mut idle = pin!(endpoint.wait_idle());
+    let (draining_waker, draining_wakes) = new_count_waker();
+    let (idle_waker, idle_wakes) = new_count_waker();
+    let mut draining_cx = Context::from_waker(&draining_waker);
+    let mut idle_cx = Context::from_waker(&idle_waker);
+    assert!(draining.as_mut().poll(&mut draining_cx).is_pending());
+    assert!(idle.as_mut().poll(&mut idle_cx).is_pending());
+
+    drop(runtime);
+
+    assert!(draining_wakes.wakes() > 0, "draining waiter was not woken");
+    assert!(idle_wakes.wakes() > 0, "idle waiter was not woken");
+    assert!(draining.as_mut().poll(&mut draining_cx).is_ready());
+    assert!(idle.as_mut().poll(&mut idle_cx).is_ready());
 }
 
 #[test]
@@ -1726,6 +1757,55 @@ async fn recv_stream_cancel_stop_drop() {
             // cancelled by the server, ensuring that read_to_end can't complete
             // immediately.
             recv_dropped.wait().await;
+        },
+    );
+}
+
+/// Dropping a pending `read_to_end` future makes subsequent reads fail because `read_to_end` uses
+/// the unordered API internally.
+#[tokio::test]
+async fn recv_stream_cancel_read_to_end_then_ordered_read_is_closed() {
+    let _guard = subscribe();
+    let factory = EndpointFactory::new();
+    let server = factory.endpoint("server");
+    let server_addr = server.local_addr().unwrap();
+    let client = factory.endpoint("client");
+    let ordered_read_done = tokio::sync::SetOnce::new();
+
+    tokio::join!(
+        async {
+            let conn = server.accept().await.unwrap().await.unwrap();
+            let mut recv = conn.accept_uni().await.unwrap();
+            {
+                let fut = pin!(recv.read_to_end(usize::MAX));
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(fut.poll(&mut cx).is_pending());
+            }
+
+            {
+                let mut buf = [0; 1];
+                let fut = pin!(recv.read(&mut buf));
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(matches!(
+                    fut.poll(&mut cx),
+                    Poll::Ready(Err(crate::ReadError::ClosedStream))
+                ));
+            }
+            assert_eq!(
+                recv.read_to_end(usize::MAX).await,
+                Err(crate::ReadToEndError::Read(crate::ReadError::ClosedStream))
+            );
+            ordered_read_done.set(()).unwrap();
+        },
+        async {
+            let conn = client
+                .connect(server_addr, "localhost")
+                .unwrap()
+                .await
+                .unwrap();
+            let mut send = conn.open_uni().await.unwrap();
+            send.write_all(b"hello").await.unwrap();
+            ordered_read_done.wait().await;
         },
     );
 }

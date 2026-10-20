@@ -11,7 +11,7 @@ checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
 [[package]]
 name = "acp"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-trait",
  "datastore",
@@ -611,7 +611,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -622,7 +622,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1633,7 +1633,7 @@ dependencies = [
 [[package]]
 name = "blockstore"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1871,7 +1871,7 @@ dependencies = [
  "maybe-owned",
  "rustix",
  "rustix-linux-procfs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "winx",
 ]
 
@@ -2502,27 +2502,27 @@ dependencies = [
 
 [[package]]
 name = "cranelift-assembler-x64"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6d504c8c7ba3f3accaf8e98b7096beb98e1a271404357744c7e9e730c6865ff"
+checksum = "c9c587da2696fbaa58e7a2fa2e5bfdd365d0928219f36992304ac1f15e5bc254"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
 
 [[package]]
 name = "cranelift-assembler-x64-meta"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c065757905596bc06e82969ebd7b92d691b7fd710a7e9e8181ae0c30dab588d0"
+checksum = "f28a60027b7556b680b051651291053ec381edf4ffbc01784997ae51a64269bb"
 dependencies = [
  "cranelift-srcgen",
 ]
 
 [[package]]
 name = "cranelift-bforest"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca7162cd4d4fc5f9f2f88d1459d939882203d93a8c5a19ef2c405b2e82ef13f"
+checksum = "62bfdb846acebfd591d601994ea283c98d525ac0bc9a84ca3f2c36bcf5b69ff1"
 dependencies = [
  "cranelift-entity",
  "wasmtime-internal-core",
@@ -2530,9 +2530,9 @@ dependencies = [
 
 [[package]]
 name = "cranelift-bitset"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ec2ba2d4f3d959ec4023a10266c3dcfb28381d1938d507a9a5e1abb78bbcc88"
+checksum = "aa9f8cc1080739d5f72b4ee7e00aff7d589f1284beaf0a19472c07878be7f299"
 dependencies = [
  "serde",
  "serde_derive",
@@ -2541,9 +2541,9 @@ dependencies = [
 
 [[package]]
 name = "cranelift-codegen"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51a64cb821d5fed56bdd6053acd36fa928cd82b70bf6b19b8b14b8b27d047b9a"
+checksum = "d85417d493ecec833b5134546b4a252c78cc0bd5be11729a35d25dcff9e4e70b"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
@@ -2572,9 +2572,9 @@ dependencies = [
 
 [[package]]
 name = "cranelift-codegen-meta"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "142be1e267a7497ba3c2b5a829eaf5387b92b9bcdba6e0a6020f1ffccae7f2b8"
+checksum = "d01c8ed0098360bae69ad6b82952d4247516799ce8050d45ad168d6689f4eae6"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -2585,24 +2585,24 @@ dependencies = [
 
 [[package]]
 name = "cranelift-codegen-shared"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e41f75410da6cce8601330137d73718f679db81cb790a33de3871b5c90a0de3"
+checksum = "04f9b86d809cec9c4e88b201f1b3ed3b0347674c9ccfbb8c355228669e34be81"
 
 [[package]]
 name = "cranelift-control"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c2616c6d01c14921ac9289ef65eb7702d9c760dfdc4537a8ee5bf38ea2832c6"
+checksum = "ce182038fb10b719841e65fdf5deeee258c684f63439f5be680c2be059274b58"
 dependencies = [
  "arbitrary",
 ]
 
 [[package]]
 name = "cranelift-entity"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a03e8b44c4877cf2fb21e5788d514af6fd291a066ed9ae37adf114a25fecb4aa"
+checksum = "7bca812b03a7b942796391f25bc02aa70a1a007fee3ce2756490c788429e9c39"
 dependencies = [
  "cranelift-bitset",
  "serde",
@@ -2612,9 +2612,9 @@ dependencies = [
 
 [[package]]
 name = "cranelift-frontend"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "366ff7cb014bd08752210eba55a650969f8db9b52670d69d2ea0b23e1e9e3edf"
+checksum = "a0c30563d2aef95e8d1a00a920199c99117b350339599f0e9487a7a1cf5d59de"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.0",
@@ -2625,15 +2625,15 @@ dependencies = [
 
 [[package]]
 name = "cranelift-isle"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ea6526ebf9064fff8ce3b1e26afad7027f9e6bb0e45d2b9200e4cbab8343345"
+checksum = "9c54184333a275698edb1d3bdff226131a25d47133d792aa716e47e32b8b7f05"
 
 [[package]]
 name = "cranelift-native"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b44d323f3e5108a8a5bc61f3acd227285ece066e19afe9aece211d66b34a64ea"
+checksum = "eb67a4c8a3180b5f1d77dffcd6317c05386ced42e5a31c7004523a9d99dc85c1"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -2642,9 +2642,9 @@ dependencies = [
 
 [[package]]
 name = "cranelift-srcgen"
-version = "0.136.3"
+version = "0.136.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc173168f291ff3b95b5d0769d6a05b1eaef5e6d74c2600affab8396b4e7b420"
+checksum = "b533db1679b4b728568bd490da6533cf50974c48a4d7534e78f1e0e02bc39769"
 
 [[package]]
 name = "crc32fast"
@@ -2658,7 +2658,7 @@ dependencies = [
 [[package]]
 name = "crdt"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2748,7 +2748,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "aes-gcm",
  "blst",
@@ -2884,7 +2884,7 @@ dependencies = [
 [[package]]
 name = "cursor"
 version = "0.1.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "base64 0.23.1",
  "serde",
@@ -3041,7 +3041,7 @@ dependencies = [
 [[package]]
 name = "datastore"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3054,7 +3054,7 @@ dependencies = [
 [[package]]
 name = "db"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "acp",
  "async-trait",
@@ -3131,7 +3131,7 @@ dependencies = [
 [[package]]
 name = "defra-core"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3159,7 +3159,7 @@ dependencies = [
 [[package]]
 name = "defra-http"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "acp",
  "async-stream",
@@ -3201,7 +3201,7 @@ dependencies = [
 [[package]]
 name = "defra-node"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "acp",
  "async-trait",
@@ -3238,7 +3238,7 @@ dependencies = [
 [[package]]
 name = "defra-p2p-adapter"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "acp",
  "async-trait",
@@ -3281,7 +3281,7 @@ dependencies = [
 [[package]]
 name = "defra-version"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "serde",
 ]
@@ -3508,7 +3508,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3571,7 +3571,7 @@ dependencies = [
 [[package]]
 name = "document"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3730,7 +3730,7 @@ dependencies = [
 [[package]]
 name = "edge"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "defra-core",
  "n0-future",
@@ -3925,7 +3925,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3958,7 +3958,7 @@ dependencies = [
 [[package]]
 name = "events"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -4193,7 +4193,7 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "fixture-domain-plugin"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4614,7 +4614,7 @@ dependencies = [
 
 [[package]]
 name = "gents"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "acp",
  "afterburner",
@@ -4720,7 +4720,7 @@ dependencies = [
 
 [[package]]
 name = "gents-chatgpt-login"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "base64 0.22.1",
  "gents-login-ui",
@@ -4740,7 +4740,7 @@ dependencies = [
 
 [[package]]
 name = "gents-claude-login"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "base64 0.22.1",
  "gents-login-ui",
@@ -4758,7 +4758,7 @@ dependencies = [
 
 [[package]]
 name = "gents-cli"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "acp",
  "afterburner",
@@ -4827,7 +4827,7 @@ dependencies = [
 
 [[package]]
 name = "gents-client-host"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4854,7 +4854,7 @@ dependencies = [
 
 [[package]]
 name = "gents-codex-protocol"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4865,7 +4865,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "clap",
@@ -4879,7 +4879,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-bridge"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4921,7 +4921,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-core"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4954,7 +4954,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-tauri"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "axum",
@@ -4988,7 +4988,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fixture-host"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "dirs 5.0.1",
  "fixture-domain-plugin",
@@ -5001,7 +5001,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fs-runner"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "globset",
@@ -5013,7 +5013,7 @@ dependencies = [
 
 [[package]]
 name = "gents-lean-contract"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5035,7 +5035,7 @@ dependencies = [
 
 [[package]]
 name = "gents-login-ui"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "base64 0.22.1",
  "tiny_http",
@@ -5043,7 +5043,7 @@ dependencies = [
 
 [[package]]
 name = "gents-loop"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5070,7 +5070,7 @@ dependencies = [
 
 [[package]]
 name = "gents-media-host"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5086,7 +5086,7 @@ dependencies = [
 
 [[package]]
 name = "gents-migration"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "crypto",
@@ -5108,7 +5108,7 @@ dependencies = [
 
 [[package]]
 name = "gents-protocol"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 dependencies = [
  "anyhow",
  "axum",
@@ -5131,7 +5131,7 @@ dependencies = [
 
 [[package]]
 name = "gents-schemas"
-version = "0.21.0-rc0"
+version = "0.21.0-rc2"
 
 [[package]]
 name = "getrandom"
@@ -5562,24 +5562,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2295ed2f9c31e471e1428a8f88a3f0e1f4b27c15049592138d1eebe9c35b183"
 dependencies = [
  "async-trait",
- "bytes",
  "cfg-if",
  "data-encoding",
  "futures-channel",
  "futures-io",
  "futures-util",
- "h2",
  "hickory-proto",
- "http",
  "idna",
  "ipnet",
  "jni 0.22.4",
  "rand 0.10.1",
- "rustls",
  "thiserror 2.0.18",
  "tinyvec",
  "tokio",
- "tokio-rustls",
  "tracing",
  "url",
 ]
@@ -5623,12 +5618,10 @@ dependencies = [
  "parking_lot",
  "rand 0.10.1",
  "resolv-conf",
- "rustls",
  "smallvec",
- "system-configuration",
+ "system-configuration 0.7.0",
  "thiserror 2.0.18",
  "tokio",
- "tokio-rustls",
  "tracing",
 ]
 
@@ -5804,7 +5797,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "socket2",
- "system-configuration",
+ "system-configuration 0.7.0",
  "tokio",
  "tower-service",
  "tracing",
@@ -5942,7 +5935,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "identity"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "base64 0.23.1",
  "crypto",
@@ -6145,7 +6138,7 @@ dependencies = [
 [[package]]
 name = "inputs"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "defra-core",
  "edge",
@@ -6223,8 +6216,8 @@ dependencies = [
 
 [[package]]
 name = "iroh"
-version = "1.0.1"
-source = "git+https://github.com/jackzampolin/iroh?rev=bd3405911703981a3fb5edc957a383b6c9cc4764#bd3405911703981a3fb5edc957a383b6c9cc4764"
+version = "1.3.0"
+source = "git+https://github.com/n0-computer/iroh?rev=26dfe1d469e274d38fe3b41617a20f9bb7a10072#26dfe1d469e274d38fe3b41617a20f9bb7a10072"
 dependencies = [
  "backon",
  "blake3",
@@ -6236,7 +6229,6 @@ dependencies = [
  "ed25519-dalek 3.0.0-rc.0",
  "futures-util",
  "getrandom 0.4.2",
- "hickory-resolver",
  "http",
  "ipnet",
  "iroh-base",
@@ -6273,8 +6265,8 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "1.0.1"
-source = "git+https://github.com/jackzampolin/iroh?rev=bd3405911703981a3fb5edc957a383b6c9cc4764#bd3405911703981a3fb5edc957a383b6c9cc4764"
+version = "1.3.0"
+source = "git+https://github.com/n0-computer/iroh?rev=26dfe1d469e274d38fe3b41617a20f9bb7a10072#26dfe1d469e274d38fe3b41617a20f9bb7a10072"
 dependencies = [
  "curve25519-dalek 5.0.0-rc.0",
  "data-encoding",
@@ -6291,17 +6283,16 @@ dependencies = [
 
 [[package]]
 name = "iroh-dns"
-version = "1.0.1"
-source = "git+https://github.com/jackzampolin/iroh?rev=bd3405911703981a3fb5edc957a383b6c9cc4764#bd3405911703981a3fb5edc957a383b6c9cc4764"
+version = "1.3.0"
+source = "git+https://github.com/n0-computer/iroh?rev=26dfe1d469e274d38fe3b41617a20f9bb7a10072#26dfe1d469e274d38fe3b41617a20f9bb7a10072"
 dependencies = [
  "arc-swap",
  "cfg_aliases 0.2.2",
  "derive_more 2.1.1",
- "hickory-resolver",
  "iroh-base",
+ "n0-dns-resolver",
  "n0-error",
  "n0-future",
- "ndk-context",
  "portable-atomic",
  "rand 0.10.1",
  "rustls",
@@ -6341,9 +6332,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-metrics"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "291065721ad7c477b972e581bbc528df031dc8eb5e39fe1ff3300ae5dfb157ef"
+checksum = "8ede55536349842337f7cdc63012ec33dc637945f3259c98a0763aac364cdf09"
 dependencies = [
  "iroh-metrics-derive",
  "itoa",
@@ -6368,8 +6359,8 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "1.0.1"
-source = "git+https://github.com/jackzampolin/iroh?rev=bd3405911703981a3fb5edc957a383b6c9cc4764#bd3405911703981a3fb5edc957a383b6c9cc4764"
+version = "1.3.0"
+source = "git+https://github.com/n0-computer/iroh?rev=26dfe1d469e274d38fe3b41617a20f9bb7a10072#26dfe1d469e274d38fe3b41617a20f9bb7a10072"
 dependencies = [
  "blake3",
  "bytes",
@@ -6377,7 +6368,6 @@ dependencies = [
  "data-encoding",
  "derive_more 2.1.1",
  "getrandom 0.4.2",
- "hickory-resolver",
  "http",
  "http-body-util",
  "hyper",
@@ -6391,6 +6381,7 @@ dependencies = [
  "noq",
  "noq-proto",
  "num_enum",
+ "percent-encoding",
  "pin-project",
  "postcard",
  "rand 0.10.1",
@@ -6406,7 +6397,6 @@ dependencies = [
  "tokio-websockets",
  "tracing",
  "url",
- "vergen-gitcl",
  "webpki-roots 1.0.10",
  "ws_stream_wasm",
 ]
@@ -6777,7 +6767,7 @@ dependencies = [
 [[package]]
 name = "kms"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "acp",
  "async-channel",
@@ -6824,8 +6814,7 @@ checksum = "a4933f3f57a8e9d9da04db23fb153356ecaf00cbd14aee46279c33dc80925c37"
 [[package]]
 name = "kovan"
 version = "0.1.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7919a54a249fd585dba9436a09301f747d4f6ca16689c0cbb619301df1cbdf8f"
+source = "git+https://github.com/jackzampolin/kovan?rev=036173d0ca95a4684a54bee9142c77a51fece032#036173d0ca95a4684a54bee9142c77a51fece032"
 dependencies = [
  "once_cell",
  "portable-atomic",
@@ -6845,8 +6834,7 @@ dependencies = [
 [[package]]
 name = "kovan-map"
 version = "0.1.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee9fda66cc131f283a3237413de11ed4488ca1cc3599d9ca5de934e67dc6a031"
+source = "git+https://github.com/jackzampolin/kovan?rev=036173d0ca95a4684a54bee9142c77a51fece032#036173d0ca95a4684a54bee9142c77a51fece032"
 dependencies = [
  "foldhash 0.2.0",
  "kovan",
@@ -6918,7 +6906,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lens"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -7460,6 +7448,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "n0-dns-resolver"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "535c99c9a786bee714155d2ee4fc2477405c2c43536e1bc6a51de09a0d1448f7"
+dependencies = [
+ "derive_more 2.1.1",
+ "ipconfig",
+ "jni 0.22.4",
+ "lru",
+ "n0-error",
+ "n0-future",
+ "ndk-context",
+ "rand 0.10.1",
+ "reqwest 0.13.2",
+ "rustc-hash",
+ "rustls",
+ "simple-dns",
+ "system-configuration 0.8.0",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "webpki-roots 1.0.10",
+]
+
+[[package]]
 name = "n0-error"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7782,7 +7795,7 @@ checksum = "610a5acd306ec67f907abe5567859a3c693fb9886eb1f012ab8f2a47bef3db51"
 
 [[package]]
 name = "noq"
-version = "1.1.1"
+version = "1.4.0"
 dependencies = [
  "bytes",
  "cfg_aliases 0.2.2",
@@ -7802,9 +7815,9 @@ dependencies = [
 
 [[package]]
 name = "noq-proto"
-version = "1.1.1"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baa7b5ccd819a9c68a0d955e67a881032d09b1a17219b1f90b0997a0888e1a15"
+checksum = "c01a35be3ed37558c8db69554419f24eff8a63599b54f711bbe3863ec727c47d"
 dependencies = [
  "aes-gcm",
  "bytes",
@@ -7831,9 +7844,9 @@ dependencies = [
 
 [[package]]
 name = "noq-udp"
-version = "1.1.1"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02bba20e097a5a16cd0ad14ec882fae1e80a092a124e9422fc4dddd92e96a647"
+checksum = "8d0160422832eea1cc11c34be04ee6d5a046452b0b46cfb14695d55a1f24c954"
 dependencies = [
  "cfg_aliases 0.2.2",
  "libc",
@@ -7874,7 +7887,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8032,19 +8045,10 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 1.1.3",
+ "proc-macro-crate 2.0.2",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "num_threads"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -8849,7 +8853,7 @@ dependencies = [
 [[package]]
 name = "p2p"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "acp",
  "async-trait",
@@ -9532,9 +9536,9 @@ dependencies = [
 
 [[package]]
 name = "portmapper"
-version = "0.19.1"
+version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb3713e4977408279158444a18c1a01ac9bf2e7eaf1fbfd1a19ac9cd18d90721"
+checksum = "ca97242f016e090a25330613bc2382aab65eb22f9149dbe84d8f8e711d49a530"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -9814,9 +9818,9 @@ dependencies = [
 
 [[package]]
 name = "pulley-interpreter"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "def59f28ccaf2cb4f8dfaac83197fd7d56a4470a70e4f2589454c731370101c5"
+checksum = "5cd3de43f4f4cff536de8902097edbdf749321b97dda548f36a37918eb85bba3"
 dependencies = [
  "cranelift-bitset",
  "log",
@@ -9826,9 +9830,9 @@ dependencies = [
 
 [[package]]
 name = "pulley-macros"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a1834d3b3ef994f266a0c9ed29a8214f2c2faaa9b1c44babfa57566bb05af83"
+checksum = "8319a8fa5269b4895957f8795861c42822bd26218e495f70060a963323d94847"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9844,7 +9848,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 [[package]]
 name = "query"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "acp",
  "async-graphql",
@@ -10287,8 +10291,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "regolith"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41e4229e0c940e097792ae06705b5c32ce3bd950193ab6608a69abeb23d7b21d"
+source = "git+https://github.com/sourcenetwork/regolith?rev=cba89a23a40ace24605489d98d9cef6b5a4770ff#cba89a23a40ace24605489d98d9cef6b5a4770ff"
 dependencies = [
  "aes-gcm-siv",
  "getrandom 0.4.2",
@@ -10323,7 +10326,7 @@ dependencies = [
 [[package]]
 name = "replication-filter"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "kovan-map",
  "p2p",
@@ -10705,9 +10708,9 @@ checksum = "b50b8869d9fc858ce7266cce0194bd74df58b9d0e3f6df3a9fc8eb470d95c09d"
 
 [[package]]
 name = "rustc-hash"
-version = "2.1.2"
+version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustc-hex"
@@ -10743,7 +10746,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10758,9 +10761,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.37"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -10821,7 +10824,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10842,7 +10845,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10938,7 +10941,7 @@ dependencies = [
 [[package]]
 name = "schema"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "cid",
  "defra-core",
@@ -11128,7 +11131,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b55fb86dfd3a2f5f76ea78310a88f96c4ea21a3031f8d212443d56123fd0521"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -11663,9 +11666,9 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "simple-dns"
-version = "0.11.2"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df350943049174c4ae8ced56c604e28270258faec12a6a48637a7655287c9ce0"
+checksum = "2b6f884fa9a8d48101774bfbd3aeb81e968dd22cffd19a372da69f183db22c1a"
 dependencies = [
  "bitflags 2.11.0",
 ]
@@ -11722,7 +11725,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -11868,7 +11871,7 @@ dependencies = [
 [[package]]
 name = "storage"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-trait",
  "bm25",
@@ -12095,6 +12098,17 @@ checksum = "a13f3d0daba03132c0aa9767f98351b3488edc2c100cda2d2ec2b04f3d8d3c8b"
 dependencies = [
  "bitflags 2.11.0",
  "core-foundation 0.9.4",
+ "system-configuration-sys",
+]
+
+[[package]]
+name = "system-configuration"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "501336eb7ba9e417300a6a0fa985721065467aa83a6dcf0422a8e43e4c0328fa"
+dependencies = [
+ "bitflags 2.11.0",
+ "core-foundation 0.10.1",
  "system-configuration-sys",
 ]
 
@@ -12520,7 +12534,7 @@ dependencies = [
 [[package]]
 name = "telemetry"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "rapidhash",
  "regolith",
@@ -12537,7 +12551,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -12648,9 +12662,7 @@ dependencies = [
  "deranged",
  "itoa",
  "js-sys",
- "libc",
  "num-conv",
- "num_threads",
  "powerfmt",
  "serde_core",
  "time-core",
@@ -13320,7 +13332,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -13586,43 +13598,6 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
-
-[[package]]
-name = "vergen"
-version = "9.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b849a1f6d8639e8de261e81ee0fc881e3e3620db1af9f2e0da015d4382ceaf75"
-dependencies = [
- "anyhow",
- "derive_builder",
- "rustversion",
- "vergen-lib",
-]
-
-[[package]]
-name = "vergen-gitcl"
-version = "9.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77ff3b5300a085d6bcd8fc96a507f706a28ae3814693236c9b409db71a1d15b9"
-dependencies = [
- "anyhow",
- "derive_builder",
- "rustversion",
- "time",
- "vergen",
- "vergen-lib",
-]
-
-[[package]]
-name = "vergen-lib"
-version = "9.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b34a29ba7e9c59e62f229ae1932fb1b8fb8a6fdcc99215a641913f5f5a59a569"
-dependencies = [
- "anyhow",
- "derive_builder",
- "rustversion",
-]
 
 [[package]]
 name = "version-compare"
@@ -13919,9 +13894,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fbdd39f5c66f63ba6b5b31391b324b7ade7237d29c866cdb561330118ef436e"
+checksum = "36abb25de5518707e5ba96b586366b09db168d2d4976cb9dac57265a317497ea"
 dependencies = [
  "addr2line",
  "async-trait",
@@ -13972,9 +13947,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-environ"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e915c27826de4f7b4411b61fd6db32ca448657a5136b8c8e8874a15e90cecbf4"
+checksum = "92f16a4d09fb1fbf2dcfeddb9818e1517a258e13b505b3bfdadcf47a19bf31ca"
 dependencies = [
  "anyhow",
  "cpp_demangle",
@@ -14003,9 +13978,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-cache"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "952086551d2041430a159fe4bda3471cfea3d52846b93c825829cea9dd01954d"
+checksum = "96e4469e885ac50f8dc06337245f9905b22c68d55416267f9afd07f7f76687be"
 dependencies = [
  "base64 0.22.1",
  "directories-next",
@@ -14023,9 +13998,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-component-macro"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d95f531a0b809fd9fd158be6133c97bd2fc628ac47f5812aff3e3b5624eb02c2"
+checksum = "d4fca03bd4425856574c0807d1dee16fad43f947feaf4e9ae1d2129596ee4de4"
 dependencies = [
  "anyhow",
  "proc-macro2",
@@ -14038,15 +14013,15 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-component-util"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e754a3ff5690c34eb4713bd7c65f60dd607ead4e39042cbf52ac8011de14455b"
+checksum = "4006009fc3598af4e895ab18c6c33d2c6b7c657b1bd0a755ca7ee1abef6f0c16"
 
 [[package]]
 name = "wasmtime-internal-core"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba00c5db77adb0749ee059068e5a417bfac3d8969f5a3479d9bd1ca8c1ba248d"
+checksum = "947a732ad659f42c10ec639706fc8cb1f068dd9a55eebde8a1f24dfd06dfa525"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.0",
@@ -14056,9 +14031,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-cranelift"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97ceeb4325712a253f463e50a69b5a547fbbecd52e45612360c543eaa25a03ff"
+checksum = "fbfb8b455d524939e03df42e3e749f8e26e26ba2acd8b08fa00b3bda55686750"
 dependencies = [
  "cranelift-codegen",
  "cranelift-control",
@@ -14082,9 +14057,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-fiber"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eb3f21bc32b5382ea95f83ce9a5f2f62b68f1b25a37d0802a41a65236eae5ae"
+checksum = "bd8aa8711f68b2cdd94c2b85ba5c8317edaa1ac4ee0a0534b957123680239307"
 dependencies = [
  "cc",
  "libc",
@@ -14096,9 +14071,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-jit-debug"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e786f9925126e0d2e466c5308e572e8b6226f4047596228a3d63d99528a78949"
+checksum = "e873e4504faf50aa8ce255d6ea7210d87b39d5f379c2486782e2c5f179c70ca8"
 dependencies = [
  "cc",
  "object",
@@ -14108,9 +14083,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-jit-icache-coherence"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92cb1dd5da78f5b21d65e91063bdd8c2eb343c1f077a1dcbc29003d4a794abb0"
+checksum = "197ab1fda5da958a5c0b8a97eb241beafc48ac568b82ef4f12f38d6866c74173"
 dependencies = [
  "libc",
  "wasmtime-internal-core",
@@ -14119,9 +14094,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-unwinder"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0243d244f6dd07ccd114e6bb099e8dd1197b47de5c054576adc9483f80f65d8"
+checksum = "5577f3a5a979a7c3b1b23c1e9f13e70a8583acc8828471ec56f282117fc4952b"
 dependencies = [
  "cranelift-codegen",
  "log",
@@ -14131,9 +14106,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-versioned-export-macros"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20fa5616cd875ec78f5b92020fa47ced7c8bb923079185c8475751098b8c4a69"
+checksum = "f6399c9c4050ed431cf66e21c05fadd6f9731db44476f452f8c7142b4597b883"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14142,9 +14117,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-internal-wit-bindgen"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cad5e8cef56790d4741b62f7b6c971af53b2ad4c2d1603f8ffe86872763147aa"
+checksum = "b4eaf45d4da7681d234bb6efd846b4a528b08a75384a7fc23f125d0145364b06"
 dependencies = [
  "anyhow",
  "bitflags 2.11.0",
@@ -14156,9 +14131,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-wasi"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "284555904d42017e049fd57c05810b7975075c322481c045f99b07385fb7a5ba"
+checksum = "821e45765c35555d3b0bdf9277cb99478f7d1f29a17b3315ba76e01220f02a38"
 dependencies = [
  "async-trait",
  "bitflags 2.11.0",
@@ -14181,9 +14156,9 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-wasi-io"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebaf573aae85636595bdb976b6c76e9277e1f81db067aff6764cb256e0c17dff"
+checksum = "8cdff38d1c730bdaf4fcfbe0eedf3265fb9c7a4deb119deecbfc1c1778950716"
 dependencies = [
  "async-trait",
  "bytes",
@@ -14386,9 +14361,9 @@ checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "wiggle"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad3dcdc2980b91d0e7db6975caee4f553c6e37fd8e1464a38b09baceed3fe568"
+checksum = "af3872869836d404f722e2361f869c09630e43a73fcc7060f7892a929b74b6a3"
 dependencies = [
  "bitflags 2.11.0",
  "thiserror 2.0.18",
@@ -14400,9 +14375,9 @@ dependencies = [
 
 [[package]]
 name = "wiggle-generate"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4765433ad668e225812b956e0f598011e5cdab4d1a57b2d295ab6863e36ff231"
+checksum = "cf7e31dec6de37e7e848aecbad54777dd246cd440a1a547ab1a1e31c27f55e49"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -14414,9 +14389,9 @@ dependencies = [
 
 [[package]]
 name = "wiggle-macro"
-version = "49.0.3"
+version = "49.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d94c6623099d11a3fee39986492e803dd0db6676c9d40ab9553a7edd29f317e5"
+checksum = "a2af323f33b28ea84b24e2bccef19e51c7a75aa1d2929280ad1a4865f2877dcc"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14446,7 +14421,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -15236,7 +15211,7 @@ dependencies = [
 [[package]]
 name = "workers"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "libc",
  "rapidhash",
@@ -15412,7 +15387,7 @@ dependencies = [
 [[package]]
 name = "zanzibar"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=619f17b13bf2bb2894fbf72e830d8b8559fd58b0#619f17b13bf2bb2894fbf72e830d8b8559fd58b0"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=8bfb77c8ddc05652a860f6ca700a1eccba68a622#8bfb77c8ddc05652a860f6ca700a1eccba68a622"
 dependencies = [
  "async-trait",
  "identity",

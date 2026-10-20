@@ -413,11 +413,16 @@ fn binding_value(value: &str) -> String {
         "@public-session" => gents::session::public_request_filter(&session(Some("probe"))),
         "@public-session-absent" => gents::session::public_request_filter(&session(None)),
         "@public-keyset" => gents::session::public_request_filter(&format!(
-            "{}, request_id: {{_gt: \"probe\"}}", session(Some("probe")))),
+            "{}, request_id: {{_gt: \"probe\"}}",
+            session(Some("probe"))
+        )),
         "@public-node-keyset" => gents::session::public_request_filter(
-            "node_did: {_eq: \"probe\"}, requester_did: {_eq: \"probe\"}, request_id: {_gt: \"probe\"}"),
+            "node_did: {_eq: \"probe\"}, requester_did: {_eq: \"probe\"}, request_id: {_gt: \"probe\"}",
+        ),
         "@public-created-keyset" => gents::session::public_request_filter(&format!(
-            "{}, created_at: {{_gte: \"2026-10-16T00:00:00Z\"}}, request_id: {{_gt: \"probe\"}}", session(Some("probe")))),
+            "{}, created_at: {{_gte: \"2026-10-16T00:00:00Z\"}}, request_id: {{_gt: \"probe\"}}",
+            session(Some("probe"))
+        )),
         literal => literal.to_owned(),
     }
 }
@@ -430,6 +435,33 @@ fn has_order_node(value: &Value) -> bool {
         Value::Array(values) => values.iter().any(has_order_node),
         _ => false,
     }
+}
+
+fn indexes_leave_limits_above_filtering(value: &Value) -> bool {
+    fn collect(value: &Value, checks: &mut Vec<bool>) {
+        match value {
+            Value::Object(fields) => {
+                if fields.contains_key("indexName") {
+                    checks.push(
+                        fields.get("indexLimit").is_some_and(Value::is_null)
+                            && fields.get("indexOffset").and_then(Value::as_u64) == Some(0),
+                    );
+                }
+                for child in fields.values() {
+                    collect(child, checks);
+                }
+            }
+            Value::Array(children) => {
+                for child in children {
+                    collect(child, checks);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut checks = Vec::new();
+    collect(value, &mut checks);
+    !checks.is_empty() && checks.into_iter().all(|check| check)
 }
 
 fn uses_index(value: &Value, index: &str) -> bool {
@@ -569,7 +601,13 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
     .await
     .unwrap();
     assert!(unsafe_plan.errors.is_empty(), "{unsafe_plan:?}");
-    assert!(!unsafe_plan.data.as_ref().is_some_and(has_order_node), "the pinned planner no longer exposes the bounded residual-filter plan; revisit this guard: {unsafe_plan:?}");
+    assert!(
+        unsafe_plan
+            .data
+            .as_ref()
+            .is_some_and(indexes_leave_limits_above_filtering),
+        "residual filters must run before an index page is bounded: {unsafe_plan:?}"
+    );
     let exceptions: Vec<OrderedIndexException> = serde_json::from_str(include_str!(
         "../fixtures/ordered_read_index_exceptions.json"
     ))
@@ -620,7 +658,12 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
             match response {
                 Ok(response) if response.errors.is_empty() => {
                     let sorted = response.data.as_ref().is_some_and(has_order_node);
-                    if !sorted {
+                    if !sorted
+                        && !response
+                            .data
+                            .as_ref()
+                            .is_some_and(indexes_leave_limits_above_filtering)
+                    {
                         let exception = exceptions
                             .iter()
                             .find(|exception| exception.read == screen.read);

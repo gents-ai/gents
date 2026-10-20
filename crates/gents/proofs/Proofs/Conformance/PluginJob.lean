@@ -607,11 +607,16 @@ private def killObservation (k : SpawnKey) : Recovery.KillObservation :=
 structure KillCase where
   name : String
   control : Control
+  job : Job := killJob
 
 def killCases : List KillCase :=
-  [ ⟨"stop_kills_live_own_children", .stop⟩
-  , ⟨"pause_kills_live_own_children", .pause⟩
-  , ⟨"deadline_kills_live_own_children", .deadline⟩ ]
+  [ { name := "stop_kills_live_own_children", control := .stop }
+  , { name := "pause_kills_live_own_children", control := .pause }
+  , { name := "deadline_kills_live_own_children", control := .deadline }
+  , { name := "stop_loses_to_terminal_driver", control := .stop,
+      job := { killJob with state := .failed } }
+  , { name := "stop_replay_kills_no_children", control := .stop,
+      job := { killJob with state := .cancelled } } ]
 
 private def killedSlots (kill : List (SpawnKey × Recovery.KillAction)) :
     List (String × Recovery.KillAction) :=
@@ -626,7 +631,7 @@ structure KillVerdict where
   deriving DecidableEq
 
 private def killVerdict (c : KillCase) : KillVerdict :=
-  let (row, kill) := Control.kill killJob c.control killObservation
+  let (row, kill) := Control.kill c.job c.control killObservation
   ⟨row.state, JobState.of row.state c.control.note, killedSlots kill⟩
 
 /-- The chain root's pin. -/
@@ -761,7 +766,9 @@ theorem control_regressions :
     killCases.map killVerdict =
       [ ⟨.cancelled, .cancelled, [("1:a", .interruptCaused), ("2:b", .interruptAndCancelRow)]⟩
       , ⟨.completed, .paused, [("1:a", .interruptCaused), ("2:b", .interruptAndCancelRow)]⟩
-      , ⟨.timedOut, .timedOut, [("1:a", .interruptCaused), ("2:b", .interruptAndCancelRow)]⟩ ] ∧
+      , ⟨.timedOut, .timedOut, [("1:a", .interruptCaused), ("2:b", .interruptAndCancelRow)]⟩
+      , ⟨.failed, .failed, []⟩
+      , ⟨.cancelled, .cancelled, []⟩ ] ∧
     resumeCases.map resumeVerdict =
       [ ⟨true, some ⟨"flow-1", "row-a", "args-a", "flow", "engine-1", 3, some "row-p"⟩, "resume",
           (["run", "flow"], none)⟩
@@ -805,10 +812,14 @@ private def observationsJson (j : Job) : Json :=
     ("observation", toJson (killObservation ch.key).toContract)])
 
 private def renderKill (c : KillCase) : Json :=
-  let (row, kill) := Control.kill killJob c.control killObservation
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "kill"), ("job", jobJson killJob),
-    ("observations", observationsJson killJob), ("control", controlJson c.control),
+  let (row, kill) := Control.kill c.job c.control killObservation
+  Json.mkObj [("name", toJson c.name), ("kind", toJson "kill"), ("job", jobJson c.job),
+    ("observations", observationsJson c.job), ("control", controlJson c.control),
     ("expected", Json.mkObj [("row_state", rowStateJson row.state),
+      ("won", toJson (match c.control.ends with
+        | none => false
+        | some state => decide ((_root_.PluginJob.terminalizeRow c.job state).2 =
+            Background.CompletionDelivery.TerminalizationResult.won))),
       ("job_state", jobStateJson (JobState.of row.state c.control.note)),
       ("kill", killJson kill)])]
 

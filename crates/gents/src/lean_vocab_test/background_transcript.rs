@@ -166,7 +166,17 @@ pub(crate) struct LeanTranscriptCase {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanCompactionInputRow {
+    Ordinary { role: String, text: String },
+    AssistantToolCalls { role: String, call_ids: Vec<String> },
+    ToolResult { role: String, call_id: String },
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct LeanCompactionReducerCase {
+    pub(crate) input_rows: Vec<LeanCompactionInputRow>,
+    pub(crate) projected_prefix_ready: bool,
     pub(crate) name: String,
     pub(crate) group: String,
     pub(crate) reducer: String,

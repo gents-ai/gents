@@ -597,6 +597,7 @@ pub(crate) struct LeanPluginJobObservation {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobKillExpected {
     pub(crate) row_state: String,
+    pub(crate) won: bool,
     pub(crate) job_state: String,
     pub(crate) kill: Vec<LeanPluginJobKill>,
 }

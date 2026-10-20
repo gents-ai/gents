@@ -18,7 +18,15 @@ use crate::report::MigrationReport;
 static ENSURE_LOCK: Mutex<()> = Mutex::const_new(());
 
 pub async fn ensure_migrations(node: &EmbeddedNode) -> Result<MigrationReport> {
-    ensure_migrations_with_registry(node, &DEFAULT_REGISTRY).await
+    let mut baseline = DEFAULT_REGISTRY.baseline.to_vec();
+    let mut steps = DEFAULT_REGISTRY.steps.to_vec();
+    crate::upgrades::include_existing(node, &mut baseline, &mut steps)?;
+    let registry = Registry {
+        baseline: &baseline,
+        steps: &steps,
+        ordinary_indexes: DEFAULT_REGISTRY.ordinary_indexes,
+    };
+    ensure_migrations_with_registry(node, &registry).await
 }
 
 pub async fn ensure_migrations_with_registry(

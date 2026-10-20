@@ -115,6 +115,48 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 }
 
 #[tokio::test]
+async fn history_reconstruction_batches_distinct_requests() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = "session-many-request-scans";
+    let count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
+    for index in 0..count {
+        let request = format!("doc-{index}");
+        import_history_observation(
+            &node,
+            &request,
+            session_id,
+            "did:test:test",
+            None,
+            &format!("message {index}"),
+            &canonical_rows::authored_message_key(&request, "prompt"),
+            index as u32 + 1,
+            None,
+        )
+        .await;
+    }
+    let (history, scans) = count_request_output_scans(history::load_history_projection(
+        &node,
+        session_id,
+        "did:test:test",
+        None,
+        None,
+        None,
+    ))
+    .await;
+    let history = history.unwrap();
+    assert_eq!(history.len(), count);
+    for (index, message) in history.iter().enumerate() {
+        assert_eq!(message, &Message::user(format!("message {index}")));
+    }
+    assert!(
+        scans <= 2,
+        "history used {scans} output scans for {count} requests"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
     let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
     let node = std::sync::Arc::new(

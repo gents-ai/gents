@@ -20,6 +20,11 @@ on:
           - auto
           - enabled
           - none
+      signed_unnotarized_candidate:
+        description: Manual prerelease candidate only. Developer ID signed, without notarization; never publishes a release.
+        required: true
+        type: boolean
+        default: false
       dry_run_unsigned:
         description: Manual dry-run only. Builds and packages an unsigned artifact that must not be deployed.
         required: true
@@ -127,6 +132,7 @@ jobs:
 
       - name: Validate release signing mode
         env:
+          CANDIDATE_INPUT: ${{ inputs.signed_unnotarized_candidate }}
           DRY_RUN_UNSIGNED_INPUT: ${{ inputs.dry_run_unsigned }}
           TIMESTAMP_MODE_INPUT: ${{ inputs.codesign_timestamp }}
           TIMESTAMP_MODE_VAR: ${{ vars.MACOS_CODESIGN_TIMESTAMP_MODE }}
@@ -150,6 +156,15 @@ jobs:
             exit 1
           fi
 
+          notarization_enabled=true
+          if [[ "${CANDIDATE_INPUT:-false}" == "true" ]]; then
+            if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" || "${GITHUB_REF_TYPE}" == "tag" || "${RELEASE_VERSION}" != *-rc* || "${dry_run_unsigned}" == "true" ]]; then
+              echo "::error::Signed unnotarized candidates require a manual prerelease branch build and cannot use unsigned mode."
+              exit 1
+            fi
+            notarization_enabled=false
+          fi
+
           signing_enabled=true
           if [[ "${dry_run_unsigned}" == "true" ]]; then
             if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
@@ -162,9 +177,11 @@ jobs:
           missing=()
           [[ -n "${MACOS_CODESIGN_IDENTITY}" ]] || missing+=("MACOS_CODESIGN_IDENTITY")
           [[ -n "${MACOS_CODESIGN_KEYCHAIN_PASSWORD}" ]] || missing+=("MACOS_CODESIGN_KEYCHAIN_PASSWORD")
-          [[ -n "${MACOS_NOTARY_API_KEY}" ]] || missing+=("MACOS_NOTARY_API_KEY")
-          [[ -n "${MACOS_NOTARY_ISSUER_ID}" ]] || missing+=("MACOS_NOTARY_ISSUER_ID")
-          [[ -n "${MACOS_NOTARY_KEY_ID}" ]] || missing+=("MACOS_NOTARY_KEY_ID")
+          if [[ "${notarization_enabled}" == "true" ]]; then
+            [[ -n "${MACOS_NOTARY_API_KEY}" ]] || missing+=("MACOS_NOTARY_API_KEY")
+            [[ -n "${MACOS_NOTARY_ISSUER_ID}" ]] || missing+=("MACOS_NOTARY_ISSUER_ID")
+            [[ -n "${MACOS_NOTARY_KEY_ID}" ]] || missing+=("MACOS_NOTARY_KEY_ID")
+          fi
 
           if [[ "${signing_enabled}" == "true" && "${#missing[@]}" -gt 0 ]]; then
             printf "::error::Missing required macOS release secret(s): %s\n" "${missing[*]}"
@@ -188,6 +205,7 @@ jobs:
             exit 1
           fi
 
+          echo "NOTARIZATION_ENABLED=${notarization_enabled}" >> "${GITHUB_ENV}"
           echo "SIGNING_ENABLED=${signing_enabled}" >> "${GITHUB_ENV}"
           echo "RELEASE_CODESIGN_TIMESTAMP_MODE=${timestamp_mode}" >> "${GITHUB_ENV}"
 
@@ -196,6 +214,9 @@ jobs:
           MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
           MACOS_CODESIGN_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_CODESIGN_KEYCHAIN_PASSWORD }}
           MACOS_CODESIGN_KEYCHAIN_PATH_VAR: ${{ vars.MACOS_CODESIGN_KEYCHAIN_PATH }}
+          CANDIDATE_INPUT: ${{ inputs.signed_unnotarized_candidate }}
+          MACOS_CODESIGN_CERT_P12_BASE64: ${{ secrets.MACOS_CODESIGN_CERT_P12_BASE64 }}
+          MACOS_CODESIGN_CERT_PASSWORD: ${{ secrets.MACOS_CODESIGN_CERT_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -210,14 +231,29 @@ jobs:
           original_keychains_path="${RUNNER_TEMP}/gents-original-keychains.txt"
           original_default_keychain_path="${RUNNER_TEMP}/gents-original-default-keychain.txt"
 
-          if [[ ! -f "${keychain_path}" ]]; then
+          security list-keychains -d user > "${original_keychains_path}"
+          security default-keychain -d user > "${original_default_keychain_path}" || true
+          if [[ "${CANDIDATE_INPUT:-false}" == "true" ]]; then
+            if [[ -z "${MACOS_CODESIGN_CERT_P12_BASE64}" ]]; then
+              echo "::error::Manual signed candidates require MACOS_CODESIGN_CERT_P12_BASE64."
+              exit 1
+            fi
+            umask 077
+            keychain_path="${RUNNER_TEMP}/gents-candidate-signing.keychain-db"
+            certificate_path="${RUNNER_TEMP}/gents-candidate-signing.p12"
+            trap 'rm -f "${certificate_path}"' EXIT
+            echo "CANDIDATE_SIGNING_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
+            printf '%s' "${MACOS_CODESIGN_CERT_P12_BASE64}" | /usr/bin/base64 -D > "${certificate_path}"
+            security create-keychain -p "${keychain_password}" "${keychain_path}"
+            security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+            security import "${certificate_path}" -k "${keychain_path}" \
+              -P "${MACOS_CODESIGN_CERT_PASSWORD}" -T /usr/bin/codesign
+          elif [[ ! -f "${keychain_path}" ]]; then
             echo "::error::Native macOS signing keychain not found at ${keychain_path}."
             exit 1
           fi
 
           echo "SIGNING_KEYCHAIN=${keychain_path}" >> "${GITHUB_ENV}"
-          security list-keychains -d user > "${original_keychains_path}"
-          security default-keychain -d user > "${original_default_keychain_path}" || true
           security unlock-keychain -p "${keychain_password}" "${keychain_path}"
 
           keychains=()
@@ -380,6 +416,7 @@ jobs:
           esac
 
       - name: Notarize signed binary
+        if: env.NOTARIZATION_ENABLED == 'true'
         env:
           MACOS_NOTARY_API_KEY: ${{ secrets.MACOS_NOTARY_API_KEY }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
@@ -681,6 +718,7 @@ jobs:
       - name: Build and verify signed desktop installer
         if: env.SIGNING_ENABLED == 'true'
         env:
+          GENTS_SIGNED_UNNOTARIZED_CANDIDATE: ${{ env.NOTARIZATION_ENABLED == 'false' && 'true' || 'false' }}
           APPLE_SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY_NAME }}
           APPLE_API_KEY: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
@@ -736,6 +774,14 @@ jobs:
               security default-keychain -s "${default_keychain}" || true
             fi
           fi
+
+      - name: Remove candidate signing keychain
+        if: always() && inputs.signed_unnotarized_candidate
+        run: |
+          if [[ -n "${CANDIDATE_SIGNING_KEYCHAIN:-}" && -f "${CANDIDATE_SIGNING_KEYCHAIN}" ]]; then
+            security delete-keychain "${CANDIDATE_SIGNING_KEYCHAIN}"
+          fi
+          rm -f "${RUNNER_TEMP}/gents-candidate-signing.p12"
 
       - name: Show Rust build cache stats
         if: always()

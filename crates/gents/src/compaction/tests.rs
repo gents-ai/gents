@@ -2867,8 +2867,10 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             crate::tool_call_lifecycle::AwaitMode::Foreground,
         )
         .unwrap();
-        tool.start_running().await.unwrap();
-        tool.complete(&"file contents\n".repeat(50)).await.unwrap();
+        if turn != 0 {
+            tool.start_running().await.unwrap();
+            tool.complete(&"file contents\n".repeat(50)).await.unwrap();
+        }
 
         let assistant = text_msg(
             "assistant",
@@ -2891,6 +2893,14 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let history = session::load_history(&node, "session-1", node_did, None)
         .await
         .unwrap();
+    assert!(
+        !safe_to_reduce(&history),
+        "an older unresolved call requires provider repair"
+    );
+    assert!(
+        session_prefix_is_stable(&history),
+        "the final published ordinary turn closes the prefix"
+    );
     let durable_before = history.clone();
     let (provider_history, _) = provider_view(GROUPED_PROFILE, history);
     let result = compactor
@@ -2950,15 +2960,34 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         "compaction must not mutate the durable transcript the timeline is built from"
     );
 
-    let (resumed_history, _) = provider_view(GROUPED_PROFILE, resumed_history);
-    let compacted_count = entries
+    let state = session::load_prompt_compaction_state(&node, "session-1", node_did, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        state.compacted_through_sequence,
+        Some(compacted_through_sequence)
+    );
+    let next_request_history = session::load_sequenced_history_projection(
+        &node,
+        "session-1",
+        node_did,
+        None,
+        None,
+        state.compacted_through_sequence,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(next_request_history
         .iter()
-        .map(|entry| entry.messages_compacted as usize)
-        .sum::<usize>();
-    let resumed_history = resumed_history
-        .into_iter()
-        .skip(compacted_count)
-        .collect::<Vec<_>>();
+        .all(|row| row.sequence > compacted_through_sequence));
+    let (resumed_history, _) = provider_view(
+        GROUPED_PROFILE,
+        next_request_history
+            .into_iter()
+            .map(|row| row.message)
+            .collect(),
+    );
     assert_eq!(resumed_history, result.provider_messages().unwrap());
 
     let prompt_builder = LayeredPromptBuilder::for_agent(

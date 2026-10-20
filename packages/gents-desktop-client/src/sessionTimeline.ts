@@ -117,6 +117,20 @@ function reuseUnchangedTimelineItems(
   });
 }
 
+function hasDurableSequence(item: RenderedTimelineItem): boolean {
+  switch (item.kind) {
+    case "userMessage":
+    case "assistantMessage":
+    case "automatedInput":
+      return item.sequence != null;
+    case "toolGroup":
+      return item.messageSequence != null;
+    case "pendingUserTurn":
+    case "liveAssistant":
+      return false;
+  }
+}
+
 export function mergeSessionTipSnapshot(
   current: DesktopSessionSnapshot | null,
   tip: DesktopSessionSnapshot,
@@ -129,7 +143,7 @@ export function mergeSessionTipSnapshot(
   ) {
     return tip;
   }
-  const firstShown = current.timelineItems[0];
+  const firstShown = current.timelineItems.find(hasDurableSequence);
   const shownFrom = firstShown
     ? tip.timelineItems.findIndex(
         (item) =>
@@ -187,7 +201,7 @@ export function mergeSessionTipSnapshot(
         : next.timelinePage.hasOlder,
       oldestItemKey: preserveLoadedOlderState
         ? currentPage.oldestItemKey
-        : (timelineItems[0]?.itemKey ?? null),
+        : next.timelinePage.oldestItemKey,
     },
   };
 }
@@ -229,10 +243,7 @@ export function mergeOlderSessionTimelinePage(
       pageItems: timelineItems.length,
       hasOlder: older.timelinePage.hasOlder,
       hasNewer: false,
-      oldestItemKey:
-        prefix.length > 0
-          ? (timelineItems[0]?.itemKey ?? null)
-          : older.timelinePage.oldestItemKey,
+      oldestItemKey: older.timelinePage.oldestItemKey,
       newestItemKey: timelineItems[timelineItems.length - 1]?.itemKey ?? null,
       queryCount:
         (currentPage.queryCount ?? 0) + (older.timelinePage.queryCount ?? 0),
