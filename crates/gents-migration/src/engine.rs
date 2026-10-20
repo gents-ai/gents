@@ -89,14 +89,24 @@ fn manages_file_images(registry: &Registry<'_>) -> bool {
 }
 
 async fn register_file_image_policy(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
-    if !manages_file_images(registry) {
+    if !manages_file_images(registry)
+        && !registry
+            .managed_names()
+            .any(|name| name == gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+    {
         return Ok(());
     }
     if let Some(collection) = node
         .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .map_err(|error| Error::Node(error.into()))?
     {
-        validate_file_image_policy(&collection)?;
+        validate_file_image_policy(&collection, true)?;
+    }
+    if let Some(collection) = node
+        .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+        .map_err(|error| Error::Node(error.into()))?
+    {
+        validate_file_image_policy(&collection, false)?;
     }
     let owner = node.node_identity_did().ok_or_else(|| {
         Error::Node(anyhow::anyhow!(
@@ -117,8 +127,8 @@ async fn register_file_image_policy(node: &EmbeddedNode, registry: &Registry<'_>
 
 /// Policy bindings are outside the pinned schema version; lineage validation
 /// alone cannot establish the retained images' document permissions.
-fn validate_file_image_policy(collection: &CollectionVersion) -> Result<()> {
-    if !collection.is_branchable
+fn validate_file_image_policy(collection: &CollectionVersion, branchable: bool) -> Result<()> {
+    if collection.is_branchable != branchable
         || !collection.policy.as_ref().is_some_and(|policy| {
             policy.id == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID
                 && policy.resource_name == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
@@ -149,7 +159,7 @@ async fn register_file_image_owner(node: &EmbeddedNode, registry: &Registry<'_>)
         .ok_or_else(|| Error::CollectionMissing {
             collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.into(),
         })?;
-    validate_file_image_policy(&collection)?;
+    validate_file_image_policy(&collection, true)?;
     let acp = node.document_acp();
     let policy = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID;
     let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;

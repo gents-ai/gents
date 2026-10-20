@@ -576,6 +576,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreihbcklqo55343lt7spcif4xftwqbsfe6flznvpge3sfcre3sakdgu"
     ),
     baseline_entry!(
+        gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME,
+        gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT,
+        "bafyreickb6g5druozipch55cjpaciwvm5gafgtrprqmdtezp4zqddk5fry"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
         gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
         "bafyreiayfxrn7hgy6xmovsmhlenwoyyb22px63mo3cjogsp4u2dapo36oe"

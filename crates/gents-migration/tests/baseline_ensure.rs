@@ -619,6 +619,7 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
             ![
                 gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
                 gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+                gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME,
             ]
             .contains(&entry.name)
         })
@@ -671,7 +672,7 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         .await
         .unwrap();
     let report = ensure_migrations(&node).await.unwrap();
-    assert_eq!(report.baseline_registered, 2);
+    assert_eq!(report.baseline_registered, 3);
     assert!(node
         .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .unwrap()
@@ -680,6 +681,13 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME)
         .unwrap()
         .is_some());
+    assert!(
+        !node
+            .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+            .unwrap()
+            .unwrap()
+            .is_branchable
+    );
     for (name, version) in versions {
         assert_eq!(
             node.get_collection(name).unwrap().unwrap().version_id,
@@ -693,6 +701,36 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
     assert_eq!(
         ensure_migrations(&node).await.unwrap().baseline_registered,
         0
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn file_image_receipt_is_local_and_matches_its_pinned_root() {
+    use gents_protocol::schemas::{
+        FILE_IMAGE_HYDRATION_RECEIPT, FILE_IMAGE_HYDRATION_RECEIPT_NAME,
+        TOOL_FILE_CHANGE_POLICY_ID, TOOL_FILE_CHANGE_POLICY_RESOURCE,
+    };
+    let node = fresh_node().await;
+    node.add_schema(FILE_IMAGE_HYDRATION_RECEIPT).await.unwrap();
+    let collection = node
+        .get_collection(FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+        .unwrap()
+        .unwrap();
+    assert!(!collection.is_branchable);
+    let policy = collection.policy.as_ref().unwrap();
+    assert_eq!(policy.id, TOOL_FILE_CHANGE_POLICY_ID);
+    assert_eq!(policy.resource_name, TOOL_FILE_CHANGE_POLICY_RESOURCE);
+    assert!(gents_protocol::schemas::is_local_only_collection(
+        FILE_IMAGE_HYDRATION_RECEIPT_NAME
+    ));
+    let baseline = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+        .unwrap();
+    assert_eq!(
+        Some(collection.version_id.as_str()),
+        baseline.expected_version
     );
     node.shutdown().await;
 }
