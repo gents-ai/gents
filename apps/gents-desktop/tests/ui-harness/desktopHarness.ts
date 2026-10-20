@@ -158,6 +158,15 @@ export type MobilePerformanceHarnessController = {
   streamText(text: string): void;
   setOlderPageDelay(ms: number): void;
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
+  /** a new reply begins at the end of the transcript: an empty live tail
+      that `streamText` then grows, the turn running */
+  beginReply(): void;
+  /**
+   * A message the person sent, as the bridge shows it: first the pending
+   * turn, then the saved prompt row, before the live tail. Every stand-in
+   * names the request by its id, as a send returns it, so the row is one
+   * from pending to saved.
+   */
   userTurn(stage: "pending" | "saved"): void;
   holdSends(): void;
   liveTool(state: "running" | "done"): void;
@@ -2705,6 +2714,30 @@ export function createDesktopUiHarness(
               status: "active",
               turnState: completed ? "completed" : "running",
               timelineItems,
+            });
+            syncSessions();
+            notify("store");
+          },
+          beginReply() {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            sessions.set("session-large", {
+              ...session,
+              status: "active",
+              turnState: "running",
+              timelineItems: [
+                ...session.timelineItems.filter(
+                  (item) => item.kind !== "liveAssistant",
+                ),
+                {
+                  kind: "liveAssistant" as const,
+                  itemKey: "large-live",
+                  content: "",
+                  reasoning: null,
+                },
+              ],
             });
             syncSessions();
             notify("store");

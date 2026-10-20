@@ -181,9 +181,46 @@ const requestOf = (item: RenderedTimelineItem): string | null => {
   return null;
 };
 
+/** The key a person's message is drawn under, from the request it made:
+    the same for the app's own copy, the saved row and a folded input. */
+export const turnKey = (requestId: string) => `turn:${requestId}`;
+
+export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
+export type FoldedInput = { requestId: string; foldedIntoRequestId: string };
+
+/**
+ * The turn the view goes to after a send from here, by key, or null while
+ * there is none: the newest send whose turn has begun. A message sent
+ * with nothing running begins as it is drawn; one queued behind a running
+ * turn has begun when the session makes it the latest request, or lists
+ * it folded into one. Messages folded into the same request begin
+ * together, so the view goes to the first of them.
+ */
+export function sentTurnKey(
+  sent: readonly SentTurn[],
+  sessionId: string | null,
+  latestRequestId: string | null,
+  folded: readonly FoldedInput[],
+): string | null {
+  const foldedInto = (turn: SentTurn) =>
+    folded.find((input) => input.requestId === turn.requestId)?.foldedIntoRequestId ??
+    null;
+  const begun = sent.filter(
+    (turn) =>
+      turn.sessionId === sessionId &&
+      (!turn.queued || turn.requestId === latestRequestId || foldedInto(turn) !== null),
+  );
+  const newest = begun[begun.length - 1];
+  if (!newest) return null;
+  const into = foldedInto(newest);
+  const first =
+    into === null ? newest : begun.find((turn) => foldedInto(turn) === into)!;
+  return turnKey(first.requestId);
+}
+
 export const drawKey = (keys: DrawKeys, item: RenderedTimelineItem): string => {
   const request = requestOf(item);
-  if (request) return `turn:${request}`;
+  if (request) return turnKey(request);
   return (
     keys.inherited.get(item.itemKey) ??
     (item.kind === "liveAssistant" && keys.tail ? keys.tail : item.itemKey)
@@ -199,16 +236,33 @@ export type LocalTurn = {
   createdAt: string | null;
 };
 
+/** The app's copy of a sent message, kept while no row stands for its
+    request; the caller bounds how long, for a row that never comes. */
+export function lingerSentTurn(
+  items: RenderedTimelineItem[],
+  local: LocalTurn | null,
+  last: LocalTurn | null,
+): LocalTurn | null {
+  if (local) return local;
+  if (!last || items.some((item) => requestOf(item) === last.requestId)) return null;
+  return last;
+}
+
 const settledness = (item: RenderedTimelineItem) =>
   item.kind === "userMessage" ? 2 : item.itemKey.startsWith("local:") ? 0 : 1;
 
+/** The rows drawn for sent messages: one per message, the most settled of
+    whatever stands for it, the app's own copy drawn before any live reply.
+    A message queued behind a running turn waits in the tray instead. */
 export function withSentTurns(
   items: RenderedTimelineItem[],
   local: LocalTurn | null,
   sessionId: string | null,
+  queued = false,
 ): RenderedTimelineItem[] {
   const shown =
     local &&
+    !queued &&
     local.sessionId === sessionId &&
     !items.some((i) => requestOf(i) === local.requestId)
       ? (() => {

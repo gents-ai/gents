@@ -20,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
-import { useApp } from "../app/AppContext";
+import { useApp, useView } from "../app/AppContext";
 import { useDragReorder } from "../hooks/useDragReorder";
 import { useSelectedSessionFields } from "../hooks/useSelectedSession";
 import {
@@ -58,14 +58,34 @@ export function useSessionQueue() {
   return { pending, queue: pending?.pendingQueue ?? null, onEdit };
 }
 
+/** The selected session's tray, reading its own queue, with a message just
+    sent behind a running turn shown from the moment it is sent, until the
+    queue lists it. */
 export function SelectedPendingTray() {
   const { pending, queue, onEdit } = useSessionQueue();
   const edit = useComposerEdit();
+  const local = useView((view) => view.pendingTurn);
+  const localQueued = useView(
+    (view) =>
+      view.sentTurns.find((sent) => sent.requestId === local?.requestId)?.queued ??
+      false,
+  );
+  const listed = pending?.queuedTurns ?? NO_TURNS;
+  const queued = useMemo(
+    () =>
+      local &&
+      localQueued &&
+      local.sessionId === pending?.sessionId &&
+      !listed.some((turn) => turn.requestId === local.requestId)
+        ? [...listed, local]
+        : listed,
+    [local, localQueued, pending?.sessionId, listed],
+  );
   if (!pending?.sessionId) return null;
   return (
     <PendingTray
       key={pending.sessionId}
-      queued={pending.queuedTurns ?? NO_TURNS}
+      queued={queued}
       queue={queue}
       onEdit={onEdit}
       editingDocId={edit?.editingDocId ?? null}

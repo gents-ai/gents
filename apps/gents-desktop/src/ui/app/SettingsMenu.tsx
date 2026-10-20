@@ -12,8 +12,8 @@ import {
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import type { ThemePreference } from "@/theme";
-import type { NavMode } from "@/preferences";
-import { preferences, useNavMode, useTheme } from "@/preferences";
+import type { NavMode, SentTurnPlacement } from "@/preferences";
+import { preferences, useNavMode, useSentTurnPlacement, useTheme } from "@/preferences";
 import { useApp } from "./AppContext";
 import { inNativeShell } from "../../lib/nativeShell";
 import { isMacTauriShell } from "../../lib/shellPlatform";
@@ -28,6 +28,7 @@ export function SettingsMenu({
   const { actions, lifecycle } = useApp();
   const theme = useTheme();
   const nav = useNavMode();
+  const sentTurn = useSentTurnPlacement();
   const openDbExplorer = () => {
     void actions.openDbExplorer().catch((e: unknown) => {
       toast(`DB explorer failed to open: ${String(e)}`);
@@ -96,6 +97,21 @@ export function SettingsMenu({
             </DropdownMenuGroup>
           </>
         )}
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>After sending</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={sentTurn}
+            onValueChange={(v) => preferences.setSentTurn(v as SentTurnPlacement)}
+          >
+            <DropdownMenuRadioItem value="follow">
+              Follow the reply
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="anchor">
+              Keep my message at the top
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
         {lifecycle.home.canReset && (!inNativeShell() || isMacTauriShell()) && (
           <>
             <DropdownMenuSeparator />

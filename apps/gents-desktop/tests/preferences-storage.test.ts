@@ -13,7 +13,12 @@ import {
 } from "../src/ui/preferences";
 import { onZoomKeys, stepZoom, zoomKey } from "../src/ui/lib/zoom";
 
-const defaults: Preferences = { theme: "light", nav: "hover", zoom: 1 };
+const defaults: Preferences = {
+  theme: "light",
+  nav: "hover",
+  zoom: 1,
+  sentTurn: "follow",
+};
 
 describe("preferences read back from storage", () => {
   it("keeps the defaults for values that are not preferences", () => {
@@ -23,7 +28,12 @@ describe("preferences read back from storage", () => {
       theme: "dark",
       nav: "collapsed",
       zoom: 1,
+      sentTurn: "follow",
     });
+    expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
+      "anchor",
+    );
+    expect(restorePreferences({ sentTurn: "top" }, defaults).sentTurn).toBe("follow");
   });
 
   it("keeps a zoom only when it is one of the steps", () => {
