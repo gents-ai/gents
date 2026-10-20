@@ -87,14 +87,14 @@ export function createMailboxActions({
         content: "",
         causedBySourceDocId: item.itemId,
         answer,
-        resolveRequestId: earlier?.requestId ?? null,
+        ...(earlier ? { resolveRequestId: earlier.requestId } : {}),
       });
       if (earlier) forgetUnresolvedSubmission(earlier.requestId);
-      if (sent.outcome === "notDelivered") {
+      if (sent?.outcome === "notDelivered") {
         reportFailure("Your earlier answer was not delivered. Answer again.");
         return;
       }
-      if (sent.outcome === "deliveryUnknown") {
+      if (sent?.outcome === "deliveryUnknown") {
         rememberUnresolvedSubmission({
           nodeDid: sent.nodeDid,
           requestId: sent.requestId,
