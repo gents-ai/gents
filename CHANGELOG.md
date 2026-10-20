@@ -15,7 +15,10 @@ source consistency checks, not a separate runtime compatibility version.
   settings survive reinstalls and desktop-managed updates and apply at the
   next start. The persisted HTTP address must be loopback or one interface,
   never `0.0.0.0`/`::`. `gents service status` adds the configured network.
-
+- The Engineer's `p2p` tool adds `enrollment request`: with mutation
+  authority and a peer's `/status` enrollment token, a node signs and delivers
+  its own enrollment request, so the peer approves it with `enrollment approve`
+  and pairs with `pairings apply` without the desktop app.
 - `gents pack wire` (with `--targets-from` and `--remove`), `gents pack install
   --wire <agent>` and the desktop's Enable for agent action add a job plugin
   to an agent's Tools with a reviewed job block, without turning on direct
