@@ -220,9 +220,22 @@ phase_verify() {
     || fail 5 "leaf certificate SHA-256 ${leaf} does not match pinned value"
   say "signature verified: team ${team}, identifier ${ident}, hardened runtime, pinned leaf certificate"
 
+  # Every Mach-O file in the artifact must be thin arm64: the release notes
+  # claim arm64 only, and for executables the single verified CDHash must
+  # cover the only slice. Non-Mach-O files are skipped.
+  local f archs
+  while IFS= read -r -d '' f; do
+    if archs="$(lipo -archs "${f}" 2>/dev/null)"; then
+      [[ "${archs}" == "arm64" ]] \
+        || fail 5 "Mach-O file is not thin arm64 (archs: $(safe "${archs}")): $(safe "$(basename "${f}")")"
+    fi
+  done < <(find "${app}" -type f -print0)
+
   local cdhash="none" item_sha="none"
   if [[ "${ARTIFACT_KIND}" == "cli" ]]; then
-    printf '%s\n' "${details}" | grep -Eq '^Format=Mach-O ' || fail 5 "executable is not a Mach-O binary"
+    printf '%s\n' "${details}" | grep -Eq '^Format=Mach-O thin \(arm64\)$' \
+      || fail 5 "executable is not a thin arm64 Mach-O binary"
+    lipo -archs "${app}" >/dev/null 2>&1 || fail 5 "executable is not a Mach-O binary"
     cdhash="$(printf '%s\n' "${details}" | sed -n 's/^CDHash=//p' | head -n1)"
     [[ "${cdhash}" =~ ^[0-9a-f]{40}$ ]] || fail 5 "could not read the executable's CDHash"
     item_sha="$(shasum -a 256 "${app}" | awk '{print $1}')"
@@ -408,6 +421,8 @@ phase_complete() {
     now_sha="$(shasum -a 256 "${APP}" | awk '{print $1}')"
     [[ "${now_sha}" == "${ITEM_SHA256}" ]] || fail 13 "executable changed since verification"
     cp -p "${APP}" "${OUT}/${APP_NAME}"
+    [[ "$(shasum -a 256 "${OUT}/${APP_NAME}" | awk '{print $1}')" == "${ITEM_SHA256}" ]] \
+      || fail 14 "copied executable does not match the verified SHA-256"
     (
       cd "${OUT}"
       shasum -a 256 "${APP_NAME}" >SHA256SUMS

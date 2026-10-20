@@ -49,6 +49,7 @@ The workflow runs as one job with these steps, in order:
      `NXJ753WW5X`, bundle id `com.source-inc.gents`, the hardened runtime, and
      the pinned leaf certificate SHA-256.
    - In submit mode, the app must not already be stapled.
+   - Every Mach-O file in the artifact must be thin `arm64` (`lipo -archs`).
    - Candidate binaries are never executed. The step refuses to run if notary
      secrets are in its environment.
 3. **`submit` (credentials).**
@@ -113,15 +114,28 @@ The default is `app`. The app path is unchanged by this option.
   Directories, symlinks, extra entries and nested paths are rejected.
 - **Signature checks.** Strict `codesign`, identifier `gents`,
   TeamIdentifier `NXJ753WW5X`, the hardened runtime, the pinned leaf
-  certificate, and `Format=Mach-O`. The verify step records the executable's
-  SHA-256 and its CDHash.
+  certificate, and `Format=Mach-O thin (arm64)` confirmed with `lipo -archs`.
+  A universal binary is rejected, because one CDHash would not cover every
+  slice. The verify step records the executable's SHA-256 and its CDHash.
+- **Identifier.** The `039e2299` release candidate's CLI is signed with
+  `Identifier=gents`, as shown by `codesign -dv` on the authentic candidate.
+  `release-macos.yml` signs CLIs as `com.source-inc.gents.cli` instead.
+  This workflow pins the candidate's actual identifier and never re-signs an
+  artifact to satisfy a check. A future candidate signed by
+  `release-macos.yml` would need `EXPECTED_CLI_IDENTIFIER` changed in a
+  reviewed commit.
 - **Stapling.** Bare executables cannot carry a stapled ticket. Instead,
   `complete` requires everything the app path requires (Accepted, Apple's log
   binding the job id and the full archive SHA-256), and in addition requires
   the log's `ticketContents` to contain the verified CDHash. It fails closed
   if `ticketContents` is missing or does not match. It then re-verifies the
-  signature and the executable's SHA-256 and copies the executable
-  **byte-for-byte unchanged** to the output, with its own `SHA256SUMS`.
+  signature and the executable's SHA-256, copies the executable to the
+  output, and requires the copy's SHA-256 to equal the verified value. It
+  then writes `SHA256SUMS`.
+- **Ticket format.** The `ticketContents[].cdhash` format in Apple's log is
+  assumed to be the 40-hex CDHash that `codesign -dv` prints. This has not
+  yet been confirmed against a live log. Any mismatch fails closed: no
+  output and no acceptance record.
 - **Gatekeeper.** Gatekeeper fetches the ticket online the first time a
   quarantined copy runs. Offline first launches of quarantined copies cannot
   be validated.

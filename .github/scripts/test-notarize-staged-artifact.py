@@ -126,6 +126,22 @@ esac
 exit 97
 """
 
+LIPO_SHIM = r"""#!/bin/bash
+# lipo -archs <file>: Mach-O fixtures start with the 64-bit magic cffaedfe.
+file="${@: -1}"
+[[ "$(head -c 4 "$file" | od -An -tx1 | tr -d ' \n')" == "cffaedfe" ]] || { echo "not a Mach-O" >&2; exit 1; }
+if [[ -n "${SHIM_ARCHS:-}" ]]; then echo "$SHIM_ARCHS"; else echo arm64; fi
+"""
+
+CP_SHIM = r"""#!/bin/bash
+# Pass through to /bin/cp; optionally corrupt the CLI output copy.
+/bin/cp "$@" || exit $?
+dest="${@: -1}"
+if [[ -n "${SHIM_CORRUPT_COPY:-}" && "$dest" == */out/gents ]]; then
+  chmod u+w "$dest"; printf 'corrupted' >> "$dest"
+fi
+"""
+
 SPCTL_SHIM = r"""#!/bin/bash
 echo "spctl $*" >> "$SHIM_LOG"
 app="${@: -1}"
@@ -148,7 +164,10 @@ class Harness(unittest.TestCase):
         self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
         self.shims = self.tmp / "shims"
         self.shims.mkdir()
-        for name, body in (("codesign", CODESIGN_SHIM), ("xcrun", XCRUN_SHIM), ("spctl", SPCTL_SHIM)):
+        for name, body in (
+            ("codesign", CODESIGN_SHIM), ("xcrun", XCRUN_SHIM), ("spctl", SPCTL_SHIM),
+            ("lipo", LIPO_SHIM), ("cp", CP_SHIM),
+        ):
             path = self.shims / name
             path.write_text(body)
             path.chmod(0o755)
@@ -313,6 +332,26 @@ class HappyPathTests(Harness):
         sha = self.stage_zip(build)
         result = self.run_phases(sha=sha, phases=("verify",))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class AppArchitectureTests(Harness):
+    def stage_app_with_macho(self):
+        def build(zf):
+            _zip_entry(zf, "Gents.app/", mode=0o040755)
+            _zip_entry(zf, "Gents.app/Contents/MacOS/bridge_runner", b"\xcf\xfa\xed\xfe macho", mode=0o100755)
+            _zip_entry(zf, "Gents.app/Contents/Resources/readme.txt", b"text")
+
+        return self.stage_zip(build)
+
+    def test_thin_arm64_app_passes(self):
+        result = self.run_phases(sha=self.stage_app_with_macho(), phases=("verify",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fat_mach_o_inside_app_rejected(self):
+        result = self.run_phases(sha=self.stage_app_with_macho(), SHIM_ARCHS="x86_64 arm64")
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn("bridge_runner", result.stderr)
+        self.assert_no_credentials_used()
 
 
 class ArchiveContainmentTests(Harness):
@@ -871,6 +910,32 @@ class CliTests(Harness):
                 self.assertEqual(result.returncode, 5, result.stderr)
                 self.assertEqual(result.phase, "verify")
         self.assert_no_credentials_used()
+
+    def test_cli_fat_binary_rejected_before_credentials(self):
+        result = self.run_cli(SHIM_ARCHS="x86_64 arm64")
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assertIn("thin arm64", result.stderr)
+        self.assert_no_credentials_used()
+
+    def test_cli_universal_format_rejected(self):
+        result = self.run_cli(SHIM_FORMAT="Mach-O universal (x86_64 arm64)")
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assert_no_credentials_used()
+
+    def test_cli_not_mach_o_rejected(self):
+        src = self.tmp / "notmacho"
+        src.mkdir()
+        (src / "gents").write_bytes(b"#!/bin/sh\necho hi\n")
+        zip_path = self.tmp / "notmacho.zip"
+        subprocess.run(["ditto", "-c", "-k", str(src / "gents"), str(zip_path)], check=True)
+        result = self.run_cli(sha=self.stage(zip_path.read_bytes()))
+        self.assertEqual(result.returncode, 5, result.stderr)
+        self.assert_no_credentials_used()
+
+    def test_cli_output_copy_mismatch_fails(self):
+        result = self.run_cli(SHIM_CORRUPT_COPY="1")
+        self.assertEqual(result.returncode, 14, result.stderr)
+        self.assertIn("verified SHA-256", result.stderr)
 
     def assert_cli_rejected(self, build):
         sha = self.stage_zip(build)

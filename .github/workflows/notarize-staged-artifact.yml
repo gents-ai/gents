@@ -56,6 +56,10 @@ env:
   EXPECTED_TEAM_ID: NXJ753WW5X
   EXPECTED_BUNDLE_ID: com.source-inc.gents
   EXPECTED_CLI_NAME: gents
+  # The authentic 039e2299 candidate CLI is signed with Identifier=gents
+  # (checked with codesign -dv). release-macos.yml signs CLIs as
+  # com.source-inc.gents.cli; this workflow pins the candidate's actual
+  # identifier rather than re-signing it to match.
   EXPECTED_CLI_IDENTIFIER: gents
   # SHA-256 of the existing "Developer ID Application: John Zampolin
   # (NXJ753WW5X)" leaf certificate (SHA-1 4855F05BB34BFB227F828F9856DA05D2D02E7D0F).
@@ -104,7 +108,7 @@ jobs:
       - name: Preflight runtime tools
         run: |
           set -euo pipefail
-          for tool in python3 shasum ditto codesign xcrun spctl; do
+          for tool in python3 shasum ditto codesign xcrun spctl lipo; do
             command -v "${tool}" >/dev/null 2>&1 || {
               echo "::error::required tool '${tool}' not found on runner"
               exit 1
