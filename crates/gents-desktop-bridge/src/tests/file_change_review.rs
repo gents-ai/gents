@@ -2,6 +2,7 @@ use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents_protocol::file_changes::{
     FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
+    MAX_FILE_IMAGE_BYTES,
 };
 use gents_protocol::job::{JobBudget, JobProgress, JobState};
 
@@ -15,6 +16,23 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
     let call = "file-review-call";
     let request = format!("req-{call}");
     create_session(&core, OPERATOR, session, None).await;
+    let (physical, expected) = seed_review(
+        &core,
+        session,
+        call,
+        FileImage::Missing,
+        FileImage::File {
+            content_hash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                .into(),
+            data: String::new(),
+            permissions: FilePermissions {
+                readonly: false,
+                unix_mode: None,
+            },
+            links: None,
+        },
+    )
+    .await;
     let progress = JobProgress {
         title: "File change".into(),
         state: JobState::Completed,
@@ -33,40 +51,6 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
         observed_terminal_children: 0,
         revision: 1,
     };
-    let physical = seed_job_row(&core, session, call, "completed", &progress, None).await;
-    seed_admission(&core, session, &physical, call, 1).await;
-    let expected = ToolFileChanges {
-        version: FILE_CHANGES_VERSION,
-        tool_call_doc_id: physical.clone(),
-        changes: vec![FileChangeImages {
-            root: "/unmapped/runtime/workspace".into(),
-            path: "empty.txt".into(),
-            before: FileImage::Missing,
-            after: FileImage::File {
-                content_hash:
-                    "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
-                data: String::new(),
-                permissions: FilePermissions {
-                    readonly: false,
-                    unix_mode: None,
-                },
-                links: None,
-            },
-        }],
-    };
-    let access = ConfigAccess::local(core.node_arc());
-    let mutation = format!(
-        r#"mutation($changes: JSON) {{ update_AgentToolCall(docID: "{}", input: {{ file_changes: $changes }}) {{ _docID }} }}"#,
-        escape_graphql_string(&physical),
-    );
-    let variables = serde_json::json!({"changes": expected});
-    access
-        .transact_write("test.file_review.images", |txn| {
-            let (mutation, variables) = (&mutation, &variables);
-            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
-        })
-        .await
-        .unwrap();
     let result = crate::commands::tool_file_changes(
         &core,
         OPERATOR.into(),
@@ -110,5 +94,153 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
             Ok(Some(_))
         ));
     }
+    core.shutdown().await.unwrap();
+}
+
+async fn seed_review(
+    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    session: &str,
+    call: &str,
+    before: FileImage,
+    after: FileImage,
+) -> (String, ToolFileChanges) {
+    let progress = JobProgress {
+        title: "File change".into(),
+        state: JobState::Completed,
+        pause_reason: None,
+        phases: Vec::new(),
+        active: Vec::new(),
+        spawned: 0,
+        budget: JobBudget {
+            total: 1,
+            spent: 0,
+            remaining: 1,
+        },
+        last_event: "finished".into(),
+        last_event_at: None,
+        question: None,
+        observed_terminal_children: 0,
+        revision: 1,
+    };
+    let physical = seed_job_row(core, session, call, "completed", &progress, None).await;
+    seed_admission(core, session, &physical, call, 1).await;
+    let expected = ToolFileChanges {
+        version: FILE_CHANGES_VERSION,
+        tool_call_doc_id: physical.clone(),
+        changes: vec![FileChangeImages {
+            root: "/unmapped/runtime/workspace".into(),
+            path: "empty.txt".into(),
+            before,
+            after,
+        }],
+    };
+    let access = ConfigAccess::local(core.node_arc());
+    let mutation = format!(
+        r#"mutation($changes: JSON) {{ update_AgentToolCall(docID: "{}", input: {{ file_changes: $changes }}) {{ _docID }} }}"#,
+        escape_graphql_string(&physical),
+    );
+    let variables = serde_json::json!({"changes": expected});
+    access
+        .transact_write("test.file_review.images", |txn| {
+            let (mutation, variables) = (&mutation, &variables);
+            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+        })
+        .await
+        .unwrap();
+    (physical, expected)
+}
+
+#[tokio::test]
+async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
+    use crate::host::{protocol, ClientHost};
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    use std::{sync::Arc, time::Duration};
+    use tokio_util::{codec::LengthDelimitedCodec, sync::CancellationToken};
+
+    let (core, _dir) = boot_core().await;
+    let session = "file-review-maximum";
+    let call = "maximum-file-call";
+    create_session(&core, OPERATOR, session, None).await;
+    let image = |triplet: &str, tail: &str, hash: &str| FileImage::File {
+        content_hash: format!("sha256:{hash}"),
+        data: triplet.repeat(MAX_FILE_IMAGE_BYTES as usize / 3) + tail,
+        permissions: FilePermissions {
+            readonly: false,
+            unix_mode: None,
+        },
+        links: None,
+    };
+    assert_eq!(MAX_FILE_IMAGE_BYTES % 3, 1);
+    let (physical, expected) = seed_review(
+        &core,
+        session,
+        call,
+        image(
+            "YWFh",
+            "YQ==",
+            "9bc1b2a288b26af7257a36277ae3816a7d4f16e89c1e7e77d0a5c48bad62b360",
+        ),
+        image(
+            "YmJi",
+            "Yg==",
+            "e56ec8dc1862be6c09c53620cbc0f00f639de2a51c882745fbbc4e144714b3c2",
+        ),
+    )
+    .await;
+    let (client, server) = tokio::io::duplex(4096);
+    let stop = CancellationToken::new();
+    let host = Arc::new(ClientHost::new(core.clone()));
+    let task = tokio::spawn(host.serve(server, stop.clone()));
+    let mut client = LengthDelimitedCodec::builder()
+        .max_frame_length(protocol::MAX_FRAME_BYTES)
+        .new_framed(client);
+    client
+        .send(Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "hello", "version": protocol::PROTOCOL_VERSION,
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let hello: serde_json::Value =
+        serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+    assert_eq!(hello["version"], protocol::PROTOCOL_VERSION);
+    client
+        .send(Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "call", "id": 1, "command": {
+                    "name": "desktop_tool_file_changes", "args": {
+                        "nodeDid": OPERATOR, "sessionId": session,
+                        "requestId": format!("req-{call}"), "toolCallDocId": physical,
+                    },
+                },
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let frame = client.next().await.unwrap().unwrap();
+            let response: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+            if response["kind"] == "response" {
+                assert!(frame.len() > MAX_FILE_IMAGE_BYTES as usize * 2);
+                break response;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(response["id"], 1);
+    assert!(response["error"].is_null());
+    assert_eq!(
+        serde_json::from_value::<ToolFileChanges>(response["result"].clone()).unwrap(),
+        expected
+    );
+    stop.cancel();
+    drop(client);
+    task.await.unwrap().unwrap();
     core.shutdown().await.unwrap();
 }

@@ -189,6 +189,57 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
 }
 
 #[tokio::test]
+async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
+    let admission = published_admission(PublishedAdmissionOptions {
+        name: "file-change-maximum-images".into(),
+        tool_name: Some("write_file".into()),
+        paired_client: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut call = admission.tool;
+    let doc_id = call.doc_id().unwrap().to_owned();
+    let root = tempfile::tempdir().unwrap();
+    let root_path = std::fs::canonicalize(root.path()).unwrap();
+    let path = root_path.join("maximum.txt");
+    let before = "a".repeat(MAX_IMAGE_BYTES as usize);
+    let after = "b".repeat(MAX_IMAGE_BYTES as usize);
+    std::fs::write(&path, &before).unwrap();
+    let registry = LiveToolOutputRegistry::default();
+    let writer = registry.writer_for(doc_id.clone()).await;
+    let tool = WriteFileTool::new(ToolContext::new(root_path, false).unwrap());
+    let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
+        Default::default(), false,
+        tool.call(WriteFileArgs {
+            path: "maximum.txt".into(), content: after.clone(), raw_json: true,
+            expected_content_hash: None, overwrite: true,
+        }),
+    ).await.unwrap();
+    call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
+    call.complete(&output).await.unwrap();
+    let retained = crate::tool_call_lifecycle::load_tool_call_file_changes(
+        &ConfigAccess::local(admission.node.clone()),
+        &doc_id,
+        call.request_doc_id().unwrap(),
+        &admission.node_did,
+        call.session_id(),
+        call.requester_did(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let value = serde_json::to_value(retained).unwrap();
+    let images = &value["changes"][0];
+    assert_eq!(decoded_image(&images["before"]), before.as_bytes());
+    assert_eq!(decoded_image(&images["after"]), after.as_bytes());
+    assert_eq!(std::fs::read(&path).unwrap(), after.as_bytes());
+    admission.node.shutdown().await;
+    std::fs::remove_dir_all(admission.path).unwrap();
+}
+
+#[tokio::test]
 async fn incomplete_images_retain_the_original_without_claiming_a_finished_mutation() {
     let registry = LiveToolOutputRegistry::default();
     let writer = registry.writer_for("physical-tool").await;
