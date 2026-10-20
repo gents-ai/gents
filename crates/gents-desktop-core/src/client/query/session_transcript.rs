@@ -1,7 +1,7 @@
 use super::*;
 use gents::session::canonical_rows::{
-    AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS, OutputSegmentRow, TranscriptMessageRow,
     decode_output_segment_row, decode_transcript_message_row, output_source_discriminator,
+    OutputSegmentRow, TranscriptMessageRow, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 use gents_protocol::output::MessagePublication;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

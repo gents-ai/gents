@@ -11,17 +11,16 @@ use defra_node::{EmbeddedNode, QueryRequest};
 use futures::future::BoxFuture;
 use identity::Did;
 use query::TransactionHandle;
-use serde_json::{Value, json};
-use tracing::{Instrument, instrument::WithSubscriber};
+use serde_json::{json, Value};
+use tracing::{instrument::WithSubscriber, Instrument};
 
 use super::graphql;
 use super::retry;
 use super::write_telemetry::{
-    ConflictSource, ReceiptRecovery, RetryOwner, RollbackStatus, WriteAttemptEvent,
-    WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
-    record_slow_native_phase,
+    record_slow_native_phase, ConflictSource, ReceiptRecovery, RetryOwner, RollbackStatus,
+    WriteAttemptEvent, WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
 };
-use super::{ConfigAccess, GraphqlEndpoint, graphql_api_base};
+use super::{graphql_api_base, ConfigAccess, GraphqlEndpoint};
 
 enum TxnBackend<'a> {
     Http {
@@ -3115,12 +3114,10 @@ mod variable_tests {
         txn.discard().await.unwrap();
         let read = node.execute("{TransactionJsonProbe {payload}}").await;
         assert!(!read.has_errors());
-        assert!(
-            read.data.unwrap()["TransactionJsonProbe"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(read.data.unwrap()["TransactionJsonProbe"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         node.shutdown().await;
     }
 }

@@ -650,16 +650,14 @@ async fn close_session_preserves_creation_time() {
         row.get("agent_id").and_then(|value| value.as_str()),
         Some("deploy-test")
     );
-    assert!(
-        row.get("created_at")
-            .and_then(|value| value.as_str())
-            .is_some_and(|value| !value.is_empty())
-    );
-    assert!(
-        row.get("closed_at")
-            .and_then(|value| value.as_str())
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(row
+        .get("created_at")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty()));
+    assert!(row
+        .get("closed_at")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.is_empty()));
 
     assert_eq!(row["created_at"], original_created_at);
     let _ = std::fs::remove_dir_all(&data_path);
@@ -1288,17 +1286,15 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     assert_eq!(foreign.len(), 1);
     assert_eq!(local[0].summary, "local summary");
     assert_eq!(foreign[0].summary, "foreign summary");
-    assert!(
-        load_compaction_entries(
-            &node,
-            "same-chain",
-            "did:key:owner",
-            Some("did:key:requester")
-        )
-        .await
-        .unwrap()
-        .is_empty()
-    );
+    assert!(load_compaction_entries(
+        &node,
+        "same-chain",
+        "did:key:owner",
+        Some("did:key:requester")
+    )
+    .await
+    .unwrap()
+    .is_empty());
 }
 
 async fn claimed_authored_request(
@@ -1403,8 +1399,8 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
 async fn single_header_transaction_matches_bulk_coordinate_validation() {
     use crate::config_client::ConfigAccess;
     use canonical_rows::{
-        AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION, decode_transcript_message_row,
-        transcript_message_create_variables,
+        decode_transcript_message_row, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
+        CREATE_AGENT_MESSAGE_MUTATION,
     };
     use gents_protocol::output::MessagePublication;
 

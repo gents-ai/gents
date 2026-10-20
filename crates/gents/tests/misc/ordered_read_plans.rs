@@ -244,7 +244,7 @@ fn reads(path: &str, template: &str, formatted: bool) -> Vec<Read> {
 
 fn javascript_literals(path: &Path, source: &str) -> Vec<(String, bool)> {
     use oxc_ast::ast::{StringLiteral, TemplateLiteral};
-    use oxc_ast_visit::{Visit, walk};
+    use oxc_ast_visit::{walk, Visit};
     use oxc_span::GetSpan;
 
     struct Strings<'s> {
