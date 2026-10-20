@@ -496,11 +496,16 @@ async fn load_session_transcript_page_with_access(
     let tool_before_sequence_filter = before_sequence
         .map(|sequence| format!(", message_sequence: {{ _lt: {sequence} }}"))
         .unwrap_or_default();
+    let message_order = if node_did.is_some() {
+        "[{ sequence: DESC }]"
+    } else {
+        "[{ sequence: DESC }, { message_key: DESC }]"
+    };
     let transcript_query = format!(
         r#"query DesktopSessionTranscriptPage {{
   AgentMessage(
     filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}{message_sequence_filter} }},
-    order: [{{ sequence: DESC }}, {{ message_key: DESC }}],
+    order: {message_order},
     limit: {message_query_limit}
   ) {{ {AGENT_MESSAGE_FIELDS} }}
   AgentToolCall(
