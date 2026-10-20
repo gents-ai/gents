@@ -113,7 +113,7 @@ pub async fn verify(
         .as_str()
         .context("physical review tool")?;
     let retained = access.execute(&format!(
-        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ file_changes }} }}"#,
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID file_changes }} }}"#,
         escape_graphql_string(physical),
     )).await?;
     let observations = retained["data"]["ToolFileChange"]
@@ -144,11 +144,64 @@ pub async fn verify(
         "both immutable file versions must be retained"
     );
     ensure!(
+        node != author,
+        "review must cross enrolled client identities"
+    );
+    let delivered = access
+        .execute(&format!(
+            r#"{{ FileImageHydrationRequest(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{
+            request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id
+            status observation_doc_id outcome_signer_did outcome_signature
+        }} }}"#,
+            escape_graphql_string(physical),
+        ))
+        .await?;
+    let receipts = delivered["data"]["FileImageHydrationRequest"]
+        .as_array()
+        .context("remote review delivery receipts")?;
+    ensure!(
+        receipts.len() == 1,
+        "review demand must be reused after delivery"
+    );
+    let receipt = &receipts[0];
+    let mut demand = gents_protocol::file_image_hydration::FileImageDemand {
+        admission: gents_protocol::session_hydration::HydrationRequest {
+            request_key: String::new(),
+            peer_id: receipt["peer_id"].as_str().context("review peer")?.into(),
+            requester_did: author.into(),
+            node_did: node.into(),
+            session_id: session.into(),
+        },
+        request_doc_id: request
+            .doc_id
+            .as_deref()
+            .context("physical review request")?
+            .into(),
+        tool_call_doc_id: physical.into(),
+    };
+    demand.admission.request_key = demand.derive_request_key();
+    for (field, expected) in demand.reference_fields() {
+        ensure!(
+            receipt[field].as_str() == Some(expected),
+            "review receipt changed {field}"
+        );
+    }
+    ensure!(
+        receipt["status"] == "served"
+            && receipt["observation_doc_id"] == observations[0]["_docID"]
+            && receipt["outcome_signer_did"] == node
+            && receipt["outcome_signature"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+        "review receipt did not identify the delivered physical image"
+    );
+    ensure!(
         std::fs::read_to_string(root.join(FILE))? == LATER,
         "review overwrote later user changes"
     );
     Ok(
         json!({"sessionId":session, "requestId":request.request_id, "physicalTool":physical,
-        "enrolledClientRead":true, "retainedImagesUnchanged":true, "workingCopyPreserved":true}),
+        "enrolledClientRead":true, "retainedImagesUnchanged":true, "workingCopyPreserved":true,
+        "scopedDeliveryReceipt":true, "exactImageIdentity":true, "demandReused":true}),
     )
 }
