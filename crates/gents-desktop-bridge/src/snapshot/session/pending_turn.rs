@@ -69,7 +69,8 @@ pub(super) fn build_pending_turn(
     let lifecycle_state = request
         .lifecycle_state
         .map(|state| state.as_str().to_string());
-    let content = normalize_optional(request.content.as_deref())?;
+    let content = normalize_optional(request.content.as_deref())
+        .or_else(|| (!request_input.captured_context.is_empty()).then(String::new))?;
     let owner = gents::lifecycle::input_message_owner(request);
     if folded_into.is_some() && owner.is_none() {
         return None;
@@ -84,7 +85,11 @@ pub(super) fn build_pending_turn(
                 && row.node_did == request.node_did
                 && row.requester_did == request.requester_did
                 && row.session_id == request.session_id
-                && normalize_optional(row.content.as_deref()).is_some()
+                && row
+                    .input
+                    .as_ref()
+                    .unwrap_or(&gents_protocol::request_input::RequestInput::default())
+                    .has_authored_input(row.content.as_deref().unwrap_or_default())
                 && gents::lifecycle::request_content_owns_user_projection(
                     &row.input.clone().unwrap_or_default(),
                 )
@@ -115,6 +120,8 @@ pub(super) fn build_pending_turn(
         request_id: request.request_id.clone(),
         request_doc_id: request.doc_id.clone(),
         content: content.to_string(),
+        captured_context: (!request_input.captured_context.is_empty())
+            .then_some(request_input.captured_context),
         selected_skill_ids: request_input.selected_skill_ids,
         lifecycle_state,
         folded_into_request_id: folded_into.map(str::to_owned),

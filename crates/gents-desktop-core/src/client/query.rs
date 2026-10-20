@@ -296,6 +296,8 @@ struct SelectedRequestLookup {
 }
 
 impl SelectedRequestLookup {
+    /// Session metadata can replicate before its physical request; an empty
+    /// lookup cannot establish a broken canonical reference.
     fn decode(
         self,
         data: &Value,
@@ -318,12 +320,6 @@ impl SelectedRequestLookup {
             }),
             "selected request query returned a row outside its exact node/session/requester scope"
         );
-        if let Some(expected_request_id) = self.expected_request_id.as_deref() {
-            anyhow::ensure!(
-                selected.len() == 1 && selected[0].request_id == expected_request_id,
-                "canonical session head did not resolve to its exact physical request"
-            );
-        }
         if selected.is_empty() {
             // A signed client request can arrive after its independently created session.
             return Err(crate::error::BridgeError::new(
@@ -331,6 +327,12 @@ impl SelectedRequestLookup {
                 "selected request has not reached the session owner yet",
             )
             .into());
+        }
+        if let Some(expected_request_id) = self.expected_request_id.as_deref() {
+            anyhow::ensure!(
+                selected.len() == 1 && selected[0].request_id == expected_request_id,
+                "canonical session head did not resolve to its exact physical request"
+            );
         }
         Ok(selected)
     }

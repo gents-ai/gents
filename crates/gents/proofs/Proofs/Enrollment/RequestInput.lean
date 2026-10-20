@@ -1,6 +1,7 @@
 import Proofs.AgentSession
 import Proofs.Session.State
 import Proofs.Enrollment.State
+import Proofs.Enrollment.CapturedContext
 import Proofs.Workspace.Types
 
 namespace Enrollment
@@ -32,10 +33,24 @@ structure RequestInput where
   initialTitle : Option AgentSession.Title := none
   queue : Option RequestQueue := none
   goalContinuation : Option GoalContinuationInput := none
+  capturedContext : List CapturedContext := []
   deriving DecidableEq, Repr
 
+/-- User submission and queue replacement may contain only typed captures.
+This is content presence, not admission authority or a requirement on internal
+runtime requests. -/
+def hasAuthoredInput (input : RequestInput) (prose : String) : Bool :=
+  !prose.trim.isEmpty || !input.capturedContext.isEmpty
+
+/-- This observation prevents sending typed captures to a process that cannot
+decode them. It grants no authority; the selected runtime's identity, readiness
+and request admission retain their existing owners. Plain input does not need
+this new contract advertisement. -/
+def capturedInputCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
+  input.capturedContext.isEmpty || runtimeVersion == some 1
+
 /-- Runtime continuations remain in their parent's invocation directory. They
-do not replay the parent's title intent, queue position, or goal issuance facts.
+do not replay the parent's title intent, queue position, captured context, or goal issuance facts.
 The executing host still validates the inherited directory against its policy. -/
 def continuationInput (parent : RequestInput) (queue : RequestQueue)
     (goal : Option GoalContinuationInput := none) : RequestInput :=
@@ -48,6 +63,10 @@ theorem continuation_preserves_directory (parent : RequestInput) (queue : Reques
 theorem continuation_does_not_replay_creation (parent : RequestInput) (queue : RequestQueue)
     (goal : Option GoalContinuationInput) :
     (continuationInput parent queue goal).initialTitle = none := rfl
+
+theorem continuation_does_not_replay_captured_context (parent : RequestInput)
+    (queue : RequestQueue) (goal : Option GoalContinuationInput) :
+    (continuationInput parent queue goal).capturedContext = [] := rfl
 
 theorem continuation_uses_current_control (parent : RequestInput) (queue : RequestQueue)
     (goal : Option GoalContinuationInput) :
@@ -82,7 +101,8 @@ def requestInputFields (input : RequestInput) : CanonicalFields :=
     [toString input.selectedSkillIds.length] ++ input.selectedSkillIds ++
     optionFields (fun s => [s]) input.cwd ++
     optionFields titleFields input.initialTitle ++ optionFields queueFields input.queue ++
-    optionFields (fun goal => [toString goal.sequence, toString goal.wrapup]) input.goalContinuation
+    optionFields (fun goal => [toString goal.sequence, toString goal.wrapup]) input.goalContinuation ++
+    capturedContextExtensionFields input.capturedContext
 
 theorem default_queue_has_no_encoding_extension (queue : RequestQueue) :
     queueExtensionFields {queue with delivery := .queue, position := none} = [] := by
@@ -102,7 +122,8 @@ def inputWithinContext (input : RequestInput) (skillIds : List String)
     (cwdAllowed : String → Bool) (queueSourceAllowed : SessionQueue.QueueSource → Bool) : Bool :=
   input.selectedSkillIds.all skillIds.contains &&
     (input.cwd.map cwdAllowed).getD true &&
-    (input.queue.map (fun q => queueSourceAllowed q.source)).getD true
+    (input.queue.map (fun q => queueSourceAllowed q.source)).getD true &&
+    input.capturedContext.all CapturedContext.wellFormed
 
 theorem continuation_retains_host_policy_checks (parent : RequestInput)
     (queue : RequestQueue) (goal : Option GoalContinuationInput) (skills : List String)
@@ -110,6 +131,15 @@ theorem continuation_retains_host_policy_checks (parent : RequestInput)
     inputWithinContext (continuationInput parent queue goal) skills cwdAllowed queueAllowed =
       ((parent.cwd.map cwdAllowed).getD true && queueAllowed queue.source) := by
   simp [continuationInput, inputWithinContext]
+
+/-- Signed source observations do not widen the existing skill, directory or
+queue-source grants. Structural acceptance of a capture is not authorization. -/
+theorem captures_do_not_widen_context (input : RequestInput) (skills : List String)
+    (cwdAllowed : String → Bool) (queueAllowed : SessionQueue.QueueSource → Bool)
+    (h : inputWithinContext input skills cwdAllowed queueAllowed = true) :
+    inputWithinContext {input with capturedContext := []} skills cwdAllowed queueAllowed = true := by
+  simp only [inputWithinContext, Bool.and_eq_true] at h ⊢
+  exact ⟨h.1, by simp⟩
 
 def agentMatchesSession (selected observed : String) : Bool :=
   !selected.trim.isEmpty && selected == observed
@@ -126,7 +156,7 @@ theorem activation_cannot_expand_allowlist (input : RequestInput) (skills : List
     (h : inputWithinContext input skills cwdAllowed queueAllowed = true) :
     ∀ skill ∈ input.selectedSkillIds, skill ∈ skills := by
   simp only [inputWithinContext, Bool.and_eq_true] at h
-  simpa using h.1.1
+  simpa using h.1.1.1
 
 theorem rejected_queue_source_cannot_grant (input : RequestInput)
     (queue : RequestQueue) (skills : List String) (cwdAllowed : String → Bool)

@@ -258,17 +258,33 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
         let mut streams = Vec::new();
         let mut plans = Vec::new();
         for (block, item) in content.iter().enumerate() {
-            let gents_protocol::message::UserContent::Text(text) = item else {
-                anyhow::bail!("authored publication currently requires native user text blocks")
-            };
-            let stream = push_stream(
-                &mut streams,
-                u32::try_from(block)?,
-                0,
-                StreamPayload::Text,
-                text.text.clone(),
-            );
-            plans.push(BlockPlan::Text { stream });
+            let block = u32::try_from(block)?;
+            match item {
+                gents_protocol::message::UserContent::Text(text) => {
+                    let stream = push_stream(
+                        &mut streams,
+                        block,
+                        0,
+                        StreamPayload::Text,
+                        text.text.clone(),
+                    );
+                    plans.push(BlockPlan::Text { stream });
+                }
+                gents_protocol::message::UserContent::Document(document) => {
+                    plans.push(BlockPlan::Media(media_plan(
+                        &mut streams,
+                        block,
+                        MediaKind::Document,
+                        &document.data,
+                        document.media_type.clone().map(MediaType::Document),
+                        None,
+                        document.additional_params.clone(),
+                    )));
+                }
+                _ => anyhow::bail!(
+                    "authored publication requires native user text or document blocks"
+                ),
+            }
         }
         anyhow::ensure!(!plans.is_empty(), "native user message has no blocks");
         return Ok(EncodedNativeMessage {
