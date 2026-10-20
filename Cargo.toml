@@ -177,6 +177,7 @@ split-debuginfo = "off"
 incremental = false
 
 [patch.crates-io]
+regolith = { git = "https://github.com/sourcenetwork/regolith", rev = "020a0b4dd9b531a2e5cfde72540495746a972797" }
 # Keep Iroh's shared transport types on the same source as the path-retry fix.
 iroh = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
 iroh-base = { git = "https://github.com/jackzampolin/iroh", rev = "bd3405911703981a3fb5edc957a383b6c9cc4764" }
