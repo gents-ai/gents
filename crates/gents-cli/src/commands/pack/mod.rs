@@ -788,6 +788,38 @@ async fn wire_pack_plugins(
     Ok(wired)
 }
 
+async fn install_documents_command(
+    access: gents::config_client::ConfigAccess,
+    pack: &PackSource,
+    args: &PackInstallArgs,
+) -> Result<()> {
+    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let bind_mode = if args.scope.graphql.is_some() {
+        Some(ManifestNodeDidBindingArg::Live)
+    } else {
+        Some(ManifestNodeDidBindingArg::Home)
+    };
+    let owner = super::config::binding::resolve_target_node_did(
+        args.scope.node_did.as_deref(),
+        if args.scope.node_did.is_some() {
+            None
+        } else {
+            bind_mode
+        },
+        args.scope.home.as_deref(),
+        args.scope.graphql.as_deref(),
+        Some(&access),
+    )
+    .await?;
+    let mut output = install_documents_pack(&access, &owner, pack, args, args.explicit).await?;
+    if !args.wire.is_empty() && !args.preview {
+        output["wired"] = wire_pack_plugins(&access, &owner, &home, pack, &args.wire)
+            .await?
+            .into();
+    }
+    crate::print_json(&output)
+}
+
 pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
@@ -823,31 +855,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 args.scope.graphql.as_deref(),
             )
             .await?;
-            let bind_mode = if args.scope.graphql.is_some() {
-                Some(ManifestNodeDidBindingArg::Live)
-            } else {
-                Some(ManifestNodeDidBindingArg::Home)
-            };
-            let owner = super::config::binding::resolve_target_node_did(
-                args.scope.node_did.as_deref(),
-                if args.scope.node_did.is_some() {
-                    None
-                } else {
-                    bind_mode
-                },
-                args.scope.home.as_deref(),
-                args.scope.graphql.as_deref(),
-                Some(&access),
-            )
-            .await?;
-            let mut output =
-                install_documents_pack(&access, &owner, &pack, &args, args.explicit).await?;
-            if !args.wire.is_empty() && !args.preview {
-                output["wired"] = wire_pack_plugins(&access, &owner, &home, &pack, &args.wire)
-                    .await?
-                    .into();
-            }
-            crate::print_json(&output)
+            install_documents_command(access, &pack, &args).await
         }
         PackKind::Assets | PackKind::Plugins => {
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
@@ -1107,12 +1115,12 @@ mod tests {
         home
     }
 
-    async fn install_from(
+    fn document_install_args(
         home: &std::path::Path,
         spec: &std::path::Path,
         inference_slots: Vec<String>,
-    ) -> Result<serde_json::Value> {
-        crate::request_helpers::capture_report(install(PackInstallArgs {
+    ) -> PackInstallArgs {
+        PackInstallArgs {
             package: spec.to_str().unwrap().to_owned(),
             bindings: None,
             inference_slots,
@@ -1130,8 +1138,58 @@ mod tests {
             wire: Vec::new(),
             expect_digest: None,
             explicit: true,
-        }))
+        }
+    }
+
+    async fn install_from(
+        home: &std::path::Path,
+        spec: &std::path::Path,
+        inference_slots: Vec<String>,
+    ) -> Result<serde_json::Value> {
+        crate::request_helpers::capture_report(install(document_install_args(
+            home,
+            spec,
+            inference_slots,
+        )))
         .await
+    }
+
+    #[tokio::test]
+    async fn documents_command_closes_its_owned_store_on_success_and_failure() {
+        for invalid_binding in [false, true] {
+            let home = initialized_home().await;
+            let directory = documents_pack_dir("1.0.0");
+            let slots = if invalid_binding {
+                vec!["malformed".into()]
+            } else {
+                Vec::new()
+            };
+            let args = document_install_args(home.path(), directory.path(), slots);
+            let pack = resolve_pack_source(&args.package, None, home.path())
+                .await
+                .unwrap();
+            let (access, _) = crate::resolve_config_access(Some(home.path()), None)
+                .await
+                .unwrap();
+            let retained_node = access.local_node().unwrap().clone();
+            let outcome = crate::request_helpers::capture_report(install_documents_command(
+                access, &pack, &args,
+            ))
+            .await;
+            assert_eq!(outcome.is_err(), invalid_binding, "{outcome:?}");
+            if let Err(error) = outcome {
+                assert!(
+                    format!("{error:#}").contains("expected NAME=PROFILE_ID"),
+                    "{error:#}"
+                );
+            }
+            let (reopened, _) = crate::resolve_config_access(Some(home.path()), None)
+                .await
+                .expect("command shutdown must release the physical store even while its old node handle is retained");
+            reopened.local_node().unwrap().shutdown().await;
+            drop(reopened);
+            drop(retained_node);
+        }
     }
 
     #[tokio::test]
