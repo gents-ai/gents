@@ -35,13 +35,13 @@ pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use defra_node::EmbeddedNode;
+
     use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn replacement_revokes_omitted_groups_without_changing_other_owner() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node);
         let mut tools: Tools = serde_json::from_value(json!({

@@ -261,7 +261,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
 async fn generated_inference_registry_cases_drive_real_permits() {
     let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
     assert_eq!(snapshot.inference_registry_cases.len(), 11);
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();
@@ -276,7 +276,7 @@ async fn generated_inference_registry_cases_drive_real_permits() {
 
 #[tokio::test]
 async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();

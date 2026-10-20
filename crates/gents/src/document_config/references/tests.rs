@@ -199,7 +199,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
         apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
         DesiredStateApplyPlan,
     };
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node);
     let mut config = json!({
