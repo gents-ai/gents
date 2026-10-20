@@ -285,7 +285,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         None,
         Arc::new(move |request| {
             if matches!(journey, Journey::EditorGoalRecovery) {
-                if let Some(action) = provider_goal_recovery.reply(&emitted) {
+                if let Some(action) = provider_goal_recovery.reply(request, &emitted) {
                     return action;
                 }
             }
@@ -1247,6 +1247,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             serde_json::to_vec(&json!({
                 "draft":editor_goal_recovery::DRAFT, "captured":editor_goal_recovery::CAPTURED,
                 "resuming":editor_goal_recovery::RESUMING, "wrapup":editor_goal_recovery::WRAPUP,
+                "title":editor_goal_recovery::TITLE,
             }))?,
         )?;
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;

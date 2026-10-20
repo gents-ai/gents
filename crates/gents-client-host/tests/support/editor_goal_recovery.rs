@@ -10,6 +10,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+pub const TITLE: &str = "Recover blocked and limited goals";
 pub const DRAFT: &str = "Keep this unsent goal follow-up";
 pub const CAPTURED: &str = "unsent goal recovery context\n";
 pub const RESUMING: &str = "Recovered goal";
@@ -32,8 +33,12 @@ impl Default for Provider {
 impl Provider {
     pub fn reply(
         &self,
+        request: &Value,
         emitted: &tokio::sync::watch::Sender<Option<Instant>>,
     ) -> Option<ChatAction> {
+        if !is_goal_input(request) {
+            return Some(ChatAction::Sse(fake_llm::completion_text_sse(TITLE)));
+        }
         match self.attempts.fetch_add(1, Ordering::SeqCst) {
             0 => None,
             1 => Some(ChatAction::HttpError(
@@ -118,7 +123,11 @@ pub async fn verify(
         "initial request, two explicit resumes and one budget wrap-up required: {value}"
     );
     ensure!(
-        provider.captured_chat_requests().len() == 4,
+        captured
+            .iter()
+            .filter(|request| is_goal_input(request))
+            .count()
+            == 4,
         "goal recovery admitted an extra provider attempt"
     );
     let goal = value["data"]["Goal"].as_array().context("goal rows")?;
@@ -187,4 +196,19 @@ pub async fn verify(
     Ok(
         json!({"nodeDid":node,"sessionId":session,"goalId":goal["goal_id"],"verifiedSignatures":rows.len(),"providerAttempts":4,"explicitResumes":2,"usageLimited":true,"budgetWrapupCompleted":true,"observation":observation,"ui":ui}),
     )
+}
+
+fn is_goal_input(request: &Value) -> bool {
+    request["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["role"] == "user")
+        .any(|message| match &message["content"] {
+            Value::String(text) => text == "Return the fixture response.",
+            Value::Array(parts) => parts
+                .iter()
+                .any(|part| part["text"] == "Return the fixture response."),
+            _ => false,
+        })
 }
