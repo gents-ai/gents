@@ -721,7 +721,43 @@ static AGENT_OUTPUT_SOURCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
+static MESSAGE_SESSION_SEQUENCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "sequence",
+        descending: false,
+    },
+];
+
+static TOOL_CALL_BACKGROUND_STATUS_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "node_did",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "await_mode",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "status",
+        descending: false,
+    },
+];
+
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_MESSAGE_NAME,
+        name: "AgentMessage_session_sequence",
+        fields: MESSAGE_SESSION_SEQUENCE_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
+        name: "AgentToolCall_node_await_status",
+        fields: TOOL_CALL_BACKGROUND_STATUS_FIELDS,
+    },
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
         name: "AgentOutputSegment_request_doc_id_source",
