@@ -27,6 +27,7 @@ import Proofs.Conformance.MailboxHandoff
 import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
+import Proofs.Conformance.ChangeReview
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
@@ -497,6 +498,8 @@ def snapshotJson : String :=
       ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
+    ++ "\"workspace_change_review_cases\":"
+      ++ Conformance.ChangeReviewContracts.casesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
     ++ "\"workspace_cases\":"

@@ -3,6 +3,7 @@ pub(crate) mod adapter;
 mod artifact;
 pub use artifact::ArtifactGrant;
 mod binding;
+pub mod change_review;
 mod documents;
 mod executor;
 mod instructions;

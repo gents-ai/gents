@@ -675,6 +675,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.workspace_path_capability_cases,
         ),
         (
+            "workspace_change_review_cases",
+            "WorkspaceChangeReviewCases",
+            &snapshot.workspace_change_review_cases,
+        ),
+        (
             "logical_output_obligation_cases",
             "LogicalOutputObligationCases",
             &snapshot.logical_output_obligation_cases,

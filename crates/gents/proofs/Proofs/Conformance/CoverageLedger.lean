@@ -1330,6 +1330,12 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases"
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_change_review_cases"
+      "WorkspaceChangeReviewCases"
+      "workspace::change_review::tests::generated_change_review_cases_drive_undo_planner"
+      "Drives the native Undo planner with model-derived scope, postimage, buffer, index and replay observations. Authenticated snapshot lookup, live filesystem comparison and restoration, mutation locking and partial-failure recovery remain host refinement obligations.")
+      "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "schema_argument_repair_cases"
       "SchemaArgumentRepairCases"

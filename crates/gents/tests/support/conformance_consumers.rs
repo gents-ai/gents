@@ -700,6 +700,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_workspace_path_capability_cases_drive_real_git_executor",
         },
         ConformanceConsumer::RustTest {
+            id: "workspace::change_review::tests::generated_change_review_cases_drive_undo_planner",
+            package: "gents",
+            source_path: "crates/gents/src/workspace/change_review.rs",
+            module_path: "workspace::change_review::tests",
+            function: "generated_change_review_cases_drive_undo_planner",
+        },
+        ConformanceConsumer::RustTest {
             id: "mailbox::notification_tests::generated_notification_cases_drive_durable_writes",
             package: "gents",
             source_path: "crates/gents/src/mailbox/notification_tests.rs",
