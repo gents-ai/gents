@@ -501,8 +501,11 @@ mod tests {
     }
 
     async fn nonce_test_node(path: &std::path::Path) -> Arc<EmbeddedNode> {
+        let identity = gents::KeyIdentity::load_or_create(path.with_extension("node.key"), None)
+            .expect("nonce test identity");
         let node = Arc::new(
             EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
                 .data_path(path)
                 .with_storage_backend(StorageBackend::Regolith)
                 .build()

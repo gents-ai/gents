@@ -142,7 +142,12 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let backend: InferenceBackend = serde_json::from_value(json!({
             "node_did": "did:key:owner", "backend_id": "claude-max", "name": "Claude",

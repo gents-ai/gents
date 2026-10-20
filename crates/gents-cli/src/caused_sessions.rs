@@ -489,7 +489,7 @@ mod tests {
         for case in snapshot["plugin_job_lineage_cases"].as_array().unwrap() {
             let dir = tempfile::tempdir().unwrap();
             let node = Arc::new(
-                EmbeddedNode::builder()
+                crate::shared::test_support::node_builder()
                     .data_path(dir.path().join("node"))
                     .build()
                     .await

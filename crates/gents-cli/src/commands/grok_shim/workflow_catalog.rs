@@ -146,6 +146,7 @@ mod tests {
         let agent_id = "catalog-agent".to_owned();
         let node = Arc::new(
             EmbeddedNode::builder()
+                .with_node_identity_did(&node_did)
                 .data_path(dir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

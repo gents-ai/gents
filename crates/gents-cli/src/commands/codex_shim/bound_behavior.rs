@@ -53,7 +53,7 @@ mod tests {
         use serde_json::json;
         let dir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(dir.path().join("db"))
                 .build()
                 .await

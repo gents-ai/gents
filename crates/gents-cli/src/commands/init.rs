@@ -1831,7 +1831,7 @@ mod tests {
     #[tokio::test]
     async fn failed_init_publishes_no_default_agent() {
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .build()
                 .await
                 .unwrap(),

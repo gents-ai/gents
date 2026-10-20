@@ -1,7 +1,21 @@
 use serde_json::Value;
 
+pub(crate) fn node_builder() -> defra_node::NodeBuilder {
+    use gents::NodeIdentity as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let identity =
+        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+}
+
 pub(crate) async fn seed_unsent_xai_effort(owner: &str) -> gents::config_client::ConfigAccess {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::shared::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     gents::ensure_runtime_schemas(&node).await.unwrap();
     for (collection, value) in [
         ("InferenceBackend", xai_effort_backend(owner)),

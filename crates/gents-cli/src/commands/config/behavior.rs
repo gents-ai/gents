@@ -355,7 +355,7 @@ mod tests {
     async fn agent_create_and_clone_materialize_canonical_chain() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(tempdir.path().join("data"))
                 .build()
                 .await
@@ -511,7 +511,7 @@ mod tests {
     async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(tempdir.path().join("data"))
                 .build()
                 .await

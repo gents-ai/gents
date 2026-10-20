@@ -2649,7 +2649,7 @@ mod tests {
         let node_did = gents::NodeIdentity::did(&identity).to_string();
         let agent_id = gents::default_agent_id_for_node(&node_did);
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(tempdir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
