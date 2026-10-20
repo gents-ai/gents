@@ -85,6 +85,7 @@ pub async fn control_goal(
     };
     let input = gents_protocol::request_input::RequestInput {
         cwd: super::chat::chat_folder(request.cwd.as_deref())?,
+        captured_context: request.captured_context.unwrap_or_default(),
         ..Default::default()
     };
     let receipt = core

@@ -15,7 +15,11 @@ import { defaultAgentOf } from "@/lib/agents";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { ChoiceRow } from "./editors";
 import { Group, Row } from "./rows";
-import { WORKFLOW_ENGINE, WirePackDialog, type WirePackDialogProps } from "./WirePackDialog";
+import {
+  WORKFLOW_ENGINE,
+  WirePackDialog,
+  type WirePackDialogProps,
+} from "./WirePackDialog";
 import { errorText } from "../../../lib/errorText";
 
 /** An install or update that would replace documents someone edited stops and

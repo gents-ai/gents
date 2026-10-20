@@ -3,15 +3,11 @@ use crate::identity::NodeIdentity;
 use crate::pack::{write_home_install, HomePackInstall, InstalledVia, PackKind};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store;
-use crate::plugin::tests::constant_output_wat;
 use crate::plugin::tests::executor::installed_plugin;
-use crate::plugin_job::driver::{JobDriver, JobRuntime};
+use crate::plugin_job::driver::{settle_plugin_job, JobDriver, JobRuntime, Settlement};
 use crate::plugin_job::input::tests::{insert, live_settings};
 use crate::plugin_job::keys::{job_session_id, job_spawn_key};
-use crate::plugin_job::records::{
-    read_pin, read_progress, read_step_state, write_pin_in_txn, write_progress_in_txn,
-    HostProgressFacts,
-};
+use crate::plugin_job::records::{read_pin, read_progress, read_step_state, write_pin_in_txn};
 use crate::plugin_job::JobBinding;
 use crate::tool_call_lifecycle::admission_fixture::{fixture_job_pin, write_fixture_job_pin};
 use gents_protocol::job::{
@@ -483,7 +479,7 @@ impl Step0 {
         let response = self
             .node
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID session_id agent_id }} }}"#,
+                r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID request_id session_id agent_id }} }}"#,
                 job_spawn_key(root, slot, 0)
             ))
             .await;
@@ -675,29 +671,20 @@ fn adopting() -> Value {
     serde_json::from_str(&format!(r#"{{"effects": {{{PIN}, "spawn": [{SPAWN}]}}}}"#)).unwrap()
 }
 
-/// Ends the job's progress, the way a settled step leaves a row resumable.
-async fn finish_progress(step: &Step0, row: &str) {
-    let stored = read_progress(&step.access(), row).await.unwrap().unwrap();
-    let host = HostProgressFacts {
-        spawned: stored.spawned,
-        budget: stored.budget.clone(),
-        observed_terminal_children: stored.observed_terminal_children,
-        state: JobState::Completed,
-        pause_reason: None,
-    };
-    let (stored, host) = (&stored, &host);
-    crate::config_client::ConfigAccess::transact_local_write(
-        &step.node,
+async fn finish_job(step: &Step0, row: &str) {
+    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        step.node.clone(),
+        row,
+        &step.hook.node_did,
+        &step.session_id,
         None,
-        "test.finish",
-        |txn| {
-            Box::pin(async move {
-                write_progress_in_txn(txn, row, stored.revision, stored.clone(), host.clone()).await
-            })
-        },
     )
     .await
+    .unwrap()
     .unwrap();
+    settle_plugin_job(&mut lifecycle, Settlement::Result(json!("done")))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -793,13 +780,29 @@ async fn host_facts_overwrite_guest_pin_fields() {
 
 #[tokio::test]
 async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
-    let step = step0(adopting(), Options::default()).await;
+    let step = step0(
+        adopting(),
+        Options {
+            idle: true,
+            ..Default::default()
+        },
+    )
+    .await;
     step.call_as("call-1", r#"{"argv": ["run"], "args": {"k": "root"}}"#)
         .await;
     let root = step.row_of("call-1").await;
     let root_id = root["_docID"].as_str().unwrap().to_owned();
     let root_pin = step.pin_of(&root).await;
-    finish_progress(&step, &root_id).await;
+    let child = step.child_request(&root_id, "s").await;
+    crate::tool_call_lifecycle::admission_fixture::complete_child(
+        &step.node,
+        child["request_id"].as_str().unwrap(),
+        &step.hook.node_did,
+        "done",
+    )
+    .await;
+    finish_job(&step, &root_id).await;
+    assert_eq!(step.row_of("call-1").await["lifecycle_state"], "completed");
 
     let resume = json!({"row_doc_id": root_id, "engine": "current"});
     step.reinstall(&json!({"effects": {

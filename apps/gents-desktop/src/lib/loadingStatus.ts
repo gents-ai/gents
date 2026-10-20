@@ -161,7 +161,7 @@ export function startupSteps(
 }
 
 export type SessionLoadState = {
-  phase: "idle" | "loading" | "loaded" | "failed";
+  phase: "idle" | "loading" | "pending" | "loaded" | "failed";
   sessionId: string | null;
   nodeDid: string | null;
   found: boolean | null;
@@ -207,6 +207,16 @@ export function projectSessionLoadingStatus({
     (!selectedNodeDid ||
       !sessionLoad.nodeDid ||
       sessionLoad.nodeDid === selectedNodeDid);
+
+  if (loadMatches && sessionLoad.phase === "pending") {
+    return {
+      layer: "sessionSync",
+      phase: "loading",
+      title: "Waiting for session update",
+      detail: "Waiting for the latest conversation update.",
+      action: null,
+    };
+  }
 
   if (loadMatches && sessionLoad.phase === "loading" && sessionLoad.error) {
     return {

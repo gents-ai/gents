@@ -29,27 +29,33 @@ const RETRY_CONTINUATION: &str = "Continue the failed request from the recorded 
 /// do), so it is swapped for that exact prompt only; all else passes verbatim.
 const BACKGROUND_WAKE_RESULT_FRAMING: &str = "Review the background execution results above. Their status describes a turn/tool result, not assignment completion. Continue the task if needed.";
 
-fn wake_frontier_prompt(content: &str, wake_notifications: &[TaggedMessage]) -> String {
+/// Only the exact plain wake prompt (no captured context) is reframed; any
+/// authored message carrying captures or other content passes through
+/// unchanged, preserving its provenance.
+fn wake_frontier_message(authored: &Message, wake_notifications: &[TaggedMessage]) -> Message {
     if !wake_notifications.is_empty()
-        && content == crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT
+        && *authored
+            == Message::user(crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
     {
-        BACKGROUND_WAKE_RESULT_FRAMING.to_owned()
+        Message::user(BACKGROUND_WAKE_RESULT_FRAMING)
     } else {
-        content.to_owned()
+        authored.clone()
     }
 }
 
 pub(super) fn request_entry(
     mut history: Vec<TaggedMessage>,
-    content: &str,
+    authored: &Message,
     resume: bool,
     context: Option<&Message>,
     wake_notifications: &[TaggedMessage],
 ) -> Result<(Vec<TaggedMessage>, TaggedMessage)> {
     if !resume {
         history = super::wake_input::project(history, wake_notifications);
-        let frontier = wake_frontier_prompt(content, wake_notifications);
-        history.push(TaggedMessage::unassociated(Message::user(frontier)));
+        history.push(TaggedMessage::unassociated(wake_frontier_message(
+            authored,
+            wake_notifications,
+        )));
     } else if let Some(context) = context {
         history.push(TaggedMessage::unassociated(context.clone()));
     } else if history
@@ -434,10 +440,11 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     loop_config.context_message = request_context_message.clone();
                     loop_config.resume_from_history = resume_from_history;
                     loop_config.folded_prompts = folded_prompts.clone();
+                    let authored_prompt = request.input.authored_message(&request.content)?;
                     let authored_input = |folded: Vec<crate::agent::loop_stream::FoldedPrompt>| {
                         crate::agent::loop_stream::AuthoredInput {
                             context: request_context_message.clone(),
-                            prompt: crate::llm::message::Message::user(request.content.clone()),
+                            prompt: authored_prompt.clone(),
                             folded,
                         }
                     };
@@ -503,7 +510,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             .collect();
                         let entry = request_entry(
                             history.to_vec(),
-                            &request.content,
+                            &authored_prompt,
                             resume_from_history,
                             loop_config.context_message.as_ref(),
                             wake_notifications,
@@ -1378,7 +1385,7 @@ pub(super) mod tests {
     #[test]
     fn wake_frontier_prompt_framing_scopes() {
         use super::{
-            request_entry, wake_frontier_prompt, TaggedMessage, BACKGROUND_WAKE_RESULT_FRAMING,
+            request_entry, wake_frontier_message, TaggedMessage, BACKGROUND_WAKE_RESULT_FRAMING,
         };
         use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         use crate::llm::message::Message;
@@ -1405,12 +1412,37 @@ pub(super) mod tests {
                 "Summarize the repo layout.",
             ),
         ] {
-            assert_eq!(wake_frontier_prompt(content, wake_notifications), expected);
+            assert_eq!(
+                wake_frontier_message(&Message::user(content), wake_notifications),
+                Message::user(expected)
+            );
         }
+
+        // A wake prompt carrying captured editor context is authored input with
+        // provenance; it is never reframed and its document parts survive.
+        let captured = Message::User {
+            content: vec![
+                crate::llm::message::UserContent::text(BACKGROUND_COMPLETION_WAKE_PROMPT),
+                crate::llm::message::UserContent::Document(crate::llm::message::Document {
+                    data: crate::llm::message::DocumentSourceKind::String("fn main() {}".into()),
+                    media_type: Some(crate::llm::message::DocumentMediaType::TXT),
+                    additional_params: Some(
+                        serde_json::json!({ "captured_context": { "kind": "selection" } }),
+                    ),
+                }),
+            ],
+        };
+        assert_eq!(wake_frontier_message(&captured, &notifications), captured);
+        let (_, frontier) =
+            request_entry(Vec::new(), &captured, false, None, &notifications).unwrap();
+        assert_eq!(
+            frontier.message, captured,
+            "captured provenance reaches provider"
+        );
 
         let (history, frontier) = request_entry(
             Vec::new(),
-            BACKGROUND_COMPLETION_WAKE_PROMPT,
+            &Message::user(BACKGROUND_COMPLETION_WAKE_PROMPT),
             false,
             None,
             &notifications,
@@ -1432,7 +1464,7 @@ pub(super) mod tests {
         let recorded = TaggedMessage::unassociated(Message::user("recorded frontier".to_owned()));
         let (history, frontier) = request_entry(
             vec![notification.clone(), recorded.clone()],
-            BACKGROUND_COMPLETION_WAKE_PROMPT,
+            &Message::user(BACKGROUND_COMPLETION_WAKE_PROMPT),
             true,
             None,
             &notifications,
@@ -1488,7 +1520,7 @@ pub(super) mod tests {
             let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
             let (mut actual, prompt) = super::request_entry(
                 history,
-                &case["authored"].to_string(),
+                &crate::llm::message::Message::user(case["authored"].to_string()),
                 case["resume"].as_bool().unwrap(),
                 context.as_ref(),
                 &[],

@@ -5,6 +5,8 @@ import type {
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
+import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
+import { projectSessionLoadingStatus } from "../src/lib/loadingStatus";
 import { setTimingForTests } from "../src/hooks/timing";
 import { createSessionReads } from "../src/hooks/sessionReads";
 import { createSelectionStore } from "../src/hooks/selectionStore";
@@ -74,6 +76,57 @@ function readsFor(
 }
 
 describe("createSessionReads", () => {
+  it("keeps the transcript while a selected request is pending and recovers on arrival", async () => {
+    const tip = session(["k1"], {
+      totalItems: 1,
+      pageItems: 1,
+      hasOlder: false,
+      hasNewer: false,
+      oldestItemKey: "k1",
+      newestItemKey: "k1",
+    });
+    let arrive!: (snapshot: DesktopSessionSnapshot) => void;
+    const arrival = new Promise<DesktopSessionSnapshot>((resolve) => {
+      arrive = resolve;
+    });
+    const fetchSessionSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(tip)
+      .mockRejectedValueOnce(
+        new BridgeInvokeError({
+          code: "projectionPending",
+          message: "selected request has not reached the session owner yet",
+          retryable: true,
+          endpoint: null,
+        }),
+      )
+      .mockReturnValueOnce(arrival);
+    const reads = readsFor({ fetchSessionSnapshot } as unknown as DesktopApiAdapter);
+    await reads.refreshSession("session-1");
+    await reads.refreshSession("session-1");
+    expect(readSession(reads.sessionStore)?.timelineItems).toEqual(tip.timelineItems);
+    expect(reads.sessionStore.getState().load.phase).toBe("pending");
+    expect(
+      projectSessionLoadingStatus({
+        selectedSessionId: "session-1",
+        selectedNodeDid: "did:key:test",
+        session: tip,
+        sessionLoad: reads.sessionStore.getState().load,
+        operationalState: null,
+      }),
+    ).toMatchObject({
+      phase: "loading",
+      title: "Waiting for session update",
+      action: null,
+    });
+    const refresh = reads.refreshSession("session-1");
+    expect(reads.sessionStore.getState().load.phase).toBe("pending");
+    arrive(tip);
+    await refresh;
+    expect(reads.sessionStore.getState().load.phase).toBe("loaded");
+    expect(reads.sessionStore.getState().load.error).toBeNull();
+  });
+
   it("keeps older pages and hydration failures across routine tip refreshes", async () => {
     const tip = session(["k1"], {
       totalItems: 2,

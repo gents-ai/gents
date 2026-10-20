@@ -19,7 +19,12 @@ const job = {
   max_messages_per_slot: 4,
   result_bytes: 4096,
   max_wall_secs: 600,
-  policy: { dynamic: "check", dynamic_targets: [], trusted_packs: [], project_roots: [] },
+  policy: {
+    dynamic: "check",
+    dynamic_targets: [],
+    trusted_packs: [],
+    project_roots: [],
+  },
 };
 
 function show(
@@ -28,7 +33,11 @@ function show(
 ) {
   return renderIn(
     testApp({
-      api: { listPackWireSources: async () => ({ plugins, target_packs: [] }), wirePack, installPack },
+      api: {
+        listPackWireSources: async () => ({ plugins, target_packs: [] }),
+        wirePack,
+        installPack,
+      },
     }),
     <WorkflowsOffer deployment={node} />,
   );
@@ -58,8 +67,13 @@ describe("setup workflows offer", () => {
     };
     const before = JSON.stringify(engineerPatches(tagged));
     const user = userEvent.setup();
-    show([{ plugin: "gents/workflow", pack: "gents/rhai_workflows", job: true }], tagged);
-    await user.click(await screen.findByRole("button", { name: "Enable workflows for the Engineer" }));
+    show(
+      [{ plugin: "gents/workflow", pack: "gents/rhai_workflows", job: true }],
+      tagged,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Enable workflows for the Engineer" }),
+    );
     const dialog = await screen.findByRole("dialog");
     await within(dialog).findByText("Max spawns: 12");
     expect(installPack).not.toHaveBeenCalled();
@@ -76,12 +90,16 @@ describe("setup workflows offer", () => {
   it("without the engine, Install workflows installs with consent, then wires", async () => {
     const user = userEvent.setup();
     installPack
-      .mockRejectedValueOnce(new Error("the plugin asks for authority; pass --grant-authority"))
+      .mockRejectedValueOnce(
+        new Error("the plugin asks for authority; pass --grant-authority"),
+      )
       .mockResolvedValueOnce(undefined);
     show([]);
     await user.click(await screen.findByRole("button", { name: "Install workflows" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Installs gents/rhai_workflows first")).toBeTruthy();
+    expect(
+      within(dialog).getByText("Installs gents/rhai_workflows first"),
+    ).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "Install" }));
     await within(dialog).findByText(/--grant-authority/);
     await user.click(within(dialog).getByRole("button", { name: "Allow" }));

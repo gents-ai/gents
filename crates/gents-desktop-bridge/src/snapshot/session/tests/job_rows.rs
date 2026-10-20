@@ -1,5 +1,5 @@
 use super::*;
-use crate::tests::support::{boot_core, create_tool_call, seed_job_row, OPERATOR};
+use crate::tests::support::{boot_core, create_session, create_tool_call, seed_job_row, OPERATOR};
 use crate::types::RenderedToolCallView;
 use gents::config_client::ConfigAccess;
 use gents_protocol::job::{JobBudget, JobOutcome, JobPauseReason, JobProgress, JobState};
@@ -88,6 +88,7 @@ fn flat<'a>(snapshot: &'a DesktopSessionSnapshot, call: &str) -> &'a ToolCallVie
 #[tokio::test]
 async fn job_row_projects_progress_handle_state_and_outcome() {
     let (core, _tmp) = boot_core().await;
+    create_session(&core, OPERATOR, "sess-job", None).await;
     let failed = progress(JobState::Failed, None);
     seed_job_row(
         &core,
@@ -163,6 +164,7 @@ async fn job_row_projects_progress_handle_state_and_outcome() {
 #[tokio::test]
 async fn paused_job_row_has_state_paused_and_no_outcome() {
     let (core, _tmp) = boot_core().await;
+    create_session(&core, OPERATOR, "sess-pause", None).await;
     let paused = progress(JobState::Paused, Some(JobPauseReason::BudgetExceeded));
     seed_job_row(
         &core,
@@ -196,6 +198,7 @@ async fn paused_job_row_has_state_paused_and_no_outcome() {
 #[tokio::test]
 async fn non_job_row_has_no_job_fields() {
     let (core, _tmp) = boot_core().await;
+    create_session(&core, OPERATOR, "sess_parent", None).await;
     seed_job_row(
         &core,
         "sess_parent",
@@ -234,6 +237,7 @@ async fn non_job_row_has_no_job_fields() {
 #[tokio::test]
 async fn job_step_state_is_not_projected() {
     let (core, _tmp) = boot_core().await;
+    create_session(&core, OPERATOR, "sess-step", None).await;
     seed_job_row(
         &core,
         "sess-step",
