@@ -6,6 +6,8 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `Node.max_request_hop` no longer defaults to 8; when it is absent the
+  causal-hop cap is disabled.
 - `gents service install` takes `--http-addr`, `--http-port`,
   `--p2p-bind-addr`, `--p2p-port`, `--p2p-relay-mode` and `--p2p-discovery`
   (plus `--reset-network`), so a node running as the native service can listen
