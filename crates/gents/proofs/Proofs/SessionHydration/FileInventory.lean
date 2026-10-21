@@ -60,46 +60,25 @@ structure Observation where
 
 /-- This is a distinct immutable metadata projection. Storing it inside the
 byte-bearing observation would still replicate that observation's image bytes.
-The native capture decoder owns path, hash, permission and byte validation. -/
+The native capture decoder owns path, hash, permission and byte validation.
+Physical IDs are the existing model's abstract names for successfully decoded
+native documents, never a way to accept empty or fabricated native `_docID`s.
+The current owner comes from the transaction-bound ACP observation, not the
+stored metadata JSON or its authored node/signer columns. -/
 structure Projection where
   id : DocId
   observation : DocId
   tool : DocId
   request : DocId
   scope : FileImages.Scope
-  /-- DefraDB's authenticated stored creator, not an authored JSON claim. -/
-  creator : String
+  /-- DefraDB's current authenticated document owner, not an authored JSON claim. -/
+  owner : String
   changes : List Change
   deriving DecidableEq, Repr
 
 def Observation.metadata (observation : Observation) (projectionId : DocId) : Projection :=
   ⟨projectionId, observation.id, observation.tool, observation.request,
     observation.scope, observation.scope.node, observation.changes.map CapturedChange.metadata⟩
-
-/-- `won` is the existing terminal CAS result, and `write` is that transaction's
-commit result. Publication shares the winning terminal/capture transaction;
-failure, cancellation and timeout do not erase a captured mutation. -/
-def publish (pre : ToolCallContext) (action : ToolCallContext.Action)
-    (won : Bool) (write : TerminalWriteResult) (observation : Observation)
-    (projectionId : DocId) : Option Projection := do
-  let post ← pre.step? action
-  if won && write == .committed && decide (HasTerminal.isTerminal post.state) &&
-      observation.tool == post.callId && observation.request == post.requestId &&
-      !observation.changes.isEmpty then
-    some (observation.metadata projectionId)
-  else none
-
-theorem losing_terminal_publishes_nothing (pre : ToolCallContext)
-    (action : ToolCallContext.Action) (write : TerminalWriteResult)
-    (observation : Observation) (projectionId : DocId) :
-    publish pre action false write observation projectionId = none := by
-  simp [publish]
-
-theorem rolled_back_terminal_publishes_nothing (pre : ToolCallContext)
-    (action : ToolCallContext.Action) (won : Bool)
-    (observation : Observation) (projectionId : DocId) :
-    publish pre action won .failed observation projectionId = none := by
-  simp [publish]
 
 /-- `accepted` is supplied by the existing physical tool acceptance owner,
 including its coordinator block and direct/spawn/plugin provenance checks.
@@ -112,6 +91,42 @@ structure Tool where
   accepted : Bool
   state : ToolCallState
   deriving DecidableEq, Repr
+
+/-- `won` is the existing terminal CAS result, and `write` is that transaction's
+commit result. Publication shares the winning terminal/capture transaction;
+failure, cancellation and timeout do not erase a captured mutation. `actual`
+is the accepted physical row which owns that CAS, not the inventory target's
+scope or a scope supplied in authored capture data. -/
+def publish (pre : ToolCallContext) (action : ToolCallContext.Action)
+    (won : Bool) (write : TerminalWriteResult) (actual : Tool) (observation : Observation)
+    (projectionId : DocId) : Option Projection := do
+  let post ← pre.step? action
+  if won && write == .committed && decide (HasTerminal.isTerminal post.state) &&
+      actual.accepted && actual.id == pre.callId && actual.request == pre.requestId &&
+      actual.state == pre.state && observation.scope == actual.scope &&
+      observation.tool == post.callId && observation.request == post.requestId &&
+      !observation.changes.isEmpty then
+    some (observation.metadata projectionId)
+  else none
+
+theorem losing_terminal_publishes_nothing (pre : ToolCallContext)
+    (action : ToolCallContext.Action) (write : TerminalWriteResult)
+    (actual : Tool) (observation : Observation) (projectionId : DocId) :
+    publish pre action false write actual observation projectionId = none := by
+  simp [publish]
+
+theorem rolled_back_terminal_publishes_nothing (pre : ToolCallContext)
+    (action : ToolCallContext.Action) (won : Bool)
+    (actual : Tool) (observation : Observation) (projectionId : DocId) :
+    publish pre action won .failed actual observation projectionId = none := by
+  simp [publish]
+
+theorem different_capture_scope_publishes_nothing (pre : ToolCallContext)
+    (action : ToolCallContext.Action) (won : Bool) (write : TerminalWriteResult)
+    (actual : Tool) (observation : Observation) (projectionId : DocId)
+    (h : observation.scope ≠ actual.scope) :
+    publish pre action won write actual observation projectionId = none := by
+  simp [publish, h]
 
 inductive Capture where
   | pending
@@ -142,9 +157,9 @@ inductive ReadBoundary where
   deriving DecidableEq, Repr
 
 /-- `atomicExhaustive` is an external premise of the ConfigAccess read owner:
-all canonical membership, accepted bindings, terminal facts and projections
-were enumerated in one consistent database read snapshot with bounded native
-queries. The current multi-read hydration loader does not establish it merely
+all canonical membership, accepted bindings, terminal facts, projections and
+current document-owner observations were enumerated in one consistent database
+read snapshot with bounded native queries. The current multi-read hydration loader does not establish it merely
 by returning a list. A truncated or mixed-revision read cannot certify empty. -/
 structure Source where
   catalog : Catalog
@@ -163,7 +178,7 @@ def validScope (scope : FileImages.Scope) : Bool :=
 
 def Projection.matches (projection : Projection) (tool : Tool) : Bool :=
   projection.tool == tool.id && projection.request == tool.request &&
-    projection.scope == tool.scope && projection.creator == tool.scope.node &&
+    projection.scope == tool.scope && projection.owner == tool.scope.node &&
     !projection.changes.isEmpty &&
     projection.changes.all (fun change => !change.root.isEmpty && !change.path.isEmpty) &&
     (projection.changes.map (fun change => (change.root, change.path))).Nodup
