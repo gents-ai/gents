@@ -89,7 +89,12 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
     assert_eq!(cases.len(), 14);
     let temp = tempfile::tempdir()?;
     let signer = gents::KeyIdentity::load_or_create(temp.path().join("node.key"), None)?;
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(signer.did())
+            .build()
+            .await?,
+    );
     gents::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     for case in cases {
