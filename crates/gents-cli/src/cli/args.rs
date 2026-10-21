@@ -1899,6 +1899,11 @@ pub(crate) struct ResetArgs {
 pub(crate) struct ServeArgs {
     #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Fail instead of displaying macOS Keychain access dialogs"
+    )]
+    pub(crate) no_keychain_prompts: bool,
     #[arg(long, hide = true)]
     pub(crate) data_dir: Option<PathBuf>,
     #[arg(

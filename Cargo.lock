@@ -4804,6 +4804,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rmcp",
  "schemars 1.2.1",
+ "security-framework 3.7.0",
  "semver 1.0.28",
  "serde",
  "serde_json",

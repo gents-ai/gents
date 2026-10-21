@@ -114,6 +114,7 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "23113c5e6ffa238fd02fdf8ee76a338af11ab742" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSBundle"] }

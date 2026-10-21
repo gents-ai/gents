@@ -451,6 +451,8 @@ fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
 }
 
 pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
+    let _keychain_prompt_guard =
+        crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
     serve_foreground(args).await
 }
