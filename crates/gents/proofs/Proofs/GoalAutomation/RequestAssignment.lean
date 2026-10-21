@@ -91,4 +91,69 @@ theorem later_assignment_keeps_old_handoff :
 theorem unbound_legacy_goal_cannot_claim_success :
     observe [⟨1, 10, 1, none⟩] ⟨100, 1, 10, none, true⟩ = .unknown := by decide
 
+/-- Revisions and physical parent links come from DefraDB's composite commits.
+Height validates the native DAG; it never orders concurrent assignment states.
+Deleted documents remain in this read observation through DocumentACP. -/
+structure Version where
+  document : Nat
+  commit : Nat
+  height : Nat
+  parents : List Nat
+  assignment : Assignment
+  status : Goals.Status
+  deriving DecidableEq, Repr
+
+def historyValid (versions : List Version) : Bool :=
+  decide ((versions.map fun v => (v.document, v.commit)).Nodup) &&
+    versions.all fun v => v.parents.all fun parent => versions.any fun p =>
+      p.document == v.document && p.commit == parent && p.height < v.height
+
+def reaches (versions : List Version) (document target : Nat) : Nat → Nat → Bool
+  | 0, _ => false
+  | fuel + 1, current => current == target ||
+      ((versions.find? fun v => v.document == document && v.commit == current).map
+        fun v => v.parents.any (reaches versions document target fuel)).getD false
+
+def sameAssignment (left right : Version) : Bool :=
+  left.document == right.document && decide (left.assignment = right.assignment)
+
+/-- A native causal frontier is required for each physical assignment. A fork,
+missing parent, cyclic history, or duplicate revision is unknown; a greater
+height or later timestamp cannot choose a winner. -/
+def latestVersions (versions : List Version) : Option (List Version) :=
+  if !historyValid versions then none
+  else
+    let frontier := versions.filter fun v => !(versions.any fun later =>
+      sameAssignment v later && v.commit != later.commit &&
+        reaches versions v.document v.commit (versions.length + 1) later.commit)
+    if (frontier.map fun v => (v.document, v.assignment)).Nodup then some frontier else none
+
+inductive HistoryObservation where
+  | unassigned
+  | unknown
+  | assigned (goal root : Nat) (status : Goals.Status)
+  deriving DecidableEq, Repr
+
+def observeHistory (versions : List Version) (entry : Entry) : HistoryObservation :=
+  match latestVersions versions with
+  | none => .unknown
+  | some frontier => match observe (frontier.map Version.assignment) entry with
+    | .unassigned => .unassigned
+    | .unknown => .unknown
+    | .assigned goal root =>
+        match frontier.find? fun v => belongs v.assignment entry &&
+            v.assignment.goal == goal && v.assignment.root == some root with
+        | some v => .assigned goal root v.status
+        | none => .unknown
+
+theorem incomplete_history_cannot_claim_assignment (versions : List Version) (entry : Entry)
+    (invalid : historyValid versions = false) :
+    observeHistory versions entry = .unknown := by
+  simp [observeHistory, latestVersions, invalid]
+
+theorem ambiguous_history_cannot_claim_assignment (versions : List Version) (entry : Entry)
+    (unknown : latestVersions versions = none) :
+    observeHistory versions entry = .unknown := by
+  simp [observeHistory, unknown]
+
 end GoalAutomation.RequestAssignment

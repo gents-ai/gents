@@ -1,4 +1,5 @@
 import Proofs.GoalAutomation.RequestAssignment
+import Proofs.Recovery.Sweeps.SessionMessage
 import Proofs.Conformance.ContractTypes
 import Lean
 
@@ -68,5 +69,77 @@ def caseJson (c : Case) : Json :=
 def casesJson : String := (toJson (cases.map caseJson)).compress
 
 example : cases.length = 18 := by decide
+
+structure HistoryCase where
+  name : String
+  versions : List Version
+  entry : Entry := ⟨101, 1, 10, some ⟨1, some 100⟩, true⟩
+  retireDocuments : List Nat := []
+  deriving DecidableEq, Repr
+
+def historyCases : List HistoryCase :=
+  let first : Version := ⟨10, 1, 1, [], ⟨1, 10, 1, some 100⟩, .active⟩
+  let stopped := {first with commit := 2, height := 2, parents := [1], status := .stopped}
+  let fresh := {first with document := 20, commit := 3, assignment := ⟨1, 10, 2, some 200⟩}
+  let reassigned := {first with commit := 3, height := 3, parents := [2], assignment := ⟨1, 10, 1, some 200⟩}
+  let fork := {stopped with commit := 3, height := 4, status := .complete}
+  [ {name := "retired_goal_keeps_its_status", versions := [first, stopped, fresh], retireDocuments := [10]}
+  , {name := "reused_goal_id_keeps_old_assignment", versions := [first, stopped, reassigned]}
+  , {name := "later_complete_goal_cannot_complete_older_active_assignment",
+      versions := [first, {reassigned with height := 2, parents := [1], status := .complete}]}
+  , {name := "current_followup_uses_current_assignment", versions := [first, stopped, fresh],
+      entry := ⟨201, 1, 10, some ⟨2, some 200⟩, true⟩}
+  , {name := "completed_old_assignment_remains_complete",
+      versions := [first, {stopped with status := .complete}, reassigned]}
+  , {name := "concurrent_states_are_unknown_despite_different_heights", versions := [first, stopped, fork]}
+  , {name := "merged_native_frontier_resolves_assignment", versions := [first, stopped, fork,
+      {first with commit := 4, height := 5, parents := [2, 3], status := .complete}]}
+  , {name := "missing_parent_is_unknown", versions := [first, {stopped with parents := [9]}]}
+  , {name := "duplicate_revision_is_unknown", versions := [first, stopped, {stopped with status := .complete}]}
+  , {name := "cyclic_history_is_unknown", versions := [{first with parents := [2]}, stopped]}
+  , {name := "foreign_owner_cannot_claim_assignment", versions := [first, stopped],
+      entry := ⟨101, 2, 10, some ⟨1, some 100⟩, true⟩}
+  , {name := "untagged_task_root_keeps_retired_assignment", versions := [first, stopped, reassigned],
+      entry := ⟨100, 1, 10, none, true⟩}
+  , {name := "no_goal_is_unassigned", versions := [], entry := ⟨100, 1, 10, none, true⟩}
+  , {name := "unbound_history_cannot_prove_assignment", versions := [{first with assignment := ⟨1, 10, 1, none⟩}],
+      entry := ⟨100, 1, 10, none, true⟩}
+  , {name := "another_document_cannot_supply_missing_parent", versions := [first,
+      {fresh with parents := [1], height := 2}]}
+  , {name := "physical_documents_keep_their_own_commit_scope", versions := [first,
+      {fresh with commit := 1}]}
+  ]
+
+def versionJson (v : Version) : Json :=
+  Json.mkObj [("document", toJson v.document), ("commit", toJson v.commit),
+    ("height", toJson v.height), ("parents", toJson v.parents),
+    ("assignment", assignmentJson v.assignment), ("status", toJson v.status.toDefraDB)]
+
+def historyObservationJson : HistoryObservation → Json
+  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
+  | .unknown => Json.mkObj [("kind", toJson "unknown")]
+  | .assigned goal root status => Json.mkObj [("kind", toJson "assigned"),
+      ("goal", toJson goal), ("root", toJson root), ("status", toJson status.toDefraDB)]
+
+def historyHandoffReason (observation : HistoryObservation) : Option String :=
+  let handoff : Recovery.AssignmentHandoff := match observation with
+    | .unassigned => .absent
+    | .unknown => .unknown
+    | .assigned _ _ .complete => .complete
+    | .assigned _ _ .stopped => .stopped
+    | .assigned _ _ status => .live status.toDefraDB
+  Recovery.sessionMessageHandoffReason true handoff
+
+def historyCaseJson (c : HistoryCase) : Json :=
+  Json.mkObj [("name", toJson c.name), ("versions", toJson (c.versions.map versionJson)),
+    ("entry", entryJson c.entry), ("retire_documents", toJson c.retireDocuments),
+    ("expected", historyObservationJson (observeHistory c.versions c.entry)),
+    ("expected_handoff_reason", toJson (historyHandoffReason (observeHistory c.versions c.entry)))]
+
+def historyCasesJson : String := (toJson (historyCases.map historyCaseJson)).compress
+
+example : historyCases.length = 16 := by decide
+example : (historyCases.map fun c => observeHistory c.versions c.entry).take 2 =
+    [.assigned 1 100 .stopped, .assigned 1 100 .stopped] := by native_decide
 
 end Conformance.GoalRequestAssignmentContracts
