@@ -14,11 +14,13 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     let stop_case = model_case("stop_drains");
     let resume_case = model_case("resume_terminal_goal");
     let db = test_db("session-control-generated").await;
+    let node_did = db.node_identity.did();
 
     let interrupted_session = uuid::Uuid::new_v4().to_string();
     assert_eq!(interrupt_case["initial_pending_count"], 0);
-    support::create_agent_session(
+    support::create_agent_session_in_scope(
         &db.node,
+        node_did,
         &interrupted_session,
         AGENT_NAME,
         "2026-10-20T10:00:00Z",
@@ -26,7 +28,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     .await;
     gents::goal::set_goal(
         &db.node,
-        NODE_DID,
+        node_did,
         &interrupted_session,
         Some("pause on session interrupt"),
         Some(gents::goal::GoalStatus::Active),
@@ -38,7 +40,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         gents::session_message::interrupt_session(
             &db.node,
             &gents::session_origin::SessionScope {
-                node_did: NODE_DID.to_owned(),
+                node_did: node_did.to_owned(),
                 session_id: interrupted_session.clone(),
                 requester_did: None,
             },
@@ -48,7 +50,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         None
     );
     let interrupted_goal =
-        gents::goal::load_canonical_goal(&db.node, NODE_DID, &interrupted_session)
+        gents::goal::load_canonical_goal(&db.node, node_did, &interrupted_session)
             .await
             .unwrap()
             .unwrap();
@@ -58,7 +60,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     );
     let interrupted_session_row = db.node.execute(&format!(
         r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: null}}}}, limit: 2) {{stopped_at}}}}"#,
-        escape_graphql_string(NODE_DID),
+        escape_graphql_string(node_did),
         escape_graphql_string(&interrupted_session)
     )).await;
     assert_eq!(
@@ -67,8 +69,9 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     );
 
     let stopped_session = uuid::Uuid::new_v4().to_string();
-    support::create_agent_session(
+    support::create_agent_session_in_scope(
         &db.node,
+        node_did,
         &stopped_session,
         AGENT_NAME,
         "2026-10-20T10:00:01Z",
@@ -78,12 +81,17 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     let mut pending_docs = Vec::new();
     for index in 0..stop_case["initial_pending_count"].as_u64().unwrap() {
         let pending_id = uuid::Uuid::new_v4().to_string();
-        let pending_doc = support::create_request(
+        let pending_doc = support::create_request_for_agent_with_signed_fields(
             &db.node,
+            node_did,
             &pending_id,
             &stopped_session,
             "pending",
             &format!("2026-10-20T10:00:{:02}Z", 2 + index),
+            None,
+            None,
+            None,
+            None,
         )
         .await;
         pending_ids.push(pending_id);
@@ -91,7 +99,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     }
     gents::goal::set_goal(
         &db.node,
-        NODE_DID,
+        node_did,
         &stopped_session,
         Some("stop and later resume"),
         Some(gents::goal::GoalStatus::Active),
@@ -99,13 +107,13 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     )
     .await
     .unwrap();
-    let receipt = gents::session::stop_session(&db.node, NODE_DID, &stopped_session, None)
+    let receipt = gents::session::stop_session(&db.node, node_did, &stopped_session, None)
         .await
         .unwrap();
     assert_eq!(receipt.drained_request_ids, pending_ids);
     let stopped_session_row = db.node.execute(&format!(
         r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: null}}}}, limit: 2) {{stopped_at}}}}"#,
-        escape_graphql_string(NODE_DID),
+        escape_graphql_string(node_did),
         escape_graphql_string(&stopped_session)
     )).await;
     assert_eq!(
@@ -113,7 +121,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         stop_case["stopped"].as_bool().unwrap()
     );
     assert_eq!(
-        gents::goal::load_canonical_goal(&db.node, NODE_DID, &stopped_session)
+        gents::goal::load_canonical_goal(&db.node, node_did, &stopped_session)
             .await
             .unwrap()
             .unwrap()
@@ -134,7 +142,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     }
     let pending_rows = db.node.execute(&format!(
         r#"{{AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: null}}, purpose: {{_eq: "normal"}}, lifecycle_state: {{_eq: "pending"}}}}, limit: 2) {{request_id}}}}"#,
-        escape_graphql_string(NODE_DID),
+        escape_graphql_string(node_did),
         escape_graphql_string(&stopped_session)
     )).await;
     assert_eq!(
@@ -146,7 +154,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     );
     gents::goal::set_goal(
         &db.node,
-        NODE_DID,
+        node_did,
         &stopped_session,
         None,
         Some(gents::goal::GoalStatus::Complete),
@@ -154,12 +162,12 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     )
     .await
     .unwrap();
-    gents::session::resume_session(&db.node, NODE_DID, &stopped_session, None)
+    gents::session::resume_session(&db.node, node_did, &stopped_session, None)
         .await
         .unwrap();
     let resumed_session_row = db.node.execute(&format!(
         r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: null}}}}, limit: 2) {{stopped_at}}}}"#,
-        escape_graphql_string(NODE_DID),
+        escape_graphql_string(node_did),
         escape_graphql_string(&stopped_session)
     )).await;
     assert_eq!(
@@ -167,7 +175,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         resume_case["stopped"].as_bool().unwrap()
     );
     assert_eq!(
-        gents::goal::load_canonical_goal(&db.node, NODE_DID, &stopped_session)
+        gents::goal::load_canonical_goal(&db.node, node_did, &stopped_session)
             .await
             .unwrap()
             .unwrap()
