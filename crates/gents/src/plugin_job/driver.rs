@@ -163,6 +163,10 @@ fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, S
         ),
         Refusal::TimedOut => ("the job ran past its max_wall_secs", inspect),
         Refusal::StepFailed => ("three consecutive job steps failed", inspect),
+        Refusal::BackgroundBudgetExceeded => (
+            "the parent request has reached its concurrent background capacity ceiling",
+            "Next: wait for a background completion notification, then retry".to_owned(),
+        ),
         Refusal::Terminal => ("the job already ended", inspect),
     }
 }
