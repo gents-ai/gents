@@ -122,6 +122,70 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     assert_background_rows(&node, &request_id, witness.numeric_bound, "cancelled").await;
+    let batch = crate::lean_vocab_test::lean_r6_backgrounding_cases()
+        .iter()
+        .filter(|case| case.group == "budget_batch")
+        .collect::<Vec<_>>();
+    assert!(!batch.is_empty(), "modeled concurrent admission schedule");
+    let ids = (0..batch.len())
+        .map(|index| format!("concurrent-budget-{index}"))
+        .collect::<Vec<_>>();
+    let calls = ids.iter().map(|id| (id.as_str(), None)).collect::<Vec<_>>();
+    let message = Message::Assistant {
+        id: Some("concurrent-budget-turn".into()),
+        content: ids
+            .iter()
+            .map(|id| {
+                AssistantContent::ToolCall(ToolCall {
+                    id: id.clone(),
+                    call_id: None,
+                    function: ToolFunction {
+                        name: "spawn_process".into(),
+                        arguments: serde_json::from_str(args).unwrap(),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
+    };
+    publish_and_adopt_tool_turns(&hook, &calls, message).await;
+    let results = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        futures::future::join_all(ids.iter().map(|id| {
+            hook.on_tool_call("spawn_process", None, id, args)
+        })),
+    )
+    .await
+    .expect("concurrent admissions must settle while their children remain running");
+    let mut admitted = Vec::new();
+    let mut rejected = 0;
+    for result in results {
+        let ToolCallHookAction::Skip { reason } = result else {
+            panic!("accepted spawn must return a receipt: {result:?}");
+        };
+        let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        if receipt["status"] == "running" {
+            admitted.push(receipt["tool_call_id"].as_str().unwrap().to_owned());
+        } else {
+            assert_eq!(receipt["code"], witness.kind_field("error_code_on_violation"));
+            rejected += 1;
+        }
+    }
+    assert_eq!(admitted.len(), batch.iter().filter(|case| case.legal).count());
+    assert_eq!(rejected, batch.iter().filter(|case| !case.legal).count());
+    let response = node.execute(&format!(
+        r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}}, lifecycle_state: {{_eq: "running"}} }}) {{ _docID tool_call_id }} }}"#,
+        crate::graphql::escape_graphql_string(&request_id),
+    )).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert_eq!(response.data.unwrap()["AgentToolCall"].as_array().unwrap().len(), admitted.len());
+    for (index, child) in admitted.iter().enumerate() {
+        let args = json!({"tool_call_id": child}).to_string();
+        let result = invoke(&hook, &format!("cancel-concurrent-{index}"), "cancel_process", &args).await;
+        assert_eq!(result["status"], "cancelled");
+        executions.wait_for_completion(child).await;
+    }
     hook_execution_fixtures().lock().await.remove(&request_id);
     node.shutdown().await;
 }
