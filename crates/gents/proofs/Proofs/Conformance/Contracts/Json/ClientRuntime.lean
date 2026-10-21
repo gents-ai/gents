@@ -7,6 +7,7 @@ import Proofs.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Compaction.Executable
 import Proofs.Recovery.ContractCases
 import Proofs.QueuedSteering
+import Proofs.CanonicalOutput.ReferenceTable
 
 namespace Conformance.Contracts
 
@@ -511,5 +512,19 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
       ++ jsonOptionalString witness.queueKeyPrefix ++ ","
     ++ "\"theorem\":" ++ jsonString witness.theoremName
     ++ "}"
+
+end Conformance.Contracts
+
+namespace Conformance.Contracts
+
+def referenceTableCaseJson (witness : CanonicalOutput.ReferenceTable.Case) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"table\":" ++ jsonArray (witness.table.map jsonString) ++
+    ",\"slot\":" ++ toString witness.slot ++
+    ",\"stream\":" ++ toString witness.stream ++
+    ",\"expected\":" ++ (match witness.expected with
+      | none => "null"
+      | some reference => "{\"close_doc_id\":" ++ jsonString reference.close ++
+          ",\"stream\":" ++ toString reference.stream ++ "}") ++ "}"
 
 end Conformance.Contracts

@@ -289,6 +289,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
     pub(crate) reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
+    pub(crate) reference_table_cases: Vec<serde_json::Value>,
     pub(crate) reasoning_delta_cases: Vec<LeanReasoningDeltaCase>,
     pub(crate) auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
