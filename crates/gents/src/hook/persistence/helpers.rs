@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 
 #[derive(Debug, thiserror::Error)]
 #[error("background tool budget exceeded ({0} admitted)")]
