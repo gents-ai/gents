@@ -1,6 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::request_input::GoalAssignmentInput;
@@ -25,20 +26,14 @@ async fn write(node: &Arc<EmbeddedNode>, mutation: &str) -> Value {
 
 async fn observe_goal(
     node: &Arc<EmbeddedNode>,
+    owner: &str,
     session: &str,
     assignment: Option<&GoalAssignmentInput>,
 ) {
     let Some(assignment) = assignment else { return };
-    let goal = crate::goal::set_goal(
-        node,
-        PIN_FIXED_DID,
-        session,
-        Some("Destination work"),
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    let goal = crate::goal::set_goal(node, owner, session, Some("Destination work"), None, None)
+        .await
+        .unwrap();
     let root = assignment
         .root_request_doc_id
         .as_deref()
@@ -68,6 +63,7 @@ async fn deliver(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     case: &Value,
+    owner: &str,
     session: &str,
     captured: Option<GoalAssignmentInput>,
 ) -> Result<(String, String)> {
@@ -85,7 +81,7 @@ async fn deliver(
                     stage_request(
                         txn,
                         cause,
-                        PIN_FIXED_DID,
+                        owner,
                         "agent",
                         session.into(),
                         "Delivery work",
@@ -184,12 +180,15 @@ async fn deliver(
 async fn generated_deliveries_capture_destination_goal_in_the_admission_transaction() {
     let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let cases = contracts["goal_delivery_input_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 14);
+    assert_eq!(cases.len(), 20);
     let directory = tempfile::tempdir().unwrap();
     let signer = pin_fixed_signing_identity(directory.path());
+    let remote: Arc<dyn NodeIdentity> =
+        Arc::new(KeyIdentity::load_or_create(directory.path().join("remote.key"), None).unwrap());
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, PIN_FIXED_DID, "agent").await;
+    crate::test_support::install_test_agent(&node, remote.did(), "agent").await;
     let mut caller = AgentRequestCreate::base(
         RequestPurpose::Normal,
         "delivery-caller",
@@ -222,6 +221,12 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
     let mut failures = Vec::new();
     for case in cases {
         let name = case["name"].as_str().unwrap();
+        let target: &dyn NodeIdentity = if case["remote"] == true {
+            remote.as_ref()
+        } else {
+            &signer
+        };
+        let owner = target.did();
         let identity = FireIdentity {
             owner_did: PIN_FIXED_DID.into(),
             trigger_id: "manual:delivery".into(),
@@ -248,7 +253,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             crate::session::ensure_session_with_agent_id_and_requester_did(
                 &node,
                 &session,
-                PIN_FIXED_DID,
+                owner,
                 "agent",
                 Some(PIN_FIXED_DID),
             )
@@ -260,16 +265,16 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 format!("{name}-root-{index}"),
-                PIN_FIXED_DID,
-                PIN_FIXED_DID,
+                owner,
+                owner,
                 "agent",
                 &session,
                 "Destination opening",
                 "interactive",
                 "2026-10-21T00:00:00Z",
-                AgentRequestAdmissionRecord::local_self(PIN_FIXED_DID),
+                AgentRequestAdmissionRecord::local_self(owner),
             );
-            crate::sign_agent_request_create(&signer, &mut opening)
+            crate::sign_agent_request_create(target, &mut opening)
                 .await
                 .unwrap();
             *root = crate::graphql::created_doc_id(
@@ -286,15 +291,66 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
         } else {
             observed.as_ref()
         };
-        observe_goal(&node, &session, first_assignment).await;
-        let first = deliver(&node, &cause, case, &session, captured.clone())
-            .await
-            .unwrap();
+        observe_goal(&node, owner, &session, first_assignment).await;
+        if case["remote"] == true && case["observation_present"] == true {
+            crate::goal::reconcile_goal_observations(&node, &remote, true, &[])
+                .await
+                .unwrap();
+            let response = ConfigAccess::local(node.clone()).execute(&format!(
+                r#"{{GoalObservation(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{_docID observation_json}}}}"#,
+                escape_graphql_string(owner), escape_graphql_string(&session))).await.unwrap();
+            let row = &response["data"]["GoalObservation"][0];
+            let mut observation: gents_protocol::goal_control::SessionGoalObservation =
+                serde_json::from_str(row["observation_json"].as_str().unwrap()).unwrap();
+            if let Some(goal) = &mut observation.goal {
+                if case["foreign_owner"] == true {
+                    goal.snapshot.node_did = PIN_FIXED_DID.into();
+                }
+                if case["foreign_session"] == true {
+                    goal.snapshot.session_id = "foreign-session".into();
+                }
+            }
+            observation.signature = remote
+                .sign(&observation.signing_payload().unwrap())
+                .await
+                .unwrap();
+            if case["observation_verified"] == false {
+                observation.signature[0] ^= 1;
+            }
+            write(&node, &format!(
+                r#"mutation {{update_GoalObservation(docID: "{}", input: {{observation_json: "{}"}}) {{_docID}}}}"#,
+                escape_graphql_string(row["_docID"].as_str().unwrap()), escape_graphql_string(&serde_json::to_string(&observation).unwrap()))).await;
+        }
+        let first = deliver(&node, &cause, case, owner, &session, captured.clone()).await;
+        if case["expected"]["kind"] == "pending" {
+            if first.is_ok() {
+                failures.push(format!(
+                    "{name}: unverified destination input was published"
+                ));
+            } else {
+                let response = ConfigAccess::local(node.clone())
+                    .execute(&format!(
+                        r#"{{AgentRequest(filter: {{retry_key: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+                        escape_graphql_string(&job_message_key(name, "worker", 1, 1))
+                    ))
+                    .await
+                    .unwrap();
+                assert!(
+                    response["data"]["AgentRequest"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty(),
+                    "{name}: refused input must not leak a request"
+                );
+            }
+            continue;
+        }
+        let first = first.unwrap();
         let initial_row = stored(&node, &first.1).await;
         if case["admitted"] == true {
-            observe_goal(&node, &session, observed.as_ref()).await;
+            observe_goal(&node, owner, &session, observed.as_ref()).await;
         }
-        let result = deliver(&node, &cause, case, &session, captured)
+        let result = deliver(&node, &cause, case, owner, &session, captured)
             .await
             .unwrap();
         assert_eq!(

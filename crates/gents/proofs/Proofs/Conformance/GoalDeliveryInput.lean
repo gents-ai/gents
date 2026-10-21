@@ -13,6 +13,11 @@ structure Case where
   observed : Option Reference := some ⟨2, some 200⟩
   captured : Option Reference := none
   admitted : Option (Option Reference) := none
+  remote : Bool := false
+  observationPresent : Bool := true
+  observationVerified : Bool := true
+  foreignOwner : Bool := false
+  foreignSession : Bool := false
   deriving DecidableEq, Repr
 
 def cases : List Case :=
@@ -32,6 +37,14 @@ def cases : List Case :=
   , {name := "plugin_admitted_reference_survives_replacement", plugin := true,
       admitted := some (some ⟨1, some 100⟩)}
   , {name := "plugin_admitted_absence_survives_new_goal", plugin := true, admitted := some none}
+  , {name := "plugin_remote_verified_assignment", plugin := true, remote := true}
+  , {name := "plugin_remote_verified_absence", plugin := true, remote := true, observed := none}
+  , {name := "plugin_remote_missing_observation", plugin := true, remote := true,
+      observationPresent := false, observationVerified := false}
+  , {name := "plugin_remote_tampered_observation", plugin := true, remote := true,
+      observationVerified := false}
+  , {name := "plugin_remote_foreign_owner", plugin := true, remote := true, foreignOwner := true}
+  , {name := "plugin_remote_foreign_session", plugin := true, remote := true, foreignSession := true}
   ]
 
 def caseJson (c : Case) : Json :=
@@ -40,8 +53,11 @@ def caseJson (c : Case) : Json :=
   let destination := if c.plugin then some (DeliveryInput.pluginDestination key c.existing)
     else DeliveryInput.triggerDestination identity (if c.existing then some "10" else none) c.owned
   let facts : MessageInputFacts := {
-    owner := 1, session := 10, sessionReadable := c.existing, observationVerified := true,
-    observed := c.observed.map fun reference => ⟨1, 10, reference.goal, reference.root⟩,
+    owner := if c.remote then 2 else 1, session := 10, sessionReadable := c.existing,
+    observationVerified := c.observationVerified,
+    observed := c.observed.map fun reference =>
+      ⟨if c.remote && !c.foreignOwner then 2 else 1,
+       if c.foreignSession then 11 else 10, reference.goal, reference.root⟩,
     callerReference := some ⟨9, some 900⟩ }
   let expected := (DeliveryInput.prepare destination c.admitted c.captured facts).map fun
     | .pending => Json.mkObj [("kind", toJson "pending")]
@@ -49,6 +65,9 @@ def caseJson (c : Case) : Json :=
         ("reference", reference.map GoalRequestAssignmentContracts.referenceJson |>.getD Json.null)]
   Json.mkObj [("name", toJson c.name), ("plugin", toJson c.plugin),
     ("existing", toJson c.existing), ("owned", toJson c.owned),
+    ("remote", toJson c.remote), ("observation_present", toJson c.observationPresent),
+    ("observation_verified", toJson c.observationVerified),
+    ("foreign_owner", toJson c.foreignOwner), ("foreign_session", toJson c.foreignSession),
     ("observed", c.observed.map GoalRequestAssignmentContracts.referenceJson |>.getD Json.null),
     ("captured", c.captured.map GoalRequestAssignmentContracts.referenceJson |>.getD Json.null),
     ("admitted", toJson c.admitted.isSome),
@@ -58,6 +77,6 @@ def caseJson (c : Case) : Json :=
 
 def json : String := (toJson (cases.map caseJson)).compress
 
-example : cases.length = 14 := by decide
+example : cases.length = 20 := by decide
 
 end Conformance.GoalDeliveryInput
