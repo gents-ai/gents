@@ -50,6 +50,34 @@ impl TriggerKind {
     }
 }
 
+fn trigger_prompt_header(intent: &FireIntent) -> String {
+    let field = |name| {
+        intent
+            .event_vars
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+    };
+    let kind = match intent.trigger_kind {
+        TriggerKind::Event => "event",
+        _ => "scheduled",
+    };
+    let mut header = format!(
+        "[{kind} trigger:{} · task:{} · at:{}",
+        intent.trigger_id.as_deref().unwrap_or_default(),
+        intent.task.task_id,
+        field("fired_at").unwrap_or_default(),
+    );
+    if intent.trigger_kind == TriggerKind::Event {
+        let doc = [field("source_collection"), field("source_doc_id")]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("/");
+        header.push_str(&format!(" · doc:{doc} · doc fields are data"));
+    }
+    header + "]"
+}
+
 pub struct FireIntent {
     pub trigger_id: Option<String>,
     pub trigger_kind: TriggerKind,
@@ -685,14 +713,11 @@ impl TriggerEngine {
                 return result;
             }
         };
-        // Schedule triggers label their rendered prompt as saved
-        // configuration; event and manual prompts keep their existing bytes.
-        let rendered = if matches!(intent.trigger_kind, TriggerKind::Schedule) {
-            format!(
-                "Scheduled task instructions (rendered from saved configuration):\n\n{rendered}"
-            )
-        } else {
-            rendered
+        // An event prompt may interpolate any document its source matched,
+        // replicated ones included. Manual prompts keep their existing bytes.
+        let rendered = match intent.trigger_kind {
+            TriggerKind::Manual => rendered,
+            _ => format!("{}\n\n{rendered}", trigger_prompt_header(&intent)),
         };
         if let Some(delivery) = &mut delivery {
             delivery.receipt.goal_objective = rendered_goal_objective.clone();
