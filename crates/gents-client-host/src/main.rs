@@ -20,8 +20,11 @@ struct Args {
     allow_keychain_prompts: bool,
     #[arg(long, conflicts_with_all = ["home", "serve", "stdio"])]
     describe: bool,
+    #[arg(long, hide = true, conflicts_with_all = ["home", "serve", "stdio", "editor_store", "allow_keychain_prompts", "describe"])]
+    editor_checkpoints: Option<PathBuf>,
 }
 
+mod editor_checkpoints;
 #[cfg(any(unix, windows))]
 mod editor_store;
 #[cfg(any(unix, windows))]
@@ -30,6 +33,13 @@ mod native;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(directory) = args.editor_checkpoints {
+        return editor_checkpoints::serve(
+            &directory,
+            std::io::stdin().lock(),
+            std::io::stdout().lock(),
+        );
+    }
     if args.describe {
         use gents_desktop_bridge::host::protocol;
         let mut output = std::io::stdout().lock();
@@ -45,6 +55,8 @@ async fn main() -> Result<()> {
                 "arch": std::env::consts::ARCH,
                 "transportSupported": cfg!(any(unix, windows)),
                 "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
+                "editorCheckpointVersion": editor_checkpoints::VERSION,
+                "editorCheckpointSupported": cfg!(unix),
             }),
         )?;
         output.write_all(b"\n")?;
