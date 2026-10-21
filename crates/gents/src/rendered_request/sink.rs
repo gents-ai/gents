@@ -708,6 +708,9 @@ pub(crate) async fn store_shared_json_in_txn(
         return Ok(json.to_owned());
     }
     let chunks = super::encoding::chunk_capture_body(json);
+    if chunks.len() > super::encoding::MAX_MANIFEST_BLOCKS {
+        return Ok(json.to_owned());
+    }
     let blocks = unique_blocks(&[&chunks]);
     let mut pins = pin_blocks_in_txn(txn, &blocks).await?;
     Ok(encode_payload_tree(txn, &chunks, &mut pins).await?.stored)
