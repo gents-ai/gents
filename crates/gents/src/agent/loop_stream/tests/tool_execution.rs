@@ -324,7 +324,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     })];
 
     let stream = run_loop_stream(
-        model,
+        model.clone(),
         Some(hook.clone()),
         TaggedMessage::unassociated(prompt),
         Vec::new(),
@@ -342,6 +342,54 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
+
+    let dispatched = model.seen_histories().await;
+    let fresh_result = dispatched[1]
+        .iter()
+        .find_map(|message| match message {
+            Message::User { content } => content.iter().find_map(|item| match item {
+                UserContent::ToolResult(result) => Some(result),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the next provider dispatch carries the fresh tool result");
+    assert!(
+        tool_result_text(&fresh_result.content[0]).contains("ECHOED"),
+        "fresh result must reach the next dispatch intact below threshold"
+    );
+
+    let persisted = crate::session::load_history(
+        &node,
+        &lifecycle.request().session_id,
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
+    .await
+    .expect("load persisted session history");
+    let persisted_view = crate::agent::loop_stream::provider_view_tagged(
+        persisted
+            .into_iter()
+            .map(crate::agent::loop_stream::TaggedMessage::unassociated)
+            .collect(),
+    )
+    .expect("project durable history for a later request");
+    let durable_result = persisted_view
+        .iter()
+        .flat_map(|row| match &row.message {
+            Message::User { content } => content.iter().collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .find_map(|item| match item {
+            UserContent::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .expect("persisted tool result remains represented in provider history");
+    let durable_stub = tool_result_text(&durable_result.content[0]);
+    assert!(durable_stub.contains("full output: sessions"));
+    assert!(durable_stub.contains("\"action\":\"output\""));
+    assert!(durable_stub.contains("\"call_id\":\"call-1\""));
+    assert!(!durable_stub.contains("ECHOED"));
 
     let resp = node
         .execute("query { AgentToolCall { _docID tool_name lifecycle_state } }")
