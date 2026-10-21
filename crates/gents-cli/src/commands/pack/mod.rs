@@ -1181,6 +1181,9 @@ mod tests {
             let (access, _) = crate::resolve_config_access(Some(home.path()), None)
                 .await
                 .unwrap();
+            let query = "{ Tools(limit: 1) { _docID } }";
+            let before = access.execute(query).await.unwrap();
+            assert!(before["data"]["Tools"].is_array(), "{before}");
             let retained_node = access.local_node().unwrap().clone();
             let outcome = crate::request_helpers::capture_report(install_documents_command(
                 access, &pack, &args,
@@ -1193,12 +1196,19 @@ mod tests {
                     "{error:#}"
                 );
             }
+            let after = gents::config_client::ConfigAccess::local(retained_node.clone())
+                .execute(query)
+                .await;
+            assert!(
+                after.is_err(),
+                "the command left its owned database running: {after:?}"
+            );
+            drop(retained_node);
             let (reopened, _) = crate::resolve_config_access(Some(home.path()), None)
                 .await
-                .expect("command shutdown must release the physical store even while its old node handle is retained");
+                .expect("command shutdown and handle release must allow immediate store reopen");
             reopened.local_node().unwrap().shutdown().await;
             drop(reopened);
-            drop(retained_node);
         }
     }
 
