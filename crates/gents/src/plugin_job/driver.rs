@@ -255,6 +255,7 @@ enum Stepped {
         row: Box<StepRow>,
         refusal: Refusal,
     },
+    Stopped(Box<StepRow>),
     Committed(Option<PluginJobTerminal>),
 }
 
@@ -267,6 +268,19 @@ pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutc
         .await?
         .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
     let mut lifecycle = load_lifecycle(&access, row_doc_id).await?;
+    if !super::recovery::step_commit_allowed(
+        session_stopped_for_scope(
+            &access,
+            lifecycle.node_did().to_owned(),
+            lifecycle.session_id().to_owned(),
+            lifecycle.requester_did().map(str::to_owned),
+        )
+        .await?,
+    ) {
+        let row = read_step_row(&access, row_doc_id).await?;
+        kill(&access, &mut lifecycle, &row, KillCause::Stop).await?;
+        return Ok(StepOutcome::Settled);
+    }
     let (namespace, name) = parse_coordinate(&pin.plugin_ref)?;
     let installed = match read_record(&runtime.home, namespace, name) {
         Ok(record) if record.digest == pin.engine_digest => record,
@@ -279,6 +293,32 @@ pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutc
     };
     let (input, revision) = build_step_input(&access, runtime, row_doc_id, StepKind::Later).await?;
     step_on(runtime, &mut lifecycle, &installed, input, revision).await
+}
+
+async fn session_stopped_for_scope(
+    access: &ConfigAccess,
+    node_did: String,
+    session_id: String,
+    requester_did: Option<String>,
+) -> Result<bool> {
+    // The precheck avoids invoking a guest for an already-stopped session;
+    // `step_transaction` repeats this exact-scope read at the write boundary.
+    access
+        .transact_readonly("plugin_job.step.session_stop", |txn| {
+            let node_did = node_did.clone();
+            let session_id = session_id.clone();
+            let requester_did = requester_did.clone();
+            Box::pin(async move {
+                crate::session::session_stopped_in_txn(
+                    txn,
+                    &node_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                )
+                .await
+            })
+        })
+        .await
 }
 
 /// The step of `input`, built at progress `revision`, on `installed`.
@@ -448,6 +488,11 @@ async fn step_on(
             kill(&access, lifecycle, &row, KillCause::FailClosed(refusal)).await?;
             Ok(StepOutcome::Refused(refusal))
         }
+        Stepped::Stopped(row) => {
+            lifecycle.stage_plugin_receipt(Some(receipt));
+            kill(&access, lifecycle, &row, KillCause::Stop).await?;
+            Ok(StepOutcome::Settled)
+        }
         Stepped::Committed(Some(terminal)) => {
             lifecycle.finish_plugin_job_row(terminal).await?;
             Ok(StepOutcome::Settled)
@@ -497,6 +542,16 @@ async fn step_transaction(
     }
     // (c)
     let row = read_step_row_in_txn(txn, row_doc_id).await?;
+    let session_stopped = crate::session::session_stopped_in_txn(
+        txn,
+        lifecycle.node_did(),
+        lifecycle.session_id(),
+        lifecycle.requester_did(),
+    )
+    .await?;
+    if !super::recovery::step_commit_allowed(session_stopped) {
+        return Ok(Stepped::Stopped(Box::new(row)));
+    }
     let (ctx, installed) = step_context(txn, runtime, input, pin, output, lifecycle).await?;
     let admitted = match admit_step(&ctx, &row, output) {
         Ok(admitted) => admitted,

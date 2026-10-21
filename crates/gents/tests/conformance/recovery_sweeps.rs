@@ -1,7 +1,7 @@
 use super::*;
 use crate::lean_vocab_test::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
 use gents::plugin_job::admit::{is_stalled, Refusal};
-use gents::plugin_job::recovery::{tick_action, RecoveryFacts, TickAction};
+use gents::plugin_job::recovery::{step_commit_allowed, tick_action, RecoveryFacts, TickAction};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -54,9 +54,10 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
 /// One tick of the row: the owner's `tick_action` is the first application of
 /// Lean's `pluginJobRecover`; a `Step` receives every terminal, and the stall
 /// rule over that step's output (`is_stalled`, the admission owner) is the
-/// second. Returns whether the tick touched the row, and the row after it.
-fn tick_row(row: LeanPluginJobRecoveryRow) -> (bool, LeanPluginJobRecoveryRow) {
+/// second. Returns the owner action and the row after it.
+fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecoveryRow) {
     let facts = RecoveryFacts {
+        session_stopped: row.session_stopped,
         terminal_children: row.terminal_children,
         observed: row.observed,
         live: row.live,
@@ -68,28 +69,26 @@ fn tick_row(row: LeanPluginJobRecoveryRow) -> (bool, LeanPluginJobRecoveryRow) {
             Err(Refusal::NotAvailable)
         },
     };
-    match tick_action(&facts) {
-        TickAction::Untouched => (false, row),
-        TickAction::Kill(_) => (
-            true,
+    let action = tick_action(&facts);
+    let after = match action {
+        TickAction::Untouched => row,
+        TickAction::Kill(_) => {
             LeanPluginJobRecoveryRow {
                 running: false,
                 ..row
-            },
-        ),
+            }
+        }
         TickAction::Step => {
             let observed = row.terminal_children;
             let stalled = is_stalled(row.live, observed, row.terminal_children, row.step_new);
-            (
-                true,
-                LeanPluginJobRecoveryRow {
-                    running: !stalled,
-                    observed,
-                    ..row
-                },
-            )
+            LeanPluginJobRecoveryRow {
+                running: !stalled,
+                observed,
+                ..row
+            }
         }
-    }
+    };
+    (action, after)
 }
 
 /// Lean `pluginJobRecoverySweep` ticks (`pluginJobStale`, then
@@ -101,7 +100,7 @@ fn tick_row(row: LeanPluginJobRecoveryRow) -> (bool, LeanPluginJobRecoveryRow) {
 #[tokio::test]
 async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
     let cases = lean_plugin_job_recovery_cases();
-    assert_eq!(cases.len(), 7, "Lean should emit the plugin-job tick rows");
+    assert_eq!(cases.len(), 8, "Lean should emit the plugin-job tick rows");
     let sweep_cases = lean_recovery_sweep_cases()
         .iter()
         .filter(|case| case.sweep_id == PLUGIN_JOB_SWEEP_ID)
@@ -122,9 +121,21 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
             case.rust_function, "plugin_job::recovery::redrive_running_jobs",
             "{name}"
         );
-        let (stale, after) = tick_row(case.row);
-        assert_eq!(stale, case.stale, "{name}: stale flag");
+        let (action, after) = tick_row(case.row);
+        assert_eq!(matches!(action, TickAction::Untouched), !case.stale, "{name}: stale flag");
         assert_eq!(after, case.expected_row, "{name}: row after one tick");
+        assert_eq!(
+            case.step_commit_allowed,
+            step_commit_allowed(case.row.session_stopped),
+            "{name}: model-driven step commit gate"
+        );
+        if case.row.session_stopped {
+            assert_eq!(
+                action,
+                TickAction::Kill(gents::plugin_job::control::KillCause::Stop),
+                "{name}"
+            );
+        }
     }
 }
 

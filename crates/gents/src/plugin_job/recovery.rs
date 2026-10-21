@@ -20,6 +20,7 @@ use crate::request_binding::load_agent_request_by_doc_id;
 /// Lean `PluginJobRow` for one running job row, less `running`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryFacts {
+    pub session_stopped: bool,
     pub terminal_children: u32,
     pub observed: u32,
     pub live: u32,
@@ -36,10 +37,13 @@ pub enum TickAction {
     Step,
 }
 
-/// Lean `pluginJobRecover`, first application: a row past its deadline,
-/// unavailable or stalled is killed and fails closed; one with unobserved
-/// terminals is re-driven one step; any other row is left alone.
+/// Lean `pluginJobRecover`, first application: a stopped session cancels its
+/// job; a row past its deadline, unavailable or stalled is failed closed; one
+/// with unobserved terminals is re-driven one step; any other row is left alone.
 pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
+    if facts.session_stopped {
+        return TickAction::Kill(KillCause::Stop);
+    }
     if facts.deadline_expired {
         return TickAction::Kill(KillCause::Deadline);
     }
@@ -59,6 +63,12 @@ pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
     } else {
         TickAction::Untouched
     }
+}
+
+/// Lean `pluginJobStepCommitAllowed`: a stop observed in the step transaction
+/// prevents the guest's staged effects from committing.
+pub fn step_commit_allowed(session_stopped: bool) -> bool {
+    !session_stopped
 }
 
 /// Lean `pluginJobRecoverySweep`: one tick per running local job row, that is
@@ -161,27 +171,61 @@ async fn facts_of(
 ) -> Result<(StepRow, RecoveryFacts)> {
     let runtime = driver.runtime();
     let row = read_step_row(access, row_doc_id).await?;
-    let caller = load_agent_request_by_doc_id(&runtime.node, request_doc_id)
-        .await?
-        .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?;
-    let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
-    let available = match parse_coordinate(&pin.plugin_ref)
-        .ok()
-        .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok())
-    {
-        Some(installed)
-            if settings.is_some() && engine_guard(&runtime.home, &installed).is_ok() =>
+    let lifecycle = load_lifecycle(access, row_doc_id).await?;
+    let session_node_did = lifecycle.node_did().to_owned();
+    let session_id = lifecycle.session_id().to_owned();
+    let session_requester_did = lifecycle.requester_did().map(str::to_owned);
+    let session_stopped = access
+        .transact_readonly("plugin_job.recovery.session_stop", |txn| {
+            let node_did = session_node_did.clone();
+            let session_id = session_id.clone();
+            let requester_did = session_requester_did.clone();
+            Box::pin(async move {
+                crate::session::session_stopped_in_txn(
+                    txn,
+                    &node_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                )
+                .await
+            })
+        })
+        .await?;
+    let caller = if session_stopped {
+        None
+    } else {
+        Some(
+            load_agent_request_by_doc_id(&runtime.node, request_doc_id)
+                .await?
+                .with_context(|| {
+                    format!("the caller request of job row {row_doc_id} does not exist")
+                })?,
+        )
+    };
+    let available = if session_stopped {
+        Err(Refusal::NotAvailable)
+    } else {
+        let caller = caller.context("an open plugin-job session requires its caller request")?;
+        let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
+        match parse_coordinate(&pin.plugin_ref)
+            .ok()
+            .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok())
         {
-            if installed.digest == pin.engine_digest {
-                Ok(())
-            } else {
-                Err(Refusal::EngineChanged)
+            Some(installed)
+                if settings.is_some() && engine_guard(&runtime.home, &installed).is_ok() =>
+            {
+                if installed.digest == pin.engine_digest {
+                    Ok(())
+                } else {
+                    Err(Refusal::EngineChanged)
+                }
             }
+            _ => Err(Refusal::NotAvailable),
         }
-        _ => Err(Refusal::NotAvailable),
     };
     let deadline = pin.adopted_at + u64::from(pin.ceiling_at_pin.max_wall_secs) * 1000;
     let facts = RecoveryFacts {
+        session_stopped,
         terminal_children: terminal_count(&row) as u32,
         observed: row.observed_terminal,
         live: live_count(&row) as u32,

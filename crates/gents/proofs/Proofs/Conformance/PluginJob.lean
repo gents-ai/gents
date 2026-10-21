@@ -1497,7 +1497,8 @@ structure RecoveryCase where
 
 private def jobRow (terminalChildren observed live stepNew : Nat)
     (deadlineExpired := false) (available := true) : Recovery.PluginJobRow :=
-  { running := true, terminalChildren, observed, live, stepNew, deadlineExpired, available }
+  { running := true, sessionStopped := false, terminalChildren, observed, live, stepNew,
+    deadlineExpired, available }
 
 def recoveryCases : List RecoveryCase :=
   [ ⟨"plugin_job_unobserved_terminal_step_with_new_effects_keeps_running", jobRow 2 1 0 1⟩
@@ -1506,7 +1507,9 @@ def recoveryCases : List RecoveryCase :=
   , ⟨"plugin_job_deadline_expired_fails_closed", jobRow 1 1 1 0 (deadlineExpired := true)⟩
   , ⟨"plugin_job_unavailable_fails_closed", jobRow 1 1 1 0 (available := false)⟩
   , ⟨"plugin_job_stalled_at_rest_fails_closed", jobRow 2 2 0 0⟩
-  , ⟨"plugin_job_live_child_not_stale", jobRow 1 1 1 0⟩ ]
+  , ⟨"plugin_job_live_child_not_stale", jobRow 1 1 1 0⟩
+  , ⟨"plugin_job_stopped_session_kills_row",
+      { jobRow 1 1 1 0 with sessionStopped := true }⟩ ]
 
 /-- One tick of the registered sweep. -/
 def recoveryTick (row : Recovery.PluginJobRow) : Recovery.PluginJobRow :=
@@ -1514,7 +1517,8 @@ def recoveryTick (row : Recovery.PluginJobRow) : Recovery.PluginJobRow :=
 
 def recoveryStale (row : Recovery.PluginJobRow) : Bool :=
   @decide (Recovery.pluginJobRecoverySweep.stale row)
-    (inferInstanceAs (Decidable (Recovery.pluginJobStale row)))
+    (inferInstanceAs (Decidable
+      (Recovery.pluginJobStale row ∨ Recovery.pluginJobStoppedSessionStale row)))
 
 def recoveryMeasure (row : Recovery.PluginJobRow) : Nat :=
   Recovery.pluginJobRecoverySweep.measure row
@@ -1527,11 +1531,12 @@ theorem recovery_regressions :
     recoveryCases.map recoveryVerdict =
       [ (true, 1, 0, true, 2), (true, 1, 0, false, 2), (true, 1, 0, true, 2)
       , (true, 1, 0, false, 1), (true, 1, 0, false, 1), (true, 1, 0, false, 2)
-      , (false, 0, 0, true, 1) ] := by
+      , (false, 0, 0, true, 1), (true, 1, 0, false, 1) ] := by
   native_decide
 
 private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
-  Json.mkObj [("running", toJson r.running), ("terminal_children", toJson r.terminalChildren),
+  Json.mkObj [("running", toJson r.running), ("session_stopped", toJson r.sessionStopped),
+    ("terminal_children", toJson r.terminalChildren),
     ("observed", toJson r.observed), ("live", toJson r.live), ("step_new", toJson r.stepNew),
     ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available)]
 
@@ -1542,7 +1547,9 @@ private def renderRecovery (c : RecoveryCase) : Json :=
     ("rust_function", toJson Recovery.pluginJobRecoverySweep.rustFunction),
     ("row", jobRowJson c.row), ("stale", toJson (recoveryStale c.row)),
     ("measure_before", toJson (recoveryMeasure c.row)),
-    ("measure_after", toJson (recoveryMeasure after)), ("expected_row", jobRowJson after)]
+    ("measure_after", toJson (recoveryMeasure after)),
+    ("step_commit_allowed", toJson (Recovery.pluginJobStepCommitAllowed c.row.sessionStopped)),
+    ("expected_row", jobRowJson after)]
 
 def recoveryCasesJson : String := (toJson (recoveryCases.map renderRecovery)).compress
 
