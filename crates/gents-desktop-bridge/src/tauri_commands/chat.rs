@@ -24,9 +24,7 @@ pub async fn desktop_goal_control(
 ) -> Result<crate::types::GoalControlResult, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    crate::commands::control_goal(&core, request)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+    crate::commands::control_goal(&core, request).await
 }
 use crate::snapshot::build_session_live_delta;
 use crate::state::{current_core, DesktopAppState};

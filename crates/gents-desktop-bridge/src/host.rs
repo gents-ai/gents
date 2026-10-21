@@ -577,11 +577,9 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
-            ClientCommand::GoalControl { request } => encode(
-                crate::commands::control_goal(&self.core, request)
-                    .await
-                    .map_err(backend_error)?,
-            ),
+            ClientCommand::GoalControl { request } => {
+                encode(crate::commands::control_goal(&self.core, request).await?)
+            }
             ClientCommand::SteerPending { request } => encode(
                 crate::commands::steer_pending_message(&self.core, request)
                     .await

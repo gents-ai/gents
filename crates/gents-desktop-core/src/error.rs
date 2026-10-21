@@ -9,6 +9,8 @@ pub enum BridgeErrorCode {
     LocalHistoryLocked,
     /// The read could not publish against the current observation fence.
     ProjectionPending,
+    /// A verified runtime Goal-control rejection, never transport or message classification.
+    GoalControlRejected,
     NotFound,
     InvalidArgument,
     Unsupported,
@@ -29,6 +31,7 @@ impl BridgeErrorCode {
             Self::ClientStartFailed => "clientStartFailed",
             Self::LocalHistoryLocked => "localHistoryLocked",
             Self::ProjectionPending => "projectionPending",
+            Self::GoalControlRejected => "goalControlRejected",
             Self::NotFound => "notFound",
             Self::InvalidArgument => "invalidArgument",
             Self::Unsupported => "unsupported",
