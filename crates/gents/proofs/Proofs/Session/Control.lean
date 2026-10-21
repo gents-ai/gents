@@ -9,6 +9,7 @@ and claim; the single-active-runtime-per-node operating convention remains the
 external ordering premise. -/
 structure State where
   queue : SessionQueueState
+  request : Option RequestContext
   goal : Goals.State
   stopped : Bool
   deriving DecidableEq, Repr
@@ -27,15 +28,23 @@ def pauseGoal (goal : Goals.State) : Goals.State :=
 def resumeGoal (goal : Goals.State) : Goals.State :=
   (Goals.step? goal .resume).getD goal
 
+def interruptCurrent (target : AgentSession.Scope) (state : State) : Option State :=
+  if state.queue.scope = target then
+    match state.request with
+    | none => some { state with goal := pauseGoal state.goal }
+    | some request => do
+        let (request, queue) ← latchInterruptScoped target request state.queue
+        some { state with request := some request, queue, goal := pauseGoal state.goal }
+  else none
+
 def step? (target : AgentSession.Scope) (state : State) : Action → Option State
   | .interrupt =>
-      if state.queue.scope = target then
-        some { state with goal := pauseGoal state.goal }
-      else none
+      interruptCurrent target state
   | .stop =>
       if state.queue.scope = target then
-        some { state with queue := state.queue.drainAllPending,
-          goal := pauseGoal state.goal, stopped := true }
+        let latched := interruptCurrent target state |>.getD state
+        some { latched with queue := latched.queue.drainAllPending,
+          goal := pauseGoal latched.goal, stopped := true }
       else none
   | .resume =>
       if state.queue.scope = target ∧ state.stopped then
@@ -74,11 +83,17 @@ private def wake : QueueEntry :=
 private def initial : State :=
   { queue := { scope := scope, active := some 300, pending := [ordinary, wake],
       terminal := ∅ },
+    request := some { state := .processing, origin := .interactive,
+      backend := ⟨"stop-test"⟩, admission := .executing, deadline := 100,
+      claimTime := 0, currentTime := 10, retryCount := 0, maxRetries := 3,
+      messageSeq := 0, persistence := .uncommitted },
     goal := { status := .active, blockedAudits := 1, wrapupRequested := false,
       wrapupCompleted := false }, stopped := false }
 
 example : (step? scope initial .interrupt).map State.queue = some initial.queue ∧
-    ((step? scope initial .interrupt).getD initial).goal.status = .paused := by
+    ((step? scope initial .interrupt).getD initial).goal.status = .paused ∧
+    ((step? scope initial .interrupt).getD initial).request.map
+      (fun request => request.interruptRequestedAt.isSome) = some true := by
   native_decide
 
 example : ((step? scope initial .stop).getD initial).stopped = true ∧
