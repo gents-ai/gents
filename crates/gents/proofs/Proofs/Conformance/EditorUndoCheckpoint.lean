@@ -273,7 +273,7 @@ def cases : List Case :=
        .finishWrite 1 durable, .release 1, .helperLost 1 false, .release 2],
       expected := accepted ++ restoreOutputs ++ [.checkpoint, .acknowledged, .effect .save,
        .settled, .checkpoint, .guardLost, .acquired, .loaded, .checkpoint, .acknowledged,
-       .acknowledged, .refused, .helperLost, .released]}
+       .acknowledged, .refused, .refused, .released]}
   ]
 
 def trace (world : World) : List Input → List (World × Output)

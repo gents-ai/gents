@@ -218,7 +218,8 @@ def step (world : World) (input : Input) : World × Output :=
     keep world {holder with cancelled := true, grant := .none} .cancelled
   | .release caller => owned world caller fun holder =>
     if holder.pending.isSome || holder.running != .none then (world, .held)
-    else if world.detached.any (fun value => value.holder.caller == caller) then (world, .refused)
+    else if world.detached.any (fun value => value.holder.caller == caller) then
+      ({world with detached := world.detached.filter (fun value => value.holder.caller != caller)}, .refused)
     else ({world with holder := none}, .released)
   | .physicalLoss caller candidateInstalled =>
     match world.holder with
