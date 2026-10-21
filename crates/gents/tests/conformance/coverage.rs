@@ -750,6 +750,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalRequestAssignmentCases".to_string(),
         ));
     }
+    if !snapshot.goal_request_ancestry_cases.is_empty() {
+        emitted.insert((
+            "goal_request_ancestry_cases".into(),
+            "GoalRequestAncestryCases".into(),
+        ));
+    }
+    if !snapshot.goal_queue_assignment_cases.is_empty() {
+        emitted.insert((
+            "goal_queue_assignment_cases".into(),
+            "GoalQueueAssignmentCases".into(),
+        ));
+    }
     if !snapshot.goal_request_head_cases.is_empty() {
         emitted.insert((
             "goal_request_head_cases".to_string(),

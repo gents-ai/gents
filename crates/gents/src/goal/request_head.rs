@@ -34,6 +34,8 @@ pub(crate) fn verify_goal_continuation_edge(
     )?;
     anyhow::ensure!(
         child.caused_by_parent_request_doc_id.as_deref() == Some(parent_doc)
+            && (parent_row.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND)
+                || parent_row.caused_by_trigger_id.as_deref() == Some(goal_id))
             && child
                 .doc_id
                 .as_deref()
@@ -267,7 +269,7 @@ pub(super) fn authenticated_entry<'a>(
     session_id: &str,
     mut row: &'a AgentRequestRow,
     by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
-    expected_goal: Option<&str>,
+    mut expected_goal: Option<&str>,
 ) -> Result<&'a AgentRequestRow> {
     let mut visited = std::collections::HashSet::new();
     loop {
@@ -288,6 +290,7 @@ pub(super) fn authenticated_entry<'a>(
             expected_goal.is_none_or(|expected| expected == goal_id),
             "Goal continuation belongs to another assignment"
         );
+        expected_goal = Some(goal_id);
         let parent_doc = row
             .caused_by_parent_request_doc_id
             .as_deref()

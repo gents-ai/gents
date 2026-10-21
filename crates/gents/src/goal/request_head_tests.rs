@@ -9,6 +9,53 @@ use std::collections::HashMap;
 struct Snapshot {
     goal_request_head_cases: Vec<Case>,
 }
+
+#[tokio::test]
+async fn generated_goal_ancestry_cases_keep_one_signed_goal() {
+    #[derive(Deserialize)]
+    struct Contracts {
+        goal_request_ancestry_cases: Vec<serde_json::Value>,
+    }
+    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    assert_eq!(contracts.goal_request_ancestry_cases.len(), 12);
+    let temp = tempfile::tempdir().unwrap();
+    let identities = [
+        KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
+        KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
+    ];
+    for value in contracts.goal_request_ancestry_cases {
+        let case: Case = serde_json::from_value(value.clone()).unwrap();
+        let mut fixture = Fixture {
+            case: &case,
+            identities: &identities,
+            built: HashMap::new(),
+        };
+        let mut rows = Vec::new();
+        for row in &case.rows {
+            rows.push(fixture.build(row.clone()).await);
+        }
+        let owner = identities[(case.scope.owner - 1) as usize].did();
+        let session = format!("session-{}", case.scope.session);
+        let by_doc = request_rows_by_doc(owner, &session, &rows).unwrap();
+        let current = format!("physical-{}", value["current"].as_u64().unwrap());
+        let goal = value["expected_goal"]
+            .as_u64()
+            .map(|id| format!("goal-{id}"));
+        let actual = authenticated_entry(
+            owner,
+            &session,
+            by_doc[&current.as_str()],
+            &by_doc,
+            goal.as_deref(),
+        )
+        .ok()
+        .and_then(|row| row.doc_id.clone());
+        let expected = value["expected_entry"]
+            .as_u64()
+            .map(|doc| format!("physical-{doc}"));
+        assert_eq!(actual, expected, "{}: signed physical ancestry", case.name);
+    }
+}
 #[derive(Deserialize)]
 struct Scope {
     owner: u64,
