@@ -26,7 +26,7 @@ def pauseGoal (goal : Goals.State) : Goals.State :=
   (Goals.step? goal .pause).getD goal
 
 def resumeGoal (goal : Goals.State) : Goals.State :=
-  (Goals.step? goal .resume).getD goal
+  if goal.status = .paused then (Goals.step? goal .resume).getD goal else goal
 
 def interruptCurrent (target : AgentSession.Scope) (state : State) : Option State :=
   if state.queue.scope = target then
