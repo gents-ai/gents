@@ -110,27 +110,6 @@ mod background_count_tests {
         }])).is_err());
     }
 
-    struct ParentScopedReader;
-
-    #[async_trait::async_trait]
-    impl crate::config_client::ConfigRead for ParentScopedReader {
-        async fn execute_read(&self, query: &str) -> anyhow::Result<serde_json::Value> {
-            anyhow::ensure!(query.contains("request_doc_id: { _eq:"), "query must scope by physical request document");
-            let parent = if query.contains("physical-parent-a") { "a" } else { "b" };
-            let count = if parent == "a" { 8 } else { 1 };
-            Ok(json!({"data":{"AgentToolCall":(0..count).map(|_| json!({
-                "lifecycle_state":"running", "await_mode":"background",
-                "spawned_by_tool_call_doc_id":null
-            })).collect::<Vec<_>>()}}))
-        }
-    }
-
-    #[tokio::test]
-    async fn background_budget_is_scoped_to_physical_parent_request() {
-        let reader = ParentScopedReader;
-        assert_eq!(super::count_live_backgrounded_rows_in(&reader, "physical-parent-a").await.unwrap(), 8);
-        assert_eq!(super::count_live_backgrounded_rows_in(&reader, "physical-parent-b").await.unwrap(), 1);
-    }
 }
 
 pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {

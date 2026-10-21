@@ -124,21 +124,58 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         panic!("expected background receipt");
     };
     replay.background_with_receipt(&receipt).await.unwrap();
-    for index in 0..7 {
-        let id = format!("handoff-capacity-{index}");
-        let mut admitted = accepted_hook_tool_lifecycle(
-            &hook,
-            &id,
+    let capacity = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        "background_tool_budget_count_8_rejects_spawn",
+    )
+    .max_backgrounded;
+    let mut fillers = Vec::new();
+    let filler_ids = (1..capacity)
+        .map(|index| format!("handoff-capacity-{index}"))
+        .collect::<Vec<_>>();
+    let filler_calls = filler_ids
+        .iter()
+        .map(|id| (id.as_str(), None))
+        .collect::<Vec<_>>();
+    let filler_message = Message::Assistant {
+        id: Some("handoff-capacity-turn".into()),
+        content: filler_ids
+            .iter()
+            .map(|id| {
+                AssistantContent::ToolCall(ToolCall {
+                    id: id.clone(),
+                    call_id: None,
+                    function: ToolFunction {
+                        name: "held_background_tool".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
+    };
+    publish_and_adopt_tool_turns(&hook, &filler_calls, filler_message).await;
+    for id in &filler_ids {
+        let mut admitted = hook.adopt_accepted_tool_dispatch(
+            id,
+            None,
+            "handoff-parent",
+            &session,
             "held_background_tool",
             "{}",
             deadline,
             crate::tool_call_lifecycle::AwaitMode::Background,
-        )
-        .await;
+        ).await.unwrap();
         admitted.start_running().await.unwrap();
+        fillers.push(admitted);
     }
-    // The already-published handoff is idempotent at the full ceiling.
     replay.background_with_receipt(&receipt).await.unwrap();
+    for filler in &mut fillers {
+        filler
+            .cancel_during_run(crate::tool_call_lifecycle::CancelCause::UserCancelled)
+            .await
+            .unwrap();
+    }
     let receipt_rows = access.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}:background-receipt:{}" }} }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(&session), crate::graphql::escape_graphql_string(&tool_doc))).await.unwrap();
     assert_eq!(
         receipt_rows["data"]["AgentMessage"]
