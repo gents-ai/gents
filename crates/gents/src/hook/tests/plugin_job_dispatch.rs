@@ -420,7 +420,7 @@ impl Step0 {
             row["_docID"].as_str().unwrap(),
             &self.hook.node_did,
             &self.session_id,
-            None,
+            Some(&self.hook.node_did),
         )
         .await
         .unwrap();
