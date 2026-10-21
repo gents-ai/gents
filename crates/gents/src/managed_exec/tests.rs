@@ -460,7 +460,31 @@ async fn managed_exec_bounds_stderr_drain_after_direct_child_exit() {
 }
 
 #[cfg(unix)]
+/// The non-retained stream must reach EOF independently of unrelated tests'
+/// forked children, which can inherit its writer until they exec.
 async fn assert_bounded_capture_drain(retained_stream: &str) {
+    const FIXTURE: &str = "GENTS_MANAGED_EXEC_DRAIN_FIXTURE";
+    if std::env::var(FIXTURE).as_deref() != Ok(retained_stream) {
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!(
+                    "managed_exec::tests::managed_exec_bounds_{retained_stream}_drain_after_direct_child_exit"
+                ),
+                "--nocapture",
+            ])
+            .env(FIXTURE, retained_stream)
+            .output()
+            .await
+            .expect("run isolated pipe-retention fixture");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let temp = tempfile::tempdir().expect("tempdir");
     let pid_file = temp
         .path()
