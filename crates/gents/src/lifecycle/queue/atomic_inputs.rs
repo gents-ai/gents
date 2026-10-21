@@ -493,6 +493,7 @@ async fn background_completion_transaction_attempt(
             let wake_input = parent.input.continuation(
                 background_wake_queue(queue, queue.queued_after_request_id.clone()),
                 None,
+                &parent.doc_id,
             );
             let request_mutation = session_request_create_mutation_at_hop(
                 parent,

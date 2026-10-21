@@ -36,6 +36,9 @@ pub struct RequestInput {
     /// Goal/parent identities remain in the existing signed request lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_continuation: Option<GoalContinuationInput>,
+    /// Signed assignment attribution; authorization remains with admission and ACP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_assignment: Option<GoalAssignmentInput>,
     /// Submitted snapshots, distinct from authored prose and configuration grants.
     #[serde(
         default,
@@ -51,6 +54,11 @@ impl RequestInput {
     pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
         self.captured_context.is_empty()
             || runtime_version == Some(u64::from(REQUEST_INPUT_CONTRACT_VERSION))
+    }
+
+    pub fn goal_assignment_compatible(&self, runtime_version: Option<u64>) -> bool {
+        self.goal_assignment.is_none()
+            || runtime_version == Some(u64::from(crate::goal_control::GOAL_STOP_CONTRACT_VERSION))
     }
 
     pub fn has_authored_input(&self, prose: &str) -> bool {
@@ -75,12 +83,41 @@ impl RequestInput {
         &self,
         queue: RequestQueue,
         goal_continuation: Option<GoalContinuationInput>,
+        parent_doc_id: &str,
     ) -> Self {
         Self {
             cwd: self.cwd.clone(),
             queue: Some(queue),
             goal_continuation,
+            goal_assignment: self
+                .goal_assignment
+                .as_ref()
+                .map(|reference| reference.continuation(parent_doc_id)),
             ..Self::default()
+        }
+    }
+}
+
+/// The opening invocation uses no root to denote itself without a recursive
+/// document hash. Later invocations name the authenticated opening document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalAssignmentInput {
+    pub goal_id: String,
+    #[serde(default)]
+    pub root_request_doc_id: Option<String>,
+}
+
+impl GoalAssignmentInput {
+    pub fn continuation(&self, parent_doc_id: &str) -> Self {
+        Self {
+            goal_id: self.goal_id.clone(),
+            root_request_doc_id: Some(
+                self.root_request_doc_id
+                    .as_deref()
+                    .unwrap_or(parent_doc_id)
+                    .to_owned(),
+            ),
         }
     }
 }

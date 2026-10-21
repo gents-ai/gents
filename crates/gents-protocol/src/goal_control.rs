@@ -10,7 +10,7 @@ pub const SESSION_GOAL_CONTROL_VERSION: u8 = 1;
 
 /// Clients must observe this capability on the selected serving runtime before
 /// removing a goal or replacing a terminal assignment with a fresh signed start.
-pub const GOAL_STOP_CONTRACT_VERSION: u8 = 2;
+pub const GOAL_STOP_CONTRACT_VERSION: u8 = 3;
 pub const STATUS_GOAL_STOP_CONTRACT_FIELD: &str = "goal_stop_contract_version";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
