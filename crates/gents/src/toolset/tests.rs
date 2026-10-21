@@ -154,6 +154,39 @@ async fn bash_schema_advertises_decoupled_default_and_max() {
     assert!(description.contains("3600"), "{description}");
 }
 
+#[tokio::test]
+async fn workspace_write_bash_names_its_process_limits() {
+    let root = temp_root("gents-workspace-process-limits");
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        DEFAULT_MAX_COMMAND_CHARS,
+        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::WorkspaceWrite),
+    );
+    let description = crate::llm::tool::Tool::definition(&tool, String::new())
+        .await
+        .description;
+    assert!(
+        description
+            .contains("ps and kill cannot see or signal processes this command did not start"),
+        "{description}"
+    );
+    #[cfg(target_os = "macos")]
+    {
+        let output = crate::llm::tool::Tool::call(
+            &tool,
+            serde_json::from_value(serde_json::json!({"command":"ps -p 1 -o pid="})).unwrap(),
+        )
+        .await;
+        let text = match output {
+            Ok(text) => text,
+            Err(error) => error.to_string(),
+        };
+        assert!(text.contains("Operation not permitted"), "{text}");
+    }
+}
+
 #[test]
 fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
     let disabled = AgentToolConfig {

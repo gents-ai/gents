@@ -252,7 +252,7 @@ impl Tool for UnrestrictedBashTool {
                 "artifact_write policy; source stays read-only, with compiler output and temporary files confined to the request's private artifact directory. CARGO_TARGET_DIR and TMPDIR are supplied automatically"
             }
             CommandExecutionMode::WorkspaceWrite => {
-                "workspace_write policy; macOS uses sandbox-exec to contain writes to the tool root"
+                "workspace_write policy; macOS uses sandbox-exec to contain writes to the tool root. Inside it ps and kill cannot see or signal processes this command did not start, so their \"Operation not permitted\" is the sandbox, not missing privileges, and programs that open a network monitor, such as a P2P gents server, fail to start; inspect or restart other processes through their service manager or a tool built for them"
             }
             CommandExecutionMode::Unrestricted => {
                 "unrestricted policy; commands run without the macOS seatbelt sandbox"
