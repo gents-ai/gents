@@ -94,7 +94,7 @@ impl DefraSessionHook {
             return complete_spawn_process_failure(
                 self,
                 &mut parent_lifecycle,
-                FailureClass::ServiceUnavailable,
+                FailureClass::ArgumentInvalid,
                 background_invalid_tool_arguments_payload(
                     SPAWN_PROCESS_TOOL_NAME,
                     "/tool_name",
