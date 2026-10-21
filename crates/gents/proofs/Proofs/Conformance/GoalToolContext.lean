@@ -22,6 +22,8 @@ def cases : List Case :=
       retired := [10], current := some ⟨20, 2, 200⟩}
   , {name := "reused_goal_id_keeps_caller_root", versions := [first, reassigned], current := some ⟨10, 1, 200⟩}
   , {name := "current_assigned_followup", versions := [first], current := some ⟨10, 1, 100⟩}
+  , {name := "current_replacement_assignment", versions := [next],
+      entry := ⟨101, 1, 10, some ⟨2, some 200⟩, true⟩, current := some ⟨20, 2, 200⟩}
   , {name := "current_unreferenced_opening_request", versions := [first],
       entry := ⟨100, 1, 10, none, true⟩, current := some ⟨10, 1, 100⟩}
   , {name := "unassigned_without_goal", entry := ⟨101, 1, 10, none, true⟩}
@@ -55,6 +57,6 @@ def caseJson (c : Case) : Json :=
 
 def casesJson : String := (toJson (cases.map caseJson)).compress
 
-example : cases.length = 10 := by decide
+example : cases.length = 11 := by decide
 
 end Conformance.GoalToolContextContracts

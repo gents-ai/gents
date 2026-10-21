@@ -22,6 +22,7 @@ async fn request(
     session: &str,
     id: u64,
     reference: Option<GoalAssignmentInput>,
+    signature_valid: bool,
 ) -> String {
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
@@ -39,6 +40,9 @@ async fn request(
     crate::sign_agent_request_create(identity, &mut request)
         .await
         .unwrap();
+    if !signature_valid {
+        request.content.push_str(" changed after signing");
+    }
     let response = access
         .write(
             "test.goal_tool_signed_request",
@@ -74,13 +78,37 @@ pub(super) async fn bind_signed_request(
     crate::sign_agent_request_create(identity, &mut request)
         .await
         .unwrap();
-    access
+    let response = access
         .write(
             "test.goal_tool_bound_request",
             &request.graphql_mutation().unwrap(),
         )
         .await
         .unwrap();
+    let doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    access
+        .transact_write("test.goal_tool_bind_existing_goal", |txn| {
+            Box::pin(async {
+                if let Some(goal) =
+                    crate::goal::load_canonical_goal_in_txn(txn, identity.did(), session).await?
+                {
+                    if goal.assignment_root_request_doc_id.is_none() {
+                        crate::goal::bind_goal_first_request_in_txn(
+                            txn,
+                            &goal,
+                            &doc,
+                            request.input.goal_assignment.as_ref(),
+                        )
+                        .await?;
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+    access.write("test.goal_tool_finish_previous_requests", &format!(r#"mutation {{update_AgentRequest(filter: {{_docID: {{_neq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}}}"#,
+        crate::graphql::escape_graphql_string(&doc))).await.unwrap();
     claim_signed_request(node, hook, request_id, session).await;
 }
 
@@ -90,12 +118,25 @@ async fn claim_signed_request(
     request_id: &str,
     session: &str,
 ) {
+    claim_request_fixture(node, hook, request_id, session, true).await;
+}
+
+async fn claim_request_fixture(
+    node: &Arc<EmbeddedNode>,
+    hook: &DefraSessionHook,
+    request_id: &str,
+    session: &str,
+    signature_valid: bool,
+) {
     let access = ConfigAccess::local(node.clone());
     let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
         crate::graphql::escape_graphql_string(request_id), crate::graphql::escape_graphql_string(session), crate::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::verify_request_receipt_signature(&row).unwrap();
+    assert_eq!(
+        crate::verify_request_receipt_signature(&row).is_ok(),
+        signature_valid
+    );
     let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
@@ -148,7 +189,7 @@ async fn versions(access: &ConfigAccess) -> Value {
 async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
     let contract = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
     let cases = contract["goal_tool_context_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 10);
+    assert_eq!(cases.len(), 11);
     for case in cases {
         for tool in [
             crate::goal::GET_GOAL_TOOL_NAME,
@@ -201,7 +242,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 };
                 roots.insert(
                     root,
-                    request(&access, &identity, &session, root, reference).await,
+                    request(&access, &identity, &session, root, reference, true).await,
                 );
             }
             let caller = if let Some(doc) = roots.get(&entry_id) {
@@ -217,13 +258,32 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         .as_u64()
                         .map(|root| roots[&root].clone()),
                 });
-                request(&access, &identity, &session, entry_id, reference).await
+                request(
+                    &access,
+                    &identity,
+                    &session,
+                    entry_id,
+                    reference,
+                    entry["signature_valid"].as_bool().unwrap(),
+                )
+                .await
             };
             let mut documents = BTreeMap::<u64, String>::new();
             for version in case["versions"].as_array().unwrap() {
                 let id = version["document"].as_u64().unwrap();
                 let assignment = &version["assignment"];
-                let input = json!({"goal_id":goal_id(identity.did(), &session, assignment["goal"].as_u64().unwrap()),
+                let goal_identity = assignment["goal"].as_u64().unwrap();
+                let creation_key = if goal_identity == 1 {
+                    crate::goal::deterministic_goal_creation_key(identity.did(), &session)
+                } else {
+                    crate::goal::replacement_goal_identity(
+                        identity.did(),
+                        &session,
+                        &format!("assignment-{goal_identity}"),
+                    )
+                    .creation_key
+                };
+                let input = json!({"goal_id":goal_id(identity.did(), &session, goal_identity), "creation_key": creation_key,
                     "node_did":identity.did(), "session_id":session, "objective":"Original caller goal",
                     "status":version["status"], "assignment_root_request_doc_id":assignment["root"].as_u64().map(|root| &roots[&root]),
                     "tokens_used":317, "token_usage_baseline":0, "active_time_seconds":23,
@@ -243,10 +303,24 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 }).await.unwrap();
                 documents.insert(id, created);
             }
-            if documents.contains_key(&10) {
+            let mut claims = BTreeMap::new();
+            for version in case["versions"].as_array().unwrap() {
+                claims.insert(version["assignment"]["goal"].as_u64().unwrap(), ());
+            }
+            for (id, ()) in claims {
+                let creation_key = if id == 1 {
+                    crate::goal::deterministic_goal_creation_key(identity.did(), &session)
+                } else {
+                    crate::goal::replacement_goal_identity(
+                        identity.did(),
+                        &session,
+                        &format!("assignment-{id}"),
+                    )
+                    .creation_key
+                };
                 access.write("test.goal_tool_original_claim", &format!(r#"mutation {{create_GoalCreationClaim(input: {{creation_key: "{}", goal_id: "{}", node_did: "{}", session_id: "{}", objective: "Original caller goal", created_at: "2026-10-21T00:00:00Z"}}) {{_docID}}}}"#,
-                    crate::graphql::escape_graphql_string(&crate::goal::deterministic_goal_creation_key(identity.did(), &session)),
-                    crate::graphql::escape_graphql_string(&goal_id(identity.did(), &session, 1)),
+                    crate::graphql::escape_graphql_string(&creation_key),
+                    crate::graphql::escape_graphql_string(&goal_id(identity.did(), &session, id)),
                     crate::graphql::escape_graphql_string(identity.did()),crate::graphql::escape_graphql_string(&session))).await.unwrap();
             }
             for id in case["retire_documents"].as_array().unwrap() {
@@ -266,18 +340,70 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             access.write("test.goal_tool_terminal_roots", &format!(r#"mutation {{update_AgentRequest(filter: {{_docID: {{_neq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}}}"#,
                 crate::graphql::escape_graphql_string(&caller))).await.unwrap();
             let request_id = format!("goal-tool-{entry_id}");
-            claim_signed_request(&node, &hook, &request_id, &session).await;
+            claim_request_fixture(
+                &node,
+                &hook,
+                &request_id,
+                &session,
+                entry["signature_valid"].as_bool().unwrap(),
+            )
+            .await;
             let args = match tool {
                 crate::goal::GET_GOAL_TOOL_NAME => "{}",
                 crate::goal::UPDATE_GOAL_TOOL_NAME => r#"{"objective":"Changed caller goal"}"#,
                 _ => r#"{"objective":"Original caller goal"}"#,
             };
             accept_hook_tool_call(&hook, "goal-context-call", tool, args, None).await;
-            if entry["signature_valid"] == false {
-                access.write("test.goal_tool_tampered_caller", &format!(r#"mutation {{update_AgentRequest(docID: "{}", input: {{content: "Changed after signing"}}) {{_docID}}}}"#,
-                    crate::graphql::escape_graphql_string(&caller))).await.unwrap();
-            }
             let before = versions(&access).await;
+            if tool == crate::goal::GET_GOAL_TOOL_NAME && case["read_only"] == true {
+                let context = crate::goal::load_goal_tool_context(
+                    &node,
+                    identity.did(),
+                    &session,
+                    &request_id,
+                    Some(&caller),
+                )
+                .await
+                .unwrap();
+                let crate::goal::RequestAssignmentObservation::Assigned(observed) =
+                    context.assignment
+                else {
+                    panic!("{name}: retained assignment unavailable");
+                };
+                assert!(
+                    crate::goal::edit_active_goal(
+                        &node,
+                        &observed,
+                        &crate::goal::GoalEdit {
+                            objective: Some("Stale edit".into()),
+                            budget: None
+                        }
+                    )
+                    .await
+                    .unwrap()
+                    .is_none(),
+                    "{name}: edit crossed physical root"
+                );
+                assert!(
+                    !crate::goal::update_goal_fields_if_status(
+                        &node,
+                        &observed,
+                        observed.parsed_status().unwrap(),
+                        r#"last_failure: "Stale controller write""#
+                    )
+                    .await
+                    .unwrap(),
+                    "{name}: controller crossed physical root"
+                );
+                crate::goal::refresh_goal_usage(&node, &observed)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    versions(&access).await,
+                    before,
+                    "{name}: retired owner mutation changed Goal history"
+                );
+            }
             let action = hook
                 .on_tool_call(tool, None, "goal-context-call", args)
                 .await;
@@ -308,6 +434,14 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                             assert!(
                                 result["assignment_context"].is_string(),
                                 "{name}/{tool}: {result}"
+                            );
+                            assert_eq!(
+                                result["tokens_used"], 317,
+                                "{name}/{tool}: retained usage changed"
+                            );
+                            assert_eq!(
+                                result["active_time_seconds"], 23,
+                                "{name}/{tool}: retained clock advanced"
                             );
                         }
                     }

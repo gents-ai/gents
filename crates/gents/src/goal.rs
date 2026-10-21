@@ -18,6 +18,7 @@ mod readiness_gate;
 mod request_assignment;
 mod request_head;
 mod reset_resume;
+mod tool_context;
 pub(crate) use claimed_publication::{
     publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
 };
@@ -54,6 +55,8 @@ pub(crate) use request_head::{
     latest_authenticated_session_request, latest_goal_request, verify_goal_continuation_edge,
 };
 pub use reset_resume::resume_at_reset;
+pub(crate) use tool_context::load_goal_tool_context;
+use tool_context::same_goal_assignment;
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
@@ -1189,6 +1192,32 @@ pub async fn create_goal_for_session(
     objective: &str,
     token_budget: Option<i64>,
 ) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
+    create_goal_for_session_inner(node, node_did, session_id, objective, token_budget, None).await
+}
+
+pub(crate) async fn create_goal_for_request(
+    node: &std::sync::Arc<EmbeddedNode>,
+    caller: &gents_protocol::row::AgentRequestRow,
+    objective: &str,
+    token_budget: Option<i64>,
+) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
+    let owner = caller.node_did.as_deref().ok_or_else(|| {
+        CreateGoalForSessionError::Storage(anyhow::anyhow!("Goal tool caller has no owner"))
+    })?;
+    let session = caller.session_id.as_deref().ok_or_else(|| {
+        CreateGoalForSessionError::Storage(anyhow::anyhow!("Goal tool caller has no session"))
+    })?;
+    create_goal_for_session_inner(node, owner, session, objective, token_budget, Some(caller)).await
+}
+
+async fn create_goal_for_session_inner(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    session_id: &str,
+    objective: &str,
+    token_budget: Option<i64>,
+    caller: Option<&gents_protocol::row::AgentRequestRow>,
+) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
     let create_request = GoalCreateRequest {
         caller: node_did.to_string(),
         current_session: session_id.to_string(),
@@ -1217,7 +1246,23 @@ pub async fn create_goal_for_session(
         "goal.create_for_session",
         move |txn| {
             Box::pin(async move {
-                stage_goal_and_claim(
+                let context = if let Some(caller) = caller {
+                    let context = tool_context::load_goal_tool_context_in_txn(
+                        txn, node_did, session_id,
+                        &caller.request_id,
+                        caller.doc_id.as_deref().context("Goal tool caller has no physical identity")?,
+                    ).await?;
+                    anyhow::ensure!(context.can_create(), "Goal creation requires an unassigned caller with no current Goal, or the exact current assignment");
+                    Some(context)
+                } else { None };
+                let identity = if let Some(tool_context::GoalToolContext { assignment: RequestAssignmentObservation::Assigned(goal), .. }) = &context {
+                    let response = txn.execute(&format!(r#"{{ Goal(filter: {{ _docID: {{_eq: "{}"}} }}) {{creation_key}} }}"#,
+                        escape_graphql_string(&goal.doc_id))).await?;
+                    let creation_key = response.pointer("/data/Goal/0/creation_key").and_then(serde_json::Value::as_str)
+                        .filter(|value| !value.is_empty()).context("assigned Goal has no creation identity")?;
+                    Some(GoalCreationIdentity { goal_id: goal.goal_id.clone(), creation_key: creation_key.to_string() })
+                } else { None };
+                let mut staged = stage_goal_and_claim(
                     txn,
                     node_did,
                     session_id,
@@ -1230,9 +1275,21 @@ pub async fn create_goal_for_session(
                         wrapup_completed: false,
                     },
                     &Utc::now().to_rfc3339(),
-                    None,
-                )
-                .await
+                    identity.as_ref(),
+                ).await?;
+                if let Some(context) = context {
+                    if matches!(staged.disposition, StagedGoalDisposition::Created) {
+                        let goal = load_canonical_goal_in_txn(txn, node_did, session_id).await?
+                            .context("created Goal row disappeared before caller binding")?;
+                        bind_goal_first_request_in_txn(txn, &goal,
+                            context.request.doc_id.as_deref().context("Goal tool caller has no physical identity")?,
+                            context.request.input.as_ref().and_then(|input| input.goal_assignment.as_ref()),
+                        ).await?;
+                        staged.goal = load_canonical_goal_in_txn(txn, node_did, session_id).await?
+                            .context("bound Goal row disappeared")?;
+                    }
+                }
+                Ok(staged)
             })
         },
     )
@@ -1240,16 +1297,24 @@ pub async fn create_goal_for_session(
 
     match result {
         Ok(outcome) => {
-            let goal = load_canonical_goal(node, node_did, session_id)
-                .await
-                .map_err(CreateGoalForSessionError::Storage)?
-                .context("committed Goal row not found")
-                .map_err(CreateGoalForSessionError::Storage)?;
+            let goal = if caller.is_some() {
+                outcome.goal
+            } else {
+                load_canonical_goal(node, node_did, session_id)
+                    .await
+                    .map_err(CreateGoalForSessionError::Storage)?
+                    .context("committed Goal row not found")
+                    .map_err(CreateGoalForSessionError::Storage)?
+            };
             Ok(match outcome.disposition {
                 StagedGoalDisposition::Created => CreateGoalForSessionOutcome::Created(goal),
                 StagedGoalDisposition::Idempotent => CreateGoalForSessionOutcome::Idempotent(goal),
             })
         }
+        Err(error) if caller.is_some() => match error.downcast::<CreateGoalForSessionError>() {
+            Ok(error) => Err(error),
+            Err(error) => Err(CreateGoalForSessionError::Storage(error)),
+        },
         Err(error) => {
             if let Some(existing) = load_canonical_goal(node, node_did, session_id)
                 .await
@@ -2578,6 +2643,14 @@ pub async fn update_goal_fields_if_status(
         "goal.update_controller_fields",
         |txn| {
             Box::pin(async {
+                let current =
+                    load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id).await?;
+                if !current
+                    .as_ref()
+                    .is_some_and(|current| same_goal_assignment(current, goal))
+                {
+                    return Ok(false);
+                }
                 let response = txn.execute(&mutation).await?;
                 let won = response
                     .pointer("/data/update_Goal")
