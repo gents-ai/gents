@@ -1554,6 +1554,11 @@ def caseCoverage : List CoverageEntry :=
       "client::core::goal::tests::generated_goal_input_bindings_wait_for_verified_source_state")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "goal_fresh_session_input_cases"
+      "GoalFreshSessionInputCases"
+      "request_input::tests::generated_fresh_session_resubmissions_drop_invocation_lineage")
+      "durable-goals" [Surface.operatorCli]
+  , tagged (consumerCoverage
       "goal_request_assignment_cases"
       "GoalRequestAssignmentCases"
       "goal::request_assignment::contract_tests::generated_goal_request_assignments_drive_signed_binding")

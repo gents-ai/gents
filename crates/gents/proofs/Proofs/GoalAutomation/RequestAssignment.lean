@@ -68,6 +68,29 @@ theorem fresh_chat_has_no_inherited_assignment (facts : InputFacts)
     prepareInput facts = .prepared none := by
   simp [prepareInput, uncaptured, fresh]
 
+/-- A stale resend keeps its authored payload but starts a fresh session.
+Queue position, Goal continuation facts and assignment references describe
+the original invocation and cannot cross that fresh-session boundary. -/
+structure ResubmissionInput where
+  reference : Option Reference
+  queued : Bool
+  continuation : Bool
+  authored : Nat
+  deriving DecidableEq, Repr
+
+def freshSessionInput (input : ResubmissionInput) : ResubmissionInput :=
+  { input with reference := none, queued := false, continuation := false }
+
+theorem fresh_resubmission_is_unassigned (input : ResubmissionInput) :
+    (freshSessionInput input).reference = none := by rfl
+
+theorem fresh_resubmission_has_no_invocation_lineage (input : ResubmissionInput) :
+    (freshSessionInput input).queued = false ∧
+      (freshSessionInput input).continuation = false := by simp [freshSessionInput]
+
+theorem fresh_resubmission_preserves_authored_payload (input : ResubmissionInput) :
+    (freshSessionInput input).authored = input.authored := by rfl
+
 /-- Session-message input belongs to the destination session. Its caller's
 Goal is not input capture. A source read is either the destination runtime's
 canonical transaction or its verified session-scoped observation. -/
