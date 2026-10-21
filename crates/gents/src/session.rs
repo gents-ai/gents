@@ -36,10 +36,10 @@ pub(crate) use compaction_entries::{
     save_compaction_entry, save_compaction_entry_with_requester_did,
 };
 pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
+pub use control::{resume_session, stop_session, SessionStopReceipt};
 pub use fork::{
     fork, fork_on, fork_via_http, is_user_turn, ForkBoundary, ForkError, ForkOutcome, ForkParams,
 };
-pub use control::{resume_session, stop_session, SessionStopReceipt};
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
 pub use history::{load_history, sequence_message_key};
@@ -57,7 +57,6 @@ pub(crate) use observations::{
 };
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 pub(crate) use observations::{load_session_current_hop, load_session_current_hop_in_txn};
-pub(crate) use query::session_stopped_in_txn;
 #[cfg(test)]
 pub(crate) use output::count_capture_row_queries;
 #[cfg(test)]
@@ -75,11 +74,12 @@ pub(crate) use output::{
     load_canonical_message_in_txn, load_request_headers_in_txn, resolve_canonical_replay_tags,
     validate_canonical_replay_boundary, CanonicalReplayScope, TxnCanonicalReader,
 };
+pub(crate) use query::session_is_stopped;
+pub(crate) use query::session_stopped_in_txn;
 pub use query::{
     decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
 };
 pub(crate) use query::{load_session_agent_id, load_session_requester_scope, require_session};
-pub(crate) use query::session_is_stopped;
 pub use request_output::{
     observe_request_output, CanonicalPresentation, CanonicalRequestOutput, CanonicalSelectedSource,
 };

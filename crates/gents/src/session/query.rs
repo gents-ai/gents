@@ -45,12 +45,9 @@ pub(crate) async fn session_is_stopped(
 ) -> Result<bool> {
     let scope = session_scope_filter(node_did, session_id, requester_did);
     let query = format!(r#"{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ stopped_at }} }}"#);
-    let response = crate::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load session stop latch",
-    )
-    .await?;
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "load session stop latch")
+            .await?;
     let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentSession")?;
     anyhow::ensure!(rows.len() <= 1, "session stop-latch scope is ambiguous");
     let Some(row) = rows.first() else {

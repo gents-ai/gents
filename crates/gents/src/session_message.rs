@@ -1532,13 +1532,19 @@ mod agent_tools_tests {
                 agent_id: caused.agent_id.clone(),
                 session_id: caused.session_id.clone(),
             },
-            RenderedBody { content: "too late".to_owned(), goal: None },
+            RenderedBody {
+                content: "too late".to_owned(),
+                goal: None,
+            },
             None,
             false,
         )
         .await
         .unwrap();
-        assert!(error.is_err(), "late message admission must honor durable stop");
+        assert!(
+            error.is_err(),
+            "late message admission must honor durable stop"
+        );
 
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();

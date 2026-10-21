@@ -44,8 +44,8 @@ pub(crate) use coalescing::supersede_pending_mutation;
 use coalescing::{
     parent_agent_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
 };
-pub(crate) use draining::drain_automated_wakeups_in_txn;
 pub(crate) use draining::drain_all_pending_session_requests_in_txn;
+pub(crate) use draining::drain_automated_wakeups_in_txn;
 pub use edit_submission::{submit_pending_user_edit, submit_pending_user_steer};
 pub use enqueue::enqueue_local_steering_request;
 #[cfg(test)]

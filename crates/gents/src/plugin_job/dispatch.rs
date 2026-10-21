@@ -190,11 +190,8 @@ pub async fn run_step0(
         .await;
     }
     let row = read_step_row(&access, &row_doc_id).await?;
-    let max_hop = crate::request_admission::max_request_hop(
-        runtime.node.as_ref(),
-        &caller.node_did,
-    )
-    .await?;
+    let max_hop =
+        crate::request_admission::max_request_hop(runtime.node.as_ref(), &caller.node_did).await?;
     let mut ctx = step0_context(
         runtime, binding, &installed, &input, &output, lifecycle, max_hop,
     )?;

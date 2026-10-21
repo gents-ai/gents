@@ -61,7 +61,10 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         escape_graphql_string(NODE_DID),
         escape_graphql_string(&interrupted_session)
     )).await;
-    assert_eq!(interrupted_session_row.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(), interrupt_case["stopped"].as_bool().unwrap());
+    assert_eq!(
+        interrupted_session_row.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
+        interrupt_case["stopped"].as_bool().unwrap()
+    );
 
     let stopped_session = uuid::Uuid::new_v4().to_string();
     support::create_agent_session(
@@ -105,7 +108,10 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         escape_graphql_string(NODE_DID),
         escape_graphql_string(&stopped_session)
     )).await;
-    assert_eq!(stopped_session_row.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(), stop_case["stopped"].as_bool().unwrap());
+    assert_eq!(
+        stopped_session_row.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
+        stop_case["stopped"].as_bool().unwrap()
+    );
     assert_eq!(
         gents::goal::load_canonical_goal(&db.node, NODE_DID, &stopped_session)
             .await
@@ -131,7 +137,13 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         escape_graphql_string(NODE_DID),
         escape_graphql_string(&stopped_session)
     )).await;
-    assert_eq!(pending_rows.data.unwrap()["AgentRequest"].as_array().unwrap().is_empty(), stop_case["pending_empty"].as_bool().unwrap());
+    assert_eq!(
+        pending_rows.data.unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        stop_case["pending_empty"].as_bool().unwrap()
+    );
     gents::goal::set_goal(
         &db.node,
         NODE_DID,
@@ -150,7 +162,10 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         escape_graphql_string(NODE_DID),
         escape_graphql_string(&stopped_session)
     )).await;
-    assert_eq!(resumed_session_row.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(), resume_case["stopped"].as_bool().unwrap());
+    assert_eq!(
+        resumed_session_row.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
+        resume_case["stopped"].as_bool().unwrap()
+    );
     assert_eq!(
         gents::goal::load_canonical_goal(&db.node, NODE_DID, &stopped_session)
             .await

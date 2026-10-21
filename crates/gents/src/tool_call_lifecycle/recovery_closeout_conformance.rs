@@ -954,9 +954,13 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         if case.owner_session_stopped == Some(true) {
             crate::session::stop_session(
-                &admission.node, &admission.node_did, admission.tool.session_id(),
+                &admission.node,
+                &admission.node_did,
+                admission.tool.session_id(),
                 admission.tool.requester_did(),
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
         }
         let records = tempfile::tempdir().unwrap();
         let registry = crate::BackgroundExecutionRegistry::default()
@@ -1045,155 +1049,172 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
 #[tokio::test]
 async fn generated_registered_background_owner_stop_cases_use_live_worker() {
     for session_stopped in [false, true] {
-    let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
-    let left = cases
-        .iter()
-        .find(|case| case.name == "registered_background_tool_left_to_worker_deferred")
-        .unwrap();
-    let deleted = cases
-        .iter()
-        .find(|case| case.name == if session_stopped {
-            "registered_background_tool_session_stopped_to_cancelled"
+        let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
+        let left = cases
+            .iter()
+            .find(|case| case.name == "registered_background_tool_left_to_worker_deferred")
+            .unwrap();
+        let deleted = cases
+            .iter()
+            .find(|case| {
+                case.name
+                    == if session_stopped {
+                        "registered_background_tool_session_stopped_to_cancelled"
+                    } else {
+                        "registered_background_tool_task_deleted_to_cancelled"
+                    }
+            })
+            .unwrap();
+        assert_eq!(left.execution_registered, Some(true));
+        assert_eq!(left.owner_task_deleted, Some(false));
+        assert_eq!(deleted.owner_task_deleted, Some(!session_stopped));
+        assert_eq!(deleted.owner_session_stopped, Some(session_stopped));
+
+        let name = if session_stopped {
+            "session-stopped"
         } else {
-            "registered_background_tool_task_deleted_to_cancelled"
-        })
-        .unwrap();
-    assert_eq!(left.execution_registered, Some(true));
-    assert_eq!(left.owner_task_deleted, Some(false));
-    assert_eq!(deleted.owner_task_deleted, Some(!session_stopped));
-    assert_eq!(deleted.owner_session_stopped, Some(session_stopped));
-
-    let name = if session_stopped { "session-stopped" } else { "task-deleted" };
-    let path =
-        std::env::temp_dir().join(format!("recovery-closeout-{name}-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&path).unwrap();
-    let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
-    let node_did = identity.did().to_owned();
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .data_path(&path)
-            .with_node_identity_did(&node_did)
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, &node_did, "general").await;
-    let session_id = format!("session-{name}");
-    let mut parent =
-        crate::tool_call_lifecycle::admission_fixture::claimed_signed_request_with_trigger(
-            &node,
-            &format!("request-{name}"),
-            &session_id,
-            &identity,
-            None,
-            Some("trigger-1858"),
-        )
-        .await;
-    let tool = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
-        node.clone(),
-        &mut parent,
-        &node_did,
-        0,
-        crate::toolset::SPAWN_PROCESS_TOOL_NAME,
-        "task-native-tool",
-        serde_json::json!({"tool_name": "bash", "args": {}}),
-        AwaitMode::Background,
-        true,
-    )
-    .await
-    .unwrap();
-    let tool_doc_id = tool.doc_id().unwrap().to_owned();
-    let tool_call_id = tool.tool_call_id().to_owned();
-
-    let registry = crate::BackgroundExecutionRegistry::default();
-    let token = tokio_util::sync::CancellationToken::new();
-    let reservation = registry.reserve(tool_call_id.clone(), token.clone());
-    let (identity_tx, identity_rx) = tokio::sync::oneshot::channel();
-    let worker = {
-        let registry = registry.clone();
-        let recorder = registry.process_recorder(&tool_call_id, &tool_doc_id);
-        let tool_call_id = tool_call_id.clone();
-        let tool_doc_id = tool_doc_id.clone();
-        tokio::spawn(async move {
-            let process = crate::managed_exec::ownership::test_support::OwnedTestProcess::spawn(
-                Some(recorder),
+            "task-deleted"
+        };
+        let path =
+            std::env::temp_dir().join(format!("recovery-closeout-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
+        let node_did = identity.did().to_owned();
+        let node = Arc::new(
+            crate::defra_node::EmbeddedNode::builder()
+                .data_path(&path)
+                .with_node_identity_did(&node_did)
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::test_support::install_test_agent(&node, &node_did, "general").await;
+        let session_id = format!("session-{name}");
+        let mut parent =
+            crate::tool_call_lifecycle::admission_fixture::claimed_signed_request_with_trigger(
+                &node,
+                &format!("request-{name}"),
+                &session_id,
+                &identity,
+                None,
+                Some("trigger-1858"),
             )
             .await;
-            let _ = identity_tx.send(process.identity.clone());
-            token.cancelled().await;
-            process.finish().await;
-            registry
-                .release_process_record(&tool_call_id, &tool_doc_id)
-                .await;
-            drop(reservation);
-        })
-    };
-    let process = identity_rx.await.unwrap();
-
-    let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
-    for mutation in [
-        format!(
-            r#"mutation {{ create_Task(input: {{ task_id: "task-1858", node_did: "{escaped_agent}", agent_id: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
-        ),
-        format!(
-            r#"mutation {{ create_Trigger(input: {{ trigger_id: "trigger-1858", node_did: "{escaped_agent}", task_id: "task-1858" }}) {{ _docID }} }}"#
-        ),
-    ] {
-        let response = node.execute(&mutation).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-    }
-    let report =
-        ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
+        let tool =
+            crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+                node.clone(),
+                &mut parent,
+                &node_did,
+                0,
+                crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+                "task-native-tool",
+                serde_json::json!({"tool_name": "bash", "args": {}}),
+                AwaitMode::Background,
+                true,
+            )
             .await
             .unwrap();
-    assert_eq!(report.tool_calls_terminalized, 0, "{}", left.name);
-    assert_eq!(
-        process.observe(),
-        crate::managed_exec::ownership::ProcessObservation::Running,
-        "{}",
-        left.name
-    );
+        let tool_doc_id = tool.doc_id().unwrap().to_owned();
+        let tool_call_id = tool.tool_call_id().to_owned();
 
-    if session_stopped {
-        crate::session::stop_session(&node, &node_did, &session_id, tool.requester_did())
-            .await.unwrap();
-    } else {
-    let response = node
+        let registry = crate::BackgroundExecutionRegistry::default();
+        let token = tokio_util::sync::CancellationToken::new();
+        let reservation = registry.reserve(tool_call_id.clone(), token.clone());
+        let (identity_tx, identity_rx) = tokio::sync::oneshot::channel();
+        let worker = {
+            let registry = registry.clone();
+            let recorder = registry.process_recorder(&tool_call_id, &tool_doc_id);
+            let tool_call_id = tool_call_id.clone();
+            let tool_doc_id = tool_doc_id.clone();
+            tokio::spawn(async move {
+                let process =
+                    crate::managed_exec::ownership::test_support::OwnedTestProcess::spawn(Some(
+                        recorder,
+                    ))
+                    .await;
+                let _ = identity_tx.send(process.identity.clone());
+                token.cancelled().await;
+                process.finish().await;
+                registry
+                    .release_process_record(&tool_call_id, &tool_doc_id)
+                    .await;
+                drop(reservation);
+            })
+        };
+        let process = identity_rx.await.unwrap();
+
+        let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
+        for mutation in [
+            format!(
+                r#"mutation {{ create_Task(input: {{ task_id: "task-1858", node_did: "{escaped_agent}", agent_id: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Trigger(input: {{ trigger_id: "trigger-1858", node_did: "{escaped_agent}", task_id: "task-1858" }}) {{ _docID }} }}"#
+            ),
+        ] {
+            let response = node.execute(&mutation).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let report =
+            ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
+                .await
+                .unwrap();
+        assert_eq!(report.tool_calls_terminalized, 0, "{}", left.name);
+        assert_eq!(
+            process.observe(),
+            crate::managed_exec::ownership::ProcessObservation::Running,
+            "{}",
+            left.name
+        );
+
+        if session_stopped {
+            crate::session::stop_session(&node, &node_did, &session_id, tool.requester_did())
+                .await
+                .unwrap();
+        } else {
+            let response = node
         .execute(&format!(
             r#"mutation {{ delete_Task(filter: {{ task_id: {{ _eq: "task-1858" }}, node_did: {{ _eq: "{escaped_agent}" }} }}) {{ _docID }} }}"#
         ))
         .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    }
-    let report =
-        ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
-            .await
-            .unwrap();
-    assert_eq!(report.tool_calls_terminalized, 1, "{}", deleted.name);
-    worker.await.unwrap();
-    assert_ne!(
-        process.observe(),
-        crate::managed_exec::ownership::ProcessObservation::Running,
-        "{}",
-        deleted.name
-    );
-    let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
-    let response = node
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let report =
+            ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
+                .await
+                .unwrap();
+        assert_eq!(report.tool_calls_terminalized, 1, "{}", deleted.name);
+        worker.await.unwrap();
+        assert_ne!(
+            process.observe(),
+            crate::managed_exec::ownership::ProcessObservation::Running,
+            "{}",
+            deleted.name
+        );
+        let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
+        let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state cancel_cause }} }}"#
         ))
         .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let row = &response.data.unwrap()["AgentToolCall"][0];
-    assert_eq!(row["lifecycle_state"], deleted.terminal_state.as_str());
-    assert_eq!(row["cancel_cause"], if session_stopped { "userCancelled" } else { "interrupted" });
-    let (notifications, _) = completion_obligations(&node, &session_id, &node_did).await;
-    let reason = deleted.notification_reason.as_deref().unwrap();
-    assert_eq!(notifications.len(), 1);
-    assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
-    node.shutdown().await;
-    std::fs::remove_dir_all(path).unwrap();
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let row = &response.data.unwrap()["AgentToolCall"][0];
+        assert_eq!(row["lifecycle_state"], deleted.terminal_state.as_str());
+        assert_eq!(
+            row["cancel_cause"],
+            if session_stopped {
+                "userCancelled"
+            } else {
+                "interrupted"
+            }
+        );
+        let (notifications, _) = completion_obligations(&node, &session_id, &node_did).await;
+        let reason = deleted.notification_reason.as_deref().unwrap();
+        assert_eq!(notifications.len(), 1);
+        assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
+        node.shutdown().await;
+        std::fs::remove_dir_all(path).unwrap();
     }
 }
 

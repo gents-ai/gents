@@ -35,8 +35,7 @@ use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, 
 use session_message::{
     AgentInterruptTool, AgentListTool, AgentMessageTool, AgentNewTool, AgentResumeTool,
     AgentSessionListTool, AgentSessionReadTool, AgentStopTool, CancelProcessTool,
-    ListProcessesTool, ReadProcessTool, SpawnProcessTool,
-    WaitProcessTool,
+    ListProcessesTool, ReadProcessTool, SpawnProcessTool, WaitProcessTool,
 };
 
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};

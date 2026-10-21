@@ -70,11 +70,18 @@ pub(crate) async fn stage_session_resume_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<()> {
-    anyhow::ensure!(identity.did() == node_did, "session resume requires its node signing identity");
+    anyhow::ensure!(
+        identity.did() == node_did,
+        "session resume requires its node signing identity"
+    );
     let requests = request_head::load_session_requests(txn, node_did, session_id).await?;
     anyhow::ensure!(
-        !requests.iter().any(|row| row.lifecycle_state.is_some_and(|state|
-            matches!(state, RequestLifecycleState::Claimed | RequestLifecycleState::Processing))),
+        !requests
+            .iter()
+            .any(|row| row.lifecycle_state.is_some_and(|state| matches!(
+                state,
+                RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+            ))),
         "session work is still settling; retry resume after the interrupted request terminates"
     );
     let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
@@ -91,17 +98,13 @@ pub(crate) async fn stage_session_resume_in_txn(
     let predecessor = latest_goal_request(&goal, &requests)
         .context("paused Goal has no canonical continuation predecessor; resume was not applied")?;
     anyhow::ensure!(
-        predecessor.lifecycle_state.is_some_and(RequestLifecycleState::is_terminal),
+        predecessor
+            .lifecycle_state
+            .is_some_and(RequestLifecycleState::is_terminal),
         "paused Goal has no terminal continuation predecessor; resume was not applied"
     );
-    operator_resume::stage_resume(
-        txn,
-        identity,
-        node_did,
-        session_id,
-        &predecessor.request_id,
-    )
-    .await?;
+    operator_resume::stage_resume(txn, identity, node_did, session_id, &predecessor.request_id)
+        .await?;
     Ok(())
 }
 
@@ -377,10 +380,13 @@ impl GoalState {
     pub fn step(self, action: GoalAction) -> Option<Self> {
         match action {
             GoalAction::Pause
-                if matches!(self.status, GoalStatus::Active | GoalStatus::BudgetLimited) => Some(Self {
-                status: GoalStatus::Paused,
-                ..self
-            }),
+                if matches!(self.status, GoalStatus::Active | GoalStatus::BudgetLimited) =>
+            {
+                Some(Self {
+                    status: GoalStatus::Paused,
+                    ..self
+                })
+            }
             GoalAction::Resume
                 if matches!(
                     self.status,

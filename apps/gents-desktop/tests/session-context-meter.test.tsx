@@ -25,7 +25,9 @@ const context = (overrides: Partial<Context> = {}): Context => ({
 describe("session context meter (#1618)", () => {
   it("does not report an unavailable compaction count as zero", () => {
     render(<SessionContext context={context()} />);
-    expect(screen.getByTestId("context-meter")).toHaveTextContent("compactions unavailable");
+    expect(screen.getByTestId("context-meter")).toHaveTextContent(
+      "compactions unavailable",
+    );
   });
 
   it("shows a queried zero session compaction count", () => {
