@@ -350,6 +350,6 @@ theorem interrupted_wrapup_does_not_retry
     (activity requestWrapup : Bool) (retries : Nat) :
     (decide Status.budgetLimited RequestTerminal.interrupted true false true activity
       requestWrapup retries true false) ≠ Decision.retry := by
-  simp [Goals.decide]
+  cases requestWrapup <;> simp [Goals.decide]
 
 end Goals
