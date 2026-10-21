@@ -1576,7 +1576,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         stale.agent_id.as_deref(),
         RequestSubmitOptions {
             caused_by_source_doc_id: None,
-            input: stale.input.clone(),
+            input: stale.input.as_ref().map(RequestInput::for_fresh_session),
             valid_until,
             retry_parent_request: Some(stale_id.clone()),
             retry_parent_request_doc_id: Some(stale_doc_id.to_string()),

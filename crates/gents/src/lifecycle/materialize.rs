@@ -1261,9 +1261,32 @@ pub(crate) async fn write_trigger_delivery(
         "lifecycle.admit_trigger_delivery",
         |txn| {
             Box::pin(async move {
-                let admitted =
-                    stage_task_delivery(txn, &prepared.receipt, prepared.target_existing, create)
+                let fresh =
+                    crate::trigger_engine::durable::stage_fire_receipt(txn, &prepared.receipt)
                         .await?;
+                let mut create = create.clone();
+                if fresh {
+                    if prepared.target_existing && prepared.receipt.goal_id.is_none() {
+                        create.input = crate::goal::prepare_goal_input_in_txn(
+                            txn,
+                            &create.node_did,
+                            &create.session_id,
+                            &create.agent_id,
+                            Some(&create.requester_did),
+                            create.input,
+                        )
+                        .await?;
+                    }
+                    sign_request(&mut create, RequestSigner::RegisteredTarget).await?;
+                }
+                let admitted = stage_task_delivery_with_receipt(
+                    txn,
+                    &prepared.receipt,
+                    prepared.target_existing,
+                    &create,
+                    fresh,
+                )
+                .await?;
                 if prepared.replace_prior && !admitted.duplicate {
                     supersede_trigger_requests_in_txn(
                         txn,
@@ -1356,6 +1379,16 @@ async fn stage_task_delivery(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
     let fresh = crate::trigger_engine::durable::stage_fire_receipt(txn, fire).await?;
+    stage_task_delivery_with_receipt(txn, fire, continue_existing, create, fresh).await
+}
+
+async fn stage_task_delivery_with_receipt(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    fire: &gents_protocol::trigger_delivery::TriggerFire,
+    continue_existing: bool,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    fresh: bool,
+) -> Result<TaskDeliveryAdmission> {
     if fresh {
         if create.caused_by_trigger_kind.as_deref() == Some("event") {
             anyhow::ensure!(

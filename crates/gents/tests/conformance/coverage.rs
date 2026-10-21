@@ -778,6 +778,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionMessageGoalInputCases".to_string(),
         ));
     }
+    if !snapshot.goal_delivery_input_cases.is_empty() {
+        emitted.insert((
+            "goal_delivery_input_cases".into(),
+            "GoalDeliveryInputCases".into(),
+        ));
+    }
     if !snapshot.goal_first_request_binding_cases.is_empty() {
         emitted.insert((
             "goal_first_request_binding_cases".to_string(),
@@ -809,7 +815,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     if !snapshot.goal_wake_coalescing_cases.is_empty() {
-        emitted.insert(("goal_wake_coalescing_cases".into(), "GoalWakeCoalescingCases".into()));
+        emitted.insert((
+            "goal_wake_coalescing_cases".into(),
+            "GoalWakeCoalescingCases".into(),
+        ));
     }
     if !snapshot.goal_wake_ancestry_cases.is_empty() {
         emitted.insert((

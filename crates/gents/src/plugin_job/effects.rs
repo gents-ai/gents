@@ -12,8 +12,7 @@ use gents_protocol::request_admission::AgentRequestCreate;
 use sha2::{Digest, Sha256};
 
 use crate::lifecycle::{
-    build_session_message_request, next_request_hop, RequestHopCause, SessionMessageCause,
-    SessionMessageTarget,
+    next_request_hop, RequestHopCause, SessionMessageCause, SessionMessageTarget,
 };
 use crate::plugin_job::admit::{StepChild, StepContext, StepRow};
 use crate::plugin_job::keys::{job_message_key, job_session_id, job_spawn_key};
@@ -174,7 +173,7 @@ pub(crate) async fn stage_recorded_effects_in_txn(
         staged.push(
             stage_request(
                 txn,
-                job,
+                job.cause,
                 &target.0,
                 &target.1,
                 session_id,
@@ -183,6 +182,7 @@ pub(crate) async fn stage_recorded_effects_in_txn(
                 job_message_key(&job.row.root, &slot, attempt, k),
                 hop,
                 None,
+                true,
             )
             .await?,
         );
@@ -264,7 +264,7 @@ async fn stage_spawn(
     });
     stage_request(
         txn,
-        job,
+        job.cause,
         &node_did,
         &agent_id,
         job_session_id(&job.row.root, &spawn.slot, spawn.attempt),
@@ -273,6 +273,7 @@ async fn stage_spawn(
         job_spawn_key(&job.row.root, &spawn.slot, spawn.attempt),
         hop,
         cwd,
+        false,
     )
     .await
 }
@@ -294,7 +295,7 @@ async fn message_hop(
 
 async fn stage_request(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    job: &JobContext<'_>,
+    cause: &SessionMessageCause,
     node_did: &str,
     agent_id: &str,
     session_id: String,
@@ -303,10 +304,46 @@ async fn stage_request(
     retry_key: String,
     hop: u32,
     cwd: Option<String>,
+    existing_destination: bool,
 ) -> Result<AgentRequestCreate> {
+    let existing = one_request(txn, &retry_key).await?;
+    let mut input = gents_protocol::request_input::RequestInput {
+        cwd,
+        ..Default::default()
+    };
+    if let Some(existing) = &existing {
+        input.goal_assignment = existing
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.clone());
+    } else if existing_destination && node_did == cause.caller_node_did {
+        input = crate::goal::prepare_goal_input_in_txn(
+            txn,
+            node_did,
+            &session_id,
+            agent_id,
+            Some(&cause.caller_node_did),
+            input,
+        )
+        .await?;
+    } else if existing_destination {
+        let verifier = crate::identity::RegisteredIdentity::from_registered_did(
+            cause.caller_node_did.clone(),
+            None,
+        )?;
+        let state = crate::goal::load_session_goal_observation_state_in_txn(
+            txn,
+            &verifier,
+            node_did,
+            &session_id,
+            Some(&cause.caller_node_did),
+        )
+        .await?;
+        input = crate::goal::bind_goal_input(input, state)?;
+    }
     let request_id = uuid::Uuid::new_v4().to_string();
-    let create = build_session_message_request(
-        job.cause,
+    let create = crate::lifecycle::materialize::build_session_message_request_with_input(
+        cause,
         &SessionMessageTarget {
             node_did: node_did.to_owned(),
             agent_id: agent_id.to_owned(),
@@ -317,29 +354,21 @@ async fn stage_request(
         &request_id,
         Some(retry_key.clone()),
         hop,
-        None,
-        cwd,
+        input,
     )
     .await?;
-    if let Some(existing) = one_request(txn, &retry_key).await? {
+    if let Some(existing) = existing {
         if same_fingerprint(&existing, &create) {
             return Ok(create);
         }
         bail!("job staging integrity error: retry key {retry_key} does not match the admitted request");
     }
     let plan = crate::session_message::Plan::request(session_id, hop, create.clone());
-    crate::session_message::stage_planned_write_in_txn(txn, job.cause, &plan).await?;
+    crate::session_message::stage_planned_write_in_txn(txn, cause, &plan).await?;
     Ok(create)
 }
 
-#[derive(serde::Deserialize)]
-struct StoredRequest {
-    node_did: Option<String>,
-    agent_id: Option<String>,
-    session_id: Option<String>,
-    content: Option<String>,
-    request_hop: Option<i64>,
-}
+type StoredRequest = gents_protocol::row::AgentRequestRow;
 
 async fn one_request(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -348,9 +377,10 @@ async fn one_request(
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
-                node_did agent_id session_id content request_hop
+                {}
             }} }}"#,
             crate::graphql::escape_graphql_string(retry_key),
+            crate::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let rows = response
@@ -362,11 +392,16 @@ async fn one_request(
         rows.len() <= 1,
         "job staging integrity error: retry key {retry_key} is not unique"
     );
-    rows.into_iter()
+    let stored: Option<StoredRequest> = rows
+        .into_iter()
         .next()
         .map(serde_json::from_value)
         .transpose()
-        .context("decoding job request fingerprint")
+        .context("decoding job request fingerprint")?;
+    if let Some(stored) = &stored {
+        crate::request_admission::verify_request_receipt_signature(stored)?;
+    }
+    Ok(stored)
 }
 
 fn same_fingerprint(existing: &StoredRequest, create: &AgentRequestCreate) -> bool {
@@ -376,6 +411,11 @@ fn same_fingerprint(existing: &StoredRequest, create: &AgentRequestCreate) -> bo
         && existing.content.as_deref().map(content_digest).as_deref()
             == Some(content_digest(&create.content).as_str())
         && existing.request_hop == Some(i64::from(create.request_hop))
+        && existing
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.as_ref())
+            == create.input.goal_assignment.as_ref()
 }
 
 fn content_digest(content: &str) -> String {
@@ -1033,3 +1073,6 @@ mod tests {
         harness.close().await;
     }
 }
+
+#[cfg(test)]
+mod goal_input_tests;

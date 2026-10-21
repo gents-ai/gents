@@ -51,11 +51,7 @@ pub(crate) async fn bind_goal_first_request_in_txn(
     Ok(())
 }
 
-pub(crate) fn task_assignment_goal_id(
-    current: Option<&str>,
-    node_did: &str,
-    session_id: &str,
-) -> String {
+pub fn task_assignment_goal_id(current: Option<&str>, node_did: &str, session_id: &str) -> String {
     current
         .map(str::to_owned)
         .unwrap_or_else(|| deterministic_goal_id(node_did, session_id))

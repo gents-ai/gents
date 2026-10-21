@@ -25,12 +25,15 @@ pub(crate) use claimed_publication::{
 pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
 pub use client_submission::submit_session_goal_control;
 pub(crate) use edit::{edit_active_goal, GoalEdit};
+pub use first_request_binding::task_assignment_goal_id;
 pub(crate) use first_request_binding::{
-    bind_goal_first_request_in_txn, task_assignment_goal_id, validate_task_goal_identity_in_txn,
+    bind_goal_first_request_in_txn, validate_task_goal_identity_in_txn,
 };
 pub(crate) use history::{load_goal_versions_for_session, GoalVersion};
 pub use observation::{
-    load_session_goal_observation, load_session_goal_observation_state, SessionGoalObservationState,
+    bind_goal_input, load_session_goal_observation, load_session_goal_observation_state,
+    load_session_goal_observation_state_in_txn, prepare_goal_input, prepare_goal_input_in_txn,
+    SessionGoalObservationState,
 };
 pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERVATION_SOURCES};
 pub use operator_resume::{
@@ -2197,7 +2200,7 @@ pub async fn set_goal_from_access(
         .await
 }
 
-pub(crate) async fn load_canonical_goal_in_txn(
+pub async fn load_canonical_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,

@@ -315,11 +315,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         root_request_doc_id: None,
                     }
                 });
-                let create = crate::lifecycle::build_signed_request(
-                    spec,
-                    crate::lifecycle::RequestSigner::RegisteredTarget,
-                )
-                .await?;
+                let create = crate::lifecycle::materialize::build_request(spec)?;
                 let admission = crate::lifecycle::write_trigger_delivery(
                     &node,
                     runtime_actor,

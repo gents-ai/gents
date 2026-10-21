@@ -306,6 +306,32 @@ pub(crate) async fn prepare_agent_request(
     session_id: Option<&str>,
     agent_id: Option<&str>,
     request_id: Option<String>,
+    mut options: RequestSubmitOptions,
+) -> Result<PreparedAgentRequest> {
+    if let Some(session_id) = session_id.filter(|_| options.retry_parent_request.is_none()) {
+        options.input = Some(
+            prepare_cli_goal_input(
+                &gents::ConfigAccess::Graphql(graphql.clone()),
+                node_did,
+                session_id,
+                options.input.take().unwrap_or_default(),
+            )
+            .await?,
+        );
+    }
+    prepare_agent_request_with_input(
+        graphql, node_did, content, session_id, agent_id, request_id, options,
+    )
+    .await
+}
+
+async fn prepare_agent_request_with_input(
+    graphql: &GraphqlEndpoint,
+    node_did: &str,
+    content: &str,
+    session_id: Option<&str>,
+    agent_id: Option<&str>,
+    request_id: Option<String>,
     options: RequestSubmitOptions,
 ) -> Result<PreparedAgentRequest> {
     let (request_content, request_input) =
@@ -371,6 +397,27 @@ pub(crate) async fn prepare_agent_request(
     Ok(PreparedAgentRequest { create })
 }
 
+pub(crate) async fn prepare_cli_goal_input(
+    access: &gents::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    input: RequestInput,
+) -> Result<RequestInput> {
+    if input.goal_assignment.is_some() {
+        return Ok(input);
+    }
+    let verifier = gents::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
+    gents::goal::prepare_goal_input(
+        access,
+        &verifier,
+        node_did,
+        session_id,
+        Some(node_did),
+        input,
+    )
+    .await
+}
+
 /// Exact retries use the same immutable submission key and converge to the
 /// already-committed pair; conflicting retries fail without mutating either
 /// document.
@@ -405,7 +452,7 @@ pub(crate) async fn create_goal_backed_agent_request(
         "goal-submit:{}",
         gents::goal::deterministic_goal_creation_key(node_did, session_id)
     );
-    let prepared = prepare_agent_request(
+    let prepared = prepare_agent_request_with_input(
         graphql,
         node_did,
         content,
@@ -448,7 +495,7 @@ pub(crate) async fn create_goal_backed_agent_request_local(
     mut options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
     options.retry_key = Some(format!("goal-request:{request_id}"));
-    let prepared = prepare_agent_request(
+    let prepared = prepare_agent_request_with_input(
         graphql,
         node_did,
         objective,
@@ -1123,6 +1170,9 @@ pub(crate) async fn fetch_request_view(
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
     serde_json::from_value(row).with_context(|| format!("decoding AgentRequest {request_id}"))
 }
+
+#[cfg(test)]
+pub(crate) mod goal_input_tests;
 
 #[cfg(test)]
 mod tests {
