@@ -3580,7 +3580,7 @@ pub(crate) async fn start_running_in_txn(
             r#"{{ AgentToolCall(filter: {{
             _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request_id}" }},
             session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}{requester_filter}
-        }}, limit: 2) {{ _docID lifecycle_state await_mode started_at }} }}"#,
+        }}, limit: 2) {{ _docID lifecycle_state }} }}"#,
             escape_graphql_string(&start.doc_id),
             escape_graphql_string(&start.session),
             escape_graphql_string(&start.agent)
@@ -3593,16 +3593,10 @@ pub(crate) async fn start_running_in_txn(
         physical_rows.len() == 1,
         "dispatch physical tool is missing or ambiguous"
     );
-    let current = &physical_rows[0];
-    if current["lifecycle_state"].as_str() == Some("running") {
-        anyhow::ensure!(current["await_mode"].as_str() == Some(start.await_mode),
-            "running dispatch replay changed await mode");
-        let started = current["started_at"].as_str()
-            .context("running dispatch replay omitted start time")?;
-        return Ok(Some(DateTime::parse_from_rfc3339(started)?.with_timezone(&Utc)));
-    }
-    anyhow::ensure!(current["lifecycle_state"].as_str() == Some("pending"),
-        "dispatch physical tool is no longer pending");
+    anyhow::ensure!(
+        physical_rows[0]["lifecycle_state"].as_str() == Some("pending"),
+        "dispatch physical tool is no longer pending"
+    );
     if start.await_mode == "background" {
         let live = crate::hook::persistence::count_live_backgrounded_rows_in(txn, &start.request)
             .await?;
