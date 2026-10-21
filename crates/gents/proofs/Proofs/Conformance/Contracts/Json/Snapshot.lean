@@ -78,6 +78,8 @@ import Proofs.Conformance.GraphPipeline
 import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
+import Proofs.Conformance.GoalRequestAncestry
+import Proofs.Conformance.GoalQueueAssignment
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GoalRequestAssignment
 import Proofs.Conformance.GoalEdit
@@ -131,6 +133,10 @@ def snapshotJson : String :=
       ++ Conformance.GoalRequestAssignmentContracts.historyCasesJson ++ ","
     ++ "\"goal_request_assignment_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.casesJson ++ ","
+    ++ "\"goal_request_ancestry_cases\":"
+      ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
+    ++ "\"goal_queue_assignment_cases\":"
+      ++ Conformance.GoalQueueAssignmentContracts.casesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
     ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","

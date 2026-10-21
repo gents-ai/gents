@@ -1,4 +1,5 @@
 import Proofs.GoalAutomation
+import Proofs.GoalAutomation.RequestHead
 
 /-!
 Authenticated physical request ancestry. The Rust owner is
@@ -44,6 +45,45 @@ def tips (rows : List Attempt) (edges : List Edge) (root : Doc) : List Attempt :
   let ms := members rows edges root
   ms.filter (fun a => !(edges.any (fun e => e.authenticated && e.parent == a.doc &&
     ms.any (fun child => child.doc == e.child))))
+
+/-- A Goal continuation retains the first Goal encountered while walking its
+signed physical parents, including older entries without assignment metadata.
+Each edge still uses the existing receipt, scope and deterministic-identity
+owner; a valid edge for another Goal cannot extend the same invocation. -/
+def signedEntryAt (owner session : Nat) (rows : List RequestHead.Row) :
+    Nat → Option Nat → Doc → Option Doc
+  | 0, _, _ => none
+  | fuel + 1, expectedGoal, doc => do
+      let row ← match rows.filter (fun row => row.doc == doc &&
+          RequestHead.inScope ⟨owner, session, 0⟩ row) with
+        | [row] => some row
+        | _ => none
+      if !row.receiptValid then none
+      else match row.goal with
+      | none => some row.doc
+      | some goal =>
+          if expectedGoal.isSome && expectedGoal != some goal then none
+          else do
+            let parentDoc ← row.parentDoc
+            let parent ← match rows.filter (fun parent => parent.doc == parentDoc &&
+                RequestHead.inScope ⟨owner, session, goal⟩ parent) with
+              | [parent] => some parent
+              | _ => none
+            if RequestHead.verifiedEdge ⟨owner, session, goal⟩ parent row then
+              signedEntryAt owner session rows fuel (some goal) parent.doc
+            else none
+
+def signedEntry (owner session : Nat) (rows : List RequestHead.Row)
+    (expectedGoal : Option Nat) (doc : Doc) : Option Doc :=
+  signedEntryAt owner session rows (rows.length + 1) expectedGoal doc
+
+theorem other_goal_cannot_extend_signed_path (owner session goal other : Nat)
+    (rows : List RequestHead.Row) (row : RequestHead.Row) (fuel : Nat)
+    (lookup : rows.filter (fun candidate => candidate.doc == row.doc &&
+      RequestHead.inScope ⟨owner, session, 0⟩ candidate) = [row])
+    (childGoal : row.goal = some other) (different : goal ≠ other) :
+    signedEntryAt owner session rows (fuel + 1) (some goal) row.doc = none := by
+  simp [signedEntryAt, lookup, childGoal, different]
 
 private def root : Attempt := ⟨10, true, some .failed⟩
 private def child : Attempt := ⟨20, false, some .completed⟩
