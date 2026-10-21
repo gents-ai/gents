@@ -2971,6 +2971,14 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
         }
     })
     .await;
+    if opted_in {
+        assert!(
+            tokio::time::timeout(RESCAN * 5, source.next_fire())
+                .await
+                .is_err(),
+            "reset must not publish a second continuation"
+        );
+    }
     goal_and_children(&db).await
 }
 
@@ -3164,6 +3172,12 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
         .last_failure
         .as_deref()
         .is_some_and(|reason| reason.contains("after 2 retries")));
+    assert!(
+        tokio::time::timeout(RESCAN * 5, source.next_fire())
+            .await
+            .is_err(),
+        "bounded failed wrap-up must not spawn a fourth child"
+    );
     assert_eq!(goal_children(&db).await.len(), 3);
 }
 
