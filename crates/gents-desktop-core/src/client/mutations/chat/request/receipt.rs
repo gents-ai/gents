@@ -411,9 +411,9 @@ mod tests {
         create.content = "check foo".into();
         create.input.selected_skill_ids = vec!["review".into()];
         let pending = UnresolvedSubmission::new(create, test_result()).unwrap();
-        assert!(pending.accepts_composer_content("/review check foo"));
-        assert!(!pending.accepts_composer_content("/other check foo"));
-        assert!(!pending.accepts_composer_content("/review check something else"));
+        assert!(pending.accepts_composer_content("/skill review check foo"));
+        assert!(!pending.accepts_composer_content("/skill other check foo"));
+        assert!(!pending.accepts_composer_content("/skill review check something else"));
     }
 
     #[tokio::test]
