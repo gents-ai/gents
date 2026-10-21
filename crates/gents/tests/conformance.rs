@@ -119,6 +119,7 @@ mod replicated_request_convergence;
 mod request_input;
 #[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
+#[path = "conformance/session_control.rs"]
 mod session_control;
 #[path = "conformance/session_hydration.rs"]
 mod session_hydration;

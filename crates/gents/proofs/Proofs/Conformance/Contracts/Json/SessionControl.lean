@@ -13,6 +13,8 @@ def statusJson (status : Goals.Status) : String :=
 def settledStopped : State :=
   { queuedStopPost with request := none }
 def resumePost : State := (step? scope settledStopped .resume).getD settledStopped
+def resumeRefusedWhileActive : Bool :=
+  (step? scope ((step? scope initial .stop).getD initial) .resume).isNone
 def terminalStopped : State :=
   { queuedStopPost with goal := { queuedStopPost.goal with status := .complete } }
 def terminalResumePost : State :=
@@ -26,7 +28,8 @@ def casesJson : String :=
   ",\"stopped\":" ++ boolJson queuedStopPost.stopped ++
   ",\"pending_empty\":" ++ boolJson queuedStopPost.queue.pending.isEmpty ++ "}," ++
   "{\"name\":\"resume_after_settlement\",\"goal_status\":" ++ statusJson resumePost.goal.status ++
-  ",\"stopped\":" ++ boolJson resumePost.stopped ++ "}," ++
+  ",\"stopped\":" ++ boolJson resumePost.stopped ++
+  ",\"refused_while_active\":" ++ boolJson resumeRefusedWhileActive ++ "}," ++
   "{\"name\":\"resume_terminal_goal\",\"goal_status\":" ++ statusJson terminalResumePost.goal.status ++
   ",\"stopped\":" ++ boolJson terminalResumePost.stopped ++ "}]"
 
