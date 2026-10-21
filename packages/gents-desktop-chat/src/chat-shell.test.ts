@@ -154,7 +154,7 @@ function session(
       providerMessageCount: 0,
       totalCompactedMessages: 0,
       sessionCompactionCount: null,
-      requestReductionHistoryLoaded: null,
+      requestReductionHistoryLoaded: false,
       compactions: [],
       lastRequest: null,
     },

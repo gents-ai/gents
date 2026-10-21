@@ -53,7 +53,7 @@ function session(content: string): DesktopSessionSnapshot {
       providerMessageCount: 1,
       totalCompactedMessages: 0,
       sessionCompactionCount: null,
-      requestReductionHistoryLoaded: null,
+      requestReductionHistoryLoaded: false,
       compactions: [],
       lastRequest: null,
     },

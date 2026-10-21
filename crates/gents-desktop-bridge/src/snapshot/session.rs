@@ -440,7 +440,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             .await
             {
                 Ok(history) => {
-                    snapshot.context.request_reduction_history_loaded = Some(true);
+                    snapshot.context.request_reduction_history_loaded = true;
                     attach_context_reduction_timeline_events(snapshot, history, &page_sequences);
                 }
                 Err(error) => tracing::warn!(

@@ -540,7 +540,7 @@ pub struct SessionContextView {
     pub provider_message_count: i64,
     pub total_compacted_messages: i64,
     pub session_compaction_count: Option<i64>,
-    pub request_reduction_history_loaded: Option<bool>,
+    pub request_reduction_history_loaded: bool,
     pub compactions: Vec<SessionCompactionView>,
     pub last_request: Option<SessionRequestContextView>,
 }

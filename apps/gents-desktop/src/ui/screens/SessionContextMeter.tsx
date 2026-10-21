@@ -213,7 +213,7 @@ export function SessionContext({
             </dl>
           </section>
         )}
-        {context.requestReductionHistoryLoaded == null && (
+        {!context.requestReductionHistoryLoaded && (
           <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">
             Per-request model-input history is unavailable for this view.
           </p>

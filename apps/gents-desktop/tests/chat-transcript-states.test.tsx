@@ -79,7 +79,7 @@ describe("session context visibility", () => {
           providerMessageCount: 612,
           totalCompactedMessages: 40,
           sessionCompactionCount: null,
-          requestReductionHistoryLoaded: null,
+          requestReductionHistoryLoaded: false,
           compactions: [
             {
               compactionKey: "session-1:1",
@@ -163,7 +163,7 @@ describe("legacy chat header context window", () => {
           providerMessageCount: 1,
           totalCompactedMessages: 0,
           sessionCompactionCount: null,
-          requestReductionHistoryLoaded: null,
+          requestReductionHistoryLoaded: false,
           compactions: [],
           lastRequest: null,
         }}

@@ -219,7 +219,7 @@ pub(super) fn build_session_context_view(
         provider_message_count: usize_to_i64(active_provider_messages.len()),
         total_compacted_messages: usize_to_i64(total_compacted_messages),
         session_compaction_count: None,
-        request_reduction_history_loaded: None,
+        request_reduction_history_loaded: false,
         compactions,
         last_request: None,
     }

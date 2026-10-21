@@ -16,7 +16,7 @@ const context = (overrides: Partial<Context> = {}): Context => ({
   providerMessageCount: 1,
   totalCompactedMessages: 0,
   sessionCompactionCount: null,
-  requestReductionHistoryLoaded: null,
+  requestReductionHistoryLoaded: false,
   compactions: [],
   lastRequest: null,
   ...overrides,
