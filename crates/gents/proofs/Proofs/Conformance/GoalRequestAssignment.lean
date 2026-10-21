@@ -190,6 +190,21 @@ def historyCases : List HistoryCase :=
       {fresh with parents := [1], height := 2}]}
   , {name := "physical_documents_keep_their_own_commit_scope", versions := [first,
       {fresh with commit := 1}]}
+  , {name := "first_binding_retires_only_its_unbound_placeholder", versions :=
+      [{first with assignment := ⟨1,10,1,none⟩}, {first with commit := 2, height := 2, parents := [1]}],
+      entry := ⟨101,1,10,none,true⟩}
+  , {name := "first_binding_keeps_its_physical_opening", versions :=
+      [{first with assignment := ⟨1,10,1,none⟩}, {first with commit := 2, height := 2, parents := [1]}],
+      entry := ⟨100,1,10,none,true⟩}
+  , {name := "unrelated_unbound_document_stays_unknown", versions :=
+      [{first with assignment := ⟨1,10,1,none⟩}, fresh], entry := ⟨101,1,10,none,true⟩}
+  , {name := "concurrent_unbound_branch_stays_unknown", versions :=
+      [{first with assignment := ⟨1,10,1,none⟩}, {first with commit := 2, height := 2, parents := [1]},
+       {first with commit := 3, height := 3, parents := [1], assignment := ⟨1,10,1,none⟩}],
+      entry := ⟨101,1,10,none,true⟩}
+  , {name := "another_goal_cannot_retire_unbound_identity", versions :=
+      [{first with assignment := ⟨1,10,1,none⟩}, {first with commit := 2, height := 2, parents := [1], assignment := ⟨1,10,2,some 100⟩}],
+      entry := ⟨101,1,10,none,true⟩}
   ]
 
 def versionJson (v : Version) : Json :=
@@ -220,7 +235,7 @@ def historyCaseJson (c : HistoryCase) : Json :=
 
 def historyCasesJson : String := (toJson (historyCases.map historyCaseJson)).compress
 
-example : historyCases.length = 16 := by decide
+example : historyCases.length = 21 := by decide
 example : (historyCases.map fun c => observeHistory c.versions c.entry).take 2 =
     [.assigned 1 100 .stopped, .assigned 1 100 .stopped] := by native_decide
 

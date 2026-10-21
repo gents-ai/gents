@@ -966,6 +966,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_request_assignments_drive_signed_binding",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::daemon::wake_input::scope_tests::generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement",
+            package: "gents",
+            source_path: "crates/gents/src/agent/daemon/wake_input_scope_tests.rs",
+            module_path: "agent::daemon::wake_input::scope_tests",
+            function: "generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement",
+        },
+        ConformanceConsumer::RustTest {
+            id: "lifecycle::queue::tests::goal_assignment_wakes::generated_goal_wake_scopes_preserve_atomic_notification_bindings",
+            package: "gents",
+            source_path: "crates/gents/src/lifecycle/queue/tests/goal_assignment_wakes.rs",
+            module_path: "lifecycle::queue::tests::goal_assignment_wakes",
+            function: "generated_goal_wake_scopes_preserve_atomic_notification_bindings",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::request_head::tests::generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations",
             package: "gents",
             source_path: "crates/gents/src/goal/request_head_tests.rs",

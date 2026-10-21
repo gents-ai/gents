@@ -70,7 +70,7 @@ async fn generated_assignment_histories_drive_goal_version_selection() {
         goal_assignment_history_cases: Vec<Value>,
     }
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_assignment_history_cases.len(), 16);
+    assert_eq!(contracts.goal_assignment_history_cases.len(), 21);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("one.key"), None).unwrap(),
@@ -78,7 +78,8 @@ async fn generated_assignment_histories_drive_goal_version_selection() {
     ];
     for case in contracts.goal_assignment_history_cases {
         let entry = entry(&case["entry"], &identities).await;
-        let actual = observe_assignment_history(&versions(&case["versions"], &identities), &entry);
+        let actual = latest_assignment_goals(&versions(&case["versions"], &identities))
+            .map(|goals| observe_request_assignment(&goals, &entry));
         assert_eq!(
             observation(actual, None),
             case["expected"],

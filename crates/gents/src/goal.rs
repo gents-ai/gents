@@ -45,7 +45,7 @@ pub use readiness_gate::{
 };
 pub(crate) use request_assignment::{
     latest_assignment_goals, load_request_assignment, load_request_assignment_in_txn,
-    load_request_assignment_scope_in_txn, load_request_assignments_in_txn,
+    load_request_assignments_in_txn,
     RequestAssignmentObservation, RequestAssignmentScope,
 };
 #[cfg(test)]

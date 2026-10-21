@@ -30,6 +30,21 @@ pub fn is_background_completion_notification_message_key(message_key: &str) -> b
     message_key.starts_with(BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX)
 }
 
+pub(crate) fn notification_receipt_keys(encoded: &str) -> Result<Vec<String>> {
+    let keys: Vec<String> =
+        serde_json::from_str(encoded).context("invalid wake notification receipt")?;
+    anyhow::ensure!(
+        keys.iter()
+            .all(|key| is_background_completion_notification_message_key(key)),
+        "wake receipt names a non-notification message"
+    );
+    anyhow::ensure!(
+        keys.iter().collect::<std::collections::BTreeSet<_>>().len() == keys.len(),
+        "wake receipt contains duplicate notification keys"
+    );
+    Ok(keys)
+}
+
 mod datetime_fields;
 mod notification_delivery;
 mod observer;

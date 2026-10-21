@@ -1,4 +1,5 @@
 import Proofs.GoalAutomation.RequestAncestry
+import Mathlib.Data.Nat.Pairing
 
 namespace GoalAutomation.RequestAssignment
 
@@ -137,6 +138,16 @@ inductive QueueScope where
   | referenced (goal root : Nat)
   deriving DecidableEq, Repr
 
+/-- Native coalescing compares the original queue key together with its
+canonical retained assignment scope. Nat is the existing abstract key identity;
+this encoding introduces no persisted field or alternate authorization. -/
+def queueScopeKey (base : Nat) (scope : QueueScope) : Nat :=
+  let association := match scope with
+    | .unassigned => 0
+    | .unresolved entry => 2 * entry + 1
+    | .referenced goal root => 2 * Nat.pair goal root + 2
+  Nat.pair base association
+
 def queueScope (assignments : List Assignment) (e : Entry) : Option QueueScope :=
   if !e.signatureValid then none
   else some (match e.reference with
@@ -206,6 +217,18 @@ def reaches (versions : List Version) (document target : Nat) : Nat → Nat → 
 def sameAssignment (left right : Version) : Bool :=
   left.document == right.document && decide (left.assignment = right.assignment)
 
+/-- The rootless creation revision is a placeholder until the same physical
+Goal receives its first request. Only a causal descendant of the same Goal
+identity can retire that placeholder; earlier nonempty roots remain distinct
+assignments after Task reassignment. -/
+def supersedesAssignment (earlier later : Version) : Bool :=
+  earlier.document == later.document &&
+    earlier.assignment.owner == later.assignment.owner &&
+    earlier.assignment.session == later.assignment.session &&
+    earlier.assignment.goal == later.assignment.goal &&
+    (earlier.assignment.root == later.assignment.root ||
+      earlier.assignment.root.isNone && later.assignment.root.isSome)
+
 /-- A native causal frontier is required for each physical assignment. A fork,
 missing parent, cyclic history, or duplicate revision is unknown; a greater
 height or later timestamp cannot choose a winner. -/
@@ -213,7 +236,7 @@ def latestVersions (versions : List Version) : Option (List Version) :=
   if !historyValid versions then none
   else
     let frontier := versions.filter fun v => !(versions.any fun later =>
-      sameAssignment v later && v.commit != later.commit &&
+      supersedesAssignment v later && v.commit != later.commit &&
         reaches versions v.document v.commit (versions.length + 1) later.commit)
     if (frontier.map fun v => (v.document, v.assignment)).Nodup then some frontier else none
 

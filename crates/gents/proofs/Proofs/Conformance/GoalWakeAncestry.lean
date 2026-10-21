@@ -19,9 +19,9 @@ structure Case where
 
 def cases : List Case :=
   [ {name := "untagged_wake_keeps_original_parent"}
-  , {name := "goal_created_during_wake_starts_here", rows := [entry, {wake with opening := true}]}
+  , {name := "goal_created_during_wake_starts_here", rows := [entry, {wake with openingGoals := [1]}]}
   , {name := "later_wake_keeps_goal_created_during_first_wake",
-      rows := [entry, {wake with opening := true},
+      rows := [entry, {wake with openingGoals := [1]},
         {wake with request := {grandchild with goal := none}}], current := 30}
   , {name := "tagged_wake_uses_its_own_signed_reference", rows := [entry, {wake with tagged := true}]}
   , {name := "goal_after_untagged_wake_keeps_opening", rows := [entry, wake, continued], current := 30}
@@ -45,12 +45,16 @@ def cases : List Case :=
   , {name := "forged_wake_signature_does_not_join_assignment",
       rows := [entry, {wake with request := {child with goal := none, receiptValid := false}}]}
   , {name := "ordinary_parent_link_stays_independent", rows := [entry, {wake with backgroundWake := false}]}
+  , {name := "goal_path_keeps_its_matching_wake_opening",
+      rows := [entry, {wake with openingGoals := [1]}, continued], current := 30}
+  , {name := "goal_path_cannot_borrow_another_goals_wake_opening",
+      rows := [entry, {wake with openingGoals := [2]}, continued], current := 30}
   ]
 
 def rowValue (r : AssignmentRow) : Json := Json.mkObj
   [("request", (Json.parse (rowJson r.request)).toOption.getD Json.null),
     ("background_wake", toJson r.backgroundWake), ("tagged", toJson r.tagged),
-    ("runtime_wake_receipt", toJson r.runtimeWakeReceipt), ("opening", toJson r.opening)]
+    ("runtime_wake_receipt", toJson r.runtimeWakeReceipt), ("opening_goals", toJson r.openingGoals)]
 
 def caseJson (c : Case) : Json := Json.mkObj
   [("name", toJson c.name), ("rows", toJson (c.rows.map rowValue)),
@@ -62,5 +66,8 @@ def casesJson : String := (toJson (cases.map caseJson)).compress
 
 example : (cases.map fun c => assignmentEntry 1 1 c.rows c.expectedGoal c.current).take 8 =
     [some 10, some 20, some 20, some 20, some 10, some 10, none, none] := by native_decide
+
+example : (cases.drop 14).map (fun c => assignmentEntry 1 1 c.rows c.expectedGoal c.current) =
+    [some 20, none] := by native_decide
 
 end Conformance.GoalWakeAncestryContracts

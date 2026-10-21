@@ -122,11 +122,7 @@ pub(crate) fn latest_goal_request<'a>(
 ) -> Option<&'a AgentRequestRow> {
     let members = if goal.assignment_root_request_doc_id.is_some() {
         let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, rows).ok()?;
-        let openings = goal
-            .assignment_root_request_doc_id
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let openings = assignment_openings(std::slice::from_ref(goal));
         Some(
             rows.iter()
                 .filter_map(|row| {
@@ -270,13 +266,26 @@ pub(super) fn request_rows_by_doc<'a>(
     Ok(by_doc)
 }
 
+pub(super) type AssignmentOpenings<'a> =
+    std::collections::HashMap<&'a str, std::collections::HashSet<&'a str>>;
+
+pub(super) fn assignment_openings(goals: &[GoalDocument]) -> AssignmentOpenings<'_> {
+    let mut openings = AssignmentOpenings::new();
+    for goal in goals {
+        if let Some(root) = goal.assignment_root_request_doc_id.as_deref() {
+            openings.entry(root).or_default().insert(&goal.goal_id);
+        }
+    }
+    openings
+}
+
 pub(super) fn authenticated_assignment_entry<'a>(
     node_did: &str,
     session_id: &str,
     row: &'a AgentRequestRow,
     by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
     expected_goal: Option<&str>,
-    openings: &std::collections::HashSet<&str>,
+    openings: &AssignmentOpenings<'_>,
 ) -> Result<&'a AgentRequestRow> {
     authenticated_physical_entry(
         node_did,
@@ -304,7 +313,7 @@ fn authenticated_physical_entry<'a>(
     mut row: &'a AgentRequestRow,
     by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
     expected_goal: Option<&str>,
-    assignment_openings: Option<&std::collections::HashSet<&str>>,
+    assignment_openings: Option<&AssignmentOpenings<'_>>,
 ) -> Result<&'a AgentRequestRow> {
     let mut visited = std::collections::HashSet::new();
     let mut path_goal: Option<&str> = None;
@@ -322,7 +331,15 @@ fn authenticated_physical_entry<'a>(
         );
         verify_request_receipt_signature(row)?;
         if row.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
-            let follows_wake = assignment_openings.is_some_and(|openings| !openings.contains(doc))
+            let opening_goals = assignment_openings.and_then(|openings| openings.get(doc));
+            anyhow::ensure!(
+                opening_goals.is_none_or(|goals| expected_goal
+                    .or(path_goal)
+                    .is_none_or(|goal| goals.contains(goal))),
+                "Goal continuation opening belongs to another assignment"
+            );
+            let follows_wake = assignment_openings.is_some()
+                && opening_goals.is_none()
                 && row
                     .input
                     .as_ref()
@@ -433,7 +450,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         "Task assignment root is a continuation"
     );
     let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, &requests)?;
-    let openings = std::collections::HashSet::from([root]);
+    let openings = assignment_openings(std::slice::from_ref(goal));
     let mut allowed = true;
     for row in pending {
         let doc = row

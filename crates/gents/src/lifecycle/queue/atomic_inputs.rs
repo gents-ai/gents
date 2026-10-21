@@ -114,12 +114,13 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
         .filter(|_| enqueued.created_request)
     {
         let created_request_doc_id = created.doc_id.clone();
-        let active_request = reconcile_coalesced_pending_request(
+        let active_request = super::coalescing::reconcile_coalesced_pending_request_for(
             node,
             &parent.session_id,
             &parent.node_did,
             QueueSource::BackgroundCompletion,
             &queue_key,
+            Some(&created.doc_id),
         )
         .await?
         .unwrap_or_else(|| created.clone());
@@ -317,6 +318,7 @@ async fn background_completion_transaction_attempt(
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     use sha2::{Digest, Sha256};
 
+    let request_fields = crate::request_admission::SIGNED_REQUEST_FIELDS;
     let escaped_session_id = escape_graphql_string(&parent.session_id);
     let escaped_node_did = escape_graphql_string(&parent.node_did);
     let notification_filter = match existing_notification_doc_id {
@@ -351,11 +353,7 @@ async fn background_completion_transaction_attempt(
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{
-                    _docID
-                    request_id
-                    session_id
-                    input
-                    request_hop
+                    {request_fields}
                 }}
                 generations: AgentRequest(
                     filter: {{
@@ -444,9 +442,24 @@ async fn background_completion_transaction_attempt(
     let pending_rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["pending"].clone())
             .context("decode pending AgentRequest rows")?;
-    let (pending, lower) = match pending_rows.into_iter().find(|row| {
-        row_matches_coalesced_source_and_key(row, QueueSource::BackgroundCompletion, queue_key)
-    }) {
+    let assignments =
+        crate::goal::load_request_assignments_in_txn(txn, &parent.node_did, &parent.session_id)
+            .await?;
+    let parent_scope = assignments.scope_for_request(&parent.doc_id, &parent.request_id)?;
+    let mut matching = None;
+    for row in pending_rows {
+        if row_matches_coalesced_source_and_key(&row, QueueSource::BackgroundCompletion, queue_key)
+            && assignments.scope(
+                row.doc_id
+                    .as_deref()
+                    .context("pending wake has no physical identity")?,
+            )? == parent_scope
+        {
+            matching = Some(row);
+            break;
+        }
+    }
+    let (pending, lower) = match matching {
         Some(row)
             if row
                 .request_hop
@@ -490,11 +503,18 @@ async fn background_completion_transaction_attempt(
             let request_id = format!("background-completion-{queue_scope}-{next_generation:020}");
             let retry_key = format!("{retry_key_prefix}{next_generation:020}");
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            let wake_input = parent.input.continuation(
+            let mut wake_input = parent.input.continuation(
                 background_wake_queue(queue, queue.queued_after_request_id.clone()),
                 None,
                 &parent.doc_id,
             );
+            wake_input.goal_assignment = match &parent_scope {
+                crate::goal::RequestAssignmentScope::Referenced(reference) => {
+                    Some(reference.clone())
+                }
+                crate::goal::RequestAssignmentScope::Unassigned
+                | crate::goal::RequestAssignmentScope::Unresolved { .. } => None,
+            };
             let request_mutation = session_request_create_mutation_at_hop(
                 parent,
                 wake_hop,

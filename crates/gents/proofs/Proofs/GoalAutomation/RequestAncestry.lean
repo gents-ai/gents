@@ -55,7 +55,7 @@ structure AssignmentRow where
   tagged : Bool := false
   runtimeWakeReceipt : Bool := false
   /-- Derived from retained Goal assignment versions in this read snapshot. -/
-  opening : Bool := false
+  openingGoals : List Nat := []
   deriving DecidableEq, Repr
 
 def scopedRows (owner session doc : Nat) (rows : List AssignmentRow) : List AssignmentRow :=
@@ -85,7 +85,9 @@ def physicalEntryAt (owner session : Nat) (rows : List AssignmentRow)
               physicalEntryAt owner session rows includeWakes fuel (some goal) parent.request.doc
             else none
       | none =>
-          if includeWakes && row.backgroundWake && !row.tagged && !row.opening then do
+          if includeWakes && expectedGoal.any (fun goal =>
+              !row.openingGoals.isEmpty && !row.openingGoals.contains goal) then none
+          else if includeWakes && row.backgroundWake && !row.tagged && row.openingGoals.isEmpty then do
             let parentDoc ← row.request.parentDoc
             let parent ← match scopedRows owner session parentDoc rows with
               | [parent] => some parent

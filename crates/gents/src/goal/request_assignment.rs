@@ -115,12 +115,14 @@ fn request_assignment_scope(
 #[cfg(test)]
 mod contract_tests;
 
-fn same_assignment(left: &super::GoalVersion, right: &super::GoalVersion) -> bool {
+fn supersedes_assignment(left: &super::GoalVersion, right: &super::GoalVersion) -> bool {
     left.goal.doc_id == right.goal.doc_id
         && left.goal.node_did == right.goal.node_did
         && left.goal.session_id == right.goal.session_id
         && left.goal.goal_id == right.goal.goal_id
-        && left.goal.assignment_root_request_doc_id == right.goal.assignment_root_request_doc_id
+        && (left.goal.assignment_root_request_doc_id == right.goal.assignment_root_request_doc_id
+            || left.goal.assignment_root_request_doc_id.is_none()
+                && right.goal.assignment_root_request_doc_id.is_some())
 }
 
 pub(crate) fn latest_assignment_goals(
@@ -175,7 +177,7 @@ pub(crate) fn latest_assignment_goals(
                 continue;
             }
             let ancestor = by_commit[&(later.goal.doc_id.as_str(), cid)];
-            if same_assignment(ancestor, later) {
+            if supersedes_assignment(ancestor, later) {
                 superseded.insert((later.goal.doc_id.as_str(), cid));
             }
             pending.extend(ancestor.parent_commit_cids.iter().map(String::as_str));
@@ -203,14 +205,6 @@ pub(crate) fn latest_assignment_goals(
     Ok(goals)
 }
 
-pub(super) fn observe_assignment_history(
-    versions: &[super::GoalVersion],
-    entry: &AgentRequestRow,
-) -> anyhow::Result<RequestAssignmentObservation> {
-    let goals = latest_assignment_goals(versions)?;
-    Ok(observe_request_assignment(&goals, entry))
-}
-
 pub(crate) async fn load_request_assignment(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request: &AgentRequestRow,
@@ -230,15 +224,6 @@ pub(crate) async fn load_request_assignment_in_txn(
 ) -> anyhow::Result<RequestAssignmentObservation> {
     let snapshot = assignment_snapshot_for_request(txn, request).await?;
     Ok(snapshot.observation(request)?.1)
-}
-
-pub(crate) async fn load_request_assignment_scope_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    request: &AgentRequestRow,
-) -> anyhow::Result<RequestAssignmentScope> {
-    let snapshot = assignment_snapshot_for_request(txn, request).await?;
-    let (entry, observation) = snapshot.observation(request)?;
-    request_assignment_scope(entry, &observation)
 }
 
 async fn assignment_snapshot_for_request(
@@ -268,6 +253,21 @@ pub(crate) struct RequestAssignments {
 }
 
 impl RequestAssignments {
+    pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
+        use anyhow::Context;
+        let by_doc =
+            super::request_head::request_rows_by_doc(&self.owner, &self.session, &self.rows)?;
+        let row = *by_doc
+            .get(doc)
+            .context("request is absent from its owner/session observation")?;
+        anyhow::ensure!(
+            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            "assignment request is auxiliary"
+        );
+        verify_request_receipt_signature(row)?;
+        Ok(row)
+    }
+
     fn entry(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         use anyhow::Context;
         let by_doc =
@@ -275,11 +275,7 @@ impl RequestAssignments {
         let current = by_doc
             .get(doc)
             .context("assignment request is absent from its owner/session")?;
-        let openings = self
-            .goals
-            .iter()
-            .filter_map(|goal| goal.assignment_root_request_doc_id.as_deref())
-            .collect();
+        let openings = super::request_head::assignment_openings(&self.goals);
         super::request_head::authenticated_assignment_entry(
             &self.owner,
             &self.session,
@@ -314,6 +310,18 @@ impl RequestAssignments {
         );
         let entry = self.entry(doc)?;
         Ok((entry, observe_request_assignment(&self.goals, entry)))
+    }
+
+    pub(crate) fn scope_for_request(
+        &self,
+        doc: &str,
+        request_id: &str,
+    ) -> anyhow::Result<RequestAssignmentScope> {
+        anyhow::ensure!(
+            self.request(doc)?.request_id == request_id,
+            "assignment request logical identity differs from its physical observation"
+        );
+        self.scope(doc)
     }
 
     pub(crate) fn scope(&self, request_doc_id: &str) -> anyhow::Result<RequestAssignmentScope> {
