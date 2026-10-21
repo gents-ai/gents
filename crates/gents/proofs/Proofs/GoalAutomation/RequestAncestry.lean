@@ -46,44 +46,75 @@ def tips (rows : List Attempt) (edges : List Edge) (root : Doc) : List Attempt :
   ms.filter (fun a => !(edges.any (fun e => e.authenticated && e.parent == a.doc &&
     ms.any (fun child => child.doc == e.child))))
 
-/-- A Goal continuation retains the first Goal encountered while walking its
-signed physical parents, including older entries without assignment metadata.
-Each edge still uses the existing receipt, scope and deterministic-identity
-owner; a valid edge for another Goal cannot extend the same invocation. -/
-def signedEntryAt (owner session : Nat) (rows : List RequestHead.Row) :
-    Nat → Option Nat → Doc → Option Doc
+/-- Background wake facts come from the existing signed local-control receipt
+and typed queue decoder. They extend assignment observation only; graph and
+output-obligation invocation membership retain Goal-only ancestry. -/
+structure AssignmentRow where
+  request : RequestHead.Row
+  backgroundWake : Bool := false
+  tagged : Bool := false
+  runtimeWakeReceipt : Bool := false
+  /-- Derived from retained Goal assignment versions in this read snapshot. -/
+  opening : Bool := false
+  deriving DecidableEq, Repr
+
+def scopedRows (owner session doc : Nat) (rows : List AssignmentRow) : List AssignmentRow :=
+  rows.filter fun row => row.request.doc == doc &&
+    RequestHead.inScope ⟨owner, session, 0⟩ row.request
+
+/-- Untagged background wakes retain their authenticated physical parent when
+observing an assignment. Tagged invocations already carry their signed opening
+reference. Goal identity remains fixed across either kind of parent edge. -/
+def physicalEntryAt (owner session : Nat) (rows : List AssignmentRow)
+    (includeWakes : Bool) : Nat → Option Nat → Doc → Option Doc
   | 0, _, _ => none
   | fuel + 1, expectedGoal, doc => do
-      let row ← match rows.filter (fun row => row.doc == doc &&
-          RequestHead.inScope ⟨owner, session, 0⟩ row) with
+      let row ← match scopedRows owner session doc rows with
         | [row] => some row
         | _ => none
-      if !row.receiptValid then none
-      else match row.goal with
-      | none => some row.doc
+      if !row.request.receiptValid then none
+      else match row.request.goal with
       | some goal =>
           if expectedGoal.isSome && expectedGoal != some goal then none
           else do
-            let parentDoc ← row.parentDoc
-            let parent ← match rows.filter (fun parent => parent.doc == parentDoc &&
-                RequestHead.inScope ⟨owner, session, goal⟩ parent) with
+            let parentDoc ← row.request.parentDoc
+            let parent ← match scopedRows owner session parentDoc rows with
               | [parent] => some parent
               | _ => none
-            if RequestHead.verifiedEdge ⟨owner, session, goal⟩ parent row then
-              signedEntryAt owner session rows fuel (some goal) parent.doc
+            if RequestHead.verifiedEdge ⟨owner, session, goal⟩ parent.request row.request then
+              physicalEntryAt owner session rows includeWakes fuel (some goal) parent.request.doc
             else none
+      | none =>
+          if includeWakes && row.backgroundWake && !row.tagged && !row.opening then do
+            let parentDoc ← row.request.parentDoc
+            let parent ← match scopedRows owner session parentDoc rows with
+              | [parent] => some parent
+              | _ => none
+            if row.runtimeWakeReceipt && !parent.tagged &&
+                row.request.parentRequest == some parent.request.request &&
+                row.request.doc != parent.request.doc then
+              physicalEntryAt owner session rows includeWakes fuel expectedGoal parent.request.doc
+            else none
+          else some row.request.doc
+
+def signedEntryAt (owner session : Nat) (rows : List RequestHead.Row)
+    (fuel : Nat) (expectedGoal : Option Nat) (doc : Doc) : Option Doc :=
+  physicalEntryAt owner session (rows.map fun row => {request := row}) false fuel expectedGoal doc
 
 def signedEntry (owner session : Nat) (rows : List RequestHead.Row)
     (expectedGoal : Option Nat) (doc : Doc) : Option Doc :=
   signedEntryAt owner session rows (rows.length + 1) expectedGoal doc
 
+def assignmentEntry (owner session : Nat) (rows : List AssignmentRow)
+    (expectedGoal : Option Nat) (doc : Doc) : Option Doc :=
+  physicalEntryAt owner session rows true (rows.length + 1) expectedGoal doc
+
 theorem other_goal_cannot_extend_signed_path (owner session goal other : Nat)
-    (rows : List RequestHead.Row) (row : RequestHead.Row) (fuel : Nat)
-    (lookup : rows.filter (fun candidate => candidate.doc == row.doc &&
-      RequestHead.inScope ⟨owner, session, 0⟩ candidate) = [row])
-    (childGoal : row.goal = some other) (different : goal ≠ other) :
-    signedEntryAt owner session rows (fuel + 1) (some goal) row.doc = none := by
-  simp [signedEntryAt, lookup, childGoal, different]
+    (rows : List AssignmentRow) (row : AssignmentRow) (fuel : Nat) (includeWakes : Bool)
+    (lookup : scopedRows owner session row.request.doc rows = [row])
+    (childGoal : row.request.goal = some other) (different : goal ≠ other) :
+    physicalEntryAt owner session rows includeWakes (fuel + 1) (some goal) row.request.doc = none := by
+  simp [physicalEntryAt, lookup, childGoal, different]
 
 private def root : Attempt := ⟨10, true, some .failed⟩
 private def child : Attempt := ⟨20, false, some .completed⟩

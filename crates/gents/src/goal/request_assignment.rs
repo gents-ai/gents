@@ -206,10 +206,16 @@ pub(crate) async fn load_request_assignment_in_txn(
             && current.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
         "assignment request differs from its physical owner/session observation"
     );
-    let entry =
-        super::request_head::authenticated_entry(owner, session, current, &by_doc, None)?.clone();
     let versions = super::load_goal_versions_for_session(txn, owner, session).await?;
-    observe_assignment_history(&versions, &entry)
+    let goals = latest_assignment_goals(&versions)?;
+    let openings = goals
+        .iter()
+        .filter_map(|goal| goal.assignment_root_request_doc_id.as_deref())
+        .collect();
+    let entry = super::request_head::authenticated_assignment_entry(
+        owner, session, current, &by_doc, None, &openings,
+    )?;
+    Ok(observe_request_assignment(&goals, entry))
 }
 
 #[cfg(test)]

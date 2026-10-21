@@ -903,6 +903,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_request_assignments_drive_signed_binding",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::request_head::tests::generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations",
+            package: "gents",
+            source_path: "crates/gents/src/goal/request_head_tests.rs",
+            module_path: "goal::request_head::tests",
+            function: "generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::request_head::tests::generated_goal_ancestry_cases_keep_one_signed_goal",
             package: "gents",
             source_path: "crates/gents/src/goal/request_head_tests.rs",

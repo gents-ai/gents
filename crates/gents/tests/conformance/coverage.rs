@@ -756,6 +756,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalRequestAssignmentCases".to_string(),
         ));
     }
+    if !snapshot.goal_wake_ancestry_cases.is_empty() {
+        emitted.insert((
+            "goal_wake_ancestry_cases".into(),
+            "GoalWakeAncestryCases".into(),
+        ));
+    }
     if !snapshot.goal_request_ancestry_cases.is_empty() {
         emitted.insert((
             "goal_request_ancestry_cases".into(),
