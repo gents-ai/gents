@@ -20,14 +20,31 @@ pub struct ContextBudgetParams {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContextBudgetSnapshot {
+    pub scope: ContextBudgetScope,
     pub max_tokens: Option<i64>,
     pub current_estimate: Option<i64>,
     pub utilization_percent: Option<f64>,
     pub compaction_count: i64,
     pub last_compacted_at: Option<String>,
-    pub sessions_considered: i64,
-    pub request_scan_limit: i64,
+    pub session_compaction_count: i64,
+    pub request_reduction_count: i64,
+    pub recent_session_compactions: Vec<ContextReductionEvidence>,
+    pub recent_request_reductions: Vec<ContextReductionEvidence>,
     pub last_request: Option<LastRequestContextSnapshot>,
+}
+
+const RECENT_REDUCTION_LIMIT: usize = 5;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextReductionEvidence {
+    pub key: String,
+    pub created_at: Option<String>,
+    pub request_id: Option<String>,
+    pub turn_index: Option<i64>,
+    pub messages_compacted: Option<i64>,
+    pub original_tokens: Option<i64>,
+    pub compacted_tokens: Option<i64>,
+    pub compacted_through_sequence: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,7 +60,7 @@ pub struct LastRequestContextSnapshot {
 /// belong to this node, this agent and this session; a node-wide scan would
 /// attribute other agents' (and other sessions') provider dispatches to the
 /// caller.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextBudgetScope {
     pub node_did: String,
     pub agent_id: String,
@@ -96,10 +113,10 @@ struct InferenceCallEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct CompactionEnvelope {
-    #[serde(rename = "CompactionEntry", default)]
+    #[serde(rename = "CompactionEntry")]
     compactions: Vec<CompactionRow>,
-    #[serde(rename = "ProviderContextReduction", default)]
-    provider_context_reductions: Vec<CompactionRow>,
+    #[serde(rename = "ProviderContextReduction")]
+    provider_context_reductions: Vec<ProviderReductionRow>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -121,7 +138,33 @@ struct ProfileRow {
 #[derive(Debug, Clone, Deserialize)]
 struct CompactionRow {
     #[serde(default)]
+    compaction_key: String,
+    #[serde(default)]
     created_at: Option<String>,
+    #[serde(default)]
+    original_tokens: Option<i64>,
+    #[serde(default)]
+    compacted_tokens: Option<i64>,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    messages_compacted: Option<i64>,
+    #[serde(default)]
+    compacted_through_sequence: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ProviderReductionRow {
+    #[serde(default)]
+    reduction_key: String,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    turn_index: Option<i64>,
+    #[serde(default)]
+    messages_compacted: Option<i64>,
     #[serde(default)]
     original_tokens: Option<i64>,
     #[serde(default)]
@@ -190,8 +233,9 @@ impl Tool for ContextBudgetTool {
             name: Self::NAME.to_string(),
             description: "Report this agent's exact latest persisted provider-dispatch context \
                 accounting: component token estimates, context window, compaction threshold, \
-                decision/reason, utilization, and compaction history. Counts both session-prefix \
-                and per-turn provider-context reductions."
+                decision/reason, utilization, and this node/agent/session scope. Session-prefix \
+                compactions and request-local provider reductions are reported separately, with \
+                exact counts and up to five recent evidence records of each kind."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -212,6 +256,11 @@ impl Tool for ContextBudgetTool {
                 "last_request",
                 "compaction_count",
                 "last_compacted_at",
+                "scope",
+                "session_compaction_count",
+                "request_reduction_count",
+                "recent_session_compactions",
+                "recent_request_reductions",
             ],
         )
         .map_err(|error| {
@@ -268,31 +317,57 @@ pub async fn load_context_budget_snapshot(
         .as_ref()
         .map(|request| request.accounting.context_window as i64)
         .or_else(|| max_context_window(&envelope.agents, &envelope.profiles));
-    let session_ids = distinct_session_ids(&envelope.requests);
+    let resp = graphql_with_transaction_retry(
+        node,
+        &compaction_query(node_did, session_id),
+        "loading context compactions",
+    )
+    .await?;
+    let envelope: CompactionEnvelope = decode(resp.data.as_ref(), "context compactions")?;
+    let compactions = (envelope.compactions, envelope.provider_context_reductions);
 
-    let compactions = if session_ids.is_empty() {
-        Vec::new()
-    } else {
-        let resp = graphql_with_transaction_retry(
-            node,
-            &compaction_query(node_did, &session_ids),
-            "loading context compactions",
-        )
-        .await?;
-        let envelope: CompactionEnvelope = decode(resp.data.as_ref(), "context compactions")?;
-        envelope
-            .compactions
-            .into_iter()
-            .chain(envelope.provider_context_reductions)
-            .collect()
-    };
+    let (session_compactions, request_reductions) = compactions;
 
     Ok(build_snapshot(
+        scope.clone(),
         max_tokens,
-        session_ids.len() as i64,
-        compactions,
+        session_compactions,
+        request_reductions,
         last_request,
     ))
+}
+
+fn compaction_query(node_did: &str, session_id: &str) -> String {
+    let node_did = escape_graphql_string(node_did);
+    let session_id = escape_graphql_string(session_id);
+    format!(
+        r#"{{
+            CompactionEntry(filter: {{ _and: [
+                {{ node_did: {{ _eq: "{node_did}" }} }},
+                {{ session_id: {{ _eq: "{session_id}" }} }}
+            ] }}, order: {{ created_at: DESC }}) {{
+                compaction_key
+                request_id
+                messages_compacted
+                compacted_through_sequence
+                created_at
+                original_tokens
+                compacted_tokens
+            }}
+            ProviderContextReduction(filter: {{ _and: [
+                {{ node_did: {{ _eq: "{node_did}" }} }},
+                {{ session_id: {{ _eq: "{session_id}" }} }}
+            ] }}, order: {{ created_at: DESC }}) {{
+                reduction_key
+                request_id
+                turn_index
+                messages_compacted
+                created_at
+                original_tokens
+                compacted_tokens
+            }}
+        }}"#
+    )
 }
 
 fn context_query(node_did: &str, agent_id: &str, session_id: &str) -> String {
@@ -353,35 +428,6 @@ fn inference_call_query(node_did: &str, agent_id: &str, request_ids: &[String]) 
     )
 }
 
-fn compaction_query(node_did: &str, session_ids: &[String]) -> String {
-    let node_did = escape_graphql_string(node_did);
-    let list = session_ids
-        .iter()
-        .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        r#"{{
-            CompactionEntry(filter: {{ _and: [
-                {{ node_did: {{ _eq: "{node_did}" }} }},
-                {{ session_id: {{ _in: [{list}] }} }}
-            ] }}, order: {{ created_at: DESC }}) {{
-                created_at
-                original_tokens
-                compacted_tokens
-            }}
-            ProviderContextReduction(filter: {{ _and: [
-                {{ node_did: {{ _eq: "{node_did}" }} }},
-                {{ session_id: {{ _in: [{list}] }} }}
-            ] }}, order: {{ created_at: DESC }}) {{
-                created_at
-                original_tokens
-                compacted_tokens
-            }}
-        }}"#
-    )
-}
-
 fn decode<T: serde::de::DeserializeOwned>(data: Option<&Value>, label: &str) -> Result<T> {
     let data = data
         .filter(|data| data.is_object())
@@ -420,46 +466,71 @@ fn distinct_request_ids(requests: &[AgentRequestRow]) -> Vec<String> {
         .collect()
 }
 
-fn distinct_session_ids(requests: &[AgentRequestRow]) -> Vec<String> {
-    requests
-        .iter()
-        .filter_map(|request| {
-            let session_id = request.session_id.as_deref().unwrap_or_default().trim();
-            (!session_id.is_empty()).then(|| session_id.to_string())
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 fn build_snapshot(
+    scope: ContextBudgetScope,
     max_tokens: Option<i64>,
-    sessions_considered: i64,
-    compactions: Vec<CompactionRow>,
+    session_compactions: Vec<CompactionRow>,
+    request_reductions: Vec<ProviderReductionRow>,
     last_request: Option<LastRequestContextSnapshot>,
 ) -> ContextBudgetSnapshot {
-    let compaction_count = compactions.len() as i64;
-    let latest = compactions
+    let session_compaction_count = session_compactions.len() as i64;
+    let request_reduction_count = request_reductions.len() as i64;
+    let compaction_count = session_compaction_count.saturating_add(request_reduction_count);
+    let latest_session = session_compactions
         .iter()
         .max_by(|a, b| a.created_at.cmp(&b.created_at));
+    let latest = session_compactions
+        .iter()
+        .filter_map(|row| row.created_at.as_ref())
+        .chain(request_reductions.iter().filter_map(|row| row.created_at.as_ref()))
+        .max();
     let current_estimate = last_request
         .as_ref()
         .map(|request| request.accounting.estimated_input_tokens as i64)
-        .or_else(|| latest.and_then(|entry| entry.compacted_tokens))
-        .or_else(|| latest.and_then(|entry| entry.original_tokens));
+        .or_else(|| latest_session.and_then(|entry| entry.compacted_tokens))
+        .or_else(|| latest_session.and_then(|entry| entry.original_tokens));
     let utilization_percent = match (current_estimate, max_tokens) {
         (Some(current), Some(max)) if max > 0 => Some((current as f64 / max as f64) * 100.0),
         _ => None,
     };
 
     ContextBudgetSnapshot {
+        scope,
         max_tokens,
         current_estimate,
         utilization_percent,
         compaction_count,
-        last_compacted_at: latest.and_then(|entry| entry.created_at.clone()),
-        sessions_considered,
-        request_scan_limit: RECENT_REQUEST_SCAN as i64,
+        last_compacted_at: latest.cloned(),
+        session_compaction_count,
+        request_reduction_count,
+        recent_session_compactions: session_compactions
+            .iter()
+            .take(RECENT_REDUCTION_LIMIT)
+            .map(|entry| ContextReductionEvidence {
+                key: entry.compaction_key.clone(),
+                created_at: entry.created_at.clone(),
+                request_id: entry.request_id.clone(),
+                turn_index: None,
+                messages_compacted: entry.messages_compacted,
+                original_tokens: entry.original_tokens,
+                compacted_tokens: entry.compacted_tokens,
+                compacted_through_sequence: entry.compacted_through_sequence,
+            })
+            .collect(),
+        recent_request_reductions: request_reductions
+            .iter()
+            .take(RECENT_REDUCTION_LIMIT)
+            .map(|entry| ContextReductionEvidence {
+                key: entry.reduction_key.clone(),
+                created_at: entry.created_at.clone(),
+                request_id: entry.request_id.clone(),
+                turn_index: entry.turn_index,
+                messages_compacted: entry.messages_compacted,
+                original_tokens: entry.original_tokens,
+                compacted_tokens: entry.compacted_tokens,
+                compacted_through_sequence: None,
+            })
+            .collect(),
         last_request,
     }
 }
@@ -751,8 +822,14 @@ mod tests {
         assert_eq!(last.request_id, "request-context");
         assert_eq!(parsed.max_tokens, Some(1000));
         assert_eq!(parsed.current_estimate, Some(650));
-        assert_eq!(parsed.sessions_considered, 1);
+        assert_eq!(parsed.scope.node_did, "did:key:z-context");
+        assert_eq!(parsed.scope.agent_id, "agent-context");
+        assert_eq!(parsed.scope.session_id, "session-context");
+        assert_eq!(parsed.session_compaction_count, 1);
+        assert_eq!(parsed.request_reduction_count, 1);
         assert_eq!(parsed.compaction_count, 2);
+        assert_eq!(parsed.recent_session_compactions[0].key, "session-context:1");
+        assert_eq!(parsed.recent_request_reductions[0].key, "context-reduction:1");
 
         // The other agent sees only its own dispatch, never the caller's.
         let output = call_as(&tool, "agent-codex", "session-codex").await;
@@ -826,9 +903,10 @@ mod tests {
         assert_eq!(parsed.compaction_count, 2);
         assert_eq!(
             parsed.last_compacted_at.as_deref(),
-            Some("2026-06-03T10:45:00Z")
+            Some("2026-06-03T10:30:00Z")
         );
-        assert_eq!(parsed.sessions_considered, 1);
+        assert_eq!(parsed.session_compaction_count, 1);
+        assert_eq!(parsed.request_reduction_count, 1);
         let last = parsed.last_request.expect("exact request accounting");
         assert_eq!(last.request_id, "request-context");
         assert_eq!(last.accounting.components.tool_schemas, 100);
