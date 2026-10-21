@@ -187,6 +187,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
         [ (Surface.operatorCli, "#266")
         ]
     }
+  , { feature := "session-control"
+    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "mcp-health"
     , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
     , deferred := []

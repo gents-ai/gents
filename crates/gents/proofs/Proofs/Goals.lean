@@ -144,9 +144,9 @@ theorem stopped_rejects_later_transitions (state : State) (action : Action)
 
 theorem interrupted_wrapup_does_not_retry
     (activity requestWrapup : Bool) (retries : Nat) :
-    decide .budgetLimited .interrupted true false true activity requestWrapup retries
-      true false ≠ .retry := by
-  simp [decide]
+    (decide Status.budgetLimited RequestTerminal.interrupted true false true activity
+      requestWrapup retries true false) ≠ Decision.retry := by
+  simp [Goals.decide]
 
 theorem pause_resume_preserves_pending_wrapup (state paused resumed : State)
     (h_requested : state.wrapupRequested = true)
@@ -205,11 +205,13 @@ theorem budget_transition_sets_wrapup_latch
 theorem resume_resets_blocked_audits
     (state post : State)
     (h : step? state .resume = some post) :
-    post.status = .active ∧ post.blockedAudits = 0 := by
+    post.status =
+      (if state.wrapupRequested ∧ !state.wrapupCompleted
+        then .budgetLimited else .active) ∧ post.blockedAudits = 0 := by
   simp only [step?] at h
   split at h
   · cases h
-    exact ⟨rfl, rfl⟩
+    simp
   · simp at h
 
 theorem same_request_does_not_increment
