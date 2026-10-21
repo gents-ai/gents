@@ -103,6 +103,7 @@ import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.Contracts.Json.ExecutionGate
 import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.InterruptQueue
+import Proofs.Conformance.Contracts.Json.SessionControl
 import Proofs.Conformance.Contracts.Json.FoldQueue
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.CausalHop
@@ -212,6 +213,8 @@ def snapshotJson : String :=
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"interrupt_queue_cases\":"
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
+    ++ "\"session_control_cases\":"
+      ++ Conformance.SessionControlContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
     ++ "\"session_input_edit_client_observation_cases\":"
       ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
