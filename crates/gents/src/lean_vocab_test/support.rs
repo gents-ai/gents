@@ -2168,7 +2168,7 @@ pub(crate) struct LeanKillCase {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopContract {
-    pub(crate) default_max_request_hop: u32,
+    pub(crate) default_max_request_hop: Option<u32>,
     pub(crate) step_cases: Vec<LeanCausalHopStepCase>,
     pub(crate) chain_cases: Vec<LeanCausalHopChainCase>,
     pub(crate) call_cases: Vec<LeanCausalHopCallCase>,
@@ -2235,7 +2235,7 @@ pub(crate) struct LeanCausalHopStepCase {
     pub(crate) cause: String,
     pub(crate) cause_hop: Option<u32>,
     pub(crate) own_predecessor_hop: u32,
-    pub(crate) max_request_hop: u32,
+    pub(crate) max_request_hop: Option<u32>,
     pub(crate) expected_hop: u32,
     pub(crate) expected_admitted: bool,
 }
@@ -2251,7 +2251,7 @@ pub(crate) struct LeanCausalHopChainStep {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopChainCase {
     pub(crate) name: String,
-    pub(crate) max_request_hop: u32,
+    pub(crate) max_request_hop: Option<u32>,
     pub(crate) steps: Vec<LeanCausalHopChainStep>,
     pub(crate) expected_hops: Vec<u32>,
     pub(crate) expected_admitted: Vec<bool>,
@@ -2261,7 +2261,7 @@ pub(crate) struct LeanCausalHopChainCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopCallCase {
     pub(crate) name: String,
-    pub(crate) max_request_hop: u32,
+    pub(crate) max_request_hop: Option<u32>,
     pub(crate) events: Vec<String>,
     pub(crate) expected_hops: Vec<u32>,
     pub(crate) expected_admitted: Vec<bool>,
