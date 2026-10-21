@@ -269,9 +269,10 @@ pub(super) fn authenticated_entry<'a>(
     session_id: &str,
     mut row: &'a AgentRequestRow,
     by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
-    mut expected_goal: Option<&str>,
+    expected_goal: Option<&str>,
 ) -> Result<&'a AgentRequestRow> {
     let mut visited = std::collections::HashSet::new();
+    let mut path_goal: Option<&str> = None;
     loop {
         let doc = row
             .doc_id
@@ -287,10 +288,11 @@ pub(super) fn authenticated_entry<'a>(
             .as_deref()
             .context("Goal continuation has no original Goal ID")?;
         anyhow::ensure!(
-            expected_goal.is_none_or(|expected| expected == goal_id),
+            expected_goal.is_none_or(|expected| expected == goal_id)
+                && path_goal.is_none_or(|expected| expected == goal_id),
             "Goal continuation belongs to another assignment"
         );
-        expected_goal = Some(goal_id);
+        path_goal = Some(goal_id);
         let parent_doc = row
             .caused_by_parent_request_doc_id
             .as_deref()
