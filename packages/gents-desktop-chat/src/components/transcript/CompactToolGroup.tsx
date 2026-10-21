@@ -17,16 +17,18 @@ import {
 
 export function coalesceToolGroups(items: RenderedTimelineItem[]) {
   const result: RenderedTimelineItem[] = [];
-  for (const item of items) {
-    const previous = result[result.length - 1];
-    if (previous?.kind === "toolGroup" && item.kind === "toolGroup") {
-      result[result.length - 1] = {
-        ...previous,
-        tools: [...previous.tools, ...item.tools],
-      };
-    } else {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!;
+    if (item.kind !== "toolGroup" || items[index + 1]?.kind !== "toolGroup") {
       result.push(item);
+      continue;
     }
+    const chunks = [item.tools];
+    while (items[index + 1]?.kind === "toolGroup") {
+      const next = items[++index]!;
+      if (next.kind === "toolGroup") chunks.push(next.tools);
+    }
+    result.push({ ...item, tools: chunks.flat() });
   }
   return result;
 }
@@ -140,37 +142,62 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
     focusAfterClose.current = null;
   }, [selected]);
   if (tools.length === 0) return null;
-  const sections: ActionEntry[][] = [];
+  const settled: ActionEntry[] = [];
+  const active: ActionEntry[] = [];
   for (const entry of actionEntries(tools)) {
-    const previous = sections.at(-1);
-    const status = actionStatus(entry.tool);
-    if (
-      status !== "running" &&
-      previous?.[0] &&
-      actionStatus(previous[0].tool) === status
-    )
-      previous.push(entry);
-    else sections.push([entry]);
+    (actionStatus(entry.tool) === "running" ? active : settled).push(entry);
+  }
+  const sections: ActionEntry[][] = settled.length ? [settled] : [];
+  if (active.length > 2) {
+    sections.push(active.slice(0, -1), [active.at(-1)!]);
+  } else {
+    sections.push(...active.map((entry) => [entry]));
   }
   return (
     <>
       {sections.map((entries) => {
-        const entry = entries[0]!;
-        const status = actionStatus(entry.tool);
-        const running = status === "running";
-        const failed = status === "error";
-        const label = running
-          ? runningAction(entry)
-          : failed
-            ? `${entries.length} ${entries.length === 1 ? "action failed" : "actions failed"}`
-            : status === "success"
-              ? completedLabel(entries)
-              : status === "cancelled"
-                ? `${entries.length} ${entries.length === 1 ? "action stopped" : "actions stopped"}`
-                : "Action status unavailable";
+        const first = entries[0]!;
+        const running = actionStatus(first.tool) === "running";
+        const failures = entries.filter(
+          (entry) => actionStatus(entry.tool) === "error",
+        );
+        const failed = failures.length > 0;
+        const succeeded = entries.filter(
+          (entry) => actionStatus(entry.tool) === "success",
+        );
+        const stopped = entries.filter(
+          (entry) => actionStatus(entry.tool) === "cancelled",
+        ).length;
+        const unknown =
+          entries.length - succeeded.length - failures.length - stopped;
+        const failedLabel = `${failures.length} ${failures.length === 1 ? "action failed" : "actions failed"}`;
+        const settledParts = [
+          succeeded.length ? completedLabel(succeeded) : null,
+          stopped
+            ? `${stopped} ${stopped === 1 ? "action stopped" : "actions stopped"}`
+            : null,
+          unknown
+            ? entries.length === 1
+              ? "Action status unavailable"
+              : `${unknown} ${unknown === 1 ? "status" : "statuses"} unavailable`
+            : null,
+        ].filter(Boolean);
+        const caption = running
+          ? entries.length === 1
+            ? runningAction(first)
+            : `${entries.length} actions running`
+          : settledParts.join(" · ") || failedLabel;
+        const label =
+          !running && failed && settledParts.length
+            ? `${caption} · ${failedLabel}`
+            : caption;
+        const selectedEntry =
+          failures[0] ??
+          entries.find((entry) => actionStatus(entry.tool) !== "success") ??
+          first;
         return (
           <button
-            key={entry.tool.itemKey}
+            key={first.tool.itemKey}
             ref={(element) => {
               for (const key of entries.flatMap(actionItemKeys)) {
                 if (element) buttons.current.set(key, element);
@@ -189,8 +216,8 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
             aria-label={`View actions: ${label}`}
             onClick={() =>
               setSelected({
-                itemKey: entry.tool.itemKey,
-                expand: status !== "success",
+                itemKey: selectedEntry.tool.itemKey,
+                expand: actionStatus(selectedEntry.tool) !== "success",
               })
             }
           >
@@ -206,8 +233,13 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
               )}
             </svg>
             <span className="tool-activity-label" title={label}>
-              {label}
+              {caption}
             </span>
+            {!running && failed && settledParts.length > 0 ? (
+              <span className="tool-activity-errors">
+                {failures.length} failed
+              </span>
+            ) : null}
             <svg
               className="tool-activity-chevron"
               viewBox="0 0 24 24"
