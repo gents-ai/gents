@@ -211,7 +211,7 @@ def recoverySweepCases : List RecoverySweepCase :=
       false true false false true (ownerTaskDeleted := true)
   , orphanedBackgroundRecoveryCase
       "registered_background_tool_session_stopped_to_cancelled"
-      false false false true true (ownerSessionStopped := true)
+      false true false false true (ownerSessionStopped := true)
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_session_stopped_to_cancelled"
       false false false true false (ownerSessionStopped := true)
