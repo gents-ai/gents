@@ -21,6 +21,7 @@ def restartBindingValid (before : World) (document : DocId)
 
 def closeAction : Recovery.ToolRecoveryCause → ToolExecution.ToolCallContext.Action
   | .deadlineExceeded => .timeout
+  | .sessionStopped => .cancelDuringRun .userCancelled
   | .parentInterrupted | .terminalizeBackgroundedAsInterrupted | .taskDeleted =>
       .cancelDuringRun .interrupted
   | _ => .fail .external

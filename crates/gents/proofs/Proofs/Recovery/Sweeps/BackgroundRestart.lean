@@ -147,7 +147,8 @@ theorem orphanedBackgroundToolCause_matches_restartDisposition
     (h_background : row.call.awaitMode = .background)
     (h_native : row.call.operation.isDetached = false)
     (h_unregistered : row.executionRegistered = false)
-    (h_task : row.ownerTaskDeleted = false) :
+    (h_task : row.ownerTaskDeleted = false)
+    (h_stop : row.ownerSessionStopped = false) :
     (orphanedBackgroundToolCause row).map ToolRecoveryCause.toContract =
       (restartDisposition row.toRestartRow).causeContract := by
   have h_session : row.call.operation ≠ .sessionMessage := fun h => by
@@ -165,7 +166,7 @@ theorem orphanedBackgroundToolCause_matches_restartDisposition
       RestartRow.isNativeBackgroundTool,
       RestartDisposition.causeContract, h_background, h_session, h_job, h_deadline,
       h_live, h_interrupted, h_terminal, h_process,
-      h_unregistered, h_task, ParentObservation.observedTerminal]
+      h_unregistered, h_task, h_stop, ParentObservation.observedTerminal]
 
 /-- Durable side effects owed after terminalizing a native background tool on
 restart: cause-specific `<tool-completion>` notification reason and the
