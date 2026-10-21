@@ -5,6 +5,7 @@ pub mod endpoint;
 pub mod engine;
 pub mod enrollment;
 pub mod enrollment_candidate;
+pub mod enrollment_offer;
 pub mod enrollment_reconcile;
 pub mod enrollment_store;
 pub mod error_class;
@@ -37,6 +38,7 @@ pub use engine::{
     EnrollmentEndpointEntry, GraphqlPairingStateStore, LoadedPairingApplied, PairingStateStore,
     PairingTickOutcome, MAX_CONCURRENT_PEER_PREPARATIONS, PAIRING_SWEEP_INTERVAL,
 };
+pub use enrollment_offer::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
 pub use enrollment_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, EnrollmentAuthorityHandle,
     EnrollmentAuthorityOwner, EnrollmentAuthorizationFence, PeerAdmissionAuthority,

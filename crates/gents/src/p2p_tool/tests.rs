@@ -247,7 +247,7 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
     }
     let (server_peer, _) = wait_for_peer_identity(&server.node).await;
     let (candidate_peer, _) = wait_for_peer_identity(&candidate.node).await;
-    let (_, offer_token) = signed_enrollment_offer(
+    signed_enrollment_offer(
         &server.node,
         "engineer-enroll",
         "Engineer enrollment",
@@ -268,6 +268,25 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
         true,
         scope(),
     );
+    let server_readonly = P2pTool::new(
+        server.node.clone(),
+        Some(server.node_identity.clone()),
+        false,
+        scope(),
+    );
+    assert!(Tool::call(
+        &server_readonly,
+        serde_json::from_value(json!({"argv":["enrollment","offer"]})).unwrap()
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("mutations are disabled"));
+    let offer = call(&server_tool, json!({"argv":["enrollment","offer"]})).await;
+    assert_eq!(offer["outcome"]["peer_id"], server_peer);
+    assert_eq!(offer["outcome"]["peer_did"], server.node_identity.did());
+    assert!(offer["outcome"]["expires_at"].is_string());
+    let offer_token = offer["outcome"]["offer_token"].as_str().unwrap();
     let request = json!({"argv":["enrollment","request"],"options":{"offer_token":offer_token}});
     let readonly = P2pTool::new(
         candidate.node.clone(),
@@ -310,6 +329,13 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
     }
     let approved = call(&server_tool, approve).await;
     assert_eq!(approved["outcome"]["request_id"], request_id);
+    let history = call(&server_readonly, json!({"argv":["enrollment","history"]})).await;
+    let entry = &history["outcome"]["history"][0];
+    assert_eq!(entry["request_id"], request_id, "{history}");
+    assert_eq!(entry["state"], "approved");
+    assert_eq!(entry["peer_did"], candidate.node_identity.did());
+    assert_eq!(entry["decided_by"], server.node_identity.did());
+    assert!(entry["decided_at"].is_string());
     let applied = call(
         &server_tool,
         json!({"argv":["pairings","apply"],"options":{"peer_id":candidate_peer,"peer_did":candidate.node_identity.did(),"collections":["DeploymentNote"]}}),
