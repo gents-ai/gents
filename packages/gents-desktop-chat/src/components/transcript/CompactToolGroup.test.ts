@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { MessageList } from "../Transcript.js";
-import { CompactToolGroup } from "./CompactToolGroup.js";
+import { CompactToolGroup, coalesceToolGroups } from "./CompactToolGroup.js";
 
 function tool(itemKey: string, statusKind = "success"): RenderedToolCallView {
   return {
@@ -138,4 +138,138 @@ describe("compact action history", () => {
       expect(html).toContain("Reading README.md");
     },
   );
+});
+
+describe("compact action summaries", () => {
+  it("summarizes mixed settled outcomes without losing failure or cancellation evidence", () => {
+    const stopped = {
+      ...tool("stopped", "error"),
+      cancelCause: {
+        cause: "userCancelled" as const,
+        source: "toolLifecycle" as const,
+        confidence: "certain" as const,
+        at: null,
+        evidence: [],
+      },
+    };
+    const tools = [
+      tool("read-a"),
+      tool("failed", "error"),
+      tool("read-b"),
+      stopped,
+      tool("unknown", "unknown"),
+    ];
+    const original = JSON.stringify(tools);
+    const html = renderToStaticMarkup(
+      createElement(CompactToolGroup, { tools }),
+    );
+    expect(html.match(/class="tool-activity-row/g)).toHaveLength(1);
+    expect(html).toContain("Explored files");
+    expect(html).toContain("1 action failed");
+    expect(html).toContain("1 action stopped");
+    expect(html).toContain("1 status unavailable");
+    expect(html).toContain('class="tool-activity-errors"');
+    expect(JSON.stringify(tools)).toBe(original);
+  });
+
+  it("bounds summary rows for many simultaneous actions and retains every original action", () => {
+    const tools = [
+      tool("past"),
+      ...Array.from({ length: 500 }, (_, index) =>
+        tool(`current-${index}`, "running"),
+      ),
+    ];
+    const html = renderToStaticMarkup(
+      createElement(CompactToolGroup, { tools }),
+    );
+    expect(html.match(/class="tool-activity-row/g)).toHaveLength(3);
+    expect(html).toContain("Explored files");
+    expect(html).toContain("499 actions running");
+    expect(html).toContain("Reading README.md");
+    expect(tools).toHaveLength(501);
+  });
+
+  it("keeps mixed history beside current work instead of fragmenting each outcome", () => {
+    const html = renderToStaticMarkup(
+      createElement(CompactToolGroup, {
+        tools: [
+          tool("first"),
+          tool("current", "running"),
+          tool("failed", "error"),
+          tool("last"),
+        ],
+      }),
+    );
+    expect(html.match(/class="tool-activity-row/g)).toHaveLength(2);
+    expect(html).toContain("1 action failed");
+    expect(html).toContain("Reading README.md");
+  });
+
+  it("retains narrative, user, automated and pending input boundaries", () => {
+    const group = (key: string): RenderedTimelineItem => ({
+      kind: "toolGroup",
+      itemKey: key,
+      messageSequence: 1,
+      tools: [tool(key)],
+    });
+    const boundaries: RenderedTimelineItem[] = [
+      {
+        kind: "assistantMessage",
+        itemKey: "explanation",
+        content: "Explain the result",
+        reconstruction: { state: "ready" },
+      },
+      {
+        kind: "userMessage",
+        itemKey: "follow-up",
+        ownsTurn: true,
+        content: "Continue",
+        reconstruction: { state: "ready" },
+      },
+      {
+        kind: "pendingUserTurn",
+        itemKey: "queued",
+        requestId: "queued",
+        content: "Queued input",
+        selectedSkillIds: [],
+      },
+      {
+        kind: "liveAssistant",
+        itemKey: "stream",
+        content: "Current commentary",
+      },
+    ];
+    for (const boundary of boundaries) {
+      const before = group("before"),
+        after = group("after");
+      const result = coalesceToolGroups([before, boundary, after]);
+      expect(result).toEqual([before, boundary, after]);
+      expect(result[0]).toBe(before);
+      expect(result[2]).toBe(after);
+    }
+  });
+
+  it("coalesces a large run once while preserving ordered identities and source objects", () => {
+    const groups: RenderedTimelineItem[] = Array.from(
+      { length: 2000 },
+      (_, index) => ({
+        kind: "toolGroup",
+        itemKey: `group-${index}`,
+        messageSequence: index,
+        tools: [tool(`tool-${index}`)],
+      }),
+    );
+    const original = JSON.stringify(groups);
+    const result = coalesceToolGroups(groups);
+    expect(result).toHaveLength(1);
+    const merged = result[0];
+    expect(merged?.kind).toBe("toolGroup");
+    if (merged?.kind !== "toolGroup")
+      throw new Error("Expected merged tool group");
+    expect(merged.itemKey).toBe("group-0");
+    expect(merged.tools.map((tool) => tool.itemKey)).toEqual(
+      Array.from({ length: 2000 }, (_, index) => `tool-${index}`),
+    );
+    expect(JSON.stringify(groups)).toBe(original);
+  });
 });
