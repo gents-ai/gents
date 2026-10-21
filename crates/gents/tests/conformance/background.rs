@@ -4,7 +4,7 @@ use gents::tool_call_lifecycle::{AwaitMode, ToolRowKind};
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 46);
+    assert_eq!(cases.len(), 56);
 
     let names = cases
         .iter()
@@ -22,6 +22,16 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
             "complete_goal_keeps_background_wake",
             "background_tool_budget_count_7_admits_spawn",
             "background_tool_budget_count_8_rejects_spawn",
+            "background_mixed_batch_attempt_0",
+            "background_mixed_batch_attempt_1",
+            "background_mixed_batch_attempt_2",
+            "background_mixed_batch_attempt_3",
+            "background_mixed_batch_attempt_4",
+            "background_mixed_batch_attempt_5",
+            "background_mixed_batch_attempt_6",
+            "background_mixed_batch_attempt_7",
+            "background_mixed_batch_attempt_8",
+            "background_mixed_batch_attempt_9",
             "tool_kind_background_mode_executes",
             "tool_kind_bridge_complete_persists_result",
             "tool_kind_explicit_cancel_projects_explicit_cancel",
@@ -84,6 +94,29 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     assert_eq!(
         reject.error_code.as_deref(),
         Some("background_tool_budget_exceeded")
+    );
+
+    let batch = cases
+        .iter()
+        .filter(|case| case.group == "budget_batch")
+        .collect::<Vec<_>>();
+    assert_eq!(batch.len(), 10);
+    assert_eq!(batch.iter().filter(|case| case.legal).count(), 8);
+    assert_eq!(batch.iter().filter(|case| !case.legal).count(), 2);
+    assert_eq!(
+        batch.iter().map(|case| case.pre_live_count).collect::<Vec<_>>(),
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 8]
+    );
+    assert_eq!(
+        batch.iter().map(|case| case.error_code.as_deref()).collect::<Vec<_>>(),
+        [None, None, None, None, None, None, None, None,
+            Some("background_tool_budget_exceeded"),
+            Some("background_tool_budget_exceeded")]
+    );
+    assert_eq!(
+        batch.iter().map(|case| case.action.as_str()).collect::<Vec<_>>(),
+        ["agent_new", "spawn_process", "agent_message", "plugin_job", "agent_new",
+            "spawn_process", "agent_message", "plugin_job", "agent_new", "spawn_process"]
     );
 
     let completed = lean_r6_backgrounding_case("tool_kind_bridge_complete_persists_result");
