@@ -81,6 +81,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_wake_receipt_cases: Vec<serde_json::Value>,
     pub(crate) goal_tool_context_cases: Vec<serde_json::Value>,
     pub(crate) goal_input_binding_cases: Vec<serde_json::Value>,
+    pub(crate) goal_fresh_session_input_cases: Vec<serde_json::Value>,
     pub(crate) session_message_goal_input_cases: Vec<serde_json::Value>,
     pub(crate) goal_delivery_input_cases: Vec<serde_json::Value>,
     pub(crate) goal_assignment_history_cases: Vec<serde_json::Value>,
