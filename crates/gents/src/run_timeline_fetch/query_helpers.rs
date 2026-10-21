@@ -36,8 +36,15 @@ fn decode_required_rows(response: &Value, collection: &str) -> Result<Vec<Value>
         "timeline {collection} query failed: {}",
         response["errors"]
     );
-    let rows = response
-        .get("data")
+    let data = response.get("data");
+    // DefraDB answers a read its node access control denies with HTTP 200 and an empty `data`.
+    anyhow::ensure!(
+        !data
+            .and_then(Value::as_object)
+            .is_some_and(serde_json::Map::is_empty),
+        "timeline {collection} read returned no data: the node probably denied it to this identity (anonymous or not its principal); read as the node's principal"
+    );
+    let rows = data
         .and_then(|data| data.get(collection))
         .and_then(Value::as_array)
         .with_context(|| format!("timeline query omitted required {collection} row array"))?;
@@ -67,6 +74,10 @@ mod tests {
                 "{response}"
             );
         }
+        let denied = decode_required_rows(&serde_json::json!({"data": {}}), "AgentMessage")
+            .unwrap_err()
+            .to_string();
+        assert!(denied.contains("probably denied"), "{denied}");
         assert!(decode_required_rows(
             &serde_json::json!({
                 "errors": [], "data": {"AgentMessage": []}
