@@ -103,14 +103,18 @@ structure MessageInputFacts where
   callerReference : Option Reference
   deriving DecidableEq, Repr
 
-def prepareMessageInput (facts : MessageInputFacts) : PreparedInput :=
+def prepareSelectedInput (existing : Bool) (captured : Option Reference)
+    (facts : MessageInputFacts) : PreparedInput :=
   prepareInput {
-    captured := none
-    sessionReadable := facts.sessionReadable
+    captured
+    sessionReadable := existing && facts.sessionReadable
     observationVerified := facts.observationVerified &&
       facts.observed.all (fun a => a.owner == facts.owner && a.session == facts.session)
     observed := facts.observed.map fun a => ⟨a.goal, a.root⟩
   }
+
+def prepareMessageInput (facts : MessageInputFacts) : PreparedInput :=
+  prepareSelectedInput true none facts
 
 theorem message_input_ignores_caller_assignment (facts : MessageInputFacts)
     (caller : Option Reference) :
