@@ -61,6 +61,9 @@ private def afterDeath (sameUri : Bool) : List Input :=
    differentAdmission sameUri, .release 2]
 private def afterDeathOutputs : List Output :=
   [.acquired, .refused, .refused, .refused, .refused, .refused, .orphanSettled, .refused, .released]
+private def otherTarget : Target := {differentTarget false with actions := ["other-action"]}
+private def twoAdmission : Input := .admit 1 "operation" [target, otherTarget]
+  [document, {document with uri := otherTarget.uri}] observations
 
 def cases : List Case :=
   [ {name := "restore_and_normal_save_require_separate_durable_acknowledgements",
@@ -209,6 +212,34 @@ def cases : List Case :=
         .release 1, .acquire 2 .acquired, .load 2 .empty, admit 2 "new"],
       expected := accepted ++ [.checkpoint, .acknowledged, .cancelled, .checkpoint,
         .acknowledged, .released, .acquired, .loaded, .checkpoint]}
+  , {name := "final_preflight_withdrawal_records_known_rejection_without_launch",
+      inputs := reserveInputs ++ [.advance 1 (.startRestore 0 true true), .finishWrite 1 durable,
+        .withdraw 1, .launch 1, .advance 1 (.observeRestore 0 .rejected false true),
+        .finishWrite 1 durable, .release 1],
+      expected := accepted ++ [.checkpoint, .acknowledged, .withdrawn, .refused,
+        .checkpoint, .acknowledged, .released]}
+  , {name := "duplicate_foreign_and_inflight_checkpoint_withdrawal_refuse",
+      inputs := reserveInputs ++ [.advance 1 (.startRestore 0 true true), .withdraw 1,
+        .finishWrite 1 durable, .withdraw 2, .withdraw 1, .withdraw 1, .launch 1],
+      expected := accepted ++ [.checkpoint, .refused, .acknowledged, .refused,
+        .withdrawn, .refused, .refused]}
+  , {name := "withdrawal_during_actual_restore_promise_refuses", inputs := reserveInputs ++ startRestore ++
+      [.withdraw 1, .release 1, .settle 1],
+      expected := accepted ++ [.checkpoint, .acknowledged, .effect .restore, .refused, .held, .settled]}
+  , {name := "helper_loss_after_unused_grant_withdrawal_still_blocks_workspace",
+      inputs := reserveInputs ++ [.advance 1 (.startRestore 0 true true), .finishWrite 1 durable,
+        .withdraw 1, .helperLost 1 false, .acquire 2 .acquired, .load 2 .empty, differentAdmission false],
+      expected := accepted ++ [.checkpoint, .acknowledged, .withdrawn, .helperLost, .acquired, .refused, .refused]}
+  , {name := "observed_auto_save_withdraws_manual_grant_and_continues_remaining_file",
+      inputs := [.acquire 1 .acquired, .load 1 .empty, twoAdmission, .finishWrite 1 durable] ++ restored ++
+        [.advance 1 (.startSave 0 saveObservations true), .finishWrite 1 durable, .withdraw 1,
+         .advance 1 (.observeSave 0 ⟨.saved, true⟩ true), .finishWrite 1 durable,
+         .advance 1 (.startRestore 1 true true), .finishWrite 1 durable, .launch 1, .settle 1,
+         .advance 1 (.observeRestore 1 .applied true true), .finishWrite 1 durable,
+         .advance 1 (.startSave 1 saveObservations true), .finishWrite 1 durable, .launch 1, .settle 1,
+         .advance 1 (.observeSave 1 ⟨.saved, true⟩ true), .finishWrite 1 durable, .release 1],
+      expected := accepted ++ restoreOutputs ++ [.checkpoint, .acknowledged, .withdrawn, .checkpoint, .acknowledged] ++
+        restoreOutputs ++ saveOutputs ++ [.released]}
   ]
 
 def trace (world : World) : List Input → List (World × Output)
@@ -263,6 +294,7 @@ private def outputJson : Output → String
   | .checkpoint => "\"checkpoint\"" | .acknowledged => "\"acknowledged\"" | .refused => "\"refused\""
   | .effect effect => object [("effect", effectJson effect)]
   | .settled => "\"settled\"" | .cancelled => "\"cancelled\"" | .held => "\"held\"" | .released => "\"released\""
+  | .withdrawn => "\"withdrawn\""
   | .helperLost => "\"helperLost\"" | .orphanSettled => "\"orphanSettled\""
 private def targetJson (t : Target) := object
   [("reference", jsonString t.reference), ("actions", jsonArray (t.actions.map jsonString)), ("uri", jsonString t.uri),
@@ -305,6 +337,7 @@ private def inputJson : Input → String
       ("receipt", object [("installed", boolJson receipt.installed), ("durable", boolJson receipt.durable),
        ("acknowledged", boolJson receipt.acknowledged)])]
   | .launch caller => object [("kind", "\"launch\""), ("caller", toString caller)]
+  | .withdraw caller => object [("kind", "\"withdraw\""), ("caller", toString caller)]
   | .settle caller => object [("kind", "\"settle\""), ("caller", toString caller)]
   | .cancel caller => object [("kind", "\"cancel\""), ("caller", toString caller)]
   | .release caller => object [("kind", "\"release\""), ("caller", toString caller)]

@@ -64,7 +64,7 @@ structure World where
 inductive Output where
   | acquired | busy | loaded | checkpoint | acknowledged | refused
   | effect (value : Effect)
-  | settled | cancelled | held | released
+  | settled | cancelled | held | released | withdrawn
   | helperLost | orphanSettled
   deriving DecidableEq, Repr
 
@@ -76,6 +76,7 @@ inductive Input where
   | advance (caller : Nat) (action : Action)
   | finishWrite (caller : Nat) (receipt : Receipt)
   | launch (caller : Nat)
+  | withdraw (caller : Nat)
   | settle (caller : Nat)
   | cancel (caller : Nat)
   | release (caller : Nat)
@@ -176,6 +177,9 @@ def step (world : World) (input : Input) : World × Output :=
   | .advance caller action => owned world caller (fun holder => advance world holder action)
   | .finishWrite caller receipt => owned world caller (fun holder => finishWrite world holder receipt)
   | .launch caller => owned world caller (launch world)
+  | .withdraw caller => owned world caller fun holder =>
+    if !usable holder || holder.grant == .none then (world, .refused)
+    else keep world {holder with grant := .none} .withdrawn
   | .settle caller => owned world caller fun holder =>
     if holder.running == .none then (world, .refused)
     else keep world {holder with running := .none} .settled
@@ -234,6 +238,19 @@ theorem orphan_settlement_cannot_rewrite_journal (world : World) (caller : Nat) 
     (step world (.settleOrphan caller)).1.stored = world.stored := by
   simp only [step]
   split <;> rfl
+
+/-- Only the host's unused grant may be withdrawn. Its editor/save effect has not
+been invoked; independently owned editor save observations retain their existing
+premises. Withdrawal changes no stored marker and cannot reissue an effect from
+the already pending/saving sequence. -/
+theorem withdrawal_cannot_rewrite_journal (world : World) (caller : Nat) :
+    (step world (.withdraw caller)).1.stored = world.stored := by
+  simp only [step, owned]
+  split
+  · split
+    · split <;> rfl
+    · rfl
+  · rfl
 
 theorem unresolved_journal_refuses_new_connection (ledger : Ledger) (caller : Nat)
     (orphans : List (Nat × Effect)) (blocked : unresolved ledger = true) :
