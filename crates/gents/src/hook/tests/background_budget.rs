@@ -299,9 +299,6 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         let receipt = invoke(&hook, &format!("timed-{index}"), "spawn_process", &args).await;
         assert_eq!(receipt["status"], "running", "{receipt}");
         if tool == "bash" {
-            // Command tools honour timeout_secs (floored at 1, capped at the
-            // background budget) min'ed with the lifetime; omitted gives
-            // min(lifetime, budget).
             assert_eq!(
                 receipt["effective_timeout_secs"],
                 json!(60.min(crate::toolset::BACKGROUND_COMMAND_TIMEOUT_SECS)),
@@ -347,8 +344,6 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         started.elapsed()
     );
 
-    // Explicit timeout_secs on a command tool: floored at 1, capped at the
-    // background budget, then min'ed with the configured lifetime.
     let args = json!({"tool_name": "bash", "args": {"timeout_secs": 0}}).to_string();
     let receipt = invoke(&hook, "timed-zero", "spawn_process", &args).await;
     assert_eq!(receipt["status"], "running", "{receipt}");
@@ -357,6 +352,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         json!(1),
         "{receipt}"
     );
+    children.push(receipt["tool_call_id"].as_str().unwrap().to_owned());
 
     for (index, child) in children.iter().enumerate() {
         let args = json!({"tool_call_id": child}).to_string();

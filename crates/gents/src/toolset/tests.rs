@@ -122,11 +122,11 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         "schema must state the background lifetime budget: {timeout_description}"
     );
     assert!(
-        timeout_description.contains("omitting timeout_secs uses that lifetime"),
+        timeout_description.contains("omitting timeout_secs uses the smaller limit"),
         "schema must state the omitted-background rule: {timeout_description}"
     );
     assert!(
-        timeout_description.contains("an explicit value ends the run sooner"),
+        timeout_description.contains("explicit values are floored at 1s and capped by both limits"),
         "schema must state that an explicit background timeout is honoured, not replaced: {timeout_description}"
     );
 }
@@ -2473,7 +2473,7 @@ fn command_timeout_resolution_matches_advertised_schema() {
     assert_eq!(
         resolve_command_timeout(None, foreground_default, foreground_max, true),
         budget,
-        "background omission uses the background lifetime budget"
+        "background command timeout omission uses the command budget"
     );
     assert_eq!(
         resolve_command_timeout(Some(7_200), foreground_default, foreground_max, true),
@@ -2490,23 +2490,6 @@ fn command_timeout_resolution_matches_advertised_schema() {
         Duration::from_secs(1)
     );
 
-    let background_command_timeout =
-        super::shared::background_command_timeout as fn(Option<u64>) -> Duration;
-    assert_eq!(
-        background_command_timeout(Some(0)),
-        Duration::from_secs(1),
-        "explicit 0 is floored at 1s for background command runs"
-    );
-    assert_eq!(
-        background_command_timeout(Some(999_999)),
-        budget,
-        "explicit background values are capped at the budget"
-    );
-    assert_eq!(
-        background_command_timeout(None),
-        budget,
-        "omission uses the budget before min'ing with the configured lifetime"
-    );
 }
 
 #[cfg(unix)]
