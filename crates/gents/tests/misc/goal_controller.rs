@@ -2186,11 +2186,10 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
     .expect("set goal");
 
     let (mut source, _snapshot_tx) = source(&db).await;
-    let goal = wait_for_goal_transition(&db, &mut source, "interrupted goal to pause", |goal| {
+    wait_for_goal_transition(&db, &mut source, "interrupted goal to pause", |goal| {
         goal.parsed_status() == Some(GoalStatus::Paused)
     })
     .await;
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::Paused));
     assert!(goal_children(&db).await.is_empty());
 }
 
@@ -2728,7 +2727,6 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
         goal.parsed_status() == Some(GoalStatus::UsageLimited)
     })
     .await;
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::UsageLimited));
     assert!(goal
         .last_failure
         .as_deref()
@@ -3165,9 +3163,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
             && goal.wrapup_completed == Some(true)
     })
     .await;
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
     assert_eq!(goal.infrastructure_retry_count, Some(2));
-    assert_eq!(goal.wrapup_completed, Some(true));
     assert!(goal
         .last_failure
         .as_deref()
