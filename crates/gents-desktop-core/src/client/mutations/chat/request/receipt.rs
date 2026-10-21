@@ -98,6 +98,16 @@ impl std::error::Error for DeliveryUnconfirmed {}
 const RECEIPT_READ_CONTEXT: &str = "reading owner signed submission receipt";
 
 impl UnresolvedSubmission {
+    pub(crate) fn accepts_composer_content(&self, content: &str) -> bool {
+        if content.trim().is_empty() {
+            return true;
+        }
+        let selected = gents::skills::prompt_slash_skill_selection(content.trim());
+        selected.prompt.trim() == self.create.content.trim()
+            && (selected.selected_skill_ids.is_empty()
+                || selected.selected_skill_ids == self.create.input.selected_skill_ids)
+    }
+
     /// Retain a prepared signed create and the identity it will produce.
     pub(crate) fn new(create: AgentRequestCreate, result: SubmittedRequest) -> Result<Self> {
         let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
@@ -395,6 +405,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn slash_skill_reconciliation_matches_the_original_prepared_request() {
+        let mut create = test_create();
+        create.content = "check foo".into();
+        create.input.selected_skill_ids = vec!["review".into()];
+        let pending = UnresolvedSubmission::new(create, test_result()).unwrap();
+        assert!(pending.accepts_composer_content("/review check foo"));
+        assert!(!pending.accepts_composer_content("/other check foo"));
+        assert!(!pending.accepts_composer_content("/review check something else"));
+    }
+
     #[tokio::test]
     async fn retained_submission_survives_reopen_and_replays_exact_bytes() {
         let home = tempfile::tempdir().unwrap();
@@ -432,9 +453,12 @@ mod tests {
             })),
         )
         .await;
-        let result = resolve_unresolved_submission(&test_access(&server.uri()), &restored)
-            .await
-            .unwrap();
+        let result = resolve_unresolved_submission(
+            &test_access(&format!("{}/api/v0/graphql", server.uri())),
+            &restored,
+        )
+        .await
+        .unwrap();
         assert_eq!(result, pending.result);
         let requests = create_requests(&server).await;
         assert_eq!(requests.len(), 1);

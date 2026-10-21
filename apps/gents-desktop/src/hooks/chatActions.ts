@@ -174,7 +174,7 @@ export function createChatActions({
         reportFailure(DELIVERY_UNKNOWN_HINT);
         if (selection.acceptsIntent(store, intentGeneration))
           chat.resetWorkflow(stores.chat);
-        return result;
+        return null;
       }
       if (selectedSessionId === null)
         writeChatFolders(stores.chat, (folders) =>

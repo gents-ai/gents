@@ -16,6 +16,9 @@ import { writeSession } from "../src/hooks/sessionStore";
 import { loadUnresolvedSubmissions } from "../src/hooks/unresolvedSubmissions";
 import { admittingProjection, shellStores } from "./shell-fixture";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
+import { act, renderHook } from "@testing-library/react";
+import { node, testApp, withApp } from "./app-fixture";
+import { useComposerSend } from "../src/ui/screens/session/useComposerSend";
 
 const deployment = {
   nodeDid: "agent",
@@ -85,6 +88,32 @@ describe("chat send with an unknown delivery outcome", () => {
     });
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it("retains the new-chat draft and selection when delivery is unknown", async () => {
+    const deployment = node();
+    const sendChatMessage = vi.fn().mockResolvedValue({
+      ...unknownOutcome,
+      nodeDid: deployment.nodeDid,
+      agentId: "default",
+    });
+    const app = testApp({
+      api: { sendChatMessage },
+      deployments: [deployment],
+      selection: { nodeDid: deployment.nodeDid, agentId: "default", sessionId: null },
+    });
+    const { result } = renderHook(() => useComposerSend("default"), {
+      wrapper: withApp(app),
+    });
+    act(() => result.current.setDraft("hello owner"));
+    let sent = true;
+    await act(async () => {
+      sent = await result.current.send("hello owner");
+    });
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(sent).toBe(false);
+    expect(result.current.draft).toBe("hello owner");
+    expect(app.stores.selection.getState().sessionId).toBeNull();
+  });
 
   it.each(["session-1", null])(
     "keeps reconciliation reachable in the real composer projection for %s",

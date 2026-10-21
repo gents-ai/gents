@@ -50,9 +50,8 @@ function store(entries: UnresolvedChatSubmission[]) {
     if (entries.length === 0) localStorage.removeItem(KEY);
     else localStorage.setItem(KEY, JSON.stringify(entries));
   } catch {
-    // Storage is best effort: without it a reload loses the block on a fresh
-    // resend, though the in-memory desktop client can still replay the
-    // original request when it is reconciled before the reload.
+    // Native storage retains the signed request; this browser-side record
+    // identifies which request the composer should reconcile after reload.
   }
 }
 

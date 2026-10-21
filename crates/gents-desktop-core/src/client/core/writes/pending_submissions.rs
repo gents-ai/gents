@@ -2,7 +2,7 @@
 //!
 //! The signed request of an ambiguous owner write is retained locally so a
 //! later reconciliation replays identical bytes and never mints a new identity.
-//! restart still permits exact replay. Older sends with no retained payload
+//! A restart still permits exact replay. Older sends with no retained payload
 //! remain unresolved when the owner cannot prove delivery.
 
 use anyhow::Result;
@@ -50,7 +50,7 @@ impl ClientCore {
                 // Mailbox answers carry no composer content; they are keyed by
                 // their mailbox item instead.
                 anyhow::ensure!(
-                    content.trim().is_empty() || pending.create.content.trim() == content.trim(),
+                    pending.accepts_composer_content(content),
                     "unresolved submission {request_id} is a different message"
                 );
                 let access = self.session_queue_access(&pending.node_did);
