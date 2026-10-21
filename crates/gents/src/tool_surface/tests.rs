@@ -3095,8 +3095,13 @@ async fn bash_schema_advertises_the_configured_background_lifetime() {
             .as_str()
             .unwrap();
         assert!(
-            description.contains(&format!("get a {expected}s lifetime")),
+            description.contains(&format!("instead get a {expected}s lifetime")),
             "{description}"
+        );
+        assert!(
+            description.contains("omitting timeout_secs uses that lifetime")
+                && description.contains("an explicit value ends the run sooner"),
+            "schema must state the background explicit-timeout rule: {description}"
         );
     }
 }
