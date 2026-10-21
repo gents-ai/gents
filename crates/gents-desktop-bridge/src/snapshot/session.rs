@@ -51,6 +51,7 @@ use projection::build_session_snapshot_from_store_for_node_with_transcript;
 #[cfg(test)]
 use request_context::decode_latest_request_context;
 use request_context::load_latest_session_request_context;
+use timeline_page::insert_timeline_item_by_sequence;
 pub use timeline_page::{apply_session_timeline_page, apply_session_timeline_page_with_query};
 
 pub(super) fn message_is_runtime_control(
@@ -196,6 +197,7 @@ pub async fn build_session_snapshot_for_node(
 ) -> Option<DesktopSessionSnapshot> {
     build_session_snapshot_for_node_with_transcript(
         core,
+        &ConfigAccess::local(core.node_arc()),
         node_did,
         session_id,
         preferred_request_id,
@@ -212,42 +214,6 @@ pub async fn build_session_snapshot_for_node(
 }
 
 pub async fn build_session_snapshot_for_node_with_transcript(
-    core: &ClientCore,
-    node_did: Option<&str>,
-    session_id: &str,
-    preferred_request_id: Option<&str>,
-    transcript_store: Option<&ClientStore>,
-    canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
-    context_store: Option<&ClientStore>,
-    prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
-    hydration_observation: Option<(
-        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
-        Option<String>,
-    )>,
-    context_totals_exact: bool,
-    include_live_tail: bool,
-    request_projection: Option<&[AgentRequestRow]>,
-) -> Option<DesktopSessionSnapshot> {
-    let access = ConfigAccess::local(core.node_arc());
-    build_session_snapshot_for_node_with_transcript_and_access(
-        core,
-        &access,
-        node_did,
-        session_id,
-        preferred_request_id,
-        transcript_store,
-        canonical_dependencies,
-        context_store,
-        prompt_ownership,
-        hydration_observation,
-        context_totals_exact,
-        include_live_tail,
-        request_projection,
-    )
-    .await
-}
-
-pub async fn build_session_snapshot_for_node_with_transcript_and_access(
     core: &ClientCore,
     access: &ConfigAccess,
     node_did: Option<&str>,
@@ -358,13 +324,8 @@ pub async fn build_session_snapshot_for_node_with_transcript_and_access(
     });
     let loaded_context = match (node_did, session_requester) {
         (Some(node_did), Some(requester_did)) => {
-            match load_latest_session_request_context(
-                access,
-                node_did,
-                requester_did,
-                session_id,
-            )
-            .await
+            match load_latest_session_request_context(access, node_did, requester_did, session_id)
+                .await
             {
                 Ok(context) => context,
                 Err(error) => {
@@ -528,16 +489,11 @@ fn attach_context_reduction_timeline_events(
             }
             _ => continue,
         };
-        let (Some(request_doc_id), Some(sequence)) =
-            (entry.request_doc_id, entry.anchor_sequence)
+        let (Some(request_doc_id), Some(sequence)) = (entry.request_doc_id, entry.anchor_sequence)
         else {
             continue;
         };
-        let order = (
-            entry.queued_at.clone(),
-            entry.call_sequence,
-            entry.call_id,
-        );
+        let order = (entry.queued_at.clone(), entry.call_sequence, entry.call_id);
         let summary = summaries
             .entry(request_doc_id)
             .or_insert_with(|| RequestSummary {
@@ -558,8 +514,8 @@ fn attach_context_reduction_timeline_events(
         }
         if order > summary.latest_order {
             summary.latest_order = order;
-            summary.latest_estimate = i64::try_from(entry.accounting.estimated_input_tokens)
-                .unwrap_or(i64::MAX);
+            summary.latest_estimate =
+                i64::try_from(entry.accounting.estimated_input_tokens).unwrap_or(i64::MAX);
             summary.latest_timestamp = entry.queued_at;
         }
     }
@@ -578,24 +534,7 @@ fn attach_context_reduction_timeline_events(
             latest_estimated_input_tokens: Some(summary.latest_estimate),
             latest_timestamp: summary.latest_timestamp,
         };
-        let insertion = snapshot.timeline_items.iter().position(|existing| {
-            let existing_sequence = match existing {
-                RenderedTimelineItem::UserMessage { sequence, .. }
-                | RenderedTimelineItem::AutomatedInput { sequence, .. }
-                | RenderedTimelineItem::AssistantMessage { sequence, .. } => *sequence,
-                RenderedTimelineItem::ToolGroup { message_sequence, .. } => *message_sequence,
-                RenderedTimelineItem::RequestContextReductionSummary { sequence, .. }
-                | RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(*sequence),
-                RenderedTimelineItem::PendingUserTurn { .. }
-                | RenderedTimelineItem::LiveAssistant { .. } => None,
-            };
-            existing_sequence.is_none_or(|existing_sequence| existing_sequence > sequence)
-        });
-        if let Some(index) = insertion {
-            snapshot.timeline_items.insert(index, item);
-        } else {
-            snapshot.timeline_items.push(item);
-        }
+        insert_timeline_item_by_sequence(&mut snapshot.timeline_items, item, summary.sequence);
     }
 }
 
@@ -697,24 +636,7 @@ fn attach_session_compaction_timeline_events(
             compacted_tokens: entry.compacted_tokens,
             timestamp: entry.created_at.clone(),
         };
-        let insertion = snapshot.timeline_items.iter().position(|existing| {
-            let existing_sequence = match existing {
-                RenderedTimelineItem::UserMessage { sequence, .. }
-                | RenderedTimelineItem::AutomatedInput { sequence, .. }
-                | RenderedTimelineItem::AssistantMessage { sequence, .. } => *sequence,
-                RenderedTimelineItem::ToolGroup { message_sequence, .. } => *message_sequence,
-                RenderedTimelineItem::RequestContextReductionSummary { sequence, .. }
-                | RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(*sequence),
-                RenderedTimelineItem::PendingUserTurn { .. }
-                | RenderedTimelineItem::LiveAssistant { .. } => None,
-            };
-            existing_sequence.is_none_or(|existing_sequence| existing_sequence > sequence)
-        });
-        if let Some(index) = insertion {
-            snapshot.timeline_items.insert(index, item);
-        } else {
-            snapshot.timeline_items.push(item);
-        }
+        insert_timeline_item_by_sequence(&mut snapshot.timeline_items, item, sequence);
     }
 }
 
@@ -873,7 +795,8 @@ mod paging_coverage_tests {
                     index % 60
                 )),
                 accounting: gents_protocol::rendered_request::ContextAccounting {
-                    accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+                    accounting_version:
+                        gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
                     turn_index: index as usize,
                     attempt: 0,
                     estimator: "test".into(),
@@ -890,7 +813,8 @@ mod paging_coverage_tests {
                     compaction_threshold_tokens: 800,
                     configured_max_output_tokens: None,
                     effective_max_output_tokens: None,
-                    compaction_reason: gents_protocol::rendered_request::ContextCompactionReason::Compacted,
+                    compaction_reason:
+                        gents_protocol::rendered_request::ContextCompactionReason::Compacted,
                     pre_compaction_input_tokens: Some(900),
                 },
             })
@@ -908,18 +832,20 @@ mod paging_coverage_tests {
                 ..
             }]
         ));
-        snapshot.timeline_items.push(RenderedTimelineItem::AssistantMessage {
-            item_key: "assistant-2".into(),
-            sequence: Some(2),
-            content: None,
-            reasoning: None,
-            timestamp: None,
-            reconstruction: MessageReconstructionView {
-                state: ReconstructionState::Ready,
-                error: None,
-                denied_dependency_doc_id: None,
-            },
-        });
+        snapshot
+            .timeline_items
+            .push(RenderedTimelineItem::AssistantMessage {
+                item_key: "assistant-2".into(),
+                sequence: Some(2),
+                content: None,
+                reasoning: None,
+                timestamp: None,
+                reconstruction: MessageReconstructionView {
+                    state: ReconstructionState::Ready,
+                    error: None,
+                    denied_dependency_doc_id: None,
+                },
+            });
         let full_snapshot = snapshot;
         let mut newest = full_snapshot.clone();
         apply_session_timeline_page(&mut newest, None, Some(1)).unwrap();

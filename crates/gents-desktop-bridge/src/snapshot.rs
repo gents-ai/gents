@@ -302,7 +302,6 @@ pub use session::build_session_live_delta;
 #[cfg(test)]
 pub(crate) use session::build_session_live_delta_from_store;
 pub use session::build_session_snapshot_for_node_with_transcript;
-pub use session::build_session_snapshot_for_node_with_transcript_and_access;
 #[cfg(test)]
 pub use session::build_session_snapshot_from_store;
 #[cfg(test)]

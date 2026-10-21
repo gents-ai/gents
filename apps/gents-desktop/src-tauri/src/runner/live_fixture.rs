@@ -739,6 +739,7 @@ mod tests {
         .await?;
         let session = build_session_snapshot_for_node_with_transcript(
             fixture.desktop_core().as_ref(),
+            &gents::config_client::ConfigAccess::local(fixture.desktop_core().node_arc()),
             Some(&node_did),
             &submitted.session_id,
             Some(&submitted.request_id),

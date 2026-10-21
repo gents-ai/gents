@@ -1,7 +1,6 @@
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_snapshot_for_node_with_transcript,
-    build_session_snapshot_for_node_with_transcript_and_access,
 };
 use crate::types::DesktopSessionSnapshot;
 
@@ -49,6 +48,7 @@ pub async fn session_snapshot(
         {
             return Ok(build_session_snapshot_for_node_with_transcript(
                 core.as_ref(),
+                &gents::config_client::ConfigAccess::local(core.node_arc()),
                 Some(node_did),
                 &session_id,
                 request_id.as_deref(),
@@ -284,7 +284,7 @@ pub async fn session_snapshot(
     let context_store = context_store.map(|tip| transcript_page.store.merge_snapshot(tip));
     let local_access = gents::config_client::ConfigAccess::local(core.node_arc());
     let session_access = operator_access.as_ref().unwrap_or(&local_access);
-    let mut snapshot = build_session_snapshot_for_node_with_transcript_and_access(
+    let mut snapshot = build_session_snapshot_for_node_with_transcript(
         core.as_ref(),
         session_access,
         node_did.as_deref(),

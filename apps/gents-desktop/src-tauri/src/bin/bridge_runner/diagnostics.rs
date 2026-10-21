@@ -194,6 +194,7 @@ pub(crate) async fn build_desktop_session_snapshot(
     };
     let mut snapshot = build_session_snapshot_for_node_with_transcript(
         fixture.desktop_core().as_ref(),
+        &ConfigAccess::local(fixture.desktop_core().node_arc()),
         node_did,
         session_id,
         request_id,
@@ -349,6 +350,7 @@ async fn build_request_diagnostics(
         .count();
     let session_snapshot = build_session_snapshot_for_node_with_transcript(
         core,
+        &ConfigAccess::local(core.node_arc()),
         resolved_node_did.as_deref(),
         session_id,
         Some(request_id),
