@@ -202,7 +202,13 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         let name = case["name"].as_str().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(dir.path().join("owner.key"), None).unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         let session = format!("wake-scope-{name}");

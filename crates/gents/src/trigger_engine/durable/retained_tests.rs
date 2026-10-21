@@ -94,6 +94,7 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         let path = directory.path().join("store");
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
                 .data_path(&path)
                 .build()
                 .await
@@ -259,6 +260,7 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         drop(node);
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
                 .data_path(&path)
                 .build()
                 .await

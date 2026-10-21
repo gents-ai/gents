@@ -130,10 +130,16 @@ async fn persist_request(
 }
 
 async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let identity = &identities[0];
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
-    let identity = &identities[0];
     let mut roots = HashMap::new();
     for version in case["versions"].as_array().unwrap() {
         let Some(root) = version["assignment"]["root"].as_u64() else {

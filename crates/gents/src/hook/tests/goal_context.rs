@@ -200,7 +200,13 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let directory = tempfile::tempdir().unwrap();
             let identity =
                 KeyIdentity::load_or_create(directory.path().join("owner.key"), None).unwrap();
-            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            let node = Arc::new(
+                EmbeddedNode::builder()
+                    .with_node_identity_did(identity.did())
+                    .build()
+                    .await
+                    .unwrap(),
+            );
             crate::ensure_runtime_schemas(&node).await.unwrap();
             let access = ConfigAccess::local(node.clone());
             let hook = DefraSessionHook::with_identity(

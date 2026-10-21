@@ -185,7 +185,13 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
     let signer = pin_fixed_signing_identity(directory.path());
     let remote: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(directory.path().join("remote.key"), None).unwrap());
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(PIN_FIXED_DID)
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, PIN_FIXED_DID, "agent").await;
     crate::test_support::install_test_agent(&node, remote.did(), "agent").await;

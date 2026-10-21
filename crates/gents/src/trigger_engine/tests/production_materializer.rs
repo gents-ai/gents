@@ -230,11 +230,17 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
 
 #[tokio::test]
 async fn durable_goal_task_replay_retains_its_admitted_assignment() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
         snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
     let owner = snapshot.local_did.clone();
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(&owner)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let session = "replaced-task-goal-session";

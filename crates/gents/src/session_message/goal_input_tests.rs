@@ -26,7 +26,13 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
         Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap()),
     ];
     let caller = &identities[0];
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(caller.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
     for identity in &identities {
         crate::test_support::install_test_agent(&node, identity.did(), "agent").await;
