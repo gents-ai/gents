@@ -1013,6 +1013,14 @@ impl JobDriver {
         Some(outcome)
     }
 
+    /// Whether a step of the row is running or a hold is on it.
+    pub fn is_stepping(&self, row_doc_id: &str) -> bool {
+        self.in_flight
+            .lock()
+            .expect("in-flight rows lock")
+            .contains_key(row_doc_id)
+    }
+
     /// Runs `f` while no step of the row runs or can start, or returns `None`
     /// when one is in flight. A wake during `f` steps the row afterwards.
     pub async fn hold_steps<T>(

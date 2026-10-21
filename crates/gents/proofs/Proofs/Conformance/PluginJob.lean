@@ -1521,9 +1521,10 @@ structure RecoveryCase where
   row : Recovery.PluginJobRow
 
 private def jobRow (terminalChildren observed live stepNew : Nat)
-    (deadlineExpired := false) (available := true) (stepped := true) : Recovery.PluginJobRow :=
+    (deadlineExpired := false) (available := true) (stepped := true) (stepInFlight := false) :
+    Recovery.PluginJobRow :=
   { running := true, sessionStopped := false, terminalChildren, observed, live, stepNew,
-    deadlineExpired, available, stepped }
+    deadlineExpired, available, stepped, stepInFlight }
 
 def recoveryCases : List RecoveryCase :=
   [ ⟨"plugin_job_unobserved_terminal_step_with_new_effects_keeps_running", jobRow 2 1 0 1⟩
@@ -1540,7 +1541,11 @@ def recoveryCases : List RecoveryCase :=
   , ⟨"plugin_job_resumed_row_first_step_with_new_effects_keeps_running",
       jobRow 1 1 0 1 (stepped := false)⟩
   , ⟨"plugin_job_resumed_row_first_step_without_new_effects_stalls",
-      jobRow 1 1 0 0 (stepped := false)⟩ ]
+      jobRow 1 1 0 0 (stepped := false)⟩
+  , ⟨"plugin_job_row_with_a_step_in_flight_is_left_to_it",
+      jobRow 2 2 0 0 (stepInFlight := true)⟩
+  , ⟨"plugin_job_row_with_a_step_in_flight_past_its_deadline_fails_closed",
+      jobRow 2 2 0 0 (deadlineExpired := true) (stepInFlight := true)⟩ ]
 
 /-- One tick of the registered sweep. -/
 def recoveryTick (row : Recovery.PluginJobRow) : Recovery.PluginJobRow :=
@@ -1563,7 +1568,8 @@ theorem recovery_regressions :
       [ (true, 1, 0, true, 2), (true, 1, 0, false, 2), (true, 1, 0, true, 2)
       , (true, 1, 0, false, 1), (true, 1, 0, false, 1), (true, 1, 0, false, 2)
       , (false, 0, 0, true, 1), (true, 1, 0, false, 1)
-      , (false, 0, 0, false, 0), (true, 1, 0, true, 1), (true, 1, 0, false, 1) ] := by
+      , (false, 0, 0, false, 0), (true, 1, 0, true, 1), (true, 1, 0, false, 1)
+      , (false, 0, 0, true, 2), (true, 1, 0, false, 2) ] := by
   native_decide
 
 private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
@@ -1571,7 +1577,7 @@ private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
     ("terminal_children", toJson r.terminalChildren),
     ("observed", toJson r.observed), ("live", toJson r.live), ("step_new", toJson r.stepNew),
     ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available),
-    ("stepped", toJson r.stepped)]
+    ("stepped", toJson r.stepped), ("step_in_flight", toJson r.stepInFlight)]
 
 private def renderRecovery (c : RecoveryCase) : Json :=
   let after := recoveryTick c.row

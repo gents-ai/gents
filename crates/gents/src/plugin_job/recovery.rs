@@ -30,6 +30,8 @@ pub struct RecoveryFacts {
     pub deadline_expired: bool,
     pub available: Result<(), Refusal>,
     pub stepped: bool,
+    /// Lean `stepInFlight`: a step of the row is running.
+    pub in_flight: bool,
 }
 
 /// What one application of Lean's `pluginJobRecover` does to a row.
@@ -41,10 +43,11 @@ pub enum TickAction {
 }
 
 /// Lean `pluginJobRecover`, first application: a row that is no longer running
-/// is left alone; a stopped session cancels its job; a row past its deadline,
-/// unavailable or stalled is failed closed; one with unobserved terminals, or at
-/// rest before its first step since adoption, is re-driven one step; any other
-/// row is left alone.
+/// is left alone; a stopped session cancels its job; a row past its deadline or
+/// unavailable is killed and fails closed; a row with a step in flight is
+/// otherwise left to that step; a stalled row is killed; one with unobserved
+/// terminals, or at rest before its first step since adoption, is re-driven
+/// one step; any other row is left alone.
 pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
     if !facts.running {
         return TickAction::Untouched;
@@ -57,6 +60,9 @@ pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
     }
     if let Err(refusal) = facts.available {
         return TickAction::Kill(KillCause::FailClosed(refusal));
+    }
+    if facts.in_flight {
+        return TickAction::Untouched;
     }
     if !facts.stepped && facts.live == 0 && facts.observed >= facts.terminal_children {
         return TickAction::Step;
@@ -136,10 +142,17 @@ async fn tick(
     request_doc_id: &str,
     pin: &JobPin,
 ) -> Result<bool> {
-    let (_, facts) = facts_of(driver, access, row_doc_id, request_doc_id, pin).await?;
+    let in_flight = driver.is_stepping(row_doc_id);
+    let (row, facts) = facts_of(driver, access, row_doc_id, request_doc_id, pin, in_flight).await?;
     match tick_action(&facts) {
         TickAction::Untouched => Ok(false),
-        TickAction::Kill(_) => kill_at_rest(driver, access, row_doc_id, request_doc_id, pin).await,
+        TickAction::Kill(KillCause::FailClosed(Refusal::Stalled)) => {
+            kill_at_rest(driver, access, row_doc_id, request_doc_id, pin).await
+        }
+        TickAction::Kill(cause) => {
+            kill_row(access, row_doc_id, &row, cause).await?;
+            Ok(true)
+        }
         TickAction::Step => {
             if let Some(outcome) = driver.step_now(row_doc_id).await {
                 if outcome? == StepOutcome::Committed {
@@ -154,7 +167,8 @@ async fn tick(
 /// Kills the row if facts re-read while no step of it can run still say so;
 /// `true` when it killed. A step's effects are not visible until it commits,
 /// so a row read while a step is in flight, or across that commit, can look
-/// stalled; one in flight is left to its step and the next sweep.
+/// stalled; one in flight is left to its step and the next sweep. The
+/// deadline and availability kills need no hold: no step changes their facts.
 async fn kill_at_rest(
     driver: &Arc<JobDriver>,
     access: &ConfigAccess,
@@ -164,7 +178,8 @@ async fn kill_at_rest(
 ) -> Result<bool> {
     driver
         .hold_steps(row_doc_id, async {
-            let (row, facts) = facts_of(driver, access, row_doc_id, request_doc_id, pin).await?;
+            let (row, facts) =
+                facts_of(driver, access, row_doc_id, request_doc_id, pin, false).await?;
             let TickAction::Kill(cause) = tick_action(&facts) else {
                 return Ok(false);
             };
@@ -197,6 +212,7 @@ async fn facts_of(
     row_doc_id: &str,
     request_doc_id: &str,
     pin: &JobPin,
+    in_flight: bool,
 ) -> Result<(StepRow, RecoveryFacts)> {
     let runtime = driver.runtime();
     let row = read_step_row(access, row_doc_id).await?;
@@ -247,6 +263,7 @@ async fn facts_of(
         deadline_expired: deadline <= u64::try_from(chrono::Utc::now().timestamp_millis())?,
         available,
         stepped,
+        in_flight,
     };
     Ok((row, facts))
 }
@@ -681,6 +698,20 @@ mod tests {
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
+        step.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_step_in_flight_does_not_delay_the_deadline_kill() {
+        let mut step = stepper(json!({"effects": {}})).await;
+        let expired = pinned_row(&mut step, "call-2", 1, None).await;
+        let driver = driver_of(&step);
+        driver
+            .hold_steps(&expired, redrive_running_jobs(&driver))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(step.row_json(&expired).await["lifecycle_state"], "timedOut");
         step.close().await;
     }
 
