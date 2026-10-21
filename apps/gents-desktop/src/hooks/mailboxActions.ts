@@ -103,7 +103,12 @@ export function createMailboxActions({
           contentKey: contentKey(answerKey),
         });
         reportFailure(MAILBOX_DELIVERY_UNKNOWN_HINT);
+        return;
       }
+      if (earlier)
+        reportFailure(
+          "Your earlier answer was delivered; this retry did not send a different answer.",
+        );
       selection.releaseMailboxRoute(store, item.itemId);
       await refreshSnapshot();
     } catch (error) {

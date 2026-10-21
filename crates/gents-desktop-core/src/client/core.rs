@@ -318,10 +318,6 @@ pub struct ClientCore {
     local_peer_id: String,
     listen_addresses: Vec<String>,
     bootstrap_errors: Vec<String>,
-    /// Owner chat sends whose outcome is unknown, keyed by request id. Holds the
-    /// original signed request so reconciliation replays identical bytes.
-    unresolved_submissions:
-        std::sync::Mutex<HashMap<String, super::mutations::UnresolvedSubmission>>,
 }
 
 #[cfg(test)]

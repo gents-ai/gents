@@ -1,0 +1,4 @@
+type PendingChatSubmission {
+    request_id: String @index(unique: true)
+    payload: String
+}

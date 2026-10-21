@@ -15,6 +15,7 @@ import { createMailboxActions } from "../src/hooks/mailboxActions";
 import { writeSession } from "../src/hooks/sessionStore";
 import { loadUnresolvedSubmissions } from "../src/hooks/unresolvedSubmissions";
 import { admittingProjection, shellStores } from "./shell-fixture";
+import { projectChatShell } from "@source-inc/gents-desktop-chat";
 
 const deployment = {
   nodeDid: "agent",
@@ -24,9 +25,13 @@ const deployment = {
   mailboxItems: [],
 } as unknown as DeploymentView;
 
-function harness(sendChatMessage: ReturnType<typeof vi.fn>) {
+function harness(
+  sendChatMessage: ReturnType<typeof vi.fn>,
+  realProjection = false,
+  sessionId: string | null = "session-1",
+) {
   const stores = shellStores({
-    selection: { nodeDid: "agent", agentId: "setup", sessionId: "session-1" },
+    selection: { nodeDid: "agent", agentId: "setup", sessionId },
   });
   applyFleetSnapshot(stores.fleet, {
     bootstrap: {},
@@ -36,7 +41,25 @@ function harness(sendChatMessage: ReturnType<typeof vi.fn>) {
   const actions = createChatActions({
     api: { sendChatMessage } as unknown as DesktopApiAdapter,
     stores,
-    project: () => admittingProjection("setup"),
+    project: () => ({
+      ...admittingProjection("setup"),
+      ...(realProjection
+        ? {
+            shellProjection: projectChatShell({
+              clientAvailable: true,
+              selectedNodeDid: "agent",
+              selectedSessionId: stores.selection.getState().sessionId,
+              sending: stores.chat.getState().sending,
+              session: null,
+              selectedSessionSummary: stores.selection.getState().sessionId
+                ? ({ sessionId: "session-1" } as never)
+                : null,
+              localWorkflow: stores.chat.getState().localWorkflow,
+              operationalState: { admissionBlocker: null } as never,
+            }),
+          }
+        : {}),
+    }),
     refreshSession: async () => null,
     refreshSnapshot: async () => {},
     reportFailure,
@@ -62,6 +85,25 @@ describe("chat send with an unknown delivery outcome", () => {
     });
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each(["session-1", null])(
+    "keeps reconciliation reachable in the real composer projection for %s",
+    async (sessionId) => {
+      const sendChatMessage = vi
+        .fn()
+        .mockResolvedValueOnce(unknownOutcome)
+        .mockResolvedValueOnce({ ...unknownOutcome, outcome: null });
+      const { actions, stores } = harness(sendChatMessage, true, sessionId);
+      await actions.sendMessage("hello owner");
+      expect(stores.selection.getState().sessionId).toBe(sessionId);
+      expect(stores.chat.getState().localWorkflow).toEqual({ kind: "ready" });
+      await actions.sendMessage("hello owner");
+      expect(sendChatMessage).toHaveBeenCalledTimes(2);
+      expect(sendChatMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ resolveRequestId: "request-unknown" }),
+      );
+    },
+  );
 
   it("reconciles the original request instead of sending a new one", async () => {
     const sendChatMessage = vi
@@ -190,11 +232,14 @@ describe("chat send with an unknown delivery outcome", () => {
 
     await mailbox.answerMailboxQuestion(item, { choice: "yes" } as never);
     expect(loadUnresolvedSubmissions()).toHaveLength(1);
-    await mailbox.answerMailboxQuestion(item, { choice: "yes" } as never);
+    await mailbox.answerMailboxQuestion(item, { choice: "no" } as never);
 
     expect(sendChatMessage).toHaveBeenLastCalledWith(
       expect.objectContaining({ resolveRequestId: "request-unknown" }),
     );
     expect(loadUnresolvedSubmissions()).toEqual([]);
+    expect(reportFailure).toHaveBeenLastCalledWith(
+      "Your earlier answer was delivered; this retry did not send a different answer.",
+    );
   });
 });

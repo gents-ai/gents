@@ -26,3 +26,4 @@ pub use manage::{
 pub use setup::PeerMutationResult;
 
 pub(crate) use chat::prepare_request_submission;
+pub(crate) use chat::submission_journal;

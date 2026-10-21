@@ -172,6 +172,9 @@ export function createChatActions({
           contentKey: contentKey(content),
         });
         reportFailure(DELIVERY_UNKNOWN_HINT);
+        if (selection.acceptsIntent(store, intentGeneration))
+          chat.resetWorkflow(stores.chat);
+        return result;
       }
       if (selectedSessionId === null)
         writeChatFolders(stores.chat, (folders) =>

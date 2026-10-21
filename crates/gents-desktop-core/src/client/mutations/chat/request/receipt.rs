@@ -17,12 +17,15 @@ use serde_json::Value;
 
 use super::SubmittedRequest;
 
+pub(crate) mod journal;
+
 /// A prepared owner submission whose commit outcome could not be determined.
 ///
 /// The original signed create payload and its rendered mutation are retained so
 /// a later reconciliation can replay the exact same bytes. Neither is exposed
 /// through `Debug`.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UnresolvedSubmission {
     pub request_id: String,
     pub session_id: String,
@@ -336,6 +339,7 @@ fn test_access(url: &str) -> ConfigAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use defra_node::EmbeddedNode;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use serde_json::json;
     use wiremock::matchers::{body_string_contains, method, path};
@@ -389,6 +393,59 @@ mod tests {
             mutation,
             result: test_result(),
         }
+    }
+
+    #[tokio::test]
+    async fn retained_submission_survives_reopen_and_replays_exact_bytes() {
+        let home = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(home.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        node.add_schema(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+            .await
+            .unwrap();
+        let pending = test_pending();
+        journal::save(&node, &pending).await.unwrap();
+        node.shutdown().await;
+        drop(node);
+
+        let reopened = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(home.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        let restored = journal::load(&reopened, REQUEST_ID).await.unwrap().unwrap();
+        assert_eq!(restored.mutation, pending.mutation);
+        assert_eq!(restored.create, pending.create);
+        let server = MockServer::start().await;
+        mount_receipt(&server, Vec::new()).await;
+        mount_create(
+            &server,
+            ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"create_AgentRequest": [{"request_id": REQUEST_ID}]}
+            })),
+        )
+        .await;
+        let result = resolve_unresolved_submission(&test_access(&server.uri()), &restored)
+            .await
+            .unwrap();
+        assert_eq!(result, pending.result);
+        let requests = create_requests(&server).await;
+        assert_eq!(requests.len(), 1);
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["query"], pending.mutation);
+        journal::forget(&reopened, REQUEST_ID).await;
+        assert!(journal::load(&reopened, REQUEST_ID)
+            .await
+            .unwrap()
+            .is_none());
+        reopened.shutdown().await;
     }
 
     fn receipt_row(create: &AgentRequestCreate) -> Value {

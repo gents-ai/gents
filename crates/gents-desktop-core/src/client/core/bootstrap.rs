@@ -223,7 +223,6 @@ impl ClientCore {
                 local_peer_id,
                 listen_addresses,
                 bootstrap_errors,
-                unresolved_submissions: std::sync::Mutex::default(),
             })
         }
         .await;

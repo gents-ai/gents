@@ -281,6 +281,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreieeavm747hdfwfrlm524uilhmnokwz3wodn22x4daidndbyg3pz6a"
     ),
     baseline_entry!(
+        gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
+        gents_protocol::schemas::PENDING_CHAT_SUBMISSION,
+        "bafyreib3pvpyumkvpovhi2x5ua34wzwsvj6o2iz7fge3qwsp2nj7oask44"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::ETH_SUBMISSION_NAME,
         gents_protocol::schemas::ETH_SUBMISSION,
         "bafyreifm54mjrhhy6wnebzgbwoimpy27ifcfrfcdq3ig4edulvgr3cm4jy"

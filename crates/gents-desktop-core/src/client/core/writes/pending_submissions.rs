@@ -1,11 +1,9 @@
 //! Owner chat sends whose commit outcome is unknown.
 //!
-//! The signed request of an ambiguous owner write is retained in memory so a
+//! The signed request of an ambiguous owner write is retained locally so a
 //! later reconciliation replays identical bytes and never mints a new identity.
-//! After a restart the payload is gone; the desktop UI keeps the identity, and
-//! reconciliation can only prove presence by request id. Absence proves
-//! nothing (the original write may still be in flight), so the identity stays
-//! unresolved.
+//! restart still permits exact replay. Older sends with no retained payload
+//! remain unresolved when the owner cannot prove delivery.
 
 use anyhow::Result;
 
@@ -20,21 +18,10 @@ impl ClientCore {
     /// send for identical replay. An unknown outcome is not recorded as a
     /// mutation failure: the request may have been delivered.
     pub(super) fn submit_failure(&self, error: anyhow::Error) -> anyhow::Error {
-        let Some(unknown) = error.downcast_ref::<SubmissionOutcomeUnknown>() else {
+        if !error.is::<SubmissionOutcomeUnknown>() {
             return self.record_mutation_error("submit request", error);
-        };
-        self.unresolved_submissions
-            .lock()
-            .expect("unresolved submission lock poisoned")
-            .insert(unknown.request_id.clone(), unknown.pending.clone());
+        }
         error
-    }
-
-    fn forget_unresolved_submission(&self, request_id: &str) {
-        self.unresolved_submissions
-            .lock()
-            .expect("unresolved submission lock poisoned")
-            .remove(request_id);
     }
 
     /// Reconcile an earlier send whose owner outcome was unknown.
@@ -51,12 +38,9 @@ impl ClientCore {
         request_id: &str,
         content: &str,
     ) -> Result<Option<SubmittedRequest>> {
-        let retained = self
-            .unresolved_submissions
-            .lock()
-            .expect("unresolved submission lock poisoned")
-            .get(request_id)
-            .cloned();
+        let retained =
+            super::super::super::mutations::submission_journal::load(&self.node, request_id)
+                .await?;
         let resolved = match retained {
             Some(pending) => {
                 anyhow::ensure!(
@@ -72,7 +56,10 @@ impl ClientCore {
                 let access = self.session_queue_access(&pending.node_did);
                 match resolve_unresolved_submission(&access, &pending).await {
                     Ok(receipt) => {
-                        self.forget_unresolved_submission(request_id);
+                        super::super::super::mutations::submission_journal::forget(
+                            &self.node, request_id,
+                        )
+                        .await;
                         Some(receipt)
                     }
                     Err(error) if error.is::<SubmissionOutcomeUnknown>() => return Err(error),
@@ -80,17 +67,19 @@ impl ClientCore {
                     // rejected the identical replay, so it holds nothing with
                     // this identity.
                     Err(_) => {
-                        self.forget_unresolved_submission(request_id);
+                        super::super::super::mutations::submission_journal::forget(
+                            &self.node, request_id,
+                        )
+                        .await;
                         None
                     }
                 }
             }
-            None if self
-                .store
-                .snapshot()
-                .requests
-                .iter()
-                .any(|row| row.request_id == request_id) =>
+            None if self.store.snapshot().requests.iter().any(|row| {
+                row.request_id == request_id
+                    && row.node_did.as_deref() == Some(node_did)
+                    && row.session_id.as_deref() == Some(session_id)
+            }) =>
             {
                 Some(SubmittedRequest {
                     request_id: request_id.to_string(),
