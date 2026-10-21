@@ -938,7 +938,7 @@ where
         }
         3 | 4 => {
             let selected = select_container_record(stored, kind)?;
-            match decode_record(&selected)? {
+            match decode_capture_record(capture_version, stored, kind)? {
                 DecodedRecord::Tree(tree) if capture_version == 4 => {
                     resolve_tree(tree, fetch_block)
                 }
@@ -1013,14 +1013,24 @@ mod tests {
     #[test]
     fn version_selects_manifest_format_before_any_reads() {
         let entry = ManifestEntry {
-            doc_id: "block".into(), content_key: "hash".into(),
-            field_commit_cid: "commit".into(), byte_len: 2,
+            doc_id: "block".into(),
+            content_key: "hash".into(),
+            field_commit_cid: "commit".into(),
+            byte_len: 2,
         };
         let flat = encode_manifest(&[entry.clone()]).unwrap();
-        let tree = encode_tree(ManifestTree { root: entry, height: 0, leaves: 1 }).unwrap();
+        let tree = encode_tree(ManifestTree {
+            root: entry,
+            height: 0,
+            leaves: 1,
+        })
+        .unwrap();
         let flat = encode_container(&flat, &flat).unwrap();
         let tree = encode_container(&tree, &tree).unwrap();
-        for kind in [CapturePayloadKind::RequestBody, CapturePayloadKind::ProvenancePayload] {
+        for kind in [
+            CapturePayloadKind::RequestBody,
+            CapturePayloadKind::ProvenancePayload,
+        ] {
             assert!(decode_capture_record(3, &flat, kind).is_ok());
             assert!(decode_capture_record(4, &tree, kind).is_ok());
             assert!(decode_capture_record(3, &tree, kind).is_err());
@@ -1216,8 +1226,12 @@ mod tests {
                     })
                 }
                 "manifest" | "manifest_tree" => {
-                    assert_eq!(case.encoding == "manifest_tree", case.manifest_root.is_some(),
-                        "{}: the tree adapter requires one root child", case.name);
+                    assert_eq!(
+                        case.encoding == "manifest_tree",
+                        case.manifest_root.is_some(),
+                        "{}: the tree adapter requires one root child",
+                        case.name
+                    );
                     let chunks = if case.manifest_blocks.is_empty() {
                         Vec::new()
                     } else {
