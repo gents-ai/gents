@@ -848,10 +848,17 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                     _ => ChatAction::Sse(completion_text_sse("waiting on the job")),
                 };
             }
+            // The delivery turn's provider input carries the watch's projected
+            // completion; its frontier text is reframed, not the stored wake prompt.
+            let delivery = serde_json::to_string(&format!(
+                r#"<tool-completion tool_call_id="{}""#,
+                spawn_handle.lock().unwrap()
+            ))
+            .unwrap();
             if released.load(Ordering::SeqCst)
                 && request["messages"]
                     .to_string()
-                    .contains(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
+                    .contains(&delivery[1..delivery.len() - 1])
             {
                 return if calls_tool(request, "update_goal") {
                     ChatAction::Sse(completion_text_sse("goal complete"))
