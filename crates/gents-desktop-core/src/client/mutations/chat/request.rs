@@ -73,9 +73,12 @@ pub async fn submit_request(
         None,
     )
     .await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    access.write("submit_request", &mutation).await?;
-    Ok(result)
+    // Owner submissions, including resends routed through this function, are
+    // receipt-reconciled. An unknown outcome returns `SubmissionOutcomeUnknown`
+    // carrying the original signed payload, so reconciliation replays identical
+    // bytes instead of minting a new request identity.
+    receipt::commit_signed_submission(access, receipt::UnresolvedSubmission::new(create, result)?)
+        .await
 }
 
 #[cfg(test)]
@@ -993,3 +996,10 @@ mod lean_vocab_test;
 
 #[cfg(test)]
 mod tests;
+
+mod receipt;
+
+pub use receipt::{
+    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
+    SubmissionOutcomeUnknown, UnresolvedSubmission,
+};
