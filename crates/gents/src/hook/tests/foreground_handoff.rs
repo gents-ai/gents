@@ -129,7 +129,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     )
     .max_backgrounded;
     let mut fillers = Vec::new();
-    let filler_ids = (1..capacity)
+    let mut filler_ids = (1..=capacity)
         .map(|index| format!("handoff-capacity-{index}"))
         .collect::<Vec<_>>();
     let filler_calls = filler_ids
@@ -155,6 +155,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
             .collect(),
     };
     publish_and_adopt_tool_turns(&hook, &filler_calls, filler_message).await;
+    let overflow_id = filler_ids.pop().unwrap();
     for id in &filler_ids {
         let mut admitted = hook.adopt_accepted_tool_dispatch(
             id,
@@ -169,6 +170,23 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         admitted.start_running().await.unwrap();
         fillers.push(admitted);
     }
+    let mut overflow = hook.adopt_accepted_tool_dispatch(
+        &overflow_id,
+        None,
+        "handoff-parent",
+        &session,
+        "held_background_tool",
+        "{}",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Background,
+    ).await.unwrap();
+    let refusal = overflow.start_running().await.unwrap_err();
+    assert_eq!(
+        refusal
+            .downcast_ref::<crate::hook::persistence::BackgroundCapacityExceeded>()
+            .map(|capacity| capacity.0),
+        Some(capacity)
+    );
     replay.background_with_receipt(&receipt).await.unwrap();
     for filler in &mut fillers {
         filler

@@ -135,12 +135,13 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         id: Some("concurrent-budget-turn".into()),
         content: ids
             .iter()
-            .map(|id| {
+            .zip(&batch)
+            .map(|(id, case)| {
                 AssistantContent::ToolCall(ToolCall {
                     id: id.clone(),
                     call_id: None,
                     function: ToolFunction {
-                        name: "spawn_process".into(),
+                        name: case.action.clone(),
                         arguments: serde_json::from_str(args).unwrap(),
                     },
                     signature: None,
@@ -152,8 +153,8 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     publish_and_adopt_tool_turns(&hook, &calls, message).await;
     let results = tokio::time::timeout(
         std::time::Duration::from_secs(60),
-        futures::future::join_all(ids.iter().map(|id| {
-            hook.on_tool_call("spawn_process", None, id, args)
+        futures::future::join_all(ids.iter().zip(&batch).map(|(id, case)| {
+            hook.on_tool_call(&case.action, None, id, args)
         })),
     )
     .await
