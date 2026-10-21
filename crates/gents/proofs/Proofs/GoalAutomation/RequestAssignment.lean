@@ -67,6 +67,32 @@ theorem fresh_chat_has_no_inherited_assignment (facts : InputFacts)
     prepareInput facts = .prepared none := by
   simp [prepareInput, uncaptured, fresh]
 
+/-- Session-message input belongs to the destination session. Its caller's
+Goal is not input capture. A source read is either the destination runtime's
+canonical transaction or its verified session-scoped observation. -/
+structure MessageInputFacts where
+  owner : Nat
+  session : Nat
+  sessionReadable : Bool
+  observationVerified : Bool
+  observed : Option Assignment
+  callerReference : Option Reference
+  deriving DecidableEq, Repr
+
+def prepareMessageInput (facts : MessageInputFacts) : PreparedInput :=
+  prepareInput {
+    captured := none
+    sessionReadable := facts.sessionReadable
+    observationVerified := facts.observationVerified &&
+      facts.observed.all (fun a => a.owner == facts.owner && a.session == facts.session)
+    observed := facts.observed.map fun a => ⟨a.goal, a.root⟩
+  }
+
+theorem message_input_ignores_caller_assignment (facts : MessageInputFacts)
+    (caller : Option Reference) :
+    prepareMessageInput { facts with callerReference := caller } = prepareMessageInput facts := by
+  rfl
+
 def inScope (a : Assignment) (e : Entry) : Bool :=
   a.owner == e.owner && a.session == e.session
 

@@ -882,6 +882,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_assignment_histories_drive_goal_version_selection",
         },
         ConformanceConsumer::RustTest {
+            id: "session_message::goal_input_tests::generated_session_messages_capture_target_goal_before_signing",
+            package: "gents",
+            source_path: "crates/gents/src/session_message/goal_input_tests.rs",
+            module_path: "session_message::goal_input_tests",
+            function: "generated_session_messages_capture_target_goal_before_signing",
+        },
+        ConformanceConsumer::RustTest {
             id: "client::core::goal::tests::generated_goal_input_bindings_wait_for_verified_source_state",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/core/goal.rs",

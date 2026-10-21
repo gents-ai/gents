@@ -81,6 +81,44 @@ def inputCasesJson : String := (toJson (inputCases.map inputCaseJson)).compress
 
 example : inputCases.length = 12 := by decide
 
+structure MessageInputCase where
+  name : String
+  facts : MessageInputFacts
+  deriving DecidableEq, Repr
+
+def messageInputCases : List MessageInputCase :=
+  [ ⟨"new_session_does_not_inherit_caller_goal", ⟨1, 10, false, false, none, some ⟨9, some 900⟩⟩⟩
+  , ⟨"new_session_ignores_orphan_goal", ⟨1, 10, false, true, some ⟨1, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
+  , ⟨"local_target_without_goal", ⟨1, 10, true, true, none, some ⟨9, some 900⟩⟩⟩
+  , ⟨"local_target_uses_own_goal", ⟨1, 10, true, true, some ⟨1, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
+  , ⟨"remote_target_uses_verified_goal", ⟨2, 10, true, true, some ⟨2, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
+  , ⟨"remote_verified_absence", ⟨2, 10, true, true, none, some ⟨9, some 900⟩⟩⟩
+  , ⟨"legacy_target_has_no_physical_binding", ⟨1, 10, true, true, some ⟨1, 10, 2, none⟩, some ⟨9, some 900⟩⟩⟩
+  , ⟨"remote_missing_observation_waits", ⟨2, 10, true, false, none, some ⟨9, some 900⟩⟩⟩
+  , ⟨"remote_forged_observation_waits", ⟨2, 10, true, false, some ⟨2, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
+  , ⟨"remote_foreign_owner_waits", ⟨2, 10, true, true, some ⟨1, 10, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
+  , ⟨"remote_foreign_session_waits", ⟨2, 10, true, true, some ⟨2, 11, 2, some 200⟩, some ⟨9, some 900⟩⟩⟩
+  ]
+
+def messageInputCaseJson (c : MessageInputCase) : Json :=
+  let expected := match prepareMessageInput c.facts with
+    | .pending => Json.mkObj [("kind", toJson "pending")]
+    | .prepared reference => Json.mkObj [("kind", toJson "prepared"),
+        ("reference", reference.map referenceJson |>.getD Json.null)]
+  let observed := c.facts.observed.map fun a => Json.mkObj [
+    ("owner", toJson a.owner), ("session", toJson a.session),
+    ("goal", toJson a.goal), ("root", toJson a.root)]
+  Json.mkObj [("name", toJson c.name), ("owner", toJson c.facts.owner),
+    ("session", toJson c.facts.session), ("session_readable", toJson c.facts.sessionReadable),
+    ("observation_verified", toJson c.facts.observationVerified),
+    ("observed", observed.getD Json.null),
+    ("caller_reference", c.facts.callerReference.map referenceJson |>.getD Json.null),
+    ("expected", expected)]
+
+def messageInputCasesJson : String := (toJson (messageInputCases.map messageInputCaseJson)).compress
+
+example : messageInputCases.length = 11 := by decide
+
 def assignmentJson (a : Assignment) : Json :=
   Json.mkObj [("owner", toJson a.owner), ("session", toJson a.session),
     ("goal", toJson a.goal), ("root", toJson a.root)]

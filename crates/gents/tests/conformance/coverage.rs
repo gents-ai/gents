@@ -732,6 +732,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalObjectiveWhitespace".to_string(),
         ));
     }
+    if !snapshot.session_message_goal_input_cases.is_empty() {
+        emitted.insert((
+            "session_message_goal_input_cases".to_string(),
+            "SessionMessageGoalInputCases".to_string(),
+        ));
+    }
     if !snapshot.goal_input_binding_cases.is_empty() {
         emitted.insert((
             "goal_input_binding_cases".to_string(),

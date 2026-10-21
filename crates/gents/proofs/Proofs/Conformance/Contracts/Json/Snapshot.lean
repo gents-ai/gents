@@ -127,6 +127,8 @@ def snapshotJson : String :=
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"graph_failure_attribution_traces\":"
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
+    ++ "\"session_message_goal_input_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
     ++ "\"goal_input_binding_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.inputCasesJson ++ ","
     ++ "\"goal_assignment_history_cases\":"
