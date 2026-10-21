@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::{GoalDocument, GOAL_FIELDS};
-use crate::config_client::ConfigAccess;
+use crate::config_client::ConfigRead;
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Deserialize)]
@@ -42,7 +42,7 @@ pub(crate) struct GoalVersion {
 }
 
 pub(crate) async fn load_goal_versions_for_session(
-    access: &ConfigAccess,
+    access: &impl ConfigRead,
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<GoalVersion>> {
@@ -56,7 +56,7 @@ pub(crate) async fn load_goal_versions_for_session(
             ) {{ _docID }}
         }}"#
     );
-    let response = access.execute(&query).await?;
+    let response = access.execute_read(&query).await?;
     let docs: Vec<GoalDocumentRef> = serde_json::from_value(
         response
             .pointer("/data/Goal")
@@ -72,7 +72,7 @@ pub(crate) async fn load_goal_versions_for_session(
 }
 
 async fn load_goal_document_versions(
-    access: &ConfigAccess,
+    access: &impl ConfigRead,
     expected_node_did: &str,
     expected_session_id: &str,
     doc_id: &str,
@@ -81,7 +81,7 @@ async fn load_goal_document_versions(
     // and currently degrades malformed filters to no filter.
     let escaped_doc_id = escape_graphql_string(doc_id);
     let response = access
-        .execute(&format!(
+        .execute_read(&format!(
             r#"query {{
                 _commits(docID: "{escaped_doc_id}") {{
                     cid
@@ -136,7 +136,7 @@ async fn load_goal_document_versions(
         .collect::<Vec<_>>()
         .join(", ");
     let response = access
-        .execute(&format!(
+        .execute_read(&format!(
             r#"query {{
                 Goal(
                     cid: [{cid_list}],

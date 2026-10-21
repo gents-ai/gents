@@ -78,7 +78,7 @@ fn same_assignment(left: &super::GoalVersion, right: &super::GoalVersion) -> boo
         && left.goal.assignment_root_request_doc_id == right.goal.assignment_root_request_doc_id
 }
 
-pub(super) fn latest_assignment_goals(
+pub(crate) fn latest_assignment_goals(
     versions: &[super::GoalVersion],
 ) -> anyhow::Result<Vec<GoalDocument>> {
     use std::collections::{HashMap, HashSet};
