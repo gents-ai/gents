@@ -164,13 +164,34 @@ impl DefraSessionHook {
                 "running spawn_process parent lacks physical identity"
             ))?
         );
-        let receipt = json_string(json!({
-            "ok": true,
-            "tool_call_id": background_tool_call_id,
-            "tool_name": target_tool_name,
-            "await_mode": "background",
-            "status": "running"
-        }));
+        let receipt = match crate::toolset::is_bash_tool_name(target_name) {
+            // Command tools interpret timeout_secs per background_command_timeout
+            // (floored at 1s, capped at the background command budget), and the
+            // run also ends at the configured lifetime.
+            true => {
+                let requested = parsed.args.get("timeout_secs").and_then(|v| v.as_u64());
+                let command_timeout = crate::toolset::background_command_timeout(requested);
+                json!({
+                    "ok": true,
+                    "tool_call_id": background_tool_call_id,
+                    "tool_name": target_tool_name,
+                    "await_mode": "background",
+                    "status": "running",
+                    "effective_timeout_secs": command_timeout.min(lifetime).as_secs()
+                })
+            }
+            // Non-command targets have no timeout_secs interpretation to
+            // honour; report only the lifetime cutoff.
+            false => json!({
+                "ok": true,
+                "tool_call_id": background_tool_call_id,
+                "tool_name": target_tool_name,
+                "await_mode": "background",
+                "status": "running",
+                "lifetime_secs": lifetime.as_secs()
+            }),
+        };
+        let receipt = json_string(receipt);
         let admission = parent_lifecycle
             .admit_spawned_background(
                 crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {

@@ -54,7 +54,7 @@ fn timeout_secs_schema(
         "minimum": 1,
         "maximum": max_secs,
         "description": format!(
-            "Timeout in seconds; omit for the default ({}s). Explicit values are capped at the foreground ceiling ({}s). Backgrounded runs (spawn_process) instead get a {}s lifetime.",
+            "Timeout in seconds; omit for the default ({}s). Explicit values are capped at the foreground ceiling ({}s). Backgrounded runs (spawn_process) instead get a {}s lifetime: omitting timeout_secs uses that lifetime, and an explicit value ends the run sooner (an explicit value beyond the lifetime is clamped to it).",
             default_timeout.as_secs(),
             max_secs,
             background_lifetime.as_secs(),
