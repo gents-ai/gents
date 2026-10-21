@@ -977,16 +977,15 @@ theorem job_row_consumes_one_background_slot (ctx : StepContext) (job job' : Job
         admitStep { ctx with liveBackground := m } job out = admitStep ctx job out) := by
   refine ⟨fun hpin h hp => ?_, fun hpin => ?_⟩
   · have hb : (Background.admitBackground ctx.liveBackground).isNone = false := by
-      by_contra hn
-      simp only [Bool.not_eq_false] at hn
+      by_contra hnone
+      simp only [Bool.not_eq_false] at hnone
       unfold admitStep at h
       rw [hp] at h
-      dsimp only at h
-      split_ifs at h
-      exact absurd (by simp [hpin, hn])
-        ‹¬(job.pin.isNone && (Background.admitBackground ctx.liveBackground).isNone) = true›
+      simp only [hpin, Option.isNone_none, Bool.true_and, Bool.and_true] at h
+      simp only [if_pos hnone] at h
+      cases h
     unfold Background.admitBackground at hb ⊢
-    split_ifs at hb ⊢ <;> simp_all
+    split <;> simp_all
   · unfold admitStep
     simp only [stepPin, hpin, Option.isNone_some, Bool.false_and, Bool.false_eq_true, if_false]
     rfl
