@@ -174,7 +174,7 @@ pub(crate) async fn stage_recorded_effects_in_txn(
         staged.push(
             stage_request(
                 txn,
-                job,
+                job.cause,
                 &target.0,
                 &target.1,
                 session_id,
@@ -264,7 +264,7 @@ async fn stage_spawn(
     });
     stage_request(
         txn,
-        job,
+        job.cause,
         &node_did,
         &agent_id,
         job_session_id(&job.row.root, &spawn.slot, spawn.attempt),
@@ -294,7 +294,7 @@ async fn message_hop(
 
 async fn stage_request(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    job: &JobContext<'_>,
+    cause: &SessionMessageCause,
     node_did: &str,
     agent_id: &str,
     session_id: String,
@@ -306,7 +306,7 @@ async fn stage_request(
 ) -> Result<AgentRequestCreate> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let create = build_session_message_request(
-        job.cause,
+        cause,
         &SessionMessageTarget {
             node_did: node_did.to_owned(),
             agent_id: agent_id.to_owned(),
@@ -328,7 +328,7 @@ async fn stage_request(
         bail!("job staging integrity error: retry key {retry_key} does not match the admitted request");
     }
     let plan = crate::session_message::Plan::request(session_id, hop, create.clone());
-    crate::session_message::stage_planned_write_in_txn(txn, job.cause, &plan).await?;
+    crate::session_message::stage_planned_write_in_txn(txn, cause, &plan).await?;
     Ok(create)
 }
 
@@ -1033,3 +1033,6 @@ mod tests {
         harness.close().await;
     }
 }
+
+#[cfg(test)]
+mod goal_input_tests;

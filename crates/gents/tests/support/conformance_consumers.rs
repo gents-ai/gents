@@ -896,6 +896,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_session_messages_capture_target_goal_before_signing",
         },
         ConformanceConsumer::RustTest {
+            id: "plugin_job::effects::goal_input_tests::generated_deliveries_capture_destination_goal_in_the_admission_transaction",
+            package: "gents",
+            source_path: "crates/gents/src/plugin_job/effects/goal_input_tests.rs",
+            module_path: "plugin_job::effects::goal_input_tests",
+            function: "generated_deliveries_capture_destination_goal_in_the_admission_transaction",
+        },
+        ConformanceConsumer::RustTest {
             id: "client::core::goal::tests::generated_goal_input_bindings_wait_for_verified_source_state",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/core/goal.rs",
