@@ -1,0 +1,239 @@
+import Proofs.Workspace.EditorUndoCheckpoint
+import Proofs.Conformance.Contracts.Json.Helpers
+
+namespace Conformance.EditorUndoCheckpoint
+open Workspace.ChangeReview.Editor Workspace.ChangeReview.Editor.Checkpoint Conformance.Contracts
+
+private def target : Target :=
+  {reference := "node/session/request/tool/root/file", actions := ["physical-action"],
+   uri := "file:///project/file", before := "before\n", after := "after\n", version := 4}
+private def document : Document :=
+  {uri := target.uri, content := target.after, version := target.version, writable := true}
+private def observations : Observations := ⟨true, true, true, true, true⟩
+private def saveObservations : SaveObservations := ⟨true, true, true, true⟩
+private def durable : Receipt := ⟨true, true, true⟩
+private def admit (caller : Nat := 1) (id : String := "operation") : Input :=
+  .admit caller id [target] [document] observations
+private def reserveInputs : List Input :=
+  [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 durable]
+private def startRestore : List Input :=
+  [.advance 1 (.startRestore 0 true true), .finishWrite 1 durable, .launch 1]
+private def restored : List Input :=
+  startRestore ++ [.settle 1, .advance 1 (.observeRestore 0 .applied true true), .finishWrite 1 durable]
+private def startSave : List Input :=
+  [.advance 1 (.startSave 0 saveObservations true), .finishWrite 1 durable, .launch 1]
+private def saved : List Input :=
+  startSave ++ [.settle 1, .advance 1 (.observeSave 0 ⟨.saved, true⟩ true), .finishWrite 1 durable]
+private def reservedSequence : Sequence := (admitSequence [target] [document] observations true).getD ⟨[], true⟩
+private def pendingSequence : Sequence := (Workspace.ChangeReview.Editor.step reservedSequence (.startRestore 0 true true)).1
+private def restoredSequence : Sequence :=
+  (Workspace.ChangeReview.Editor.step pendingSequence (.observeRestore 0 .applied true true)).1
+private def savingSequence : Sequence := (Workspace.ChangeReview.Editor.step restoredSequence (.startSave 0 saveObservations true)).1
+private def completedSequence : Sequence :=
+  (Workspace.ChangeReview.Editor.step savingSequence (.observeSave 0 ⟨.saved, true⟩ true)).1
+private def retained (sequence : Sequence) : World := ⟨.present 1 [⟨"old", sequence⟩], none⟩
+private def replay : List Input := [.acquire 2 .acquired, .load 2, admit 2 "new", .launch 2, .release 2]
+
+structure Case where
+  name : String
+  initial : World := {}
+  inputs : List Input
+  expected : List Output
+
+private def accepted : List Output := [.acquired, .loaded, .checkpoint, .acknowledged]
+private def restoreOutputs : List Output :=
+  [.checkpoint, .acknowledged, .effect .restore, .settled, .checkpoint, .acknowledged]
+private def saveOutputs : List Output :=
+  [.checkpoint, .acknowledged, .effect .save, .settled, .checkpoint, .acknowledged]
+private def noReplay : List Output := [.acquired, .loaded, .refused, .refused, .released]
+
+def cases : List Case :=
+  [ {name := "restore_and_normal_save_require_separate_durable_acknowledgements",
+      inputs := reserveInputs ++ restored ++ saved ++ [.release 1],
+      expected := accepted ++ restoreOutputs ++ saveOutputs ++ [.released]}
+  , {name := "second_window_cannot_acquire_held_guard", inputs :=
+      [.acquire 1 .acquired, .acquire 2 .acquired, .load 2, .release 2, .load 1],
+      expected := [.acquired, .busy, .refused, .refused, .loaded]}
+  , {name := "real_os_lock_busy", inputs := [.acquire 1 .busy, .load 1, .launch 1],
+      expected := [.busy, .refused, .refused]}
+  , {name := "unavailable_guard_refuses", inputs := [.acquire 1 .unavailable, .load 1],
+      expected := [.refused, .refused]}
+  , {name := "corrupt_or_truncated_journal_refuses", initial := ⟨.corrupt, none⟩,
+      inputs := [.acquire 1 .acquired, .load 1, admit, .launch 1],
+      expected := [.acquired, .refused, .refused, .refused]}
+  , {name := "unreadable_journal_is_not_empty", initial := ⟨.unavailable, none⟩,
+      inputs := [.acquire 1 .acquired, .load 1, admit], expected := [.acquired, .refused, .refused]}
+  , {name := "unsupported_envelope_version_refuses", initial := ⟨.present 2 [], none⟩,
+      inputs := [.acquire 1 .acquired, .load 1, admit], expected := [.acquired, .refused, .refused]}
+  , {name := "malformed_ref_only_ledger_refuses", initial := ⟨.present 1 [⟨"", reservedSequence⟩], none⟩,
+      inputs := [.acquire 1 .acquired, .load 1, admit], expected := [.acquired, .refused, .refused]}
+  , {name := "reservation_write_failure_poisoned_until_new_explicit_session", inputs :=
+      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨false, false, false⟩,
+       .finishWrite 1 durable, .launch 1, .release 1, .acquire 2 .acquired, .load 2, admit 2 "new"],
+      expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .refused,
+       .released, .acquired, .loaded, .checkpoint]}
+  , {name := "installed_reservation_lost_ack_is_inert_and_reserved", inputs :=
+      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨true, true, false⟩,
+       .launch 1, .release 1] ++ replay,
+      expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .released] ++ noReplay}
+  , {name := "directory_sync_unknown_never_grants_effect", inputs :=
+      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨true, false, false⟩,
+       .launch 1, .release 1] ++ replay,
+      expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .released] ++ noReplay}
+  , {name := "ack_without_durability_is_not_success", inputs :=
+      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨true, false, true⟩, .launch 1],
+      expected := [.acquired, .loaded, .checkpoint, .refused, .refused]}
+  , {name := "durability_without_installation_is_not_success", inputs :=
+      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨false, true, true⟩, .launch 1],
+      expected := [.acquired, .loaded, .checkpoint, .refused, .refused]}
+  , {name := "pending_restoration_replay_is_inert", initial := retained pendingSequence,
+      inputs := replay, expected := noReplay}
+  , {name := "pending_save_replay_is_inert", initial := retained savingSequence,
+      inputs := replay, expected := noReplay}
+  , {name := "completed_operation_replay_is_inert", initial := retained completedSequence,
+      inputs := replay, expected := noReplay}
+  , {name := "known_rejected_allows_only_a_new_explicit_attempt", initial := retained
+      ⟨[{reference := target.reference, actions := target.actions, uri := target.uri,
+          restore := .rejected, save := ⟨.pending, false⟩}], true⟩,
+      inputs := [.acquire 2 .acquired, .load 2, admit 2 "new"],
+      expected := [.acquired, .loaded, .checkpoint]}
+  , {name := "cancel_during_checkpoint_cannot_release_or_launch", inputs :=
+      [.acquire 1 .acquired, .load 1, admit, .cancel 1, .release 1,
+       .finishWrite 1 durable, .launch 1, .release 1] ++ replay,
+      expected := [.acquired, .loaded, .checkpoint, .cancelled, .held, .acknowledged,
+       .refused, .released] ++ noReplay}
+  , {name := "cancelled_restore_keeps_guard_until_actual_settlement", inputs :=
+      reserveInputs ++ startRestore ++ [.cancel 1, .release 1, .acquire 2 .acquired,
+       .advance 1 (.observeRestore 0 .applied true true), .settle 1,
+       .advance 1 (.observeRestore 0 .applied true true), .finishWrite 1 durable,
+       .advance 1 (.startSave 0 saveObservations true), .release 1],
+      expected := accepted ++ [.checkpoint, .acknowledged, .effect .restore, .cancelled,
+       .held, .busy, .refused, .settled, .checkpoint, .acknowledged, .refused, .released]}
+  , {name := "cancelled_save_keeps_guard_until_actual_settlement", inputs :=
+      reserveInputs ++ restored ++ startSave ++ [.cancel 1, .release 1, .settle 1,
+       .advance 1 (.observeSave 0 ⟨.saved, true⟩ true), .finishWrite 1 durable, .release 1],
+      expected := accepted ++ restoreOutputs ++ [.checkpoint, .acknowledged, .effect .save,
+       .cancelled, .held, .settled, .checkpoint, .acknowledged, .released]}
+  , {name := "restore_marker_installed_but_lost_ack_never_launches", inputs := reserveInputs ++
+      [.advance 1 (.startRestore 0 true true), .finishWrite 1 ⟨true, true, false⟩,
+       .launch 1, .release 1] ++ replay,
+      expected := accepted ++ [.checkpoint, .refused, .refused, .released] ++ noReplay}
+  , {name := "checkpoint_in_flight_holds_guard", inputs :=
+      [.acquire 1 .acquired, .load 1, admit, .release 1, .acquire 2 .acquired],
+      expected := [.acquired, .loaded, .checkpoint, .held, .busy]}
+  , {name := "stale_connection_cannot_use_released_effect", inputs := reserveInputs ++
+      [.advance 1 (.startRestore 0 true true), .finishWrite 1 durable, .release 1,
+       .acquire 2 .acquired, .launch 1, .settle 1, .load 2, admit 2 "new"],
+      expected := accepted ++ [.checkpoint, .acknowledged, .released, .acquired,
+       .refused, .refused, .loaded, .refused]}
+  , {name := "foreign_write_cannot_change_owned_pending_candidate", inputs :=
+      [.acquire 1 .acquired, .load 1, admit, .finishWrite 2 durable, .launch 2,
+       .finishWrite 1 durable],
+      expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .acknowledged]}
+  ]
+
+def trace (world : World) : List Input → List (World × Output)
+  | [] => []
+  | input :: rest =>
+    let next := Checkpoint.step world input
+    next :: trace next.1 rest
+
+theorem expected_traces :
+    cases.all (fun c => (trace c.initial c.inputs).map Prod.snd == c.expected) = true := by native_decide
+
+private def boolJson (value : Bool) := if value then "true" else "false"
+private def object (fields : List (String × String)) :=
+  "{" ++ String.intercalate "," (fields.map fun (key, value) => jsonString key ++ ":" ++ value) ++ "}"
+private def stateJson : State → String
+  | .fresh => "\"fresh\"" | .pending => "\"pending\"" | .applied => "\"applied\""
+  | .rejected => "\"rejected\"" | .unknown => "\"unknown\""
+private def saveStateJson : SaveState → String
+  | .pending => "\"pending\"" | .saving => "\"saving\"" | .saved => "\"saved\""
+  | .conflict => "\"conflict\"" | .failed => "\"failed\"" | .unknown => "\"unknown\""
+private def saveJson (marker : SaveMarker) :=
+  object [("state", saveStateJson marker.state), ("exact", boolJson marker.exact)]
+private def effectJson : Effect → String
+  | .none => "\"none\"" | .restore => "\"restore\"" | .save => "\"save\""
+private def sequenceJson (sequence : Sequence) := object
+  [("items", jsonArray (sequence.items.map fun progress => object
+    [("reference", jsonString progress.reference), ("actions", jsonArray (progress.actions.map jsonString)),
+     ("uri", jsonString progress.uri), ("restore", stateJson progress.restore), ("save", saveJson progress.save)])),
+   ("closed", boolJson sequence.closed)]
+private def ledgerJson (ledger : Ledger) := jsonArray (ledger.map fun operation =>
+  object [("id", jsonString operation.id), ("sequence", sequenceJson operation.sequence)])
+private def storedJson : Stored → String
+  | .absent => object [("kind", "\"absent\"")]
+  | .present version ledger => object [("kind", "\"present\""), ("version", toString version), ("ledger", ledgerJson ledger)]
+  | .corrupt => object [("kind", "\"corrupt\"")]
+  | .unavailable => object [("kind", "\"unavailable\"")]
+private def proposalJson (proposal : Proposal) := object
+  [("ledger", ledgerJson proposal.ledger), ("effect", effectJson proposal.effect),
+   ("operation", (proposal.operation.map jsonString).getD "null")]
+private def holderJson (holder : Holder) := object
+  [("caller", toString holder.caller), ("loaded", boolJson holder.loaded),
+   ("refused", boolJson holder.refused), ("cancelled", boolJson holder.cancelled),
+   ("ledger", ledgerJson holder.ledger), ("operation", (holder.operation.map jsonString).getD "null"),
+   ("pending", (holder.pending.map proposalJson).getD "null"),
+   ("grant", effectJson holder.grant), ("running", effectJson holder.running)]
+private def worldJson (world : World) := object
+  [("stored", storedJson world.stored), ("holder", (world.holder.map holderJson).getD "null")]
+private def outputJson : Output → String
+  | .acquired => "\"acquired\"" | .busy => "\"busy\"" | .loaded => "\"loaded\""
+  | .checkpoint => "\"checkpoint\"" | .acknowledged => "\"acknowledged\"" | .refused => "\"refused\""
+  | .effect effect => object [("effect", effectJson effect)]
+  | .settled => "\"settled\"" | .cancelled => "\"cancelled\"" | .held => "\"held\"" | .released => "\"released\""
+private def targetJson (t : Target) := object
+  [("reference", jsonString t.reference), ("actions", jsonArray (t.actions.map jsonString)), ("uri", jsonString t.uri),
+   ("before", jsonString t.before), ("after", jsonString t.after), ("version", toString t.version),
+   ("encoding", jsonString t.encoding), ("eol", jsonString t.eol)]
+private def documentJson (d : Document) := object
+  [("uri", jsonString d.uri), ("content", jsonString d.content), ("version", toString d.version),
+   ("encoding", jsonString d.encoding), ("eol", jsonString d.eol), ("dirty", boolJson d.dirty),
+   ("closed", boolJson d.closed), ("writable", boolJson d.writable)]
+private def observationsJson (o : Observations) := object
+  [("trusted", boolJson o.trusted), ("selectionCurrent", boolJson o.selectionCurrent),
+   ("sourcesVerified", boolJson o.sourcesVerified), ("mappingsCurrent", boolJson o.mappingsCurrent),
+   ("preservesConflicts", boolJson o.preservesConflicts)]
+private def saveObservationsJson (o : SaveObservations) := object
+  [("preservesConflicts", boolJson o.preservesConflicts), ("documentCurrent", boolJson o.documentCurrent),
+   ("diskPostimageCurrent", boolJson o.diskPostimageCurrent), ("bufferRecoverable", boolJson o.bufferRecoverable)]
+private def actionJson : Action → String
+  | .startRestore index allowed persisted => object
+    [("kind", "\"startRestore\""), ("index", toString index), ("allowed", boolJson allowed), ("persisted", boolJson persisted)]
+  | .observeRestore index completion observed persisted => object
+    [("kind", "\"observeRestore\""), ("index", toString index), ("completion", stateJson (match completion with
+       | .applied => .applied | .rejected => .rejected | .unknown => .unknown)),
+     ("observed", boolJson observed), ("persisted", boolJson persisted)]
+  | .startSave index o persisted => object
+    [("kind", "\"startSave\""), ("index", toString index), ("observations", saveObservationsJson o), ("persisted", boolJson persisted)]
+  | .observeSave index result persisted => object
+    [("kind", "\"observeSave\""), ("index", toString index), ("result", saveJson result), ("persisted", boolJson persisted)]
+  | .observeSavedByEditor index result persisted => object
+    [("kind", "\"observeSavedByEditor\""), ("index", toString index), ("result", saveJson result), ("persisted", boolJson persisted)]
+private def inputJson : Input → String
+  | .acquire caller observation => object [("kind", "\"acquire\""), ("caller", toString caller),
+      ("observation", jsonString (match observation with | .acquired => "acquired" | .busy => "busy" | .unavailable => "unavailable"))]
+  | .load caller => object [("kind", "\"load\""), ("caller", toString caller)]
+  | .admit caller id targets documents o => object [("kind", "\"admit\""), ("caller", toString caller),
+      ("id", jsonString id), ("targets", jsonArray (targets.map targetJson)),
+      ("documents", jsonArray (documents.map documentJson)), ("observations", observationsJson o)]
+  | .advance caller action => object [("kind", "\"advance\""), ("caller", toString caller), ("action", actionJson action)]
+  | .finishWrite caller receipt => object [("kind", "\"finishWrite\""), ("caller", toString caller),
+      ("receipt", object [("installed", boolJson receipt.installed), ("durable", boolJson receipt.durable),
+       ("acknowledged", boolJson receipt.acknowledged)])]
+  | .launch caller => object [("kind", "\"launch\""), ("caller", toString caller)]
+  | .settle caller => object [("kind", "\"settle\""), ("caller", toString caller)]
+  | .cancel caller => object [("kind", "\"cancel\""), ("caller", toString caller)]
+  | .release caller => object [("kind", "\"release\""), ("caller", toString caller)]
+private def traceJson (world : World) : List Input → List String
+  | [] => []
+  | input :: rest =>
+    let next := Checkpoint.step world input
+    object [("world", worldJson world), ("input", inputJson input),
+      ("expected", worldJson next.1), ("output", outputJson next.2)] :: traceJson next.1 rest
+
+def casesJson := jsonArray (cases.map fun c => object
+  [("name", jsonString c.name), ("initial", worldJson c.initial), ("trace", jsonArray (traceJson c.initial c.inputs))])
+end Conformance.EditorUndoCheckpoint
+
+def main : IO Unit := IO.println Conformance.EditorUndoCheckpoint.casesJson
