@@ -117,6 +117,9 @@ def admissionCases : List AdmissionCase :=
       { pinned [] 0 0 with pin := some (hostPin guestPin { facts with origin := .dynamic }) },
       effects [spawn "1:b" targetB]⟩
   , ⟨"stalled_step_refused", context, pinned [] 0 0, effects []⟩
+  , ⟨"full_background_budget_returns_capacity_refusal",
+      { context with liveBackground := Background.maxBackgroundedPerParent }, stepZero,
+      effects [] (some guestPin)⟩
   , ⟨"scratch_then_complete_admitted", context, pinned [] 0 0,
       .result { writes := 1, scratch := ["runs/call-1/report.md"], progress := false } [] none
         none⟩ ]
@@ -145,6 +148,7 @@ theorem admission_regressions :
       , (some "plugin_job_depth_exceeded", none, 0)
       , (some "plugin_job_policy_denied", none, 0)
       , (some "plugin_job_stalled", none, 0)
+      , (some "background_tool_budget_exceeded", none, 0)
       , (none, some (.completed, 0, 0), 0) ] := by native_decide
 
 private def targetJson (t : Target) : Json :=
