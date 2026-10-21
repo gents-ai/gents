@@ -136,26 +136,43 @@ async fn tick(
     request_doc_id: &str,
     pin: &JobPin,
 ) -> Result<bool> {
-    let (row, facts) = facts_of(driver, access, row_doc_id, request_doc_id, pin).await?;
+    let (_, facts) = facts_of(driver, access, row_doc_id, request_doc_id, pin).await?;
     match tick_action(&facts) {
         TickAction::Untouched => Ok(false),
-        TickAction::Kill(cause) => {
-            kill_row(access, row_doc_id, &row, cause).await?;
-            Ok(true)
-        }
+        TickAction::Kill(_) => kill_at_rest(driver, access, row_doc_id, request_doc_id, pin).await,
         TickAction::Step => {
             if let Some(outcome) = driver.step_now(row_doc_id).await {
                 if outcome? == StepOutcome::Committed {
-                    let (row, facts) =
-                        facts_of(driver, access, row_doc_id, request_doc_id, pin).await?;
-                    if let TickAction::Kill(cause) = tick_action(&facts) {
-                        kill_row(access, row_doc_id, &row, cause).await?;
-                    }
+                    kill_at_rest(driver, access, row_doc_id, request_doc_id, pin).await?;
                 }
             }
             Ok(true)
         }
     }
+}
+
+/// Kills the row if facts re-read while no step of it can run still say so;
+/// `true` when it killed. A step's effects are not visible until it commits,
+/// so a row read while a step is in flight, or across that commit, can look
+/// stalled; one in flight is left to its step and the next sweep.
+async fn kill_at_rest(
+    driver: &Arc<JobDriver>,
+    access: &ConfigAccess,
+    row_doc_id: &str,
+    request_doc_id: &str,
+    pin: &JobPin,
+) -> Result<bool> {
+    driver
+        .hold_steps(row_doc_id, async {
+            let (row, facts) = facts_of(driver, access, row_doc_id, request_doc_id, pin).await?;
+            let TickAction::Kill(cause) = tick_action(&facts) else {
+                return Ok(false);
+            };
+            kill_row(access, row_doc_id, &row, cause).await?;
+            Ok(true)
+        })
+        .await
+        .unwrap_or(Ok(false))
 }
 
 async fn kill_row(
@@ -643,6 +660,27 @@ mod tests {
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
         assert_eq!(step.progress(&step.row).await.revision, 2);
+        step.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_row_whose_step_is_in_flight_is_not_killed_stalled() {
+        let step = stepper(json!({"effects": {}})).await;
+        terminal_child(&step, &step.row, "child-1").await;
+        let driver = driver_of(&step);
+        let stepped = driver.step_now(&step.row).await.unwrap().unwrap();
+        assert_eq!(stepped, StepOutcome::Committed);
+        // The stored row reads as stalled while a step that has not yet
+        // committed its effects holds it.
+        let swept = driver
+            .hold_steps(&step.row, redrive_running_jobs(&driver))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(swept, 0);
+        assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
+        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
+        assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
         step.close().await;
     }
 
