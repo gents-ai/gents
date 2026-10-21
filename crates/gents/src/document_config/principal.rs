@@ -6,9 +6,6 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::serde_helpers::first_row_with_doc_id;
 
-/// Default admission bound on a request's causal hop.
-pub const DEFAULT_MAX_REQUEST_HOP: u32 = 8;
-
 /// DefraDB DID identity for the runtime node. One active instance is an
 /// operating convention; runtime enforcement is deferred to #1435. No host identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,8 +32,7 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_by: Option<String>,
-    /// Admission bound on a request's causal hop; absent uses
-    /// [`DEFAULT_MAX_REQUEST_HOP`].
+    /// Optional admission bound on a request's causal hop; absent disables the cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_request_hop: Option<u32>,

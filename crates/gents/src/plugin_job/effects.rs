@@ -763,7 +763,7 @@ mod tests {
             engine_digest: "engine".to_owned(),
             engine_provenance_operator: true,
             installed_trusted_sources: Vec::new(),
-            max_hop: 8,
+            max_hop: Some(8),
             target_hops: vec![((node_did.to_owned(), "general".to_owned()), 0)],
             live_background: 0,
             started_by_job: false,

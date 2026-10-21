@@ -190,7 +190,14 @@ pub async fn run_step0(
         .await;
     }
     let row = read_step_row(&access, &row_doc_id).await?;
-    let mut ctx = step0_context(runtime, binding, &installed, &input, &output, lifecycle)?;
+    let max_hop = crate::request_admission::max_request_hop(
+        runtime.node.as_ref(),
+        &caller.node_did,
+    )
+    .await?;
+    let mut ctx = step0_context(
+        runtime, binding, &installed, &input, &output, lifecycle, max_hop,
+    )?;
     ctx.control_targets = control_targets(&access, coordinate, &output).await?;
     if let Err(refusal) = admit_step(&ctx, &row, &output) {
         let (class, message, next) = step0_refusal(
@@ -913,6 +920,7 @@ fn step0_context(
     input: &JobStepInput,
     output: &JobStepOutput,
     lifecycle: &ToolCallLifecycle,
+    max_hop: Option<u32>,
 ) -> Result<StepContext> {
     let caller = &input.caller;
     let policy = binding.settings.as_ref().map(|settings| &settings.policy);
@@ -959,7 +967,7 @@ fn step0_context(
         engine_digest: installed.digest.clone(),
         engine_provenance_operator: engine_guard(&runtime.home, installed).is_ok(),
         installed_trusted_sources,
-        max_hop: crate::document_config::DEFAULT_MAX_REQUEST_HOP,
+        max_hop,
         target_hops: Vec::new(),
         live_background: 0,
         started_by_job: caller.started_by_job,
@@ -1026,7 +1034,7 @@ mod tests {
             engine_digest: "engine".to_owned(),
             engine_provenance_operator: true,
             installed_trusted_sources: Vec::new(),
-            max_hop: 8,
+            max_hop: Some(8),
             target_hops: vec![(("node".to_owned(), "a".to_owned()), 0)],
             live_background: 0,
             started_by_job: false,

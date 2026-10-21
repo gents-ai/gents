@@ -141,7 +141,7 @@ pub struct AgentRequestAdmissionObservation {
     pub target_policy_allows: bool,
     /// The target's `PeerAdmissionAuthority` ACP authorizes the requester DID.
     pub peer_authority_allows: bool,
-    /// `request_hop <= Node.max_request_hop` for the target.
+    /// The target node's configured causal-hop cap admits this request, if set.
     pub hop_within_bound: bool,
 }
 

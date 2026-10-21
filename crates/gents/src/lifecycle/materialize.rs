@@ -549,6 +549,10 @@ pub enum RequestHopCause {
     Continuation,
 }
 
+/// Materializes hop provenance in the signed `u32` request field. Cross-session
+/// increments saturate at `u32::MAX`; disabling the configured admission cap
+/// does not make this representation mathematically unbounded or preserve an
+/// exact depth beyond that value.
 pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
     match cause {
         RequestHopCause::Root => 0,
@@ -557,8 +561,8 @@ pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
     }
 }
 
-pub fn request_hop_within_bound(max_request_hop: u32, hop: u32) -> bool {
-    hop <= max_request_hop
+pub fn request_hop_within_bound(max_request_hop: Option<u32>, hop: u32) -> bool {
+    max_request_hop.map_or(true, |bound| hop <= bound)
 }
 
 #[derive(Debug, Clone)]

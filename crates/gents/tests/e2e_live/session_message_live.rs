@@ -3349,13 +3349,11 @@ async fn wait_for_node_quiescent(node: &EmbeddedNode, node_did: &str, timeout: D
 
 async fn soak_violations(fx: &LiveNode) -> Vec<String> {
     let node = fx.node();
-    let max_request_hop = i64::from(
-        ensure_node(node, &fx.did)
-            .await
-            .expect("node_config")
-            .max_request_hop
-            .unwrap_or(8),
-    );
+    let max_request_hop = ensure_node(node, &fx.did)
+        .await
+        .expect("node_config")
+        .max_request_hop
+        .map(i64::from);
     let requests = requests_where(
         node,
         "node_did",
@@ -3389,11 +3387,13 @@ async fn soak_violations(fx: &LiveNode) -> Vec<String> {
                 .failure_reason
                 .as_deref()
                 .is_some_and(|reason| reason.contains("max_request_hop"));
-        if hop(request) > max_request_hop && !refused_by_bound {
-            violations.push(format!(
-                "hop {} exceeds max_request_hop {max_request_hop}: {request:?}",
-                hop(request)
-            ));
+        if let Some(max_request_hop) = max_request_hop {
+            if hop(request) > max_request_hop && !refused_by_bound {
+                violations.push(format!(
+                    "hop {} exceeds max_request_hop {max_request_hop}: {request:?}",
+                    hop(request)
+                ));
+            }
         }
         if request.caused_by_parent_tool_call_id.is_some() {
             let Some(parent) = request
