@@ -229,14 +229,6 @@ impl MaterializerHandle for ProductionMaterializer {
         let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
 
         Box::pin(async move {
-            if let Some(prepared) = &delivery {
-                if let Some(request_id) = self
-                    .recover_admitted_fire(&prepared.receipt.identity)
-                    .await?
-                {
-                    return Err(super::MaterializeDuplicate { request_id }.into());
-                }
-            }
             let (agent_id, node_did, _deadline_secs, _backend_id) = resolved?;
             let runtime_actor = runtime_actor?;
             crate::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
