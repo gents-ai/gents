@@ -189,6 +189,10 @@ pub async fn verify(
         ui["sessionId"] == session,
         "goal recovery evidence crossed sessions"
     );
+    ensure!(
+        ui["sourceBlockedReasonObserved"] == true,
+        "the editor did not acknowledge the source audit reason"
+    );
     let captured = provider.captured_chat_requests();
     ensure!(
         captured
