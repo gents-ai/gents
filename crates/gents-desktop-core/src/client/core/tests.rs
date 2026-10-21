@@ -1586,3 +1586,70 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
     core.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(tmp.path().to_path_buf()),
+            ClientCoreOptions::local_only(),
+        )
+        .await?,
+    );
+    let observer = core.observer.lock().await.take().expect("observer");
+    observer.shutdown().await;
+    let owner = core.node_identity.did().to_owned();
+    let access = gents::ConfigAccess::local(core.node_arc());
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut docs = Vec::new();
+    for id in ["older", "latest"] {
+        let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+            "request_id":id,"session_id":"terminal-page","node_did":owner,
+            "agent_id":"agent","purpose":"normal","content":"fixture",
+            "lifecycle_state":"completed","created_at":now,
+        }))?;
+        let result = access
+            .write(
+                "test.terminal_page.request",
+                &format!("mutation {{ create_AgentRequest(input:{input}) {{_docID}} }}"),
+            )
+            .await?;
+        docs.push(gents::graphql::created_doc_id(&result, "AgentRequest")?);
+    }
+    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "session_id":"terminal-page","node_did":owner,"agent_id":"agent",
+        "created_at":now,"observation":{"last_activity_at":now,"latest_request":{
+            "request_doc_id":docs[1],"request_id":"latest","lifecycle_state":"completed"
+        }}
+    }))?;
+    access
+        .write(
+            "test.terminal_page.session",
+            &format!("mutation {{ create_AgentSession(input:{input}) {{_docID}} }}"),
+        )
+        .await?;
+    core.refresh_node(&owner).await?;
+    let first = core
+        .refresh_local_request(&owner, "terminal-page", Some("latest"), None, &docs)
+        .await?
+        .expect("first projection");
+    assert!(first.published_version.is_some());
+    assert_eq!(first.requests.len(), 2);
+    let second = core
+        .refresh_local_request(&owner, "terminal-page", Some("latest"), None, &docs)
+        .await?
+        .expect("unchanged projection");
+    assert!(
+        second.published_version.is_none(),
+        "unchanged terminal page must not publish another refresh: {:?}",
+        second.published_version
+    );
+    assert!(core
+        .store
+        .snapshot()
+        .request_row_by_doc_id(&docs[0])
+        .is_some());
+    core.shutdown().await?;
+    Ok(())
+}
