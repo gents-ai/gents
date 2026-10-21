@@ -121,14 +121,6 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         timeout_description.contains(&BACKGROUND_COMMAND_TIMEOUT_SECS.to_string()),
         "schema must state the background lifetime budget: {timeout_description}"
     );
-    assert!(
-        timeout_description.contains("omitting timeout_secs uses the smaller limit"),
-        "schema must state the omitted-background rule: {timeout_description}"
-    );
-    assert!(
-        timeout_description.contains("explicit values are floored at 1s and capped by both limits"),
-        "schema must state that an explicit background timeout is honoured, not replaced: {timeout_description}"
-    );
 }
 
 #[tokio::test]
@@ -2489,7 +2481,6 @@ fn command_timeout_resolution_matches_advertised_schema() {
         resolve_command_timeout(Some(0), foreground_default, foreground_max, true),
         Duration::from_secs(1)
     );
-
 }
 
 #[cfg(unix)]

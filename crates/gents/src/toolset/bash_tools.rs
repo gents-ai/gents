@@ -54,11 +54,10 @@ fn timeout_secs_schema(
         "minimum": 1,
         "maximum": max_secs,
         "description": format!(
-            "Timeout in seconds; omitted foreground runs use the default ({}s), and explicit foreground values are capped at the foreground ceiling ({}s). Backgrounded runs (spawn_process) are capped by both the configured {}s lifetime and the {}s background command budget: omitting timeout_secs uses the smaller limit, while explicit values are floored at 1s and capped by both limits.",
+            "Timeout in seconds; omitted foreground runs use the default ({}s), and explicit foreground values are capped at the foreground ceiling ({}s). Backgrounded runs (spawn_process) end at the configured {}s lifetime; explicit values are floored at 1s and capped by it.",
             default_timeout.as_secs(),
             max_secs,
             background_lifetime.as_secs(),
-            BACKGROUND_COMMAND_TIMEOUT_SECS,
         )
     })
 }

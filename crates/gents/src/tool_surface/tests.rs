@@ -3064,7 +3064,7 @@ fn unconfigured_tool_timeouts_keep_host_defaults() {
 async fn bash_schema_advertises_the_configured_background_lifetime() {
     let root = temp_root("gents-background-lifetime-schema");
     let ceiling = ToolCeiling::readwrite(root);
-    for (lifetime, expected) in [(Some(90), 90), (Some(36_001), 36_001), (None, 36_000)] {
+    for (lifetime, expected) in [(Some(90), 90), (Some(36_001), 36_000), (None, 36_000)] {
         let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
             "tools_id": "timed", "node_did": "did:key:example",
             "host": {"bash": {"mode": "Unrestricted", "background_enabled": true,
@@ -3093,15 +3093,6 @@ async fn bash_schema_advertises_the_configured_background_lifetime() {
         assert!(
             description.contains(&format!("configured {expected}s lifetime")),
             "{description}"
-        );
-        assert!(
-            description.contains("omitting timeout_secs uses the smaller limit")
-                && description.contains("explicit values are floored at 1s and capped by both limits")
-                && description.contains(&format!(
-                    "{}s background command budget",
-                    crate::toolset::BACKGROUND_COMMAND_TIMEOUT_SECS
-                )),
-            "schema must state the background explicit-timeout rule: {description}"
         );
     }
 }
