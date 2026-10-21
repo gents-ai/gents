@@ -1327,7 +1327,7 @@ pub(crate) struct LeanPluginJobContext {
     pub(crate) engine_digest: String,
     pub(crate) engine_provenance_operator: bool,
     pub(crate) installed_trusted_sources: Vec<String>,
-    pub(crate) max_hop: u32,
+    pub(crate) max_hop: Option<u32>,
     pub(crate) target_hops: Vec<LeanPluginJobTargetHop>,
     pub(crate) live_background: u32,
     pub(crate) started_by_job: bool,

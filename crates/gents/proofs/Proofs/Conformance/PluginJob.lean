@@ -55,7 +55,7 @@ private def context : StepContext :=
                 , trustedPacks := ["job_plugin_fixture"], projectRoots := [] }
   , engineDigest := "engine-1", engineProvenanceOperator := true
   , installedTrusted := fun digest => digest == "source-1"
-  , maxHop := 4, targetHop := fun _ => 0
+  , maxHop := some 4, targetHop := fun _ => 0
   , cwdAllowed := fun _ => true, within := fun base cwd => base == cwd
   , liveBackground := 0, startedByJob := false, namedOrigin := none, adoptionFacts := facts
   , callerScope := { requestId := "request-1", sessionId := "session-1", nodeDid := "did:key:node"
@@ -120,6 +120,9 @@ def admissionCases : List AdmissionCase :=
   , ⟨"full_background_budget_returns_capacity_refusal",
       { context with liveBackground := Background.maxBackgroundedPerParent }, stepZero,
       effects [] (some guestPin)⟩
+  , ⟨"absent_hop_cap_admits_deep_target",
+      { context with maxHop := none, targetHop := fun target => if target == targetA then 100 else 0 },
+      stepZero, effects [spawn "1:a" targetA] (some guestPin)⟩
   , ⟨"scratch_then_complete_admitted", context, pinned [] 0 0,
       .result { writes := 1, scratch := ["runs/call-1/report.md"], progress := false } [] none
         none⟩ ]
@@ -149,6 +152,7 @@ theorem admission_regressions :
       , (some "plugin_job_policy_denied", none, 0)
       , (some "plugin_job_stalled", none, 0)
       , (some "background_tool_budget_exceeded", none, 0)
+      , (none, some (.running, 1, 1), 0)
       , (none, some (.completed, 0, 0), 0) ] := by native_decide
 
 private def targetJson (t : Target) : Json :=
