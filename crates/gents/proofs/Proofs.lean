@@ -65,6 +65,7 @@ import Proofs.StreamingResponse
 import Proofs.Background
 import Proofs.Workspace
 import Proofs.Conformance.FileImageHydration
+import Proofs.Conformance.FileInventory
 import Proofs.Callback
 import Proofs.Migration
 import Proofs.CodexShim
