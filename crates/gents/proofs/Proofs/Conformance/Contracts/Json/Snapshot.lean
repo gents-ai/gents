@@ -79,6 +79,7 @@ import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
 import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.GoalRequestAssignment
 import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
@@ -124,6 +125,8 @@ def snapshotJson : String :=
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"graph_failure_attribution_traces\":"
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
+    ++ "\"goal_request_assignment_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.casesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
     ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","

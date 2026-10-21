@@ -875,6 +875,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_graph_logical_invocations_drive_persisted_run_projection",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::request_assignment::contract_tests::generated_goal_request_assignments_drive_signed_binding",
+            package: "gents",
+            source_path: "crates/gents/src/goal/request_assignment/contract_tests.rs",
+            module_path: "goal::request_assignment::contract_tests",
+            function: "generated_goal_request_assignments_drive_signed_binding",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::request_head::tests::generated_goal_request_head_cases_drive_signed_row_selector",
             package: "gents",
             source_path: "crates/gents/src/goal/request_head_tests.rs",
