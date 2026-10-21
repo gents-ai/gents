@@ -436,7 +436,7 @@ where
                         )
                         .await?;
                     } else {
-                        accumulator.push_provider_reasoning_delta(provider_profile, id, &reasoning);
+                        accumulator.push_reasoning_delta(id, &reasoning);
                     }
                 }
                 LoopStreamItem::ToolCall { tool_call, .. } => {

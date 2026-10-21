@@ -2011,6 +2011,12 @@ def caseCoverage : List CoverageEntry :=
       "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "reasoning_delta_cases"
+      "ReasoningDeltaCases"
+      "agent::stream_processor::tests::generated_reasoning_delta_cases_coalesce_native_parts"
+      "Generated fragment cases drive the native accumulator across reasoning identities, signed boundaries, text boundaries and UTF-8 bytes.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "reasoning_signature_cases"
       "ReasoningSignatureCases"
       "native_output_reconstruction::generated_reasoning_signature_cases_drive_native_header_validation"

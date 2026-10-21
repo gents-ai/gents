@@ -21,8 +21,8 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
     use crate::llm::message::ReasoningContent;
 
     let mut accumulator = AssistantTurnAccumulator::default();
-    accumulator.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "考");
-    accumulator.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "慮");
+    accumulator.push_reasoning_delta(None, "考");
+    accumulator.push_reasoning_delta(None, "慮");
     accumulator
         .push_provider_reasoning(
             ProviderInputProfile::ClaudeMessages,
@@ -50,7 +50,7 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
     );
 
     let mut mismatch = AssistantTurnAccumulator::default();
-    mismatch.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "prefix");
+    mismatch.push_reasoning_delta(None, "prefix");
     assert!(mismatch
         .push_provider_reasoning(
             ProviderInputProfile::ClaudeMessages,
@@ -65,7 +65,7 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
         .is_err());
 
     let mut other = AssistantTurnAccumulator::default();
-    other.push_provider_reasoning_delta(ProviderInputProfile::OpenAiChatCompletions, None, "first");
+    other.push_reasoning_delta(None, "first");
     other
         .push_provider_reasoning(
             ProviderInputProfile::OpenAiChatCompletions,
@@ -89,6 +89,63 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
         2,
         "non-Claude final remains append-only"
     );
+}
+
+#[test]
+fn generated_reasoning_delta_cases_coalesce_native_parts() {
+    use crate::lean_vocab_test::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
+    use crate::llm::message::ReasoningContent;
+
+    for case in lean_reasoning_delta_cases() {
+        let mut accumulator = AssistantTurnAccumulator::default();
+        for part in &case.before {
+            match part {
+                Part::Reasoning {
+                    id,
+                    signature,
+                    bytes,
+                } => accumulator.push_reasoning(Reasoning {
+                    id: id.map(|id| id.to_string()),
+                    content: vec![ReasoningContent::Text {
+                        text: String::from_utf8(bytes.clone()).unwrap(),
+                        signature: signature.map(|signature| signature.to_string()),
+                    }],
+                }),
+                Part::Text { bytes } => accumulator.push_text(std::str::from_utf8(bytes).unwrap()),
+            }
+        }
+        accumulator.push_reasoning_delta(
+            case.id.map(|id| id.to_string()),
+            std::str::from_utf8(&case.fragment).unwrap(),
+        );
+        let Some(Message::Assistant { content, .. }) = accumulator.take_message() else {
+            panic!("{}: missing assistant message", case.name);
+        };
+        let actual = content
+            .into_iter()
+            .flat_map(|part| match part {
+                AssistantContent::Text(text) => vec![Part::Text {
+                    bytes: text.text.into_bytes(),
+                }],
+                AssistantContent::Reasoning(reasoning) => reasoning
+                    .content
+                    .into_iter()
+                    .map(|part| {
+                        let ReasoningContent::Text { text, signature } = part else {
+                            panic!("{}: unexpected reasoning type", case.name);
+                        };
+                        Part::Reasoning {
+                            id: reasoning.id.as_ref().map(|id| id.parse().unwrap()),
+                            signature: signature.map(|signature| signature.parse().unwrap()),
+                            bytes: text.into_bytes(),
+                        }
+                    })
+                    .collect(),
+                _ => panic!("{}: unexpected content type", case.name),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, case.expected, "{}", case.name);
+    }
 }
 
 fn user_text_message(text: &str) -> Message {

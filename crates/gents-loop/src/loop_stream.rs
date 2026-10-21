@@ -649,7 +649,7 @@ where
                         yield LoopStreamItem::Reasoning(reasoning);
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
-                        accumulator.push_provider_reasoning_delta(provider_profile, id.clone(), &reasoning);
+                        accumulator.push_reasoning_delta(id.clone(), &reasoning);
                         yield LoopStreamItem::ReasoningDelta { id, reasoning };
                     }
                     StreamedAssistantContent::ToolCall { mut tool_call, internal_call_id } => {

@@ -249,11 +249,7 @@ where
                 {
                     return Ok(StreamAction::Continue);
                 }
-                self.assistant_turn.push_provider_reasoning_delta(
-                    self.provider_profile,
-                    id,
-                    &reasoning,
-                );
+                self.assistant_turn.push_reasoning_delta(id, &reasoning);
                 if !reasoning.is_empty() {
                     let flush_due = self
                         .stream_writer
@@ -584,26 +580,7 @@ impl AssistantTurnAccumulator {
         }
     }
 
-    pub fn push_reasoning_delta(&mut self, id: Option<String>, reasoning: &str) {
-        self.push_reasoning(AssistantReasoning {
-            id,
-            content: vec![gents_protocol::message::ReasoningContent::Text {
-                text: reasoning.into(),
-                signature: None,
-            }],
-        });
-    }
-
-    pub fn push_provider_reasoning_delta(
-        &mut self,
-        profile: ProviderInputProfile,
-        id: Option<String>,
-        fragment: &str,
-    ) {
-        if profile != ProviderInputProfile::ClaudeMessages {
-            self.push_reasoning_delta(id, fragment);
-            return;
-        }
+    pub fn push_reasoning_delta(&mut self, id: Option<String>, fragment: &str) {
         if let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() {
             if current.id == id {
                 if let Some(gents_protocol::message::ReasoningContent::Text {

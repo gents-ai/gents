@@ -766,12 +766,9 @@ fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
         let mut accumulator = AssistantTurnAccumulator::default();
         for event in parsed {
             match event {
-                RawStreamingChoice::ReasoningDelta { id, reasoning } => accumulator
-                    .push_provider_reasoning_delta(
-                        ProviderInputProfile::ClaudeMessages,
-                        id,
-                        &reasoning,
-                    ),
+                RawStreamingChoice::ReasoningDelta { id, reasoning } => {
+                    accumulator.push_reasoning_delta(id, &reasoning)
+                }
                 RawStreamingChoice::Reasoning { id, content } => {
                     let part = gents::llm::rig_compat::from_rig_reasoning_part(&content);
                     match &part {

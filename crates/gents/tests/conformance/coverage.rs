@@ -478,6 +478,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let mut emitted = BTreeSet::new();
     for (category, domain, present) in [
         (
+            "reasoning_delta_cases",
+            "ReasoningDeltaCases",
+            !snapshot.reasoning_delta_cases.is_empty(),
+        ),
+        (
             "reasoning_audit_cases",
             "ReasoningAuditCases",
             !snapshot.reasoning_audit_cases.is_empty(),

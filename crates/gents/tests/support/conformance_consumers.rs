@@ -259,6 +259,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::stream_processor::tests::generated_reasoning_delta_cases_coalesce_native_parts",
+            package: "gents",
+            source_path: "crates/gents/src/agent/stream_processor_tests.rs",
+            module_path: "agent::stream_processor::tests",
+            function: "generated_reasoning_delta_cases_coalesce_native_parts",
+        },
+        ConformanceConsumer::RustTest {
             id: "native_output_reconstruction::generated_reasoning_audit_cases_drive_exact_native_prefix",
             package: "gents-lean-contract",
             source_path: "crates/gents-lean-contract/tests/native_output_reconstruction.rs",

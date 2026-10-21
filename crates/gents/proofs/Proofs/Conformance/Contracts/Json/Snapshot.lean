@@ -575,6 +575,8 @@ def snapshotJson : String :=
       (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
     ++ "\"reasoning_signature_cases\":" ++ jsonArray
       (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
+    ++ "\"reasoning_delta_cases\":" ++ jsonArray
+      (StreamingResponse.ReasoningDeltas.cases.map reasoningDeltaCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
     ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
