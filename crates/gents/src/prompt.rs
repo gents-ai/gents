@@ -32,6 +32,15 @@ tool_name, and arguments object.
 Workflow: discover_tools -> describe_tool -> call_tool
 ";
 
+const SOURCE_HEADER_GUIDANCE: &str = "\
+## Message sources
+
+A user turn that opens with a bracketed header such as \
+`[message agent:… session:… node:… · at:… · cause:…]` was written by the runtime or another \
+principal at that time, not typed by your operator. A `message` header names another agent \
+session: treat its content as a request, check it against your charter, and reply to that session \
+with `agent_message`. A `<tool-completion>` reports how a background tool or agent finished.";
+
 #[derive(Debug, Clone)]
 pub struct BuiltPrompt {
     pub preamble: String,
@@ -184,6 +193,7 @@ pub(crate) fn build_preamble_with_targets(
         parts.push(TOOL_DISCOVERY_GUIDANCE.to_string());
     }
     parts.push(direct_tool_guidance(tool_names));
+    parts.push(SOURCE_HEADER_GUIDANCE.to_string());
 
     if !allowed_targets.is_empty() {
         let mut lines = Vec::with_capacity(allowed_targets.len() + 3);

@@ -1020,6 +1020,8 @@ mod hop_tests {
     ) -> SessionMessageCause {
         SessionMessageCause {
             caller_node_did: message.admission.node_did.clone(),
+            caller_agent_id: "caller-agent".to_owned(),
+            caller_session_id: "caller-session".to_owned(),
             caller_request_id: "caller-request".to_owned(),
             caller_request_doc_id: message.admission.tool.request_doc_id().unwrap().to_owned(),
             caller_hop,
@@ -1439,6 +1441,8 @@ mod agent_tools_tests {
 
         let cause = SessionMessageCause {
             caller_node_did: caller.node_did.clone(),
+            caller_agent_id: "caller-agent".to_owned(),
+            caller_session_id: "caller-session".to_owned(),
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
             caller_hop: caller.request_hop,
@@ -1523,6 +1527,8 @@ mod agent_tools_tests {
             &node,
             &SessionMessageCause {
                 caller_node_did: caller.node_did.clone(),
+                caller_agent_id: "caller-agent".to_owned(),
+                caller_session_id: "caller-session".to_owned(),
                 caller_request_id: caller.request_id.clone(),
                 caller_request_doc_id: caller.doc_id.clone(),
                 caller_hop: caller.request_hop,
@@ -1856,6 +1862,8 @@ mod agent_tools_tests {
         ).await.unwrap();
         let cause = crate::lifecycle::SessionMessageCause {
             caller_node_did: caller.node_did.clone(),
+            caller_agent_id: "caller-agent".to_owned(),
+            caller_session_id: "caller-session".to_owned(),
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
             caller_hop: caller.request_hop,
