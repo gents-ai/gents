@@ -160,7 +160,9 @@ theorem recovered_is_noop (s : Snapshot) (r : Request) (commit : Bool)
 
 theorem created_publishes_atomically (s : Snapshot) (r : Request) (commit : Bool)
     (h : (resume s r commit).2 = .created) :
-    (resume s r commit).1.goal.status = .active ∧
+    (resume s r commit).1.goal.status =
+      (if s.goal.wrapupRequested ∧ !s.goal.wrapupCompleted
+        then .budgetLimited else .active) ∧
     (resume s r commit).1.children = r.binding :: s.children ∧
     (resume s r commit).1.sequence = s.sequence + 1 ∧
     (resume s r commit).1.lastContinuedFrom = some r.binding.predecessor ∧
@@ -213,10 +215,12 @@ theorem recovered_receipt_observes_current_status (s : Snapshot) (r : Request) (
   have same := recovered_is_noop s r commit h
   simp [receiptStatus, h, same]
 
-theorem created_receipt_reports_active (s : Snapshot) (r : Request) (commit : Bool)
+theorem created_receipt_reports_resumed_status (s : Snapshot) (r : Request) (commit : Bool)
     (h : (resume s r commit).2 = .created) :
-    receiptStatus (resume s r commit) = some .active := by
-  have active := (created_publishes_atomically s r commit h).1
-  simp [receiptStatus, h, active]
+    receiptStatus (resume s r commit) =
+      some (if s.goal.wrapupRequested ∧ !s.goal.wrapupCompleted
+        then .budgetLimited else .active) := by
+  have resumed := (created_publishes_atomically s r commit h).1
+  simp [receiptStatus, h, resumed]
 
 end GoalAutomation.OperatorResume

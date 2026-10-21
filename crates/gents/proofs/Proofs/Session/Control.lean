@@ -47,7 +47,9 @@ def step? (target : AgentSession.Scope) (state : State) : Action → Option Stat
           goal := pauseGoal latched.goal, stopped := true }
       else none
   | .resume =>
-      if state.queue.scope = target ∧ state.stopped then
+      if state.queue.scope = target ∧
+          ((state.request.isNone || state.request.all fun request =>
+            decide (request.state ≠ .claimed ∧ request.state ≠ .processing)) = true) then
         some { state with goal := resumeGoal state.goal, stopped := false }
       else none
   | .enqueue entry =>
@@ -69,18 +71,18 @@ theorem stopped_rejects_enqueue (target : AgentSession.Scope) (state post : Stat
     (h : step? target state (.enqueue entry) = some post) : False := by
   simp [step?, hstop] at h
 
-private def scope : AgentSession.Scope := ⟨1, 900, some 1⟩
+def scope : AgentSession.Scope := ⟨1, 900, some 1⟩
 
-private def ordinary : QueueEntry :=
+def ordinary : QueueEntry :=
   { requestId := 301, createdAt := 10, source := .user, policy := .append,
     queueKey := none, queuedAfter := none }
 
-private def wake : QueueEntry :=
+def wake : QueueEntry :=
   { requestId := 302, createdAt := 11, source := .backgroundCompletion,
     policy := .coalesce, queueKey := some 900, queuedAfter := none,
     origin := .scheduled }
 
-private def initial : State :=
+def initial : State :=
   { queue := { scope := scope, active := some 300, pending := [ordinary, wake],
       terminal := ∅ },
     request := some { state := .processing, origin := .interactive,
@@ -90,21 +92,43 @@ private def initial : State :=
     goal := { status := .active, blockedAudits := 1, wrapupRequested := false,
       wrapupCompleted := false }, stopped := false }
 
-example : (step? scope initial .interrupt).map State.queue = some initial.queue ∧
+def idleInterruptInitial : State :=
+  { initial with
+    queue := { initial.queue with active := none, pending := [], terminal := ∅ },
+    request := none }
+
+def queuedStopInitial : State :=
+  { idleInterruptInitial with queue := { idleInterruptInitial.queue with pending := [ordinary] } }
+
+def idleInterruptPost : State :=
+  (step? scope idleInterruptInitial .interrupt).getD idleInterruptInitial
+def queuedStopPost : State :=
+  (step? scope queuedStopInitial .stop).getD queuedStopInitial
+
+example : ((step? scope initial .interrupt).getD initial).queue.pending = [ordinary] ∧
+    302 ∈ ((step? scope initial .interrupt).getD initial).queue.terminal ∧
     ((step? scope initial .interrupt).getD initial).goal.status = .paused ∧
     ((step? scope initial .interrupt).getD initial).request.map
       (fun request => request.interruptRequestedAt.isSome) = some true := by
   native_decide
 
-example : ((step? scope initial .stop).getD initial).stopped = true ∧
-    ((step? scope initial .stop).getD initial).queue.pending = [] ∧
-    ((step? scope initial .stop).getD initial).queue.active = some 300 := by
+example : queuedStopPost.stopped = true ∧
+    queuedStopPost.queue.pending = [] ∧
+    queuedStopPost.queue.active = none := by
   native_decide
 
 example : step? scope ((step? scope initial .stop).getD initial) (.enqueue wake) = none := by
   native_decide
 
-example : ((step? scope ((step? scope initial .stop).getD initial) .resume).getD initial).stopped = false := by
+example : step? scope ((step? scope initial .stop).getD initial) .resume = none := by
+  native_decide
+
+example : ((step? scope
+    { initial with stopped := true, goal := { initial.goal with status := .complete },
+      request := none } .resume).getD initial).stopped = false := by
+  native_decide
+
+example : step? scope ((step? scope initial .stop).getD initial) (.enqueue ordinary) = none := by
   native_decide
 
 example : step? ⟨2, 900, some 1⟩ initial .stop = none := by
