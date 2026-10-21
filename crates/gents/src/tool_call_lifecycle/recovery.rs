@@ -859,7 +859,8 @@ async fn append_recovered_background_tool_completion(
     let status = match outcome {
         RecoveryOutcome::Cancelled
         | RecoveryOutcome::BackgroundInterrupted
-        | RecoveryOutcome::TaskDeleted => "cancelled",
+        | RecoveryOutcome::TaskDeleted
+        | RecoveryOutcome::SessionStopped => "cancelled",
         RecoveryOutcome::TimedOut | RecoveryOutcome::Failed | RecoveryOutcome::ProcessLost => {
             "failed"
         }
@@ -1161,7 +1162,8 @@ async fn recover_tool_call_row(
         RecoveryOutcome::TimedOut => lifecycle.timeout().await,
         RecoveryOutcome::Cancelled
         | RecoveryOutcome::BackgroundInterrupted
-        | RecoveryOutcome::TaskDeleted => {
+        | RecoveryOutcome::TaskDeleted
+        | RecoveryOutcome::SessionStopped => {
             lifecycle
                 .cancel_during_run_owned(
                     outcome
