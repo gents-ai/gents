@@ -298,3 +298,67 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         "reduction-key",
     ));
 }
+
+#[tokio::test]
+async fn shared_reduction_snapshots_reload_exactly_and_reuse_pinned_blocks() {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    gents::ensure_runtime_schemas(&node).await.unwrap();
+    let prefix = vec![Message::user("prefix 🦀 ".repeat(2400))];
+    let suffix = vec![Message::user("retained suffix ".repeat(2400))];
+    let associations = unassociated(&prefix, &suffix);
+    let source = boundary("request-doc", 7);
+    let make_input = || NewProviderContextReduction {
+        node_did: "did:key:agent",
+        requester_did: None,
+        session_id: "session",
+        request_id: "request",
+        request_doc_id: "request-doc",
+        request_commit_cid: "claim-cid-7",
+        reduction_index: 1,
+        turn_index: 1,
+        parent_reduction_key: None,
+        producer_call: None,
+        source_boundary: &source,
+        compacted_prefix: &prefix,
+        retained_suffix: &suffix,
+        checkpoint_messages: &suffix,
+        replay_associations: &associations,
+        summary: "",
+        original_tokens: 20000,
+        compacted_tokens: 10000,
+    };
+    let first = persist(&node, make_input()).await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Vec<Message>>(&first.compacted_prefix_json).unwrap(),
+        prefix
+    );
+    assert_eq!(first.checkpoint_messages().unwrap(), suffix);
+    assert_eq!(
+        persist(&node, make_input()).await.unwrap().doc_id,
+        first.doc_id
+    );
+    let raw = crate::graphql::graphql_with_transaction_retry(
+        &node, "{ ProviderContextReduction { compacted_prefix_json retained_suffix_json } RenderedRequestBlock { _docID payload } }", "test reduction storage"
+    ).await.unwrap().data.unwrap();
+    let stored = &raw["ProviderContextReduction"][0];
+    for field in ["compacted_prefix_json", "retained_suffix_json"] {
+        let encoded = stored[field].as_str().unwrap();
+        assert!(encoded.len() < 1024);
+        assert!(encoded.contains("\"kind\":\"tree\""));
+    }
+    let loaded = load_for_request(&node, "request-doc").await.unwrap();
+    assert_eq!(loaded[0].compacted_prefix_json, first.compacted_prefix_json);
+    assert_eq!(loaded[0].retained_suffix_json, first.retained_suffix_json);
+    let block_id = raw["RenderedRequestBlock"][0]["_docID"].as_str().unwrap();
+    crate::config_client::ConfigAccess::write_local_response(
+        &node,
+        "test delete reduction block",
+        &format!(
+            "mutation {{ delete_RenderedRequestBlock(docID: \"{}\") {{ _docID }} }}",
+            crate::graphql::escape_graphql_string(block_id)
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(load_for_request(&node, "request-doc").await.is_err());
+}

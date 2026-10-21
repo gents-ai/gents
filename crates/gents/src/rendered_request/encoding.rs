@@ -533,7 +533,7 @@ pub(crate) fn encode_tree(tree: ManifestTree) -> Result<EncodedJson> {
     })
 }
 
-fn resolve_tree<F>(tree: ManifestTree, mut fetch: F) -> Result<Value>
+pub(crate) fn resolve_tree<F>(tree: ManifestTree, mut fetch: F) -> Result<Value>
 where
     F: FnMut(&ManifestEntry) -> Result<(Vec<u8>, String)>,
 {

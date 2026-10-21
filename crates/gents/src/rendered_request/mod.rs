@@ -810,6 +810,32 @@ pub(crate) struct CaptureReadCache {
     blocks: std::collections::BTreeMap<String, CachedCaptureBlock>,
 }
 
+pub(crate) async fn load_shared_json(
+    node: &defra_node::EmbeddedNode,
+    stored: &str,
+    cache: &mut CaptureReadCache,
+) -> Result<String> {
+    if stored.trim_start().starts_with('[') {
+        return Ok(stored.to_owned());
+    }
+    let encoding::DecodedRecord::Tree(tree) = encoding::decode_record(stored)? else {
+        anyhow::bail!("shared JSON is not a pinned manifest tree");
+    };
+    read_manifest_tree(node, &tree, &mut cache.blocks).await?;
+    let value = encoding::resolve_tree(tree, |entry| {
+        let block = cache
+            .blocks
+            .get(&entry.doc_id)
+            .context("shared JSON block was not read")?;
+        anyhow::ensure!(
+            block.content_key == entry.content_key,
+            "shared JSON block content key mismatch"
+        );
+        Ok((block.bytes.clone(), block.field_commit_cid.clone()))
+    })?;
+    canonical_json_string(&value)
+}
+
 async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
     reader: &R,
     capture_version: u32,

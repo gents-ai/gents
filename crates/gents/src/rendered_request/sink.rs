@@ -700,6 +700,19 @@ async fn encode_payload_tree(
     })
 }
 
+pub(crate) async fn store_shared_json_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    json: &str,
+) -> Result<String> {
+    if json.len() < 4096 {
+        return Ok(json.to_owned());
+    }
+    let chunks = super::encoding::chunk_capture_body(json);
+    let blocks = unique_blocks(&[&chunks]);
+    let mut pins = pin_blocks_in_txn(txn, &blocks).await?;
+    Ok(encode_payload_tree(txn, &chunks, &mut pins).await?.stored)
+}
+
 fn single_mutation_result(data: &Value) -> Option<&Value> {
     let object = data.as_object()?;
     let mut entries = object.values();
