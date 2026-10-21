@@ -827,6 +827,9 @@ pub async fn interrupt_session(
             None,
             "session.interrupt",
             move |txn| {
+                let session_id = session_id.clone();
+                let node_did = node_did.clone();
+                let requester_did = requester_did.clone();
                 Box::pin(async move {
                     let active = crate::interrupt::interrupt_active_session_in_txn(
                         txn,

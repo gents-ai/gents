@@ -33,6 +33,9 @@ pub async fn stop_session(
         Some(actor),
         "session.stop",
         move |txn| {
+            let node_did = node_did.clone();
+            let session_id = session_id.clone();
+            let requester_did = requester_did.clone();
             Box::pin(async move {
                 let owner = crate::session::load_agent_session_row_in_txn(
                     txn,
@@ -112,13 +115,19 @@ pub async fn resume_session(
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
-    let identity = crate::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
+    let identity = Arc::new(crate::identity::RegisteredIdentity::from_registered_did(
+        &node_did, None,
+    )?);
     let actor = ::identity::Did::new(node_did.clone())?;
     crate::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "session.resume",
         move |txn| {
+            let identity = identity.clone();
+            let node_did = node_did.clone();
+            let session_id = session_id.clone();
+            let requester_did = requester_did.clone();
             Box::pin(async move {
                 let owner = crate::session::load_agent_session_row_in_txn(
                     txn,
@@ -146,8 +155,13 @@ pub async fn resume_session(
                         == Some(&serde_json::Value::String(owner.doc_id.clone())),
                     "session resume latch was not cleared on the selected session"
                 );
-                crate::goal::stage_session_resume_in_txn(txn, &identity, &node_did, &session_id)
-                    .await
+                crate::goal::stage_session_resume_in_txn(
+                    txn,
+                    identity.as_ref(),
+                    &node_did,
+                    &session_id,
+                )
+                .await
             })
         },
     )
