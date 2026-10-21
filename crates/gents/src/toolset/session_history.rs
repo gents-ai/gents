@@ -266,12 +266,20 @@ pub async fn load_pinned_request_context_observation(
 /// document IDs, not logical request aliases, fence every inference read.
 /// Missing requester is an exact null identity, never a wildcard.
 pub async fn load_session_inference_observation(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<SessionInferenceObservation> {
-    let ids = load_session_request_doc_ids(node, node_did, requester_did, session_id).await?;
+    let ids = load_session_request_doc_ids(
+        &crate::config_client::ConfigAccess::local(Arc::clone(node)),
+        node_did,
+        requester_did,
+        session_id,
+    )
+    .await?
+    .into_keys()
+    .collect::<Vec<_>>();
     let mut rows = Vec::new();
     for batch in ids.chunks(128) {
         let response = graphql_with_transaction_retry(
@@ -300,11 +308,11 @@ pub async fn load_session_inference_observation(
 }
 
 pub async fn load_session_request_doc_ids(
-    node: &EmbeddedNode,
+    access: &crate::config_client::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
-) -> Result<Vec<String>> {
+) -> Result<BTreeMap<String, String>> {
     anyhow::ensure!(
         !node_did.trim().is_empty() && !session_id.trim().is_empty(),
         "session request selection requires a node and session"
@@ -312,39 +320,33 @@ pub async fn load_session_request_doc_ids(
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(
+    let data = access
+        .execute(&format!(
             r#"{{ AgentRequest(filter: {{
                 purpose: {{_eq: "normal"}},
                 node_did: {{_eq: "{}"}},
                 session_id: {{_eq: "{}"}},
                 requester_did: {{_eq: {requester}}}
-            }}) {{ _docID }} }}"#,
+            }}) {{ _docID request_id }} }}"#,
             escape_graphql_string(node_did.trim()),
             escape_graphql_string(session_id.trim())
-        ),
-        "session accounting ownership",
-    )
-    .await?;
+        ))
+        .await
+        .context("session accounting ownership")?;
     let requests: Vec<PhysicalRequestDocIdRow> = serde_json::from_value(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
+        data.pointer("/data/AgentRequest")
             .cloned()
             .context("missing accounting request rows")?,
     )?;
-    let mut seen = BTreeSet::new();
     requests
         .into_iter()
         .map(|request| {
-            clean(request.doc_id.as_ref()).context("accounting request lacks physical identity")
-        })
-        .filter_map(|result| match result {
-            Ok(doc_id) if seen.insert(doc_id.clone()) => Some(Ok(doc_id)),
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
+            Ok((
+                clean(request.doc_id.as_ref())
+                    .context("accounting request lacks physical identity")?,
+                clean(request.request_id.as_ref())
+                    .context("accounting request lacks logical identity")?,
+            ))
         })
         .collect()
 }
@@ -370,6 +372,8 @@ struct SessionIndexEnvelope {
 struct PhysicalRequestDocIdRow {
     #[serde(rename = "_docID", default)]
     doc_id: Option<String>,
+    #[serde(default)]
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
