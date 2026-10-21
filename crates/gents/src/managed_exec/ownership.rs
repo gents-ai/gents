@@ -124,12 +124,8 @@ impl ProcessIdentity {
             return ProcessObservation::Unowned;
         }
         match platform::process_info(self.pid) {
-            Some(info) if !info.zombie => {
-                if info.start == self.start && info.pgid == self.pgid {
-                    ProcessObservation::Running
-                } else {
-                    ProcessObservation::Unowned
-                }
+            Some(info) if !info.zombie && info.start == self.start && info.pgid == self.pgid => {
+                ProcessObservation::Running
             }
             _ => match platform::group_has_live_member(self.pgid) {
                 Some(false) => ProcessObservation::Exited,

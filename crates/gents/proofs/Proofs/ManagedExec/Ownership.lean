@@ -12,7 +12,8 @@ exit of a proven-owned running group — may be reported as a cancellation.
 namespace ManagedExec
 
 /-- A proven-owned running group, or a recorded leader whose start identity
-matches; `running` means a non-zombie member remains. -/
+matches; `running` means a non-zombie member remains. `exited` means the
+recorded group has no live member, whatever now holds the leader pid. -/
 inductive ProcessObservation where
   | running
   | exited
