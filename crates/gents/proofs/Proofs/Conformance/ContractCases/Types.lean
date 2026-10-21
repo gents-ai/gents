@@ -468,6 +468,7 @@ structure RecoverySweepCase where
   executionRegistered : Option Bool := none
   processOutcome : Option String := none
   ownerTaskDeleted : Option Bool := none
+  ownerSessionStopped : Option Bool := none
   recoveryCause : Option String := none
   notificationReason : Option String := none
   deriving DecidableEq, Repr

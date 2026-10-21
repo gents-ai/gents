@@ -460,6 +460,8 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ "\"process_outcome\":" ++ jsonOptionalString witness.processOutcome ++ ","
     ++ "\"owner_task_deleted\":"
       ++ jsonOptionalBool witness.ownerTaskDeleted ++ ","
+    ++ "\"owner_session_stopped\":"
+      ++ jsonOptionalBool witness.ownerSessionStopped ++ ","
     ++ "\"recovery_cause\":" ++ jsonOptionalString witness.recoveryCause ++ ","
     ++ "\"notification_reason\":"
       ++ jsonOptionalString witness.notificationReason ++ ","
