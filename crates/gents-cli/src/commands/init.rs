@@ -1244,14 +1244,11 @@ fn engineer_tools(
         target_ids: Vec::new(),
         enabled: Some(true),
     });
-    tools
-        .built_ins
-        .get_or_insert_with(Default::default)
-        .enable_session_history_tool = Some(true);
-    tools
-        .built_ins
-        .get_or_insert_with(Default::default)
-        .enable_schema_tool = Some(true);
+    let built_ins = tools.built_ins.get_or_insert_with(Default::default);
+    built_ins.enable_session_history_tool = Some(true);
+    built_ins.enable_schema_tool = Some(true);
+    built_ins.enable_p2p_tool = Some(true);
+    built_ins.enable_p2p_mutations = Some(true);
     let datastore = tools.datastore.get_or_insert_with(Default::default);
     datastore.enable_defra_query = Some(enable_defra_query);
     datastore.datastore_tool_surface_ids = Some(vec![surface_id.clone()]);
@@ -1825,6 +1822,70 @@ mod tests {
         assert_eq!(
             resolved.max_turns_provenance,
             gents::config::MaxTurnsProvenance::ExecutionProfile
+        );
+    }
+
+    async fn explain_initialized_default_agent(
+        engineer: bool,
+    ) -> gents::tool_surface::ToolSurfaceExplanation {
+        let temp = tempfile::tempdir().unwrap();
+        let identity: Arc<dyn gents::NodeIdentity> =
+            Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
+        let owner = identity.did().to_string();
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(owner.clone())
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let access = ConfigAccess::local(node.clone());
+
+        let mut args = init_args();
+        args.engineer = engineer;
+        let tool_package = resolve_initial_tool_package(&args).unwrap();
+        let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
+            .await
+            .expect("a fresh home initializes");
+
+        let agent = gents::Gents::from_default_agent_documents(
+            node.clone(),
+            identity,
+            gents::DocumentRuntimeOptions::default(),
+        )
+        .await
+        .unwrap();
+        agent
+            .agents()
+            .iter()
+            .find(|resolved| resolved.agent_id == summary.default_agent_id)
+            .expect("init default agent resolves")
+            .tools
+            .explain_with_runtime(false, &owner, &Default::default())
+    }
+
+    #[tokio::test]
+    async fn the_engineer_gets_the_p2p_tool_and_other_presets_do_not() {
+        let p2p = gents::p2p_tool::P2P_TOOL_NAME;
+
+        let engineer = explain_initialized_default_agent(true).await;
+        assert!(
+            engineer.tool_names.iter().any(|name| name == p2p),
+            "{:?}",
+            engineer.tool_names
+        );
+        let effective = &engineer.policy.effective[p2p];
+        assert!(
+            effective.iter().any(|entry| entry == "mutate:true"),
+            "{effective:?}"
+        );
+
+        let default = explain_initialized_default_agent(false).await;
+        assert!(
+            !default.tool_names.iter().any(|name| name == p2p),
+            "{:?}",
+            default.tool_names
         );
     }
 
