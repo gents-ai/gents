@@ -273,7 +273,7 @@ instance (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
 
 structure TargetAuthority where
   peerAuthorityAllows : Bool
-  maxRequestHop : Nat
+  maxRequestHop : Option Nat
   deriving DecidableEq, Repr
 
 /-- `authorizationFresh` is the current-clock lease check made during this
@@ -493,7 +493,7 @@ def auxiliaryPendingDisposition
     (observationAvailable : Bool) (s : State) (request : AgentRequestSemantics)
     (admission : AgentRequestAdmission) (runtimeEvidence : Option RuntimeInternalEvidence)
     (sessionAgent : String) (branchFieldsExact pendingDeadlineAbsent : Bool)
-    (maxRequestHop : Nat) :
+    (maxRequestHop : Option Nat) :
     AgentRequestAdmissionDisposition :=
   if !request.purpose.isAuxiliary then .deny
   else admissionDispositionFromResult observationAvailable <|
@@ -505,7 +505,7 @@ def auxiliaryPendingStep?
     (observationAvailable : Bool) (s : State) (request : AgentRequestSemantics)
     (admission : AgentRequestAdmission) (runtimeEvidence : Option RuntimeInternalEvidence)
     (sessionAgent : String) (branchFieldsExact pendingDeadlineAbsent : Bool)
-    (maxRequestHop : Nat) (pending : RequestContext) : Option RequestContext :=
+    (maxRequestHop : Option Nat) (pending : RequestContext) : Option RequestContext :=
   if !request.purpose.isAuxiliary || pending.state != .pending ||
       pending.admission != .released then none
   else
@@ -529,7 +529,7 @@ theorem available_negative_admission_observation_denies
 theorem unavailable_title_pending_preserves
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (evidence : Option RuntimeInternalEvidence) (agent: String)
-    (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
+    (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Option Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released) :
@@ -541,7 +541,7 @@ theorem unavailable_title_pending_preserves
 theorem admitted_title_pending_awaits_owned_claim
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (evidence : Option RuntimeInternalEvidence) (agent: String)
-    (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
+    (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Option Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released)
@@ -554,7 +554,7 @@ theorem admitted_title_pending_awaits_owned_claim
 theorem denied_title_pending_uses_admission_reject
     (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
     (evidence : Option RuntimeInternalEvidence) (agent: String)
-    (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Nat)
+    (branchFieldsExact pendingDeadlineAbsent : Bool) (maxRequestHop : Option Nat)
     (pending : RequestContext)
     (hpurpose : request.purpose = .titleAudit)
     (hstate : pending.state = .pending) (hslot : pending.admission = .released)
@@ -670,14 +670,15 @@ theorem peer_requires_foreign_signed_authorized_requester
   simp only [agentRequestAdmissible, hkind] at hadmit
   exact hadmit.2.2.2.2.1
 
-theorem admitted_request_within_hop_bound
+theorem admitted_request_within_configured_hop_bound
     {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
     {enrollmentRequest : Option Request} {decision : Option Decision} {fresh : Bool}
     {runtimeEvidence : Option RuntimeInternalEvidence}
     {branchFieldsExact pendingDeadlineAbsent : Bool} {target : TargetAuthority}
+    {bound : Nat} (hbound : target.maxRequestHop = some bound)
     (hadmit : agentRequestAdmissible s request admission enrollmentRequest decision fresh
       runtimeEvidence branchFieldsExact pendingDeadlineAbsent target) :
-    request.hop ≤ target.maxRequestHop := by
-  simpa [CausalHop.admitHop] using hadmit.2.2.2.2.2.2
+    request.hop ≤ bound := by
+  simpa [CausalHop.admitHop, hbound] using hadmit.2.2.2.2.2.2
 
 end Enrollment
