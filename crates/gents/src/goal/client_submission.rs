@@ -1,10 +1,11 @@
-use gents_protocol::goal_control::{
-    GoalControlOutcome, SessionGoalControl, SessionGoalControlReceipt,
-};
+use gents_protocol::goal_control::{SessionGoalControl, SessionGoalControlReceipt};
 
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::identity::NodeIdentity;
+
+#[cfg(test)]
+mod tests;
 
 /// Publishes one author-signed intent. The runtime receipt confirms the
 /// transaction; observing its replicated Goal is a separate read.
@@ -64,9 +65,6 @@ pub async fn submit_session_goal_control(
                         .await
                         .unwrap_or(false)
                 {
-                    if let GoalControlOutcome::Rejected { reason } = &receipt.outcome {
-                        bail!("Runtime rejected goal control: {reason}");
-                    }
                     return Ok::<_, anyhow::Error>(receipt);
                 }
             }

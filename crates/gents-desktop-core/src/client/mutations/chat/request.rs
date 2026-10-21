@@ -444,7 +444,11 @@ async fn retry_request_in_txn(
             .as_deref()
             .context("retry parent request must have a session_id")?,
     )?;
-    let input = parent.input.clone().unwrap_or_default();
+    let input = parent
+        .input
+        .clone()
+        .unwrap_or_default()
+        .reissued(&parent_doc_id);
     let content = normalize_authored_content(
         &input,
         parent

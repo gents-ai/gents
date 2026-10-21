@@ -80,7 +80,16 @@ import Proofs.Conformance.GraphPipeline
 import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
+import Proofs.Conformance.GoalWakeAncestry
+import Proofs.Conformance.GoalWakeReceipt
+import Proofs.Conformance.GoalWakeCoalescing
+import Proofs.Conformance.GoalRequestAncestry
+import Proofs.Conformance.GoalQueueAssignment
+import Proofs.Conformance.GoalFirstRequestBinding
 import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.GoalDeliveryInput
+import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
@@ -126,6 +135,32 @@ def snapshotJson : String :=
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"graph_failure_attribution_traces\":"
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
+    ++ "\"session_message_goal_input_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
+    ++ "\"goal_delivery_input_cases\":"
+      ++ Conformance.GoalDeliveryInput.json ++ ","
+    ++ "\"goal_first_request_binding_cases\":"
+      ++ Conformance.GoalFirstRequestBinding.json ++ ","
+    ++ "\"goal_input_binding_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.inputCasesJson ++ ","
+    ++ "\"goal_fresh_session_input_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.freshSessionCasesJson ++ ","
+    ++ "\"goal_assignment_history_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.historyCasesJson ++ ","
+    ++ "\"goal_request_assignment_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.casesJson ++ ","
+    ++ "\"goal_wake_receipt_cases\":"
+      ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
+    ++ "\"goal_wake_coalescing_cases\":"
+      ++ Conformance.GoalWakeCoalescingContracts.casesJson ++ ","
+    ++ "\"goal_wake_ancestry_cases\":"
+      ++ Conformance.GoalWakeAncestryContracts.casesJson ++ ","
+    ++ "\"goal_tool_context_cases\":"
+      ++ Conformance.GoalToolContextContracts.casesJson ++ ","
+    ++ "\"goal_request_ancestry_cases\":"
+      ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
+    ++ "\"goal_queue_assignment_cases\":"
+      ++ Conformance.GoalQueueAssignmentContracts.casesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
     ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","

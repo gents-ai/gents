@@ -147,6 +147,7 @@ export function Title({
 
 export function Goal({ goal }: { goal: GoalView }) {
   const [open, setOpen] = useState(false);
+  if (goal.status === "stopped") return null;
   const used = goal.tokenBudget ? goal.tokensUsed / goal.tokenBudget : null;
   const blocked = goal.status === "blocked";
   /* A budget-limited stop also completes wrap-up; runtime status records

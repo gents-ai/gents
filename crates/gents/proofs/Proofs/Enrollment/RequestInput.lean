@@ -27,6 +27,14 @@ structure GoalContinuationInput where
   wrapup : Bool
   deriving DecidableEq, Repr
 
+/-- The opening request uses `none` for its own physical document identity.
+Descendants replace that sentinel with the authenticated parent's physical ID.
+The reference attributes work; existing admission and ACP retain authority. -/
+structure GoalAssignmentInput where
+  goalId : String
+  rootRequestDocId : Option String := none
+  deriving DecidableEq, Repr
+
 structure RequestInput where
   selectedSkillIds : List String := []
   cwd : Option String := none
@@ -34,6 +42,7 @@ structure RequestInput where
   queue : Option RequestQueue := none
   goalContinuation : Option GoalContinuationInput := none
   capturedContext : List CapturedContext := []
+  goalAssignment : Option GoalAssignmentInput := none
   deriving DecidableEq, Repr
 
 /-- User submission and queue replacement may contain only typed captures.
@@ -49,29 +58,71 @@ this new contract advertisement. -/
 def capturedInputCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
   input.capturedContext.isEmpty || runtimeVersion == some 1
 
+def goalAssignmentCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
+  input.goalAssignment.isNone || runtimeVersion == some 3
+
+/-- Retry and queue replacement publish a fresh physical request in the same
+session. The opening request's self sentinel must still name its original
+physical document; all other captured invocation facts retain their owner. -/
+def reissuedInput (source : RequestInput) (sourceDocId : String) : RequestInput :=
+  { source with goalAssignment := source.goalAssignment.map fun reference =>
+      { reference with rootRequestDocId := some (reference.rootRequestDocId.getD sourceDocId) } }
+
+theorem reissued_input_preserves_captures (source : RequestInput) (sourceDocId : String) :
+    (reissuedInput source sourceDocId).capturedContext = source.capturedContext := rfl
+
+theorem reissued_input_preserves_known_root (source : RequestInput) (sourceDocId root : String)
+    (reference : GoalAssignmentInput) (hasReference : source.goalAssignment = some reference)
+    (hasRoot : reference.rootRequestDocId = some root) :
+    (reissuedInput source sourceDocId).goalAssignment = some reference := by
+  simp [reissuedInput, hasReference, hasRoot]
+  cases reference
+  simp_all
+
+theorem reissued_input_preserves_opening_request (source : RequestInput) (sourceDocId : String)
+    (reference : GoalAssignmentInput) (hasReference : source.goalAssignment = some reference)
+    (selfRoot : reference.rootRequestDocId = none) :
+    (reissuedInput source sourceDocId).goalAssignment =
+      some { reference with rootRequestDocId := some sourceDocId } := by
+  simp [reissuedInput, hasReference, selfRoot]
+
+theorem reissued_input_does_not_join_an_assignment (source : RequestInput) (sourceDocId : String)
+    (unassigned : source.goalAssignment = none) :
+    (reissuedInput source sourceDocId).goalAssignment = none := by
+  simp [reissuedInput, unassigned]
+
 /-- Runtime continuations remain in their parent's invocation directory. They
 do not replay the parent's title intent, queue position, captured context, or goal issuance facts.
 The executing host still validates the inherited directory against its policy. -/
 def continuationInput (parent : RequestInput) (queue : RequestQueue)
-    (goal : Option GoalContinuationInput := none) : RequestInput :=
-  { cwd := parent.cwd, queue := some queue, goalContinuation := goal }
+    (goal : Option GoalContinuationInput) (parentDocId : String) : RequestInput :=
+  { cwd := parent.cwd, queue := some queue, goalContinuation := goal
+    goalAssignment := parent.goalAssignment.map fun reference =>
+      { reference with rootRequestDocId := some (reference.rootRequestDocId.getD parentDocId) } }
 
 theorem continuation_preserves_directory (parent : RequestInput) (queue : RequestQueue)
-    (goal : Option GoalContinuationInput) :
-    (continuationInput parent queue goal).cwd = parent.cwd := rfl
+    (goal : Option GoalContinuationInput) (parentDocId : String) :
+    (continuationInput parent queue goal parentDocId).cwd = parent.cwd := rfl
 
 theorem continuation_does_not_replay_creation (parent : RequestInput) (queue : RequestQueue)
-    (goal : Option GoalContinuationInput) :
-    (continuationInput parent queue goal).initialTitle = none := rfl
+    (goal : Option GoalContinuationInput) (parentDocId : String) :
+    (continuationInput parent queue goal parentDocId).initialTitle = none := rfl
 
 theorem continuation_does_not_replay_captured_context (parent : RequestInput)
-    (queue : RequestQueue) (goal : Option GoalContinuationInput) :
-    (continuationInput parent queue goal).capturedContext = [] := rfl
+    (queue : RequestQueue) (goal : Option GoalContinuationInput) (parentDocId : String) :
+    (continuationInput parent queue goal parentDocId).capturedContext = [] := rfl
 
 theorem continuation_uses_current_control (parent : RequestInput) (queue : RequestQueue)
-    (goal : Option GoalContinuationInput) :
-    (continuationInput parent queue goal).queue = some queue ∧
-    (continuationInput parent queue goal).goalContinuation = goal := ⟨rfl, rfl⟩
+    (goal : Option GoalContinuationInput) (parentDocId : String) :
+    (continuationInput parent queue goal parentDocId).queue = some queue ∧
+    (continuationInput parent queue goal parentDocId).goalContinuation = goal := ⟨rfl, rfl⟩
+
+theorem continuation_keeps_assignment (parent : RequestInput) (queue : RequestQueue)
+    (goal : Option GoalContinuationInput) (parentDocId : String) (reference : GoalAssignmentInput)
+    (h : parent.goalAssignment = some reference) :
+    (continuationInput parent queue goal parentDocId).goalAssignment =
+      some { reference with rootRequestDocId := some (reference.rootRequestDocId.getD parentDocId) } := by
+  simp [continuationInput, h]
 
 /-- The implementation must use its one canonical input encoder for signing and
 verification, rather than concatenating unescaped JSON or arbitrary metadata. -/
@@ -96,13 +147,20 @@ private def queueFields (queue : RequestQueue) : List String :=
   optionFields (fun n => [toString n]) queue.backgroundCompletionWakeVersion ++
   queueExtensionFields queue
 
+/-- Absent references retain the existing signed request bytes. A present
+reference signs both the Goal and opening request; the self sentinel is explicit. -/
+def goalAssignmentFields : Option GoalAssignmentInput → List String
+  | none => []
+  | some reference => ["goal-assignment", reference.goalId] ++
+      optionFields (fun s => [s]) reference.rootRequestDocId
+
 def requestInputFields (input : RequestInput) : CanonicalFields :=
   textFieldsToBytes <|
     [toString input.selectedSkillIds.length] ++ input.selectedSkillIds ++
     optionFields (fun s => [s]) input.cwd ++
     optionFields titleFields input.initialTitle ++ optionFields queueFields input.queue ++
     optionFields (fun goal => [toString goal.sequence, toString goal.wrapup]) input.goalContinuation ++
-    capturedContextExtensionFields input.capturedContext
+    capturedContextExtensionFields input.capturedContext ++ goalAssignmentFields input.goalAssignment
 
 theorem default_queue_has_no_encoding_extension (queue : RequestQueue) :
     queueExtensionFields {queue with delivery := .queue, position := none} = [] := by
@@ -126,9 +184,9 @@ def inputWithinContext (input : RequestInput) (skillIds : List String)
     input.capturedContext.all CapturedContext.wellFormed
 
 theorem continuation_retains_host_policy_checks (parent : RequestInput)
-    (queue : RequestQueue) (goal : Option GoalContinuationInput) (skills : List String)
+    (queue : RequestQueue) (goal : Option GoalContinuationInput) (parentDocId : String) (skills : List String)
     (cwdAllowed : String → Bool) (queueAllowed : SessionQueue.QueueSource → Bool) :
-    inputWithinContext (continuationInput parent queue goal) skills cwdAllowed queueAllowed =
+    inputWithinContext (continuationInput parent queue goal parentDocId) skills cwdAllowed queueAllowed =
       ((parent.cwd.map cwdAllowed).getD true && queueAllowed queue.source) := by
   simp [continuationInput, inputWithinContext]
 

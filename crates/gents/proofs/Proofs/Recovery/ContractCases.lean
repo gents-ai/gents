@@ -232,6 +232,9 @@ def recoverySweepCases : List RecoverySweepCase :=
       "session_message_request_completed_blocked_goal_to_completed" .requestCompleted
       (.live "blocked")
   , sessionMessageRecoveryCase
+      "session_message_request_completed_stopped_goal_to_completed" .requestCompleted
+      .stopped
+  , sessionMessageRecoveryCase
       "session_message_request_failed_to_failed" .requestFailed
   , sessionMessageRecoveryCase
       "session_message_request_interrupted_to_cancelled" .requestInterrupted

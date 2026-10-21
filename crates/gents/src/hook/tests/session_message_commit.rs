@@ -161,17 +161,14 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let did = identity.did().to_owned();
     enable_agents_tools(&node, &did).await;
     let hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
-    hook.on_completion_call(&user_text_message("start agents"), &[])
-        .await;
-    let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        node.as_ref(),
+    bind_signed_hook_request(
         &hook,
         "request-commit-receipt-loss",
-        &session_id,
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    hook.on_completion_call(&user_text_message("start agents"), &[])
+        .await;
 
     let (tool_doc_id, caused) = dispatch_with_lost_receipt(
         &hook,

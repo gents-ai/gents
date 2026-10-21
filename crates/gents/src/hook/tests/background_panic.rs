@@ -47,20 +47,15 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
                 &["panicking_tool".into()],
             ))
             .with_background_execution_registry(executions.clone());
-    hook.on_completion_call(&user_text_message("run tool"), &[])
-        .await;
     let session_id = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session_id, &hook.node_did, "general")
-        .await
-        .unwrap();
-    bind_interruptible_request(
-        &node,
+    bind_signed_hook_request(
         &hook,
         "request-background-panic",
-        &session_id,
         Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    hook.on_completion_call(&user_text_message("run tool"), &[])
+        .await;
     let args = r#"{"tool_name":"panicking_tool","args":{}}"#;
     accept_hook_tool_call(&hook, "meta-background-panic", "spawn_process", args, None).await;
     let action = hook
@@ -78,9 +73,10 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         .as_str()
         .unwrap()
         .contains("intentional background tool panic"));
-    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
-        .await
-        .unwrap();
+    let history =
+        crate::session::load_history(&node, &session_id, &hook.node_did, Some(identity.did()))
+            .await
+            .unwrap();
     let marker = format!("<tool-completion tool_call_id=\"{tool_call_id}\"");
     let notification = history
         .iter()

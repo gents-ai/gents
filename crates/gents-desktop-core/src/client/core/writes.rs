@@ -437,14 +437,21 @@ impl ClientCore {
         node_did: &str,
         content: &str,
         agent_id: Option<&str>,
-        options: SubmitRequestOptions,
+        mut options: SubmitRequestOptions,
     ) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
         let peer_record = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
-        crate::local_runtime::ensure_captured_input_supported(peer_record.as_ref(), &options.input)
+        // Queue preparation captures assignment intent before signing; a later
+        // replacement must not change an already prepared unassigned message.
+        if options.input.queue.is_none() {
+            options.input = self
+                .prepare_goal_input(node_did, session_id, options.input)
+                .await?;
+        }
+        crate::local_runtime::ensure_request_input_supported(peer_record.as_ref(), &options.input)
             .await?;
         let (signer, admission, requester_did) = self
             .request_authority(node_did, peer_record.as_ref())
@@ -509,6 +516,7 @@ impl ClientCore {
         input: gents_protocol::request_input::RequestInput,
         delivery: gents_protocol::request_input::QueueDelivery,
     ) -> Result<gents_protocol::request_input::RequestInput> {
+        let input = self.prepare_goal_input(node_did, session_id, input).await?;
         gents::lifecycle::prepare_user_message_input(
             &self
                 .operator_observation_graphql(node_did)
@@ -1520,7 +1528,7 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
-        crate::local_runtime::ensure_captured_input_supported(
+        crate::local_runtime::ensure_request_input_supported(
             peer_record.as_ref(),
             &parent.input.clone().unwrap_or_default(),
         )

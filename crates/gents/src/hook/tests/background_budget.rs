@@ -330,21 +330,16 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
                 &["bash".into()],
             ))
             .with_background_execution_registry(executions.clone());
-    hook.on_completion_call(&user_text_message("budgeted background"), &[])
-        .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
-        .await
-        .unwrap();
     let request_id = format!("budgeted-{}", uuid::Uuid::new_v4());
-    bind_interruptible_request(
-        &node,
+    bind_signed_hook_request(
         &hook,
         &request_id,
-        &session,
         Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    hook.on_completion_call(&user_text_message("budgeted background"), &[])
+        .await;
     let receipt = invoke(
         &hook,
         "budgeted-spawn",
@@ -357,9 +352,10 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     let row = fetch_tool_call_row(&node, &session, &child).await;
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
 
-    let history = crate::session::load_history(&node, &session, identity.did(), None)
-        .await
-        .unwrap();
+    let history =
+        crate::session::load_history(&node, &session, identity.did(), Some(identity.did()))
+            .await
+            .unwrap();
     let marker = format!("<tool-completion tool_call_id=\"{child}\"");
     let notification = history
         .iter()
@@ -414,9 +410,10 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     )
     .await
     .expect("redrive after a budget change replays the published notice");
-    let history = crate::session::load_history(&node, &session, identity.did(), None)
-        .await
-        .unwrap();
+    let history =
+        crate::session::load_history(&node, &session, identity.did(), Some(identity.did()))
+            .await
+            .unwrap();
     let notices = history
         .iter()
         .filter_map(|message| match message {

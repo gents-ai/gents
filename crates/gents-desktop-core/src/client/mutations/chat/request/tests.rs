@@ -1346,6 +1346,96 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(tempdir.path()),
+        ClientCoreOptions::local_simulated_route(),
+    )
+    .await?;
+    let result = async {
+        core.add_local_standard_peer_for_test(core.node_identity().did())
+            .await?;
+        for case in lean_contract_snapshot()
+            .request_input_cases
+            .iter()
+            .filter(|case| {
+                case["name"] == "goal-assignment-opening-with-capture"
+                    || case["name"] == "goal-assignment-followup-with-capture"
+            })
+        {
+            let input: RequestInput = serde_json::from_value(case["input"].clone())?;
+            let request_id = Uuid::new_v4().to_string();
+            let session_id = Uuid::new_v4().to_string();
+            let mut create = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                &request_id,
+                core.node_identity().did(),
+                core.node_identity().did(),
+                RECOVERY_AGENT_ID,
+                &session_id,
+                case["authored_text"].as_str().unwrap(),
+                "interactive",
+                Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                test_local_admission(&core),
+            );
+            create.input = input.clone();
+            gents::sign_agent_request_create(core.node_identity(), &mut create).await?;
+            ConfigAccess::write_local(
+                &core.node_arc(),
+                "test.goal_retry_parent",
+                &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+            )
+            .await?;
+            force_retry_parent_eligible_for_test(
+                &core.node_arc(),
+                &request_id,
+                &(Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
+            )
+            .await?;
+            core.refresh_store().await?;
+            let parent = fetch_request_row_for_test(core.node(), &request_id).await?;
+            gents::verify_request_receipt_signature(&parent)?;
+            let mut expected: RequestInput =
+                serde_json::from_value(case["expected_reissued_input"].clone())?;
+            let model_parent = case["reissued_source_doc_id"].as_str().unwrap();
+            if let Some(reference) = expected.goal_assignment.as_mut() {
+                if reference.root_request_doc_id.as_deref() == Some(model_parent) {
+                    reference.root_request_doc_id = parent.doc_id.clone();
+                }
+            }
+            let snapshot = core.store().snapshot();
+            let submitted = retry_request(
+                &core.node_arc(),
+                snapshot.as_ref(),
+                &parent,
+                core.node_identity().did(),
+                core.node_identity(),
+                test_local_admission(&core),
+            )
+            .await?;
+            let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
+            gents::verify_request_receipt_signature(&retried)?;
+            assert_eq!(retried.input.as_ref(), Some(&expected), "{}", case["name"]);
+            assert_eq!(retried.retry_parent_request_doc_id, parent.doc_id);
+            assert_eq!(
+                fetch_request_row_for_test(core.node(), &request_id)
+                    .await?
+                    .input,
+                Some(input),
+                "the signed source is immutable"
+            );
+        }
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    let shutdown = Arc::new(core).shutdown().await;
+    result?;
+    shutdown?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let core = ClientCore::start_with_paths_and_options(

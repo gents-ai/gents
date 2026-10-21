@@ -778,6 +778,11 @@ fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::R
             push_captured_context(fields, context);
         }
     }
+    if let Some(reference) = &input.goal_assignment {
+        push_text(fields, "goal-assignment");
+        push_text(fields, &reference.goal_id);
+        push_input_option(fields, reference.root_request_doc_id.as_deref());
+    }
 }
 
 fn push_captured_context(

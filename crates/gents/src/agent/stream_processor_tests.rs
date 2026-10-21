@@ -728,21 +728,34 @@ struct PersistedMessageShape {
     content: String,
 }
 
-async fn load_message_shapes(
+async fn load_message_shapes_in_scope(
     node: &defra_node::EmbeddedNode,
     session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
 ) -> Vec<PersistedMessageShape> {
+    let scope_node_did = crate::graphql::escape_graphql_string(node_did);
+    let scope_requester = requester_did.map_or_else(
+        || "null".to_owned(),
+        |did| format!("\"{}\"", crate::graphql::escape_graphql_string(did)),
+    );
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }},
-                    node_did: {{ _eq: "did:test:test" }}, requester_did: {{ _eq: null }} }},
+                    node_did: {{ _eq: "{scope_node_did}" }}, requester_did: {{ _eq: {scope_requester} }} }},
                 order: {{ sequence: ASC }}
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "test.stream_processor.message_shapes",
+    )
+    .await
+    .unwrap();
     assert!(
         !response.has_errors(),
         "AgentMessage shape query failed: {:?}",
@@ -755,7 +768,7 @@ async fn load_message_shapes(
     for row in rows {
         let doc_id = row["_docID"].as_str().expect("physical message identity");
         let (header, message) =
-            crate::session::load_canonical_message_from_node(node, doc_id, "did:test:test", None)
+            crate::session::load_canonical_message_from_node(node, doc_id, node_did, requester_did)
                 .await
                 .expect("exact canonical message reconstructs");
         shapes.push(PersistedMessageShape {
@@ -1049,8 +1062,12 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         "agent-stream-processor-inline-tool-result-{}",
         uuid::Uuid::new_v4()
     ));
+    use crate::identity::NodeIdentity;
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap();
     let node = Arc::new(
-        crate::test_support::node_builder()
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
             .data_path(&data_path)
             .build()
             .await
@@ -1059,41 +1076,38 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     ensure_runtime_schemas(&node).await.unwrap();
 
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default());
+    hook.set_active_request_binding(None, None, Some(identity.did().to_owned()))
+        .await;
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("read the source"), &[])
+        hook.on_completion_call(&user_text_message("spawn"), &[])
             .await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
 
     let request_id = uuid::Uuid::new_v4().to_string();
-    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
-    hook.set_active_request_lineage(Some(request_id.clone()), None)
+    let mut lifecycle = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request(
+        &node,
+        &request_id,
+        &session_id,
+        &identity,
+        None,
+    )
+    .await;
+    hook.set_active_request_lineage(Some(request_id.clone()), Some(identity.did().to_owned()))
         .await
         .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let request =
-        fixture_agent_request(request_doc_id, &request_id, &session_id, "read the source");
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        "general",
-        "did:test:test",
-        request,
-        30,
-        ExecutionOrigin::Interactive,
-        "test-backend",
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
+        DefraStreamWriter::new(node.clone(), identity.did(), Duration::from_millis(0));
     lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
     stream_writer
-        .publish_authored_message(&lifecycle, "prompt", &user_text_message("read the source"))
+        .publish_authored_message(&lifecycle, "prompt", &user_text_message("spawn"))
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
@@ -1146,10 +1160,6 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         crate::llm::ToolCallHookAction::Continue
     ));
 
-    // The streamed tool-call envelope already owns its durable assistant row,
-    // so a concurrent background completion allocates the following sequence
-    // instead of colliding. Seed an already-admitted pending wake so the real
-    // publisher exercises coalescing rather than asking the fixture to sign.
     let queue = gents_protocol::request_input::RequestQueue {
         delivery: Default::default(),
         position: None,
@@ -1160,16 +1170,34 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         interrupted_request_id: None,
         background_completion_wake_version: None,
     };
-    create_pending_request_with_input(
-        &node,
+    let mut wake = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "concurrent-notification-wake",
+        identity.did(),
+        identity.did(),
+        "general",
         &session_id,
-        Some(&gents_protocol::request_input::RequestInput {
-            queue: Some(queue.clone()),
-            ..Default::default()
-        }),
-    )
-    .await;
+        "Review background completion",
+        "scheduled",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+            identity.did(),
+            &request_id,
+        ),
+    );
+    wake.input.queue = Some(queue.clone());
+    wake.caused_by_parent_request_id = Some(request_id.clone());
+    wake.caused_by_parent_request_doc_id = Some(notification_request.doc_id.clone());
+    crate::sign_agent_request_create(&identity, &mut wake)
+        .await
+        .unwrap();
+    crate::config_client::ConfigAccess::local(node.clone())
+        .write(
+            "test.stream_processor.pending_wake",
+            &wake.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
     crate::lifecycle::queue::persist_background_completion_with_message(
         &node,
         &notification_request,
@@ -1204,9 +1232,10 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .await
         .unwrap();
 
-    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
-        .await
-        .unwrap();
+    let history =
+        crate::session::load_history(&node, &session_id, identity.did(), Some(identity.did()))
+            .await
+            .unwrap();
     assert_eq!(history.len(), 4);
     assert!(matches!(&history[1], Message::Assistant { content, .. }
         if matches!(content.first(), Some(AssistantContent::ToolCall(tool_call))
@@ -1218,7 +1247,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         if matches!(content.first(), Some(UserContent::ToolResult(tool_result))
             if tool_result.call_id.as_deref() == Some("call-1"))));
 
-    let shapes = load_message_shapes(&node, &session_id).await;
+    let shapes =
+        load_message_shapes_in_scope(&node, &session_id, identity.did(), Some(identity.did()))
+            .await;
     assert_eq!(
         shapes
             .iter()

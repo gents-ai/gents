@@ -9,6 +9,239 @@ use std::collections::HashMap;
 struct Snapshot {
     goal_request_head_cases: Vec<Case>,
 }
+
+#[tokio::test]
+async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations() {
+    #[derive(Deserialize)]
+    struct Contracts {
+        goal_wake_ancestry_cases: Vec<serde_json::Value>,
+    }
+    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    assert_eq!(contracts.goal_wake_ancestry_cases.len(), 16);
+    let temp = tempfile::tempdir().unwrap();
+    let identities = [
+        KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
+        KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
+    ];
+    for value in contracts.goal_wake_ancestry_cases {
+        let rows = value["rows"].as_array().unwrap();
+        let case = Case {
+            name: value["name"].as_str().unwrap().into(),
+            scope: Scope {
+                owner: 1,
+                session: 1,
+                goal: 1,
+            },
+            rows: rows
+                .iter()
+                .map(|row| serde_json::from_value(row["request"].clone()).unwrap())
+                .collect(),
+            expected: None,
+        };
+        let mut fixture = Fixture {
+            case: &case,
+            identities: &identities,
+            built: HashMap::new(),
+        };
+        let mut built = Vec::new();
+        for (model, facts) in case.rows.iter().zip(rows) {
+            let row = if facts["background_wake"] == true {
+                let identity = fixture.identity(model.owner);
+                let parent = fixture.built.get(&model.parent_request.unwrap()).cloned();
+                let parent_id = parent
+                    .as_ref()
+                    .map(|parent| parent.request_id.clone())
+                    .unwrap_or_else(|| fixture.base_id(model.parent_request.unwrap()));
+                let mut create = AgentRequestCreate::base(
+                    model.purpose,
+                    fixture.base_id(model.request),
+                    identity.did(),
+                    identity.did(),
+                    "head-behavior",
+                    format!("session-{}", model.session),
+                    "review notifications",
+                    "scheduled",
+                    "2026-10-21T00:00:00Z",
+                    if facts["runtime_wake_receipt"] == true {
+                        AgentRequestAdmissionRecord::runtime_local_control(
+                            identity.did(),
+                            &parent_id,
+                        )
+                    } else {
+                        AgentRequestAdmissionRecord::local_self(identity.did())
+                    },
+                );
+                create.caused_by_parent_request_id = Some(if model.parent_request == Some(999) {
+                    fixture.base_id(999)
+                } else {
+                    parent_id
+                });
+                create.caused_by_parent_request_doc_id =
+                    model.parent_doc.map(|doc| format!("physical-{doc}"));
+                create.input.queue = Some(gents_protocol::request_input::RequestQueue {
+                    source: gents_protocol::request_input::QueueSource::BackgroundCompletion,
+                    policy: gents_protocol::request_input::QueuePolicy::Coalesce,
+                    key: Some("background_completion:session-1".into()),
+                    delivery: Default::default(),
+                    position: None,
+                    queued_after_request_id: create.caused_by_parent_request_id.clone(),
+                    interrupted_request_id: None,
+                    background_completion_wake_version: Some(1),
+                });
+                if facts["tagged"] == true {
+                    create.input.goal_assignment =
+                        Some(gents_protocol::request_input::GoalAssignmentInput {
+                            goal_id: "goal-1".into(),
+                            root_request_doc_id: Some("physical-10".into()),
+                        });
+                }
+                crate::sign_agent_request_create(identity, &mut create)
+                    .await
+                    .unwrap();
+                let mut row = signed_row(&create, model.doc);
+                if !model.receipt_valid {
+                    row.content = Some("changed after signing".into());
+                }
+                fixture.built.insert(model.request, row.clone());
+                row
+            } else {
+                let mut row = fixture.build(model.clone()).await;
+                if facts["tagged"] == true {
+                    let mut create = AgentRequestCreate::base(
+                        model.purpose,
+                        row.request_id.clone(),
+                        fixture.identity(model.owner).did(),
+                        fixture.identity(model.owner).did(),
+                        "head-behavior",
+                        "session-1",
+                        "entry",
+                        "interactive",
+                        "2026-10-21T00:00:00Z",
+                        AgentRequestAdmissionRecord::local_self(
+                            fixture.identity(model.owner).did(),
+                        ),
+                    );
+                    create.input.goal_assignment =
+                        Some(gents_protocol::request_input::GoalAssignmentInput {
+                            goal_id: "goal-1".into(),
+                            root_request_doc_id: None,
+                        });
+                    crate::sign_agent_request_create(fixture.identity(model.owner), &mut create)
+                        .await
+                        .unwrap();
+                    row = signed_row(&create, model.doc);
+                    fixture.built.insert(model.request, row.clone());
+                }
+                row
+            };
+            built.push(row);
+        }
+        let owner = identities[0].did();
+        let by_doc = request_rows_by_doc(owner, "session-1", &built).unwrap();
+        let current = format!("physical-{}", value["current"].as_u64().unwrap());
+        let expected_goal = value["expected_goal"]
+            .as_u64()
+            .map(|goal| format!("goal-{goal}"));
+        let opening_facts = rows
+            .iter()
+            .filter(|row| !row["opening_goals"].as_array().unwrap().is_empty())
+            .map(|row| {
+                (
+                    format!("physical-{}", row["request"]["doc"].as_u64().unwrap()),
+                    row["opening_goals"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|goal| format!("goal-{}", goal.as_u64().unwrap()))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let openings = opening_facts
+            .iter()
+            .map(|(doc, goals)| (doc.as_str(), goals.iter().map(String::as_str).collect()))
+            .collect();
+        let actual = authenticated_assignment_entry(
+            owner,
+            "session-1",
+            by_doc[current.as_str()],
+            &by_doc,
+            expected_goal.as_deref(),
+            &openings,
+        )
+        .ok()
+        .and_then(|row| row.doc_id.clone());
+        let invocation = authenticated_entry(
+            owner,
+            "session-1",
+            by_doc[current.as_str()],
+            &by_doc,
+            expected_goal.as_deref(),
+        )
+        .ok()
+        .and_then(|row| row.doc_id.clone());
+        let expected = |field: &str| value[field].as_u64().map(|doc| format!("physical-{doc}"));
+        assert_eq!(
+            actual,
+            expected("expected_entry"),
+            "{}: assignment ancestry",
+            case.name
+        );
+        assert_eq!(
+            invocation,
+            expected("expected_invocation_entry"),
+            "{}: invocation ancestry",
+            case.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn generated_goal_ancestry_cases_keep_one_signed_goal() {
+    #[derive(Deserialize)]
+    struct Contracts {
+        goal_request_ancestry_cases: Vec<serde_json::Value>,
+    }
+    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    assert_eq!(contracts.goal_request_ancestry_cases.len(), 12);
+    let temp = tempfile::tempdir().unwrap();
+    let identities = [
+        KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
+        KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
+    ];
+    for value in contracts.goal_request_ancestry_cases {
+        let case: Case = serde_json::from_value(value.clone()).unwrap();
+        let mut fixture = Fixture {
+            case: &case,
+            identities: &identities,
+            built: HashMap::new(),
+        };
+        let mut rows = Vec::new();
+        for row in &case.rows {
+            rows.push(fixture.build(row.clone()).await);
+        }
+        let owner = identities[(case.scope.owner - 1) as usize].did();
+        let session = format!("session-{}", case.scope.session);
+        let by_doc = request_rows_by_doc(owner, &session, &rows).unwrap();
+        let current = format!("physical-{}", value["current"].as_u64().unwrap());
+        let goal = value["expected_goal"]
+            .as_u64()
+            .map(|id| format!("goal-{id}"));
+        let actual = authenticated_entry(
+            owner,
+            &session,
+            by_doc[&current.as_str()],
+            &by_doc,
+            goal.as_deref(),
+        )
+        .ok()
+        .and_then(|row| row.doc_id.clone());
+        let expected = value["expected_entry"]
+            .as_u64()
+            .map(|doc| format!("physical-{doc}"));
+        assert_eq!(actual, expected, "{}: signed physical ancestry", case.name);
+    }
+}
 #[derive(Deserialize)]
 struct Scope {
     owner: u64,

@@ -191,7 +191,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 43);
+    assert_eq!(lean_recovery_sweep_cases().len(), 44);
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
@@ -770,6 +770,84 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "goal_objective_whitespace_codepoints".to_string(),
             "GoalObjectiveWhitespace".to_string(),
+        ));
+    }
+    if !snapshot.session_message_goal_input_cases.is_empty() {
+        emitted.insert((
+            "session_message_goal_input_cases".to_string(),
+            "SessionMessageGoalInputCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_delivery_input_cases.is_empty() {
+        emitted.insert((
+            "goal_delivery_input_cases".into(),
+            "GoalDeliveryInputCases".into(),
+        ));
+    }
+    if !snapshot.goal_first_request_binding_cases.is_empty() {
+        emitted.insert((
+            "goal_first_request_binding_cases".to_string(),
+            "GoalFirstRequestBindingCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_input_binding_cases.is_empty() {
+        emitted.insert((
+            "goal_input_binding_cases".to_string(),
+            "GoalInputBindingCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_fresh_session_input_cases.is_empty() {
+        emitted.insert((
+            "goal_fresh_session_input_cases".to_string(),
+            "GoalFreshSessionInputCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_assignment_history_cases.is_empty() {
+        emitted.insert((
+            "goal_assignment_history_cases".to_string(),
+            "GoalAssignmentHistoryCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_request_assignment_cases.is_empty() {
+        emitted.insert((
+            "goal_request_assignment_cases".to_string(),
+            "GoalRequestAssignmentCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_wake_receipt_cases.is_empty() {
+        emitted.insert((
+            "goal_wake_receipt_cases".into(),
+            "GoalWakeReceiptCases".into(),
+        ));
+    }
+    if !snapshot.goal_wake_coalescing_cases.is_empty() {
+        emitted.insert((
+            "goal_wake_coalescing_cases".into(),
+            "GoalWakeCoalescingCases".into(),
+        ));
+    }
+    if !snapshot.goal_wake_ancestry_cases.is_empty() {
+        emitted.insert((
+            "goal_wake_ancestry_cases".into(),
+            "GoalWakeAncestryCases".into(),
+        ));
+    }
+    if !snapshot.goal_tool_context_cases.is_empty() {
+        emitted.insert((
+            "goal_tool_context_cases".into(),
+            "GoalToolContextCases".into(),
+        ));
+    }
+    if !snapshot.goal_request_ancestry_cases.is_empty() {
+        emitted.insert((
+            "goal_request_ancestry_cases".into(),
+            "GoalRequestAncestryCases".into(),
+        ));
+    }
+    if !snapshot.goal_queue_assignment_cases.is_empty() {
+        emitted.insert((
+            "goal_queue_assignment_cases".into(),
+            "GoalQueueAssignmentCases".into(),
         ));
     }
     if !snapshot.goal_request_head_cases.is_empty() {

@@ -160,6 +160,28 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             case["name"]
         );
     }
+    for case in cases["retained_outcomes"].as_array().unwrap() {
+        let request: Request = decode(&case["request"]);
+        let mut fire = receipt(&request.fire, 0);
+        fire.goal_assignment_applied = request.goal_assignment_applied;
+        let retained: Option<GoalBinding> = decode(&case["retained"]);
+        let current: Option<GoalBinding> = decode(&case["current"]);
+        let retained = retained.as_ref().map(GoalBinding::observation);
+        let current = current.as_ref().map(GoalBinding::observation);
+        let binding =
+            durable::select_goal_outcome_binding(&fire, retained.as_ref(), current.as_ref());
+        assert_eq!(
+            durable::fire_outcome_reason(
+                &fire,
+                request.terminal,
+                durable::assignment_replaced(&fire, binding.as_ref()),
+                binding.as_ref()
+            ),
+            decode::<Option<String>>(&case["classification"]),
+            "{}",
+            case["name"]
+        );
+    }
     for case in cases["queues"].as_array().unwrap() {
         let identity: FireIdentity = decode(&case["identity"]);
         let rows: Vec<durable::ClaimObservation> = decode(&case["observations"]);

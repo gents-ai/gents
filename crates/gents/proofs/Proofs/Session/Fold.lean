@@ -38,8 +38,15 @@ theorem stale_candidate_never_folds {head entry : QueueEntry}
     (h_stale : entry.fresh = false) :
     entry ∉ foldRun head admitted entries := by
   intro h_mem
-  have h_fresh := (mem_foldRun h_mem).1.2.2.2.2.2
+  have h_fresh := (mem_foldRun h_mem).1.2.2.2.2.2.1
   simp [h_stale] at h_fresh
+
+theorem different_assignment_never_folds {head entry : QueueEntry}
+    {admitted : List RequestId} {entries : List QueueEntry}
+    (different : entry.goalAssignment ≠ head.goalAssignment) :
+    entry ∉ foldRun head admitted entries := by
+  intro selected
+  exact different (mem_foldRun selected).1.2.2.2.2.2.2
 
 theorem foreign_requester_never_folds {head entry : QueueEntry}
     {admitted : List RequestId} {entries : List QueueEntry}

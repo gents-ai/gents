@@ -53,7 +53,7 @@ pub(super) async fn receipt(
 #[tokio::test]
 async fn generated_goal_client_controls_drive_signed_commands() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_client_control_cases.len(), 576);
+    assert_eq!(contracts.goal_client_control_cases.len(), 756);
     for case in contracts.goal_client_control_cases {
         let fixture = Fixture::new_with_parent_state(
             &case.before["execution"],

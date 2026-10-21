@@ -513,20 +513,17 @@ mod job_control {
                 &["slow_tool".into()],
             ))
             .with_background_execution_registry(executions.clone());
+            let session_id = owner.session_id().await.unwrap();
+            let request_id = format!("job-control-{}", uuid::Uuid::new_v4());
+            bind_signed_hook_request(
+                &owner,
+                &request_id,
+                Utc::now() + chrono::Duration::minutes(5),
+            )
+            .await;
             owner
                 .on_completion_call(&user_text_message("run job control work"), &[])
                 .await;
-            let session_id = owner.session_id().await.unwrap();
-            let request_id = format!("job-control-{}", uuid::Uuid::new_v4());
-            bind_interruptible_request_with_requester(
-                &node,
-                &owner,
-                &request_id,
-                &session_id,
-                Utc::now() + chrono::Duration::minutes(5),
-                None,
-            )
-            .await;
             Self {
                 _dir: dir,
                 node,
@@ -542,7 +539,7 @@ mod job_control {
                 request_id: self.request_id.clone(),
                 session_id: self.session_id.clone(),
                 node_did: self.owner.node_did.clone(),
-                requester_did: requester_did.map(str::to_owned),
+                requester_did: Some(requester_did.unwrap_or(&self.owner.node_did).to_owned()),
             }
         }
 
@@ -683,7 +680,7 @@ mod job_control {
                     "request_id": "child-slot-a",
                     "purpose": "normal",
                     "node_did": self.owner.node_did,
-                    "requester_did": null,
+                    "requester_did": self.owner.node_did,
                     "session_id": "child-session-slot-a",
                     "agent_id": "general",
                     "lifecycle_state": "processing",
@@ -947,7 +944,7 @@ mod job_control {
             hook.node.clone(),
             &hook.executions,
             &hook.owner.node_did,
-            None,
+            Some(&hook.owner.node_did),
             &hook.session_id,
             "job-client",
         )

@@ -134,6 +134,7 @@ pub(super) fn steering_compatible(
             && input.selected_skill_ids == head.input.selected_skill_ids
             && input.initial_title.is_none()
             && input.goal_continuation.is_none()
+            && super::folding::same_goal_assignment(head, row)
     }) && row.purpose == Some(RequestPurpose::Normal)
         && row.execution_origin.as_deref() == Some("interactive")
         && row.node_did.as_deref() == Some(head.node_did.as_str())

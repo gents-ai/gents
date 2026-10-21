@@ -85,11 +85,31 @@ async fn live_core_persists_managed_server_peer_through_watched_owner() -> Resul
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Result<()> {
-    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
     let node_did = "did:key:hosted-message-owner";
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":17})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx/17"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("AgentSession"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {"AgentSession": []}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
     Mock::given(method("POST"))
         .and(body_string_contains("AgentRequest"))
         .and(body_string_contains(node_did))

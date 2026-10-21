@@ -133,7 +133,13 @@ def goalDecisionCases : List GoalDecisionCase :=
       sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
       requestIsWrapup := false, infrastructureRetries := 0,
       wrapupRequested := false, wrapupCompleted := false }
-  ]
+  ] ++ ([Goals.RequestTerminal.completed, .failed, .dead, .interrupted, .superseded].map fun terminal =>
+    { name := "stopped_" ++ terminalName terminal ++ "_cannot_continue"
+      status := .stopped, terminal
+      sessionIdle := true, childExists := false
+      budgetReached := decide (terminal = .completed), hasActivity := true
+      requestIsWrapup := true, infrastructureRetries := 0
+      wrapupRequested := true, wrapupCompleted := false })
 
 def goalDecisionCaseJson (w : GoalDecisionCase) : String :=
   let decision := Goals.decide w.status w.terminal w.sessionIdle w.childExists
@@ -165,6 +171,7 @@ structure GoalTransitionCase where
 def goalActionName : Goals.Action → String
   | .pause => "pause"
   | .resume => "resume"
+  | .stop => "stop"
   | .complete => "complete"
   | .blockedAudit .sameRequest => "blocked_audit_same_request"
   | .blockedAudit .sameCondition => "blocked_audit_same_condition"
@@ -192,6 +199,24 @@ def goalTransitionCases : List GoalTransitionCase :=
       action := .complete }
   , { name := "complete_rewrite_rejected", pre := goalCaseState .complete,
       action := .complete }
+  , { name := "active_stop", pre := goalCaseState .active 2,
+      action := .stop }
+  , { name := "paused_stop", pre := goalCaseState .paused,
+      action := .stop }
+  , { name := "blocked_stop_preserves_audits", pre := goalCaseState .blocked 3,
+      action := .stop }
+  , { name := "usage_limited_stop", pre := goalCaseState .usageLimited,
+      action := .stop }
+  , { name := "budget_stop_preserves_wrapup_history", pre := goalCaseState .budgetLimited 0 true false,
+      action := .stop }
+  , { name := "complete_stop_rejected", pre := goalCaseState .complete,
+      action := .stop }
+  , { name := "stopped_stop_rejected", pre := goalCaseState .stopped,
+      action := .stop }
+  , { name := "stopped_cannot_complete", pre := goalCaseState .stopped,
+      action := .complete }
+  , { name := "stopped_cannot_resume", pre := goalCaseState .stopped,
+      action := .resume }
   , { name := "same_request_dedupes", pre := goalCaseState .active 2,
       action := .blockedAudit .sameRequest }
   , { name := "same_condition_increments", pre := goalCaseState .active 1,

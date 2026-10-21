@@ -1,4 +1,6 @@
 mod recovery;
+#[cfg(test)]
+mod retained_tests;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use anyhow::{ensure, Context, Result};
@@ -30,6 +32,7 @@ pub(crate) fn resolve_session_id(
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct GoalOutcomeBinding {
     pub owner_did: String,
     pub session_id: String,
@@ -57,11 +60,14 @@ pub(crate) fn fire_outcome_reason(
             && goal.session_id == fire.session_id
             && goal.assignment_request_id == fire.request_id
     })?;
+    goal_outcome_terminal(&goal.status).then(|| goal.status.clone())
+}
+
+fn goal_outcome_terminal(status: &str) -> bool {
     matches!(
-        goal.status.as_str(),
-        "complete" | "blocked" | "budget_limited"
+        status,
+        "complete" | "blocked" | "budget_limited" | "stopped"
     )
-    .then(|| goal.status.clone())
 }
 
 async fn observe_goal_outcome_binding(
@@ -71,29 +77,109 @@ async fn observe_goal_outcome_binding(
     let Some(expected_goal_id) = &fire.goal_id else {
         return Ok(None);
     };
-    let Some(goal) =
+    let current =
         crate::goal::load_canonical_goal_in_txn(txn, &fire.identity.owner_did, &fire.session_id)
+            .await?;
+    let current_binding = if let Some(goal) = &current {
+        crate::goal::assignment_request_id_in_txn(txn, goal)
             .await?
-    else {
-        return Ok(None);
+            .map(|assignment_request_id| GoalOutcomeBinding {
+                owner_did: goal.node_did.clone(),
+                session_id: goal.session_id.clone(),
+                assignment_request_id,
+                status: goal.status.clone(),
+            })
+    } else {
+        None
     };
+    if current
+        .as_ref()
+        .is_some_and(|goal| &goal.goal_id == expected_goal_id)
+        && current_binding
+            .as_ref()
+            .is_some_and(|binding| binding.assignment_request_id == fire.request_id)
+    {
+        return Ok(current_binding);
+    }
+    let response = txn.execute(&format!(
+        r#"{{AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+        escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id),
+        escape_graphql_string(&fire.request_id)
+    )).await?;
+    let requests = response["data"]["AgentRequest"]
+        .as_array()
+        .context("Task assignment request query omitted rows")?;
     ensure!(
-        &goal.goal_id == expected_goal_id,
-        "Task fire Goal identity changed during outcome observation"
+        requests.len() == 1,
+        "Task assignment has no unique physical request in its owner/session"
     );
-    let Some(assignment_request_id) = crate::goal::assignment_request_id_in_txn(txn, &goal).await?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(GoalOutcomeBinding {
-        owner_did: goal.node_did,
-        session_id: goal.session_id,
-        assignment_request_id,
-        status: goal.status,
-    }))
+    let root = requests[0]["_docID"]
+        .as_str()
+        .context("Task assignment request has no physical identity")?;
+    let versions = crate::goal::load_goal_versions_for_session(
+        txn,
+        &fire.identity.owner_did,
+        &fire.session_id,
+    )
+    .await?;
+    let goals = crate::goal::latest_assignment_goals(&versions)?;
+    let retained = goals
+        .iter()
+        .filter(|goal| {
+            &goal.goal_id == expected_goal_id
+                && goal.assignment_root_request_doc_id.as_deref() == Some(root)
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        retained.len() <= 1,
+        "Task assignment has ambiguous physical Goal history"
+    );
+    let retained_binding = retained.first().map(|goal| GoalOutcomeBinding {
+        owner_did: goal.node_did.clone(),
+        session_id: goal.session_id.clone(),
+        assignment_request_id: fire.request_id.clone(),
+        status: goal.status.clone(),
+    });
+    ensure!(
+        current_binding
+            .as_ref()
+            .is_none_or(|binding| binding.assignment_request_id != fire.request_id),
+        "Task assignment root is reused by a different Goal identity"
+    );
+    Ok(select_goal_outcome_binding(
+        fire,
+        retained_binding.as_ref(),
+        current_binding.as_ref(),
+    ))
 }
 
-fn assignment_replaced(fire: &TriggerFire, binding: Option<&GoalOutcomeBinding>) -> bool {
+pub(super) fn select_goal_outcome_binding(
+    fire: &TriggerFire,
+    retained: Option<&GoalOutcomeBinding>,
+    current: Option<&GoalOutcomeBinding>,
+) -> Option<GoalOutcomeBinding> {
+    let retained = retained.filter(|goal| {
+        goal.owner_did == fire.identity.owner_did
+            && goal.session_id == fire.session_id
+            && goal.assignment_request_id == fire.request_id
+    })?;
+    if goal_outcome_terminal(&retained.status) {
+        return Some(retained.clone());
+    }
+    Some(
+        current
+            .filter(|goal| {
+                goal.owner_did == fire.identity.owner_did && goal.session_id == fire.session_id
+            })
+            .unwrap_or(retained)
+            .clone(),
+    )
+}
+
+pub(super) fn assignment_replaced(
+    fire: &TriggerFire,
+    binding: Option<&GoalOutcomeBinding>,
+) -> bool {
     fire.goal_assignment_applied
         && binding.is_some_and(|goal| {
             goal.owner_did == fire.identity.owner_did
@@ -183,16 +269,7 @@ pub(crate) async fn stage_outcome(
         "noncanonical outcome fire identity"
     );
     let handoff_id = fire.identity.outcome_id();
-    let prior = txn
-        .execute(&format!(
-            "{{ FireOutcome(filter: {{handoff_id: {{_eq: \"{}\"}}}}) {{ handoff_id }} }}",
-            escape_graphql_string(&handoff_id)
-        ))
-        .await?;
-    if prior["data"]["FireOutcome"]
-        .as_array()
-        .is_some_and(|rows| !rows.is_empty())
-    {
+    if outcome_published(txn, fire).await? {
         return Ok(false);
     }
     let source_handoff_id = fire
@@ -221,6 +298,19 @@ pub(crate) async fn stage_outcome(
 
 const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
 
+async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Result<bool> {
+    let response = txn
+        .execute(&format!(
+            "{{ FireOutcome(filter: {{handoff_id: {{_eq: \"{}\"}}}}) {{ handoff_id }} }}",
+            escape_graphql_string(&fire.identity.outcome_id())
+        ))
+        .await?;
+    Ok(!response["data"]["FireOutcome"]
+        .as_array()
+        .context("Task outcome query omitted rows")?
+        .is_empty())
+}
+
 pub(crate) async fn publish_request_outcome(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -247,6 +337,9 @@ pub(crate) async fn publish_goal_outcomes(
     let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, goal_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(goal_id))).await?;
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
+        if outcome_published(txn, &fire).await? {
+            continue;
+        }
         let binding = observe_goal_outcome_binding(txn, &fire).await?;
         stage_outcome(
             txn,

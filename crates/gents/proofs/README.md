@@ -621,7 +621,8 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
 | `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
 | `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
-| `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input and context-bound activation |
+| `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input, continuation assignment attribution and context-bound activation |
+| `Proofs/GoalAutomation/RequestAssignment.lean` | Signed Goal and physical opening-request attribution, retained assignment handoffs |
 | `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another node and is authorized by the target's `PeerAdmissionAuthority` ACP. Every branch bounds the signed causal hop by `max_request_hop`. Title requests are runtime-internal local control with parent-only provenance |
 | `Proofs/Request/CausalHop.lean` | The only loop bound between agents: `nextHop` (roots 0, tool-caused +1, continuations copy), `admitHop`, and `admitted_chain_sends_le_max`. A plugin job's completion wake is a continuation (`job_completion_wake_is_continuation`) |
 | `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |

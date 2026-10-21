@@ -139,8 +139,9 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             .cloned()
             .unwrap_or_else(|| format!("trigger-session:{fire_key}")),
     };
-    let prior_created_at = lookup_request_by_retry_key(&access, &node_did, &fire_key)
-        .await?
+    let admitted = lookup_request_by_retry_key(&access, &node_did, &fire_key).await?;
+    let prior_created_at = admitted
+        .as_ref()
         .map(|request| {
             anyhow::ensure!(
                 request.request_id == request_id,
@@ -148,6 +149,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             );
             request
                 .created_at
+                .clone()
                 .context("Task fire request is missing created_at")
         })
         .transpose()?;
@@ -185,6 +187,24 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     }
 
     let (content, input) = content_and_input_with_prompt_selected_skill_ids(None, &content);
+    let input = prepare_task_run_input(
+        &access,
+        &node_did,
+        &session_id,
+        args.continue_session.is_some(),
+        rendered_goal_objective.is_some(),
+        admitted.as_ref(),
+        input,
+    )
+    .await?;
+    let goal_id = prepare_task_run_goal_id(
+        &access,
+        &node_did,
+        &session_id,
+        rendered_goal_objective.is_some(),
+        admitted.as_ref(),
+    )
+    .await?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&node_did);
     let create = gents::build_signed_request(
@@ -219,9 +239,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         task_id: task_id.clone(),
         request_id: request_id.clone(),
         session_id: session_id.clone(),
-        goal_id: rendered_goal_objective
-            .as_ref()
-            .map(|_| gents::goal::deterministic_goal_id(&node_did, &session_id)),
+        goal_id,
         goal_objective: rendered_goal_objective,
         goal_token_budget,
         goal_assignment_applied: false,
@@ -288,6 +306,64 @@ fn resolve_invocation_key(
     }
 }
 
+async fn prepare_task_run_input(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    continue_existing: bool,
+    goal_backed: bool,
+    admitted: Option<&AgentRequestRow>,
+    input: RequestInput,
+) -> Result<RequestInput> {
+    if let Some(admitted) = admitted {
+        anyhow::ensure!(
+            admitted.node_did.as_deref() == Some(node_did)
+                && admitted.requester_did.as_deref() == Some(node_did)
+                && admitted.session_id.as_deref() == Some(session_id),
+            "admitted Task input differs from its owner/session"
+        );
+        return Ok(admitted.input.clone().unwrap_or_default());
+    }
+    if goal_backed || !continue_existing {
+        return Ok(input);
+    }
+    crate::request_helpers::prepare_cli_goal_input(access, node_did, session_id, input).await
+}
+
+/// Duplicate admission preserves the stored fire, so an untagged signed receipt
+/// must not infer its original Task Goal identity from the current Goal row.
+async fn prepare_task_run_goal_id(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    goal_backed: bool,
+    admitted: Option<&AgentRequestRow>,
+) -> Result<Option<String>> {
+    if let Some(admitted) = admitted {
+        return Ok(admitted
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.as_ref())
+            .map(|reference| reference.goal_id.clone()));
+    }
+    if !goal_backed {
+        return Ok(None);
+    }
+    access
+        .transact_readonly("cli.task_run.goal_identity", |txn| {
+            Box::pin(async move {
+                let current =
+                    gents::goal::load_canonical_goal_in_txn(txn, node_did, session_id).await?;
+                Ok(Some(gents::goal::task_assignment_goal_id(
+                    current.as_ref().map(|goal| goal.goal_id.as_str()),
+                    node_did,
+                    session_id,
+                )))
+            })
+        })
+        .await
+}
+
 async fn lookup_request_by_retry_key(
     access: &ConfigAccess,
     node_did: &str,
@@ -296,15 +372,12 @@ async fn lookup_request_by_retry_key(
     let query = format!(
         r#"query {{
             AgentRequest(filter: {{ node_did: {{ _eq: "{owner}" }}, requester_did: {{ _eq: "{owner}" }}, retry_key: {{ _eq: "{key}" }} }}, limit: 2) {{
-                _docID
-                request_id
-                agent_id
-                input
-                created_at
+                {signed_fields}
             }}
         }}"#,
         key = escape_graphql_string(retry_key),
         owner = escape_graphql_string(node_did),
+        signed_fields = gents::SIGNED_REQUEST_FIELDS,
     );
     let response = access.execute(&query).await?;
     if let Some(errors) = response.get("errors").and_then(Value::as_array) {
@@ -324,7 +397,10 @@ async fn lookup_request_by_retry_key(
     rows.first()
         .cloned()
         .map(|row| {
-            serde_json::from_value(row).context("decoding Task fire canonical AgentRequest row")
+            let row: AgentRequestRow = serde_json::from_value(row)
+                .context("decoding Task fire canonical AgentRequest row")?;
+            gents::verify_request_receipt_signature(&row)?;
+            Ok(row)
         })
         .transpose()
 }
@@ -354,6 +430,125 @@ pub(crate) fn resolve_task_id_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::request_helpers::goal_input_tests::{authored_input, fixture, reference};
+    use gents::NodeIdentity;
+    use serde_json::json;
+
+    pub(super) async fn signed_task_receipt(
+        identity: &gents::KeyIdentity,
+        input: RequestInput,
+    ) -> Result<Value> {
+        let create = gents::build_signed_request(
+            gents::RequestSpec {
+                input,
+                retry_key: Some("manual-fire".into()),
+                ..gents::RequestSpec::new(
+                    gents_protocol::request_admission::RequestPurpose::Normal,
+                    gents::RequestIdentity {
+                        request_id: "manual-task".into(),
+                        node_did: identity.did().into(),
+                        requester_did: None,
+                        agent_id: "engineer".into(),
+                        session_id: "chat".into(),
+                        content: "Continue the Task".into(),
+                        execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                        created_at: "2026-10-21T00:00:00Z".into(),
+                    },
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                        identity.did(),
+                    ),
+                )
+            },
+            gents::RequestSigner::Identity(identity),
+        )
+        .await?;
+        let mut row = serde_json::to_value(&create)?;
+        row["_docID"] = json!("admitted-physical-request");
+        row["admission_kind"] = json!("local-self");
+        row["admission_signer_did"] = json!(create.admission.signer_did);
+        row["admission_signature"] = json!(bs58::encode(create.admission.signature).into_string());
+        gents::verify_request_receipt_signature(&serde_json::from_value(row.clone())?)?;
+        Ok(row)
+    }
+
+    #[tokio::test]
+    async fn generated_manual_task_goal_input_preserves_signed_receipts() -> Result<()> {
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
+        let cases = snapshot["goal_delivery_input_cases"].as_array().unwrap();
+        let mut covered = 0;
+        for case in cases
+            .iter()
+            .filter(|case| case["plugin"] == false && case["owned"] == true)
+        {
+            covered += 1;
+            let (identity, graphql, source, server) = fixture(
+                case["existing"].as_bool().unwrap(),
+                true,
+                reference(&case["observed"]),
+                None,
+            )
+            .await?;
+            let access = ConfigAccess::Graphql(graphql);
+            let mut input = authored_input();
+            input.goal_assignment = reference(&case["captured"]);
+            let mut expected = input.clone();
+            let admitted = if case["admitted"] == true {
+                let mut original = authored_input();
+                original.cwd = Some("/admitted-workspace".into());
+                original.goal_assignment = reference(&case["admitted_reference"]);
+                let row = signed_task_receipt(&identity, original.clone()).await?;
+                *source.requests.lock().unwrap() = json!([row]);
+                expected = original;
+                lookup_request_by_retry_key(&access, identity.did(), "manual-fire").await?
+            } else {
+                None
+            };
+            let actual = prepare_task_run_input(
+                &access,
+                identity.did(),
+                "chat",
+                case["existing"].as_bool().unwrap(),
+                case["captured"].is_object(),
+                admitted.as_ref(),
+                input,
+            )
+            .await?;
+            server.abort();
+            expected.goal_assignment = reference(&case["expected"]["reference"]);
+            assert_eq!(actual, expected, "{case}");
+            if admitted.is_some() || case["captured"].is_object() || case["existing"] == false {
+                assert!(
+                    !source
+                        .queries
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|q| q.contains("AgentSession") || q.contains("GoalObservation")),
+                    "{case}"
+                );
+            }
+        }
+        assert_eq!(covered, 7);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manual_task_goal_input_rejects_tampered_admitted_receipts() -> Result<()> {
+        let (identity, graphql, source, server) = fixture(true, true, None, None).await?;
+        let mut row = signed_task_receipt(&identity, authored_input()).await?;
+        row["input"]["cwd"] = json!("/forged-workspace");
+        *source.requests.lock().unwrap() = json!([row]);
+        let error = lookup_request_by_retry_key(
+            &ConfigAccess::Graphql(graphql),
+            identity.did(),
+            "manual-fire",
+        )
+        .await
+        .unwrap_err();
+        server.abort();
+        assert!(format!("{error:#}").contains("signature"), "{error:#}");
+        Ok(())
+    }
 
     #[test]
     fn goal_task_requires_a_stable_invocation_key() {
@@ -366,3 +561,6 @@ mod tests {
         assert!(resolve_invocation_key("task", false, Some(" ")).is_err());
     }
 }
+
+#[cfg(test)]
+mod goal_identity_tests;
