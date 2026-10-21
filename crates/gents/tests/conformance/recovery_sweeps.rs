@@ -13,7 +13,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        47,
+        48,
         "Lean should emit one row per registered recovery predicate witness"
     );
 

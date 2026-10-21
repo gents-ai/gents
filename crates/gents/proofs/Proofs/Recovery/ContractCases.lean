@@ -97,7 +97,8 @@ def sessionMessageRecoveryCase
 def pluginJobRecoveryCase (c : Conformance.PluginJob.RecoveryCase) : RecoverySweepCase :=
   let after := Conformance.PluginJob.recoveryTick c.row
   let state := fun (row : PluginJobRow) =>
-    (if row.running then ToolExecution.ToolCallState.running else .failed).toDefraDB
+    (if row.running then ToolExecution.ToolCallState.running
+      else if row.sessionStopped then .cancelled else .failed).toDefraDB
   { (recoveryCase
       pluginJobRecoverySweep
       c.name
@@ -212,6 +213,10 @@ def recoverySweepCases : List RecoverySweepCase :=
   , orphanedBackgroundRecoveryCase
       "registered_background_tool_session_stopped_to_cancelled"
       false true false false true (ownerSessionStopped := true)
+  , orphanedBackgroundRecoveryCase
+      "registered_background_tool_session_stop_still_running_deferred"
+      false true false false true (process := .stillRunning)
+      (ownerSessionStopped := true)
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_session_stopped_to_cancelled"
       false false false true false (ownerSessionStopped := true)
