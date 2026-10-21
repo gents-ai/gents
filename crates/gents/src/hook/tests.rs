@@ -16,6 +16,9 @@ use super::*;
 #[path = "tests/transcript_native.rs"]
 mod transcript_native;
 
+#[path = "tests/goal_context.rs"]
+mod goal_context;
+
 #[path = "tests/background_panic.rs"]
 mod background_panic;
 

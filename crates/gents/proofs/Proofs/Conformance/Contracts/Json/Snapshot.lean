@@ -84,6 +84,7 @@ import Proofs.Conformance.GoalQueueAssignment
 import Proofs.Conformance.GoalFirstRequestBinding
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
@@ -141,6 +142,8 @@ def snapshotJson : String :=
       ++ Conformance.GoalRequestAssignmentContracts.casesJson ++ ","
     ++ "\"goal_wake_ancestry_cases\":"
       ++ Conformance.GoalWakeAncestryContracts.casesJson ++ ","
+    ++ "\"goal_tool_context_cases\":"
+      ++ Conformance.GoalToolContextContracts.casesJson ++ ","
     ++ "\"goal_request_ancestry_cases\":"
       ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
     ++ "\"goal_queue_assignment_cases\":"

@@ -768,6 +768,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalWakeAncestryCases".into(),
         ));
     }
+    if !snapshot.goal_tool_context_cases.is_empty() {
+        emitted.insert((
+            "goal_tool_context_cases".into(),
+            "GoalToolContextCases".into(),
+        ));
+    }
     if !snapshot.goal_request_ancestry_cases.is_empty() {
         emitted.insert((
             "goal_request_ancestry_cases".into(),

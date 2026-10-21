@@ -917,6 +917,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations",
         },
         ConformanceConsumer::RustTest {
+            id: "hook::tests::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment",
+            package: "gents",
+            source_path: "crates/gents/src/hook/tests/goal_context.rs",
+            module_path: "hook::tests::goal_context",
+            function: "generated_goal_tool_context_uses_the_signed_callers_assignment",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::request_head::tests::generated_goal_ancestry_cases_keep_one_signed_goal",
             package: "gents",
             source_path: "crates/gents/src/goal/request_head_tests.rs",
