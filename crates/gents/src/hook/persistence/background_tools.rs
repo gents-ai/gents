@@ -213,9 +213,9 @@ impl DefraSessionHook {
             .doc_id()
             .ok_or_else(|| anyhow::anyhow!("spawned background lifecycle lacks physical identity"))?
             .to_owned();
-        let execution_reservation = self.background_executions.reserve_scoped(
+        let execution_reservation = self.background_executions.reserve(
             background_tool_call_id.clone(),
-            Some(execution_tool_doc_id.clone()),
+            execution_tool_doc_id.clone(),
             cancellation_token.clone(),
         );
         lifecycle.start_running().await?;

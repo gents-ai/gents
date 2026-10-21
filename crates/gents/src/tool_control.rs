@@ -297,7 +297,14 @@ mod tests {
             .unwrap();
             lifecycle.start_running().await.unwrap();
             let token = CancellationToken::new();
-            reservations.insert(id.clone(), registry.reserve(id.clone(), token.clone()));
+            reservations.insert(
+                id.clone(),
+                registry.reserve(
+                    id.clone(),
+                    lifecycle.doc_id().unwrap().to_owned(),
+                    token.clone(),
+                ),
+            );
             tokens.insert(id, token);
         }
         let token = tokens["cancel-native-tool"].clone();
@@ -433,7 +440,7 @@ mod tests {
                     );
                 }
             }
-            assert!(registry.process_record_list().is_empty(), "{name}");
+            assert!(registry.process_record_list().unwrap().is_empty(), "{name}");
             admission.node.shutdown().await;
             let _ = std::fs::remove_dir_all(admission.path);
         }

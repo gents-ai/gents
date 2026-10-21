@@ -109,7 +109,7 @@ impl BackgroundToolRegistry {
 struct BackgroundExecution {
     cancellation_token: CancellationToken,
     completion_tx: watch::Sender<bool>,
-    tool_call_doc_id: Option<String>,
+    tool_call_doc_id: String,
 }
 
 #[derive(Clone, Default)]
@@ -202,14 +202,10 @@ impl BackgroundExecutionRegistry {
             .filter(|record| record.tool_call_doc_id == tool_call_doc_id)
     }
 
-    pub(crate) fn process_record_list(&self) -> Vec<crate::managed_exec::ownership::ProcessRecord> {
-        self.process_records.list()
-    }
-
-    pub(crate) fn try_process_record_list(
+    pub(crate) fn process_record_list(
         &self,
     ) -> anyhow::Result<Vec<crate::managed_exec::ownership::ProcessRecord>> {
-        self.process_records.try_list()
+        self.process_records.list()
     }
 
     pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
@@ -323,15 +319,7 @@ impl BackgroundExecutionRegistry {
     pub(crate) fn reserve(
         &self,
         tool_call_id: String,
-        cancellation_token: CancellationToken,
-    ) -> BackgroundExecutionReservation {
-        self.reserve_scoped(tool_call_id, None, cancellation_token)
-    }
-
-    pub(crate) fn reserve_scoped(
-        &self,
-        tool_call_id: String,
-        tool_call_doc_id: Option<String>,
+        tool_call_doc_id: String,
         cancellation_token: CancellationToken,
     ) -> BackgroundExecutionReservation {
         let (completion_tx, _) = watch::channel(false);
@@ -359,10 +347,10 @@ impl BackgroundExecutionRegistry {
         self.lock_executions().contains_key(tool_call_id)
     }
 
-    pub(crate) fn active_tool_calls(&self) -> Vec<(String, Option<String>)> {
+    pub(crate) fn active_tool_call_doc_ids(&self) -> Vec<String> {
         self.lock_executions()
-            .iter()
-            .map(|(id, execution)| (id.clone(), execution.tool_call_doc_id.clone()))
+            .values()
+            .map(|execution| execution.tool_call_doc_id.clone())
             .collect()
     }
 

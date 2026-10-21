@@ -58,9 +58,11 @@ impl DefraSessionHook {
                 .expect("accepted foreground tool")
                 .to_owned();
             let process_token = CancellationToken::new();
-            let reservation = hook
-                .background_executions
-                .reserve(lifecycle.tool_call_id().to_owned(), process_token.clone());
+            let reservation = hook.background_executions.reserve(
+                lifecycle.tool_call_id().to_owned(),
+                doc.clone(),
+                process_token.clone(),
+            );
             let recorder = hook
                 .background_executions
                 .process_recorder(lifecycle.tool_call_id(), &doc);
