@@ -1367,6 +1367,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             emitted.insert(("interrupt_queue_cases".to_string(), domain.to_string()));
         }
     }
+    if !snapshot.session_control_cases.is_empty() {
+        emitted.insert((
+            "session_control_cases".to_string(),
+            "SessionControlCases".to_string(),
+        ));
+    }
     if !snapshot.mailbox_handoff_cases.is_empty() {
         emitted.insert((
             "mailbox_handoff_cases".to_string(),

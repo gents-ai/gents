@@ -295,6 +295,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub(crate) canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub(crate) interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
+    pub(crate) session_control_cases: Vec<serde_json::Value>,
     pub(crate) fold_queue_cases: Vec<LeanFoldQueueCase>,
     pub(crate) fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
     pub(crate) handover_fold_cases: Vec<LeanHandoverFoldCase>,
@@ -2940,6 +2941,10 @@ pub(crate) fn lean_canonical_spawned_target_rejection_cases(
 
 pub(crate) fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {
     &lean_contract_snapshot().interrupt_queue_cases
+}
+
+pub(crate) fn lean_session_control_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().session_control_cases
 }
 
 #[derive(Debug, Deserialize)]

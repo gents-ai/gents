@@ -1217,6 +1217,11 @@ def caseCoverage : List CoverageEntry :=
       "interrupt::queue_tests::generated_interrupt_queue_events_bind_to_native_rows"
       "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_control_cases"
+      "SessionControlCases"
+      "conformance::session_control::generated_session_control_cases_drive_native_interrupt_stop_and_resume")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "fold_queue_cases"
       "FoldQueueCases"

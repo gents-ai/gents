@@ -121,6 +121,7 @@ mod request_input;
 mod request_lifecycle;
 #[path = "conformance/session_hydration.rs"]
 mod session_hydration;
+mod session_control;
 #[path = "conformance/startup_readiness.rs"]
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
