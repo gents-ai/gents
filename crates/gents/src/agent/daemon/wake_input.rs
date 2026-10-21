@@ -149,3 +149,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "wake_input_scope_tests.rs"]
+mod scope_tests;

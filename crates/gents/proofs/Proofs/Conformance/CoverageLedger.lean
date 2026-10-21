@@ -1559,6 +1559,11 @@ def caseCoverage : List CoverageEntry :=
       "goal::request_assignment::contract_tests::generated_goal_request_assignments_drive_signed_binding")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_wake_receipt_cases"
+      "GoalWakeReceiptCases"
+      "agent::daemon::wake_input::scope_tests::generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_wake_coalescing_cases"
       "GoalWakeCoalescingCases"
       "lifecycle::queue::tests::goal_assignment_wakes::generated_goal_wake_scopes_preserve_atomic_notification_bindings")

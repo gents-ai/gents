@@ -78,6 +78,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_first_request_binding_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_assignment_cases: Vec<serde_json::Value>,
+    pub(crate) goal_wake_receipt_cases: Vec<serde_json::Value>,
     pub(crate) goal_tool_context_cases: Vec<serde_json::Value>,
     pub(crate) goal_input_binding_cases: Vec<serde_json::Value>,
     pub(crate) session_message_goal_input_cases: Vec<serde_json::Value>,
