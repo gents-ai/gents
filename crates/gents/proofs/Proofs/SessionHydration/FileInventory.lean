@@ -288,15 +288,6 @@ structure Page where
   next : Option Cursor
   deriving DecidableEq, Repr
 
-/-- Snapshot values are logical signed preimages, not a requirement to repeat
-the full membership and projection list on every wire page. The native typed
-purpose must bind their canonical digest, exact scope and page position. -/
-structure Receiver where
-  snapshot : Snapshot
-  entries : List Entry
-  complete : Bool
-  deriving DecidableEq, Repr
-
 inductive PageResult where
   | rejected
   | unknown
@@ -304,9 +295,9 @@ inductive PageResult where
   | page (value : Page)
   deriving DecidableEq, Repr
 
-/-- Only a verified source signature for the explicit metadata purpose can
-establish this value. Transcript v1 receipts are intentionally a disjoint
-constructor and cannot prove a metadata snapshot, even for the same IDs. -/
+/-- Source-side logical commitment. The full value is not a receiver wire
+field. Its native digest encoding and authenticated page rendering must bind
+this exact preimage; transcript v1 has a disjoint purpose. -/
 inductive VerifiedReceipt where
   | transcriptV1 (admission : Request) (documents : List CanonicalOutput.Hydration.DocumentKey)
   | metadata (snapshot : Snapshot)
@@ -352,22 +343,188 @@ theorem changed_snapshot_invalidates_old_receipt (before after : Snapshot)
     (VerifiedReceipt.metadata before).proves after = false := by
   simp [VerifiedReceipt.proves, h]
 
-def beginReceive (receipt : VerifiedReceipt) : Option Receiver :=
-  match receipt with
-  | .transcriptV1 _ _ => none
-  | .metadata value => some ⟨value, [], false⟩
+structure Coverage where
+  entries : Nat
+  pending : Nat
+  unknown : Nat
+  deriving DecidableEq, Repr
 
-/-- A signed later page cannot certify an omitted prefix. End-of-pages and
-known capture coverage remain distinct: legacy missing capture stays unknown
-even after every page has arrived. -/
-def receive (state : Receiver) (value : Page) : Option Receiver :=
-  if state.complete || value.snapshot != state.snapshot ||
-      state.entries != state.snapshot.entries.take state.entries.length ||
-      value.offset != state.entries.length ||
-      value != makePage state.snapshot state.entries.length then none
-  else some ⟨state.snapshot, state.entries ++ value.entries, value.next.isNone⟩
+def Snapshot.coverage (value : Snapshot) : Coverage :=
+  ⟨value.entries.length, value.pending.length, value.unknown.length⟩
+
+/-- Digest strings are opaque native canonical commitments, not decoded
+snapshots. Signature verification binds every page field and its digest to
+the source; the receiver does not infer unreceived membership from a hash. -/
+structure PageBinding where
+  admission : Request
+  digest : String
+  coverage : Coverage
+  deriving DecidableEq, Repr
+
+structure PageCursor where
+  binding : PageBinding
+  offset : Nat
+  deriving DecidableEq, Repr
+
+structure WirePage where
+  binding : PageBinding
+  offset : Nat
+  entries : List Entry
+  next : Option PageCursor
+  deriving DecidableEq, Repr
+
+/-- Rendering follows source selection. Native hashing uses the full logical
+snapshot's canonical preimage; collision resistance is an external crypto
+premise, not a claim that every String uniquely encodes an arbitrary snapshot. -/
+def Page.toWire (value : Page) (digest : String) : WirePage :=
+  let binding := PageBinding.mk value.snapshot.admission digest value.snapshot.coverage
+  ⟨binding, value.offset, value.entries, value.next.map fun cursor => ⟨binding, cursor.offset⟩⟩
+
+inductive ReceiptPurpose where
+  | transcriptV1
+  | fileInventoryV2
+  deriving DecidableEq, Repr
+
+/-- `signatureVerified` is the existing NodeIdentity verifier's observation
+over the exact versioned purpose, nonce, binding and full page payload. It is
+not a field accepted from the wire or persisted without re-verification. -/
+structure PageEnvelope where
+  purpose : ReceiptPurpose
+  requestKey : String
+  signer : String
+  signatureVerified : Bool
+  page : WirePage
+  deriving DecidableEq, Repr
+
+structure ReceivedPage where
+  requestKey : String
+  envelope : PageEnvelope
+  deriving DecidableEq, Repr
+
+structure Prefix where
+  binding : PageBinding
+  entries : List Entry
+  complete : Bool
+  deriving DecidableEq, Repr
+
+def Entry.key (value : Entry) : DocId × String × String :=
+  ⟨value.projection, value.change.root, value.change.path⟩
+
+def coherentEntries (entries : List Entry) : Bool :=
+  (entries.map Entry.key).Nodup &&
+    entries.Pairwise (fun left right => left.tool ≤ right.tool) &&
+    entries.all (fun entry => validScope entry.scope &&
+      !entry.change.root.isEmpty && !entry.change.path.isEmpty) &&
+    entries.all (fun left => entries.all fun right =>
+      (left.tool != right.tool || (left.request == right.request && left.scope == right.scope &&
+        left.projection == right.projection && left.observation == right.observation)) &&
+      (left.projection != right.projection || (left.tool == right.tool &&
+        left.request == right.request && left.scope == right.scope &&
+        left.observation == right.observation)) &&
+      (left.observation != right.observation || left.projection == right.projection))
+
+def WirePage.wellFormed (value : WirePage) : Bool :=
+  let following := value.offset + value.entries.length
+  !value.binding.digest.isEmpty && value.entries.length ≤ pageLimit &&
+    value.offset ≤ value.binding.coverage.entries &&
+    value.entries.length == min pageLimit (value.binding.coverage.entries - value.offset) &&
+    value.next == (if following < value.binding.coverage.entries then
+      some ⟨value.binding, following⟩ else none) &&
+    coherentEntries value.entries
+
+/-- All authorization remains with the existing source/identity owners. This
+receiver checks their signed metadata representation, not another access
+policy. Fork entries retain the attested actual scope, including origins. -/
+def advance (admission : Request) (previous : Option Prefix) (received : ReceivedPage) : Option Prefix :=
+  let envelope := received.envelope
+  let value := envelope.page
+  if !envelope.signatureVerified || envelope.purpose != .fileInventoryV2 ||
+      envelope.signer != admission.node || received.requestKey.isEmpty ||
+      envelope.requestKey != received.requestKey || value.binding.admission != admission ||
+      !value.wellFormed then none
+  else match previous with
+  | none =>
+      if value.offset != 0 then none
+      else some ⟨value.binding, value.entries,
+        value.entries.length == value.binding.coverage.entries⟩
+  | some prior =>
+      if prior.complete || prior.binding != value.binding ||
+          value.offset != prior.entries.length ||
+          !coherentEntries (prior.entries ++ value.entries) then none
+      else some ⟨value.binding, prior.entries ++ value.entries,
+        prior.entries.length + value.entries.length == value.binding.coverage.entries⟩
+
+def validatePrefix (admission : Request) :
+    Option Prefix → List ReceivedPage → Option Prefix
+  | prior, [] => prior
+  | prior, head :: tail => do
+      let next ← advance admission prior head
+      validatePrefix admission (some next) tail
+
+/-- Stored page bytes are re-verified by the native decoder before entering
+this owner. There is no full snapshot or unsigned retained entry cache here. -/
+structure Receiver where
+  admission : Request
+  pages : List ReceivedPage
+  deriving DecidableEq, Repr
+
+def Receiver.validated (state : Receiver) : Option Prefix :=
+  if !(state.pages.map (·.requestKey)).Nodup then none
+  else validatePrefix state.admission none state.pages
+
+def receive (state : Receiver) (requestKey : String) (envelope : PageEnvelope) : Option Receiver :=
+  let next := Receiver.mk state.admission (state.pages ++ [⟨requestKey, envelope⟩])
+  if next.validated.isSome then some next else none
+
+def Receiver.complete (state : Receiver) : Bool := state.validated.any (·.complete)
 
 def knownInventory (state : Receiver) : Bool :=
-  state.complete && state.snapshot.pending.isEmpty && state.snapshot.unknown.isEmpty
+  state.validated.any fun prior => prior.complete &&
+    prior.binding.coverage.pending == 0 && prior.binding.coverage.unknown == 0
+
+theorem oversized_page_cannot_advance (admission : Request) (prior : Option Prefix)
+    (received : ReceivedPage) (h : pageLimit < received.envelope.page.entries.length) :
+    advance admission prior received = none := by
+  simp [advance, WirePage.wellFormed, Nat.not_le_of_lt h]
+
+theorem malformed_page_cannot_advance (admission : Request) (prior : Option Prefix)
+    (received : ReceivedPage) (h : received.envelope.page.wellFormed = false) :
+    advance admission prior received = none := by simp [advance, h]
+
+theorem unverified_page_cannot_advance (admission : Request) (prior : Option Prefix)
+    (received : ReceivedPage) (h : received.envelope.signatureVerified = false) :
+    advance admission prior received = none := by simp [advance, h]
+
+theorem contradictory_binding_cannot_advance (admission : Request) (prior : Prefix)
+    (received : ReceivedPage) (h : prior.binding ≠ received.envelope.page.binding) :
+    advance admission (some prior) received = none := by simp [advance, h]
+
+theorem empty_history_is_not_complete (admission : Request) :
+    (Receiver.mk admission []).complete = false := by
+  simp [Receiver.complete, Receiver.validated, validatePrefix]
+
+theorem completed_advance_has_exact_count (admission : Request) (previous : Option Prefix)
+    (received : ReceivedPage) (after : Prefix)
+    (h : advance admission previous received = some after) (hc : after.complete = true) :
+    after.entries.length = after.binding.coverage.entries := by
+  cases previous with
+  | none =>
+    simp only [advance] at h
+    split at h
+    · contradiction
+    · split at h
+      · contradiction
+      · injection h with heq
+        subst after
+        simpa only [beq_iff_eq] using hc
+  | some prior =>
+    simp only [advance] at h
+    split at h
+    · contradiction
+    · split at h
+      · contradiction
+      · injection h with heq
+        subst after
+        simpa only [List.length_append, beq_iff_eq] using hc
 
 end SessionHydration.FileInventory

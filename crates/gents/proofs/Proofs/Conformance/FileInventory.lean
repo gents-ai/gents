@@ -196,6 +196,11 @@ def pageInputs : List PageInput :=
     , source := { large with
         projections := large.projections.map (fun value => if value.tool = 1 then
           {value with changes := [{(change 1).metadata with path := "other.rs"}]} else value) } }
+  , { name := "current_owner_changed"
+    , source := { large with
+        projections := large.projections.map (fun value =>
+          if value.tool = 1 then {value with owner := "foreign-node"} else value) }
+    , cursor := some ⟨largeSnapshot, 64⟩ }
   , {name := "revoked_before_page", source := {large with catalog :=
       {large.catalog with verifiedActiveMemberships := []}}}
   , {name := "incomplete_read_cannot_certify", source := {large with boundary := .incomplete}}
@@ -211,29 +216,45 @@ private def pageInputJson (value : PageInput) : String := object
    ("cursor", optional cursorJson value.cursor),
    ("expected", pageResultJson (page value.source.model value.admission value.receipt value.cursor))]
 
+private def coverageJson (value : Coverage) : String := object
+  [("entries", toString value.entries), ("pending", toString value.pending),
+   ("unknown", toString value.unknown)]
+
+private def bindingJson (value : PageBinding) : String := object
+  [("admission", hydrationRequestJson value.admission), ("digest", jsonString value.digest),
+   ("coverage", coverageJson value.coverage)]
+
+private def pageCursorJson (value : PageCursor) : String := object
+  [("binding", bindingJson value.binding), ("offset", toString value.offset)]
+
+private def wirePageJson (value : WirePage) : String := object
+  [("binding", bindingJson value.binding), ("offset", toString value.offset),
+   ("entries", jsonArray (value.entries.map entryJson)), ("next", optional pageCursorJson value.next)]
+
+private def envelopeJson (value : PageEnvelope) : String := object
+  [("purpose", jsonString (match value.purpose with
+      | .transcriptV1 => "transcript_v1"
+      | .fileInventoryV2 => "file_inventory_v2")),
+   ("request_key", jsonString value.requestKey), ("signer", jsonString value.signer),
+   ("signature_verified", boolString value.signatureVerified), ("page", wirePageJson value.page)]
+
+private def receivedJson (value : ReceivedPage) : String := object
+  [("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope)]
+
 private def receiverJson (value : Receiver) : String := object
-  [("snapshot", snapshotJson value.snapshot), ("entries", jsonArray (value.entries.map entryJson)),
-   ("complete", boolString value.complete), ("known_inventory", boolString (knownInventory value))]
+  [("admission", hydrationRequestJson value.admission), ("pages", jsonArray (value.pages.map receivedJson))]
 
-structure ReceiverInput where
-  name : String
-  state : Receiver := receiving
-  page : Page := firstPage
+private def receiverResultJson (value : Receiver) : String := object
+  [("state", receiverJson value), ("complete", boolString value.complete),
+   ("known_inventory", boolString (knownInventory value)),
+   ("validated", optional (fun prior => object
+      [("binding", bindingJson prior.binding), ("entries", jsonArray (prior.entries.map entryJson)),
+       ("complete", boolString prior.complete)]) value.validated)]
 
-def receiverInputs : List ReceiverInput :=
-  [ {name := "first_page"}
-  , {name := "cannot_skip_prefix", page := secondPage}
-  , {name := "truncated_page", page := {firstPage with entries := firstPage.entries.take 1}}
-  , {name := "corrupt_retained_prefix", state := {receiving with entries := firstPage.entries.reverse},
-      page := secondPage}
-  , {name := "complete_contiguous_inventory", state := ⟨largeSnapshot, firstPage.entries, false⟩,
-      page := secondPage}
-  , {name := "unknown_survives_complete_page", state := ⟨getSnapshot {source 1 with projections := []}, [], false⟩,
-      page := makePage (getSnapshot {source 1 with projections := []}) 0} ]
-
-private def receiverInputJson (value : ReceiverInput) : String := object
-  [("name", jsonString value.name), ("state", receiverJson value.state), ("page", pageJson value.page),
-   ("expected", optional receiverJson (receive value.state value.page))]
+private def receiverInputJson (value : Examples.ReceiverInput) : String := object
+  [("name", jsonString value.name), ("state", receiverJson value.state),
+   ("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope),
+   ("expected", optional receiverResultJson (receive value.state value.requestKey value.envelope))]
 
 /-- IDs, DIDs and image hashes are the existing models' abstract names. Native
 adapters bind them to actual Defra-created physical IDs, authenticated key

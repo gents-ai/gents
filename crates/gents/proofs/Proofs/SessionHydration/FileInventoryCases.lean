@@ -258,22 +258,85 @@ theorem cursor_cannot_skip_partial_page :
     page large.model admission (.metadata largeSnapshot) (some ⟨largeSnapshot, 1⟩) = .rejected := by
   native_decide
 
-def receiving : Receiver := ⟨largeSnapshot, [], false⟩
+def firstEnvelope : PageEnvelope :=
+  ⟨.fileInventoryV2, "page-0", admission.node, true, firstPage.toWire "snapshot-digest"⟩
+def secondEnvelope : PageEnvelope :=
+  ⟨.fileInventoryV2, "page-1", admission.node, true, secondPage.toWire "snapshot-digest"⟩
+def receiving : Receiver := ⟨admission, []⟩
+def receivedFirst : Receiver := ⟨admission, [⟨"page-0", firstEnvelope⟩]⟩
 def receivedBoth : Option Receiver := do
-  let state ← receive receiving firstPage
-  receive state secondPage
+  let state ← receive receiving "page-0" firstEnvelope
+  receive state "page-1" secondEnvelope
 
-theorem receiver_requires_contiguous_prefix : receive receiving secondPage = none := by native_decide
-theorem receiver_rejects_truncated_signed_page :
-    receive receiving {firstPage with entries := firstPage.entries.take 1} = none := by native_decide
-theorem receiver_completes_exact_inventory : receivedBoth =
-    some ⟨largeSnapshot, largeSnapshot.entries, true⟩ := by native_decide
-theorem receiver_rejects_corrupt_retained_prefix :
-    receive {receiving with entries := (firstPage.entries.reverse)} secondPage = none := by native_decide
-theorem unknown_capture_survives_end_of_pages :
-    let value := getSnapshot {source 1 with projections := []}
-    (receive ⟨value, [], false⟩ (makePage value 0)).map knownInventory = some false := by
+def unknownSnapshot : Snapshot := getSnapshot {source 1 with projections := []}
+def unknownEnvelope : PageEnvelope :=
+  ⟨.fileInventoryV2, "unknown-page", admission.node, true,
+    (makePage unknownSnapshot 0).toWire "unknown-digest"⟩
+
+structure ReceiverInput where
+  name : String
+  state : Receiver := receiving
+  requestKey : String := "page-0"
+  envelope : PageEnvelope := firstEnvelope
+  expected : Bool := false
+
+def receiverInputs : List ReceiverInput :=
+  [ {name := "first_page", expected := true}
+  , {name := "cannot_skip_prefix", requestKey := "page-1", envelope := secondEnvelope}
+  , {name := "truncated_page", envelope := {firstEnvelope with page :=
+      {firstEnvelope.page with entries := firstEnvelope.page.entries.take 1}}}
+  , {name := "corrupt_retained_prefix", state := ⟨admission, [⟨"page-0",
+      {firstEnvelope with page := {firstEnvelope.page with entries := firstEnvelope.page.entries.reverse}}⟩]⟩,
+      requestKey := "page-1", envelope := secondEnvelope}
+  , {name := "complete_contiguous_inventory", state := receivedFirst,
+      requestKey := "page-1", envelope := secondEnvelope, expected := true}
+  , {name := "unknown_survives_complete_page", requestKey := "unknown-page",
+      envelope := unknownEnvelope, expected := true}
+  , {name := "unverified_page", envelope := {firstEnvelope with signatureVerified := false}}
+  , {name := "transcript_v1_not_metadata", envelope := {firstEnvelope with purpose := .transcriptV1}}
+  , {name := "foreign_signer", envelope := {firstEnvelope with signer := "foreign-node"}}
+  , {name := "wrong_demand_nonce", envelope := {firstEnvelope with requestKey := "other-demand"}}
+  , {name := "changed_snapshot_digest", state := receivedFirst, requestKey := "page-1",
+      envelope := {secondEnvelope with page := {secondEnvelope.page with binding :=
+        {secondEnvelope.page.binding with digest := "different-digest"}}}}
+  , {name := "contradictory_coverage", state := receivedFirst, requestKey := "page-1",
+      envelope := {secondEnvelope with page := {secondEnvelope.page with binding :=
+        {secondEnvelope.page.binding with coverage := ⟨66, 0, 0⟩}}}}
+  , {name := "incorrect_next_cursor", envelope :=
+      {firstEnvelope with page := {firstEnvelope.page with next := none}}}
+  , {name := "duplicate_entry_identity", envelope := {firstEnvelope with page :=
+      {firstEnvelope.page with entries := List.replicate 64 ⟨1, (tool 1).request, scope, (projection 1).id, (observation 1).id, (change 1).metadata⟩}}}
+  , {name := "contradictory_projection_binding", state := receivedFirst, requestKey := "page-1",
+      envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
+        (secondEnvelope.page.entries.map fun entry => {entry with projection := (projection 1).id})}}}
+  , {name := "contradictory_observation_binding", state := receivedFirst, requestKey := "page-1",
+      envelope := {secondEnvelope with page := {secondEnvelope.page with entries :=
+        (secondEnvelope.page.entries.map fun entry => {entry with observation := (observation 1).id})}}}
+  , {name := "empty_digest", envelope := {firstEnvelope with page :=
+      {firstEnvelope.page with binding := {firstEnvelope.page.binding with digest := ""}}}}
+  , {name := "oversized_page", envelope := {firstEnvelope with page :=
+      {firstEnvelope.page with entries := largeSnapshot.entries}}}
+  , {name := "reused_demand_nonce", state := receivedFirst,
+      envelope := {secondEnvelope with requestKey := "page-0"}}
+  , {name := "cross_scope_page", envelope := {firstEnvelope with page :=
+      {firstEnvelope.page with binding := {firstEnvelope.page.binding with admission := forkRequest}}}} ]
+
+theorem receiver_regressions : receiverInputs.all (fun value =>
+    (receive value.state value.requestKey value.envelope).isSome == value.expected) = true := by
   native_decide
+
+theorem receiver_completes_exact_inventory : receivedBoth.any (fun state =>
+    state.complete && knownInventory state &&
+      state.validated.any (fun prior => prior.entries == largeSnapshot.entries)) = true := by
+  native_decide
+
+theorem unknown_capture_survives_end_of_pages :
+    (receive receiving "unknown-page" unknownEnvelope).map knownInventory = some false := by native_decide
+
+theorem owner_change_invalidates_continuation :
+    page ({large with projections := large.projections.map fun value =>
+      if value.tool = 1 then {value with owner := "foreign-node"} else value} : SourceInput).model
+      admission (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩) = .rejected := by native_decide
 
 theorem physical_input_reordering_preserves_snapshot :
     (snapshot ({ source 2 with
