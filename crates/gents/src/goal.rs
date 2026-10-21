@@ -30,7 +30,8 @@ pub(crate) use first_request_binding::{
 };
 pub(crate) use history::{load_goal_versions_for_session, GoalVersion};
 pub use observation::{
-    load_session_goal_observation, load_session_goal_observation_state, SessionGoalObservationState,
+    bind_goal_input, load_session_goal_observation, load_session_goal_observation_state,
+    prepare_goal_input, prepare_goal_input_in_txn, SessionGoalObservationState,
 };
 pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERVATION_SOURCES};
 pub use operator_resume::{

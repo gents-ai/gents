@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
+#[cfg(test)]
+use gents::goal::bind_goal_input;
 use gents_protocol::goal_control::{
     GoalOperation, GoalRevision, SessionGoalControl, SessionGoalControlReceipt,
     SessionGoalObservation, SESSION_GOAL_CONTROL_VERSION,
@@ -9,32 +11,6 @@ use gents_protocol::request_input::{GoalAssignmentInput, QueueDelivery, RequestI
 use super::writes::ensure_peer_chat_ready_at;
 use super::ClientCore;
 use crate::client::mutations::{prepare_request_submission, SubmitRequestOptions};
-
-fn bind_goal_input(
-    mut input: RequestInput,
-    state: gents::goal::SessionGoalObservationState,
-) -> Result<RequestInput> {
-    if input.goal_assignment.is_some() {
-        return Ok(input);
-    }
-    match state {
-        gents::goal::SessionGoalObservationState::NoReadableSession => {}
-        gents::goal::SessionGoalObservationState::Unknown => {
-            anyhow::bail!("Goal state is still syncing. Refresh this chat before sending.")
-        }
-        gents::goal::SessionGoalObservationState::Observed(observation) => {
-            if let Some(goal) = observation.goal {
-                if let Some(root_request_doc_id) = goal.assignment_root_request_doc_id {
-                    input.goal_assignment = Some(GoalAssignmentInput {
-                        goal_id: goal.snapshot.goal_id,
-                        root_request_doc_id: Some(root_request_doc_id),
-                    });
-                }
-            }
-        }
-    }
-    Ok(input)
-}
 
 impl ClientCore {
     pub(super) async fn prepare_goal_input(
@@ -53,7 +29,7 @@ impl ClientCore {
             .find(|record| record.node_did == node_did)
             .map(|record| self.requester_did(record))
             .unwrap_or_else(|| self.node_identity.did().to_owned());
-        let state = gents::goal::load_session_goal_observation_state(
+        gents::goal::prepare_goal_input(
             &self
                 .operator_observation_graphql(node_did)
                 .map(gents::config_client::ConfigAccess::Graphql)
@@ -62,9 +38,9 @@ impl ClientCore {
             node_did,
             session_id,
             Some(&requester_did),
+            input,
         )
-        .await?;
-        bind_goal_input(input, state)
+        .await
     }
 
     pub async fn session_goal_observation(
