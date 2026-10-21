@@ -255,10 +255,11 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
             "test.replay_current_goal",
             &format!(
                 r#"mutation {{create_Goal(input: {{
-        node_did: "{}", session_id: "{session}", goal_id: "{}", creation_key: "{}",
+        node_did: "{}", session_id: "{}", goal_id: "{}", creation_key: "{}",
         objective: "Finish the task", status: "active", created_at: "2030-01-01T00:00:00Z"
     }}) {{_docID}}}}"#,
                 escape_graphql_string(&owner),
+                escape_graphql_string(session),
                 escape_graphql_string(&selected.goal_id),
                 escape_graphql_string(&selected.creation_key)
             ),
