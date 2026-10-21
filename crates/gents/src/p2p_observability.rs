@@ -18,6 +18,8 @@ pub struct P2pSyncStatusSnapshot {
     pub pending_resync_in_flight: bool,
     pub retained_background_tasks: usize,
     pub request_dispatch: P2pRequestDispatchSnapshot,
+    pub inbound_budget: Vec<P2pInboundClassSnapshot>,
+    pub peer_fetches: Vec<P2pPeerFetchSnapshot>,
     pub non_authoritative_broadcast_tasks: usize,
     pub non_authoritative_broadcast_high_water: usize,
     pub non_authoritative_broadcast_rejected_total: u64,
@@ -42,6 +44,32 @@ pub struct P2pSyncStatusSnapshot {
     pub next_pending_retry_in_ms: Option<u64>,
     pub pending_dag_terminal_quarantined: u64,
     pub quarantined_pending_dags: usize,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct P2pInboundClassSnapshot {
+    pub class: String,
+    pub capacity_bytes: usize,
+    pub held_bytes: usize,
+    pub held_bytes_high_water: usize,
+    pub busy_resets: u64,
+    pub oversized_resets: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct P2pPeerFetchSnapshot {
+    pub peer: String,
+    pub fetches: u64,
+    pub bytes: u64,
+    pub delivery_rate_bytes_per_sec: u64,
+    pub min_rtt_micros: Option<u64>,
+    pub success_ppm: u64,
+    pub timeout_ppm: u64,
+    pub partial_ppm: u64,
+    pub in_flight: u64,
+    pub in_flight_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

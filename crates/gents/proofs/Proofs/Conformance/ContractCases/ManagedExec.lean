@@ -59,6 +59,7 @@ def processStopCases : List ProcessStopCase :=
       , before := before.toContract
       , after := after.toContract
       , mayTerminate := ManagedExec.mayTerminate before
+      , retainRecord := ManagedExec.retainProcessRecord after
       , outcome := outcome.toContract
       , cancelReply := (ManagedExec.cancelReply outcome).toContract
       }

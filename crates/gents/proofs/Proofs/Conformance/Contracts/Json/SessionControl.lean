@@ -17,6 +17,12 @@ def terminalStopped : State :=
   { queuedStopPost with goal := { queuedStopPost.goal with status := .complete } }
 def terminalResumePost : State :=
   (step? scope terminalStopped .resume).getD terminalStopped
+def terminalRunningResumeBlocked : Bool :=
+  (step? scope terminalParentWithRunningBackground .resume).isNone
+def terminalRunningSettledResume : State :=
+  (step? scope
+    ((step? scope terminalParentWithRunningBackground .settleOwnedBackground).getD
+      terminalParentWithRunningBackground) .resume).getD terminalParentWithRunningBackground
 
 def casesJson : String :=
   "[" ++
@@ -28,6 +34,8 @@ def casesJson : String :=
   "{\"name\":\"resume_after_settlement\",\"goal_status\":" ++ statusJson resumePost.goal.status ++
   ",\"stopped\":" ++ boolJson resumePost.stopped ++ "}," ++
   "{\"name\":\"resume_terminal_goal\",\"goal_status\":" ++ statusJson terminalResumePost.goal.status ++
-  ",\"stopped\":" ++ boolJson terminalResumePost.stopped ++ "}]"
+  ",\"stopped\":" ++ boolJson terminalResumePost.stopped ++ "}," ++
+  "{\"name\":\"resume_waits_for_owned_background\",\"blocked\":" ++ boolJson terminalRunningResumeBlocked ++
+  ",\"stopped_after_settlement\":" ++ boolJson terminalRunningSettledResume.stopped ++ "}]"
 
 end Conformance.SessionControlContracts

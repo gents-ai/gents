@@ -170,9 +170,21 @@ theorem pluginJobRow_tick_keeps_job_with_new_effects (row : PluginJobRow)
     other effects. -/
 def pluginJobStepCommitAllowed (sessionStopped : Bool) : Bool := !sessionStopped
 
+/-- A stale observer may invoke the guest only while its physical job row is
+    still running and its exact caller session is open. The write transaction
+    repeats the session check before publishing effects. -/
+def pluginJobStepInvocationAllowed (rowRunning sessionStopped : Bool) : Bool :=
+  rowRunning && pluginJobStepCommitAllowed sessionStopped
+
 theorem stopped_session_cannot_commit_step : pluginJobStepCommitAllowed true = false := rfl
 
 theorem open_session_can_commit_step : pluginJobStepCommitAllowed false = true := rfl
+
+theorem terminal_job_does_not_invoke_guest :
+    pluginJobStepInvocationAllowed false false = false := rfl
+
+theorem stopped_job_does_not_invoke_guest :
+    pluginJobStepInvocationAllowed true true = false := rfl
 
 /-- A tick re-drives one step, then
     the stall rule fails the job closed when that step left it stalled. -/

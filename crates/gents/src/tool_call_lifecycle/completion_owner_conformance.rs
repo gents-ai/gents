@@ -40,7 +40,7 @@ async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &st
     );
 }
 
-async fn set_hop_cap(node: &EmbeddedNode, node_did: &str, cap: u32) {
+async fn set_hop_cap(node: &std::sync::Arc<EmbeddedNode>, node_did: &str, cap: u32) {
     crate::document_config::upsert_node(node, node_did, None, Some("general"), true)
         .await
         .expect("ensure node configuration before setting hop cap");

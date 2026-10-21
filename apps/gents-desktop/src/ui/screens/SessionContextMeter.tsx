@@ -85,6 +85,13 @@ export function SessionContext({
   const window = Math.max(1, context.contextWindow);
   const threshold = Math.max(0, context.compactionThresholdTokens);
   const sessionCompactionCount = context.sessionCompactionCount;
+  const contextLabel = windowError
+    ? `Context ~${formatTokens(used)}, window unavailable`
+    : `Context ~${formatTokens(used)} of ${formatTokens(window)}`;
+  const compactionLabel =
+    sessionCompactionCount == null
+      ? "Session compactions unavailable"
+      : `${sessionCompactionCount} session ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`;
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {
@@ -108,13 +115,10 @@ export function SessionContext({
           compact ? (
             <Button
               variant="ghost"
-              size="icon-xs"
+              size="xs"
               data-testid="context-meter-compact"
-              aria-label={
-                windowError
-                  ? `Context ~${formatTokens(used)}, window unavailable`
-                  : `Context ~${formatTokens(used)} of ${formatTokens(window)}`
-              }
+              className="gap-1 px-1.5"
+              aria-label={`${contextLabel}; ${compactionLabel}`}
             />
           ) : (
             <Button
@@ -140,14 +144,17 @@ export function SessionContext({
               : `~${formatTokens(used)} / ${formatTokens(window)}`}
           </span>
         )}
-        <span
-          className="text-xs text-muted-foreground"
-          title="Durable session compactions"
-        >
-          {sessionCompactionCount == null
-            ? "compactions unavailable"
-            : `${sessionCompactionCount} ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`}
-        </span>
+        {compact ? (
+          <span className="text-xs tabular-nums" title={compactionLabel}>
+            {sessionCompactionCount ?? "?"}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground" title={compactionLabel}>
+            {sessionCompactionCount == null
+              ? "compactions unavailable"
+              : `${sessionCompactionCount} ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`}
+          </span>
+        )}
       </PopoverTrigger>
       <PopoverContent
         ref={popover.popupRef}

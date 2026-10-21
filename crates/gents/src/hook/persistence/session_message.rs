@@ -525,11 +525,16 @@ impl DefraSessionHook {
                     "next": "call agent_session_read with view=status to observe request and tool settlement"})))
             }
             crate::toolset::AGENT_RESUME_TOOL_NAME => {
+                let Some(job_driver) = self.job_driver.clone() else {
+                    anyhow::bail!("agent_resume cannot verify plugin execution settlement because the runtime job owner is unavailable; retry after runtime recovery")
+                };
                 crate::session::resume_session(
                     &self.node,
                     &target.node_did,
                     &target.session_id,
                     target.requester_did.as_deref(),
+                    self.background_executions.clone(),
+                    job_driver,
                 )
                 .await?;
                 Ok(json_string(

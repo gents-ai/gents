@@ -37,6 +37,17 @@ def mayTerminate : ProcessObservation → Bool
   | .running => true
   | _ => false
 
+/-- Keep process ownership evidence until the group is positively observed
+exited. An unknown leader/group observation is not proof that descendants are
+gone. -/
+def retainProcessRecord : ProcessObservation → Bool
+  | .exited => false
+  | .running | .unowned => true
+
+theorem retainProcessRecord_iff_not_exited (o : ProcessObservation) :
+    retainProcessRecord o = true ↔ o ≠ .exited := by
+  cases o <;> simp [retainProcessRecord]
+
 theorem mayTerminate_iff_running (o : ProcessObservation) :
     mayTerminate o = true ↔ o = .running := by
   cases o <;> simp [mayTerminate]

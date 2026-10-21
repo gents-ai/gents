@@ -413,7 +413,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
         gents_protocol::schemas::AGENT_SESSION,
-        "bafyreietunsrqsijc3k6x3gf6y2nwkim74uf6j4lskv7p3pjrl44q4tthe"
+        "bafyreiajedcyxilotygvagpzwbruh3nofyd5mr3kao7phf6fc73x3sdc7u"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_NAME,
@@ -782,6 +782,11 @@ static TOOL_CALL_BACKGROUND_STATUS_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
+static SESSION_STOPPED_AT_FIELDS: &[OrdinaryIndexField<'static>] = &[OrdinaryIndexField {
+    name: "stopped_at",
+    descending: false,
+}];
+
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
@@ -797,6 +802,11 @@ pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
         collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         name: "AgentToolCall_node_await_status",
         fields: TOOL_CALL_BACKGROUND_STATUS_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_SESSION_NAME,
+        name: "AgentSession_stopped_at_ASC",
+        fields: SESSION_STOPPED_AT_FIELDS,
     },
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,

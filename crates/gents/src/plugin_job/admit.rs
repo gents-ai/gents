@@ -1571,9 +1571,9 @@ mod tests {
         };
         let out = effects(vec![spawn("s1", 0, "a")], &[]);
         let mut ctx = base_context();
-        ctx.max_hop = 3;
+        ctx.max_hop = Some(3);
         assert_eq!(code(&ctx, &job, &out), Some("plugin_job_depth_exceeded"));
-        ctx.max_hop = 4;
+        ctx.max_hop = Some(4);
         assert!(admit_step(&ctx, &job, &out).is_ok());
     }
 

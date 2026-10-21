@@ -71,6 +71,12 @@ pub fn step_commit_allowed(session_stopped: bool) -> bool {
     !session_stopped
 }
 
+/// Lean `pluginJobStepInvocationAllowed`: stale observers do not invoke a
+/// guest after the canonical job row has already reached a terminal state.
+pub fn step_invocation_allowed(row_running: bool, session_stopped: bool) -> bool {
+    row_running && step_commit_allowed(session_stopped)
+}
+
 /// Lean `pluginJobRecoverySweep`: one tick per running local job row, that is
 /// `pluginJobRecover` applied twice. The first application kills the row or
 /// re-drives one step; the second is the stall rule over the row that step

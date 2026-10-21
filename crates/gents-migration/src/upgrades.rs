@@ -13,6 +13,8 @@ const TOOL_BACKGROUND_PATCH: &str = r#"[{"op":"add","path":"/AgentToolCall/Field
 const TOOL_FRESH_ROOT: &str = "bafyreihfkiuhbdzdlmfqf6wm4q5xgrad4wl2zi4fvcj25co3kdjrktjv5a";
 const TOOL_FRESH_BACKGROUND: &str = "bafyreifddp6p4viubjrzhgbrgyjnnyzuq2u5qzpcavw2rkkmrbgfltboza";
 const TOOL_LEGACY_BACKGROUND: &str = "bafyreigxgxq4itlpku2ajqwpb7axfy2pqckgpab3l5zmrljm4lcht7fhoe";
+const SESSION_ROOT: &str = "bafyreietunsrqsijc3k6x3gf6y2nwkim74uf6j4lskv7p3pjrl44q4tthe";
+const SESSION_TARGET: &str = "bafyreifbqcjrp64kux3uawewu3rn4xrfi7v2soi2mcuwzq4bk7vuqsq5au";
 
 /// DefraDB field positions are persistent identifiers. Existing RC1 lineages
 /// append fields through versioned patches; fresh stores retain the current
@@ -54,6 +56,14 @@ pub(crate) fn include_existing(
             "agent-tool-call-add-background-request",
             TOOL_BACKGROUND_PATCH,
             &["background_requested_at"][..],
+        ),
+        (
+            "AgentSession",
+            SESSION_ROOT,
+            SESSION_TARGET,
+            "agent-session-add-stopped-at",
+            r#"[{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"stopped_at","Kind":"String"}}]"#,
+            &["stopped_at"][..],
         ),
     ] {
         let Some(current) = node

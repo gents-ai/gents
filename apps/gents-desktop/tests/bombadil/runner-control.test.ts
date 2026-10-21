@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { runWithWatchdogRetry, stopProcess } from "./runner-control.mjs";
 
@@ -191,26 +191,33 @@ describe("Bombadil watchdog recovery", () => {
   });
 
   it("gives surviving group members the full SIGTERM grace after a clean exit", async () => {
+    vi.useFakeTimers();
     const child = new FakeChild(865);
     child.finish(0);
     const signals: Array<[number, string]> = [];
     let polls = 0;
 
-    await stopProcess(child, {
-      killProcessGroup: true,
-      graceMs: 100,
-      killByPid: (pid: number, signal: string | number) => {
-        if (signal === 0) {
-          polls += 1;
-          if (polls < 3) return true;
-          const error = new Error("process group drained") as NodeJS.ErrnoException;
-          error.code = "ESRCH";
-          throw error;
-        }
-        signals.push([pid, String(signal)]);
-        return true;
-      },
-    });
+    try {
+      const stopping = stopProcess(child, {
+        killProcessGroup: true,
+        graceMs: 100,
+        killByPid: (pid: number, signal: string | number) => {
+          if (signal === 0) {
+            polls += 1;
+            if (polls < 3) return true;
+            const error = new Error("process group drained") as NodeJS.ErrnoException;
+            error.code = "ESRCH";
+            throw error;
+          }
+          signals.push([pid, String(signal)]);
+          return true;
+        },
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      await stopping;
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(signals).toEqual([[-865, "SIGTERM"]]);
     expect(polls).toBeGreaterThanOrEqual(3);

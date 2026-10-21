@@ -646,6 +646,12 @@ async fn generated_process_stop_cases_drive_host_owner() {
         assert_eq!(outcome.as_str(), case.outcome, "{}", case.name);
         assert_eq!(before.may_terminate(), case.may_terminate, "{}", case.name);
         assert_eq!(
+            after.retain_process_record(),
+            case.retain_record,
+            "{}",
+            case.name
+        );
+        assert_eq!(
             outcome.cancel_reply().as_str(),
             case.cancel_reply,
             "{}",

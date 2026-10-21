@@ -166,6 +166,7 @@ pub(crate) struct LeanProcessStopCase {
     pub(crate) before: String,
     pub(crate) after: String,
     pub(crate) may_terminate: bool,
+    pub(crate) retain_record: bool,
     pub(crate) outcome: String,
     pub(crate) cancel_reply: String,
 }
