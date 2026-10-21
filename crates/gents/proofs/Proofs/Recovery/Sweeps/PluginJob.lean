@@ -177,7 +177,11 @@ theorem open_session_can_commit_step : pluginJobStepCommitAllowed false = true :
 /-- A tick re-drives one step, then
     the stall rule fails the job closed when that step left it stalled. -/
 def pluginJobStoppedSessionStale (r : PluginJobRow) : Prop :=
-  r.running ∧ r.sessionStopped
+  r.running = true ∧ r.sessionStopped = true
+
+instance (r : PluginJobRow) : Decidable (pluginJobStoppedSessionStale r) := by
+  unfold pluginJobStoppedSessionStale
+  infer_instance
 
 def pluginJobRecoveryTick (r : PluginJobRow) : PluginJobRow :=
   if pluginJobStoppedSessionStale r then { r with running := false }
