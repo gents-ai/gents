@@ -966,6 +966,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_input_bindings_wait_for_verified_source_state",
         },
         ConformanceConsumer::RustTest {
+            id: "request_input::tests::generated_fresh_session_resubmissions_drop_invocation_lineage",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/request_input/tests.rs",
+            module_path: "request_input::tests",
+            function: "generated_fresh_session_resubmissions_drop_invocation_lineage",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::request_assignment::contract_tests::generated_goal_request_assignments_drive_signed_binding",
             package: "gents",
             source_path: "crates/gents/src/goal/request_assignment/contract_tests.rs",
