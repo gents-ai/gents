@@ -949,8 +949,7 @@ async fn manifest_tree_leaves<R: CaptureBaseReader + Sync>(
 ) -> Result<Vec<encoding::ManifestEntry>> {
     tree.validate()?;
     let mut entries = vec![tree.root.clone()];
-    let mut remaining =
-        encoding::MAX_MANIFEST_BLOCKS * 2 + usize::from(encoding::MAX_MANIFEST_HEIGHT);
+    let mut remaining = encoding::TREE_RESOLUTION_FUEL;
     for _ in 0..tree.height {
         anyhow::ensure!(
             entries.len() <= remaining,
@@ -1119,7 +1118,7 @@ pub(crate) async fn preload_manifest_trees<R: CaptureBaseReader + Sync>(
                 vec![tree.root.clone()],
                 tree.height,
                 tree.leaves,
-                encoding::MAX_MANIFEST_BLOCKS * 2 + usize::from(encoding::MAX_MANIFEST_HEIGHT),
+                encoding::TREE_RESOLUTION_FUEL,
             )
         })
         .collect::<Vec<_>>();

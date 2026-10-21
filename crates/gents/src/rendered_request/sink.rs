@@ -17,31 +17,6 @@ use crate::graphql::escape_graphql_string;
 #[derive(Clone)]
 pub struct DefraRenderedRequestSink {
     node: Arc<EmbeddedNode>,
-    block_pins: Arc<std::sync::Mutex<CapturePinCache>>,
-}
-
-type CapturePinCache =
-    std::collections::BTreeMap<CapturePinScope, std::collections::BTreeMap<String, BlockPin>>;
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct CapturePinScope {
-    node_did: String,
-    requester_did: String,
-    session_id: String,
-    source: String,
-    capture_scope: String,
-}
-
-impl CapturePinScope {
-    fn for_capture(rendered: &RenderedCompletionRequest) -> Result<Self> {
-        Ok(Self {
-            node_did: rendered.node_did.clone(),
-            requester_did: rendered.requester_did.clone(),
-            session_id: rendered.session_id.clone(),
-            source: serde_json::to_string(&rendered.source)?,
-            capture_scope: rendered.capture_scope.clone(),
-        })
-    }
 }
 
 impl std::fmt::Debug for DefraRenderedRequestSink {
@@ -52,10 +27,7 @@ impl std::fmt::Debug for DefraRenderedRequestSink {
 
 impl DefraRenderedRequestSink {
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self {
-            node,
-            block_pins: Default::default(),
-        }
+        Self { node }
     }
 
     async fn stored_fact(&self, capture_key: &str) -> Result<Option<Value>> {
@@ -309,14 +281,6 @@ impl DefraRenderedRequestSink {
             super::encoding::chunk_capture_payloads([&request_layout, &provenance_payload_layout]);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
 
-        let pin_scope = CapturePinScope::for_capture(&rendered)?;
-        let cached_pins = self
-            .block_pins
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&pin_scope)
-            .cloned()
-            .unwrap_or_default();
         let capture_container = crate::config_client::ConfigAccess::transact_local_write(
             &self.node,
             None,
@@ -324,19 +288,12 @@ impl DefraRenderedRequestSink {
             |txn| {
                 let (request_chunks, provenance_chunks) = (&request_chunks, &provenance_chunks);
                 let (blocks, rendered, provenance_json) = (&blocks, &rendered, &provenance_json);
-                let cached_pins = &cached_pins;
                 let context_accounting = &context_accounting;
                 Box::pin(async move {
-                    let mut pins = pin_capture_blocks(txn, rendered, blocks, cached_pins).await?;
-                    let mut used = std::collections::BTreeSet::new();
-                    let request =
-                        encode_payload_tree(txn, rendered, request_chunks, &mut pins, &mut used)
-                            .await?;
-                    let provenance =
-                        encode_payload_tree(txn, rendered, provenance_chunks, &mut pins, &mut used)
-                            .await?;
+                    let mut pins = pin_blocks_in_txn(txn, blocks).await?;
+                    let request = encode_payload_tree(txn, request_chunks, &mut pins).await?;
+                    let provenance = encode_payload_tree(txn, provenance_chunks, &mut pins).await?;
                     let container = super::encoding::encode_container(&request, &provenance)?;
-                    pins.retain(|key, _| used.contains(key));
                     Self::create_in_txn(txn, rendered, &container, provenance_json).await?;
                     if let Some((call_id, accounting_json)) = context_accounting {
                         Self::persist_inference_call_context_accounting_in_txn(
@@ -346,18 +303,14 @@ impl DefraRenderedRequestSink {
                         )
                         .await?;
                     }
-                    Ok((container, pins))
+                    Ok(container)
                 })
             },
         )
         .await;
 
         match capture_container {
-            Ok((_, pins)) => {
-                self.block_pins
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .insert(pin_scope, pins);
+            Ok(_) => {
                 tracing::debug!(
                     capture_key = %rendered.capture_key,
                     request_id = %rendered.request_id,
@@ -549,92 +502,6 @@ const CREATE_RENDERED_REQUEST_BLOCKS_MUTATION: &str = "mutation($input: \
 
 const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
 
-async fn prior_block_pins_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    rendered: &RenderedCompletionRequest,
-) -> Result<std::collections::BTreeMap<String, BlockPin>> {
-    let source = serde_json::to_value(rendered.source)?
-        .as_str()
-        .context("rendered source is not a string")?
-        .to_owned();
-    let query = format!(
-        r#"{{ {collection}(filter: {{
-                node_did: {{_eq: "{node_did}"}}, requester_did: {{_eq: "{requester_did}"}},
-                session_id: {{_eq: "{session_id}"}}, source: {{_eq: "{source}"}},
-                capture_scope: {{_eq: "{capture_scope}"}}
-            }}, order: [{{node_did: DESC}}, {{requester_did: DESC}}, {{session_id: DESC}},
-                {{source: DESC}}, {{capture_scope: DESC}}, {{created_at: DESC}}], limit: 1) {{
-                capture_version request_json
-            }} }}"#,
-        collection = RENDERED_REQUEST_COLLECTION,
-        node_did = escape_graphql_string(&rendered.node_did),
-        requester_did = escape_graphql_string(&rendered.requester_did),
-        session_id = escape_graphql_string(&rendered.session_id),
-        source = escape_graphql_string(&source),
-        capture_scope = escape_graphql_string(&rendered.capture_scope),
-    );
-    let response = txn.execute(&query).await?;
-    let mut pins = std::collections::BTreeMap::new();
-    let Some(row) = response
-        .get("data")
-        .and_then(|data| data.get(RENDERED_REQUEST_COLLECTION))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-    else {
-        return Ok(pins);
-    };
-    let version = row
-        .get("capture_version")
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok());
-    let stored = row.get("request_json").and_then(Value::as_str);
-    let (Some(version), Some(stored)) = (version, stored) else {
-        return Ok(pins);
-    };
-    let mut cache = std::collections::BTreeMap::new();
-    for kind in [
-        super::CapturePayloadKind::RequestBody,
-        super::CapturePayloadKind::ProvenancePayload,
-    ] {
-        let Ok(record) = super::encoding::decode_capture_record(version, stored, kind) else {
-            continue;
-        };
-        let entries = match record {
-            super::encoding::DecodedRecord::Manifest { blocks } => blocks,
-            super::encoding::DecodedRecord::Tree(tree) => {
-                super::manifest_tree_leaves(txn, &tree, &mut cache)
-                    .await
-                    .map_err(
-                        |error| match error.downcast::<super::CaptureStoreReadError>() {
-                            Ok(error) => error.0,
-                            Err(error) => error,
-                        },
-                    )?
-            }
-            _ => continue,
-        };
-        for entry in entries {
-            pins.insert(
-                entry.content_key,
-                BlockPin {
-                    doc_id: entry.doc_id,
-                    field_commit_cid: entry.field_commit_cid,
-                },
-            );
-        }
-    }
-    for (doc_id, block) in cache {
-        pins.insert(
-            block.content_key,
-            BlockPin {
-                doc_id,
-                field_commit_cid: block.field_commit_cid,
-            },
-        );
-    }
-    Ok(pins)
-}
-
 async fn stored_block_doc_ids_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     keys: &[&str],
@@ -736,47 +603,28 @@ async fn create_blocks_in_txn(
     Ok(created)
 }
 
-async fn pin_capture_blocks(
+async fn pin_blocks_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    rendered: &RenderedCompletionRequest,
     blocks: &[&super::encoding::ChunkedBlock],
-    cached: &std::collections::BTreeMap<String, BlockPin>,
 ) -> Result<std::collections::BTreeMap<String, BlockPin>> {
-    let mut pins = cached.clone();
-    if pins.is_empty() {
-        pins = prior_block_pins_in_txn(txn, rendered).await?;
-    }
+    let mut pins = std::collections::BTreeMap::new();
     let keys = blocks
         .iter()
         .map(|block| block.content_key.as_str())
         .collect::<Vec<_>>();
     let mut doc_ids = stored_block_doc_ids_in_txn(txn, &keys).await?;
-    for block in blocks {
-        if let Some(pin) = pins.get(&block.content_key) {
-            anyhow::ensure!(
-                doc_ids.get(&block.content_key) == Some(&pin.doc_id),
-                "capture block {} was deleted or replaced; refusing to publish a stale reference",
-                pin.doc_id
-            );
-        }
-    }
-    let unpinned: Vec<&super::encoding::ChunkedBlock> = blocks
-        .iter()
-        .copied()
-        .filter(|block| !pins.contains_key(&block.content_key))
-        .collect();
-    let missing = unpinned
+    let missing = blocks
         .iter()
         .copied()
         .filter(|block| !doc_ids.contains_key(&block.content_key))
         .collect::<Vec<_>>();
     doc_ids.extend(create_blocks_in_txn(txn, &missing).await?);
-    let witness_docs = unpinned
+    let witness_docs = blocks
         .iter()
         .map(|block| doc_ids[&block.content_key].clone())
         .collect::<Vec<_>>();
     let witnesses = super::commits::field_commits_in_txn(txn, &witness_docs, "payload").await?;
-    for ((block, doc_id), commit) in unpinned.iter().zip(witness_docs).zip(witnesses) {
+    for ((block, doc_id), commit) in blocks.iter().zip(witness_docs).zip(witnesses) {
         let commit = commit
             .with_context(|| format!("capture block {doc_id} lacks a payload field commit"))?;
         pins.insert(
@@ -814,17 +662,14 @@ fn payload_entries(
 
 async fn encode_payload_tree(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    rendered: &RenderedCompletionRequest,
     chunks: &[super::encoding::ChunkedBlock],
     pins: &mut std::collections::BTreeMap<String, BlockPin>,
-    used: &mut std::collections::BTreeSet<String>,
 ) -> Result<super::encoding::EncodedJson> {
     use super::encoding::{self, ChunkedBlock, ManifestTree};
     anyhow::ensure!(
         !chunks.is_empty() && chunks.len() <= encoding::MAX_MANIFEST_BLOCKS,
         "capture manifest exceeds leaf bound"
     );
-    used.extend(chunks.iter().map(|chunk| chunk.content_key.clone()));
     let leaves = chunks.len();
     let mut entries = payload_entries(chunks, pins)?;
     let mut height = 0;
@@ -844,8 +689,7 @@ async fn encode_payload_tree(
             })
             .collect::<Result<Vec<_>>>()?;
         let blocks = unique_blocks(&[&nodes]);
-        *pins = pin_capture_blocks(txn, rendered, &blocks, pins).await?;
-        used.extend(nodes.iter().map(|node| node.content_key.clone()));
+        pins.extend(pin_blocks_in_txn(txn, &blocks).await?);
         entries = payload_entries(&nodes, pins)?;
         height += 1;
     }
@@ -1304,58 +1148,22 @@ mod tests {
         } else {
             super::super::CapturePayloadKind::ProvenancePayload
         };
-        let super::super::encoding::DecodedRecord::Tree(tree) =
-            super::super::encoding::decode_capture_record(
-                gents_protocol::rendered_request::CAPTURE_VERSION,
-                stored,
-                kind,
-            )
-            .unwrap()
-        else {
-            panic!("expected shared manifest")
-        };
-        let mut cache = std::collections::BTreeMap::new();
-        super::super::read_manifest_tree(node, &tree, &mut cache)
+        let record = super::super::encoding::decode_capture_record(
+            gents_protocol::rendered_request::CAPTURE_VERSION,
+            stored,
+            kind,
+        )
+        .unwrap();
+        super::super::manifest_leaf_entries(node, record)
             .await
-            .unwrap();
-        cache
+            .unwrap()
             .into_iter()
-            .map(|(doc_id, block)| (doc_id, block.content_key, block.field_commit_cid))
+            .map(|entry| (entry.doc_id, entry.content_key, entry.field_commit_cid))
             .collect()
     }
 
     #[tokio::test]
-    async fn cached_capture_pins_survive_interleaved_scopes() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
-        let body = json!({"messages":[{"role":"user","content":capture_text(83, 24 * 1024)}]});
-        let first = rendered_turn(0, body.clone());
-        let mut other = first.clone();
-        other.session_id = "other-session".into();
-        other.capture_key = super::super::capture_key(
-            &other.node_did,
-            &other.session_id,
-            &other.request_doc_id,
-            &other.capture_scope,
-            other.turn_index,
-            other.attempt,
-        )
-        .unwrap();
-        sink.capture(first.clone()).await.unwrap();
-        sink.capture(other.clone()).await.unwrap();
-        sink.capture(rendered_turn(1, body)).await.unwrap();
-        {
-            let cache = sink.block_pins.lock().unwrap();
-            assert_eq!(cache.len(), 2);
-            assert!(cache.contains_key(&CapturePinScope::for_capture(&first).unwrap()));
-            assert!(cache.contains_key(&CapturePinScope::for_capture(&other).unwrap()));
-        }
-        node.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn deleted_blocks_never_publish_cached_or_reloaded_references() {
+    async fn deleted_blocks_never_publish_dangling_references() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
@@ -1382,33 +1190,31 @@ mod tests {
         .unwrap();
         let next = rendered_turn(1, body);
         let error = sink.capture(next.clone()).await.unwrap_err();
-        assert!(
-            format!("{error:#}").contains("stale reference"),
-            "{error:#}"
-        );
+        assert!(format!("{error:#}").contains("deleted"), "{error:#}");
         assert!(sink.stored_fact(&next.capture_key).await.unwrap().is_none());
         let reopened = DefraRenderedRequestSink::new(Arc::clone(&node));
         let error = reopened.capture(next.clone()).await.unwrap_err();
-        assert!(
-            format!("{error:#}").contains("stale reference"),
-            "{error:#}"
-        );
+        assert!(format!("{error:#}").contains("deleted"), "{error:#}");
         assert!(reopened
             .stored_fact(&next.capture_key)
             .await
             .unwrap()
             .is_none());
+        let unrelated = rendered_turn(
+            2,
+            json!({"messages": [{"role": "user", "content": "fresh"}]}),
+        );
+        reopened.capture(unrelated.clone()).await.unwrap();
+        assert!(reopened
+            .stored_fact(&unrelated.capture_key)
+            .await
+            .unwrap()
+            .is_some());
         node.shutdown().await;
     }
 
     #[tokio::test]
     async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
-        let _trace = tracing::subscriber::set_default(
-            tracing_subscriber::fmt()
-                .with_env_filter("off,gents::rendered_request::sink=info")
-                .with_test_writer()
-                .finish(),
-        );
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let mut sink = DefraRenderedRequestSink::new(Arc::clone(&node));
@@ -1497,12 +1303,6 @@ mod tests {
         assert!(
             shared_bytes < flat_bytes,
             "shared={shared_bytes}, flat={flat_bytes}"
-        );
-        tracing::info!(
-            flat_bytes,
-            root_bytes,
-            shared_bytes,
-            "capture reference storage across growing turns"
         );
         node.shutdown().await;
     }

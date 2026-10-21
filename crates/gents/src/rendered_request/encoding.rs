@@ -449,6 +449,9 @@ pub(crate) fn block_content_key(bytes: &[u8]) -> String {
 pub(crate) const MAX_MANIFEST_BLOCKS: usize = 10_000;
 pub(crate) const MAX_MANIFEST_HEIGHT: u8 = 8;
 pub(crate) const MANIFEST_FANOUT: usize = 32;
+const MANIFEST_MIN_GROUP: usize = 8;
+pub(crate) const TREE_RESOLUTION_FUEL: usize =
+    MAX_MANIFEST_BLOCKS * 2 + MAX_MANIFEST_HEIGHT as usize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -482,7 +485,7 @@ pub(crate) fn manifest_groups(entries: &[ManifestEntry]) -> Vec<&[ManifestEntry]
             .as_bytes()
             .last()
             .is_some_and(|byte| *byte == b'0');
-        if size == MANIFEST_FANOUT || (size >= 8 && boundary) {
+        if size == MANIFEST_FANOUT || (size >= MANIFEST_MIN_GROUP && boundary) {
             groups.push(&entries[start..=index]);
             start = index + 1;
         }
@@ -536,7 +539,7 @@ where
 {
     tree.validate()?;
     let mut pending = vec![(tree.root, tree.height)];
-    let mut fuel = MAX_MANIFEST_BLOCKS * 2 + usize::from(MAX_MANIFEST_HEIGHT);
+    let mut fuel = TREE_RESOLUTION_FUEL;
     let mut leaves = 0;
     let mut bytes = Vec::new();
     while let Some((entry, height)) = pending.pop() {
@@ -655,7 +658,18 @@ pub(crate) fn decode_capture_record(
     match capture_version {
         1 if kind == CapturePayloadKind::RequestBody => decode_versioned_record(1, stored),
         1 => anyhow::bail!("legacy provenance payload lives in provenance_json"),
-        2 | 3 | 4 => decode_record(&select_container_record(stored, kind)?),
+        2 => decode_record(&select_container_record(stored, kind)?),
+        3 | 4 => {
+            let record = decode_record(&select_container_record(stored, kind)?)?;
+            anyhow::ensure!(
+                matches!(
+                    (&record, capture_version),
+                    (DecodedRecord::Manifest { .. }, 3) | (DecodedRecord::Tree(_), 4)
+                ),
+                "capture version does not match manifest format"
+            );
+            Ok(record)
+        }
         other => anyhow::bail!("unsupported rendered-request capture version {other}"),
     }
 }
@@ -1215,6 +1229,11 @@ mod tests {
                         }
                     }
                     if let Some(root) = &case.manifest_root {
+                        assert!(
+                            case.max_depth >= case.manifest_blocks.len() + 2,
+                            "{}: this adapter supports only nonbinding tree fuel",
+                            case.name
+                        );
                         let bytes = serde_json::to_vec(&entries).unwrap();
                         let entry = ManifestEntry {
                             doc_id: format!("block-{}", root.r#ref),
