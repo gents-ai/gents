@@ -70,7 +70,7 @@ async fn generated_assignment_histories_drive_goal_version_selection() {
         goal_assignment_history_cases: Vec<Value>,
     }
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_assignment_history_cases.len(), 16);
+    assert_eq!(contracts.goal_assignment_history_cases.len(), 21);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("one.key"), None).unwrap(),

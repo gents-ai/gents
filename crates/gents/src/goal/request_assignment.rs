@@ -115,12 +115,14 @@ fn request_assignment_scope(
 #[cfg(test)]
 mod contract_tests;
 
-fn same_assignment(left: &super::GoalVersion, right: &super::GoalVersion) -> bool {
+fn supersedes_assignment(left: &super::GoalVersion, right: &super::GoalVersion) -> bool {
     left.goal.doc_id == right.goal.doc_id
         && left.goal.node_did == right.goal.node_did
         && left.goal.session_id == right.goal.session_id
         && left.goal.goal_id == right.goal.goal_id
-        && left.goal.assignment_root_request_doc_id == right.goal.assignment_root_request_doc_id
+        && (left.goal.assignment_root_request_doc_id == right.goal.assignment_root_request_doc_id
+            || left.goal.assignment_root_request_doc_id.is_none()
+                && right.goal.assignment_root_request_doc_id.is_some())
 }
 
 pub(crate) fn latest_assignment_goals(
@@ -175,7 +177,7 @@ pub(crate) fn latest_assignment_goals(
                 continue;
             }
             let ancestor = by_commit[&(later.goal.doc_id.as_str(), cid)];
-            if same_assignment(ancestor, later) {
+            if supersedes_assignment(ancestor, later) {
                 superseded.insert((later.goal.doc_id.as_str(), cid));
             }
             pending.extend(ancestor.parent_commit_cids.iter().map(String::as_str));
