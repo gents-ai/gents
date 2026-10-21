@@ -308,7 +308,7 @@ fn context_query(node_did: &str, agent_id: &str, session_id: &str) -> String {
                 inference_profile_id
                 enabled
             }}
-            InferenceProfile(order: {{ profile_id: ASC }}) {{
+            InferenceProfile(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ profile_id: ASC }}) {{
                 profile_id
                 context_window
             }}
@@ -514,6 +514,7 @@ mod tests {
             r#"mutation {
                 create_InferenceProfile(input: {
                     profile_id: "profile-context",
+                    node_did: "did:key:z-context",
                     context_window: 1000
                 }) { _docID }
             }"#,
@@ -766,6 +767,35 @@ mod tests {
         let output = call_as(&tool, "agent-codex", "session-context").await;
         let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed.last_request, None);
+    }
+
+    #[tokio::test]
+    async fn fallback_context_window_does_not_use_another_nodes_profile() {
+        let node = seeded_node().await;
+        let tool = ContextBudgetTool::new(Arc::clone(&node), "did:key:z-context");
+        let output = call_as(&tool, "agent-context", "session-without-accounting").await;
+        let own: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
+        assert_eq!(own.max_tokens, Some(1000));
+
+        for mutation in [
+            r#"mutation {
+                create_InferenceProfile(input: {
+                    profile_id: "foreign-profile",
+                    node_did: "did:key:z-foreign",
+                    context_window: 9000
+                }) { _docID }
+            }"#,
+            r#"mutation {
+                update_Agent(filter: { agent_id: { _eq: "agent-context" } },
+                    input: { inference_profile_id: "foreign-profile" }) { _docID }
+            }"#,
+        ] {
+            let response = node.execute(mutation).await;
+            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+        }
+        let output = call_as(&tool, "agent-context", "session-without-accounting").await;
+        let scoped: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
+        assert_eq!(scoped.max_tokens, None);
     }
 
     #[tokio::test]
