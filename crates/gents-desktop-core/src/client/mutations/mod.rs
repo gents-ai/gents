@@ -7,6 +7,10 @@ pub use chat::{
     interrupt_request, rename_session, resend_request, retry_request, submit_request,
     submit_task_request, SubmitRequestOptions, SubmittedRequest,
 };
+pub use chat::{
+    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
+    SubmissionOutcomeUnknown, UnresolvedSubmission,
+};
 pub use manage::{
     apply_config_components_on, delete_agent_context_on, delete_agent_on, delete_event_source_on,
     delete_inference_backend_on, delete_inference_profile_on, delete_schedule_on, delete_skill_on,
@@ -22,3 +26,4 @@ pub use manage::{
 pub use setup::PeerMutationResult;
 
 pub(crate) use chat::prepare_request_submission;
+pub(crate) use chat::submission_journal;

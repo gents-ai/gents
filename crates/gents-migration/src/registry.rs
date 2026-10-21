@@ -286,6 +286,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreifm54mjrhhy6wnebzgbwoimpy27ifcfrfcdq3ig4edulvgr3cm4jy"
     ),
     baseline_entry!(
+        gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
+        gents_protocol::schemas::PENDING_CHAT_SUBMISSION,
+        "bafyreib3pvpyumkvpovhi2x5ua34wzwsvj6o2iz7fge3qwsp2nj7oask44"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::WORKSPACE_ROOT_NAME,
         gents_protocol::schemas::WORKSPACE_ROOT,
         "bafyreibw7kuk4xise6epukrca2inza3j44bgsxfbkse3tkbk6enqzsr6ui"
@@ -736,7 +741,63 @@ static AGENT_OUTPUT_SOURCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
+static MESSAGE_SESSION_SEQUENCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "sequence",
+        descending: false,
+    },
+];
+
+static TOOL_CALL_SESSION_ORDER_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "message_sequence",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "tool_call_key",
+        descending: false,
+    },
+];
+
+static TOOL_CALL_BACKGROUND_STATUS_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "node_did",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "await_mode",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "status",
+        descending: false,
+    },
+];
+
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
+        name: "AgentToolCall_session_sequence_key",
+        fields: TOOL_CALL_SESSION_ORDER_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_MESSAGE_NAME,
+        name: "AgentMessage_session_sequence",
+        fields: MESSAGE_SESSION_SEQUENCE_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
+        name: "AgentToolCall_node_await_status",
+        fields: TOOL_CALL_BACKGROUND_STATUS_FIELDS,
+    },
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
         name: "AgentOutputSegment_request_doc_id_source",

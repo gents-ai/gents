@@ -582,3 +582,203 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
     }
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn background_completion_recovery_seeks_pending_status_range() {
+    use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
+    let node = fresh_node().await;
+    node.add_schema(AGENT_TOOL_CALL).await.unwrap();
+    let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
+    let historical = (0..160)
+        .map(|i| {
+            serde_json::json!({
+                "tool_call_key": format!("old-{i}"), "node_did":"n", "await_mode":"background",
+                "lifecycle_state":"completed", "status":"completed"
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(historical)).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{ create_AgentToolCall(input:{input}) {{_docID}} }}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let baseline = DEFAULT_BASELINE
+        .iter()
+        .find(|c| c.name == AGENT_TOOL_CALL_NAME)
+        .unwrap();
+    let index = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|i| i.name == "AgentToolCall_node_await_status")
+        .unwrap();
+    let registry = Registry {
+        baseline: std::slice::from_ref(baseline),
+        steps: &[],
+        ordinary_indexes: std::slice::from_ref(index),
+    };
+    ensure_migrations_with_registry(node.as_ref(), &registry)
+        .await
+        .unwrap();
+    let query = r#"query { AgentToolCall(filter:{node_did:{_eq:"n"},await_mode:{_eq:"background"},lifecycle_state:{_in:["completed","failed","timedOut","cancelled"]},status:{_like:"completionPending%",_ge:"completionPending",_lt:"completionPendinh"}}){tool_call_key} }"#;
+    assert_indexed_query(node.as_ref(), query, index.name, 0).await;
+    let cases = serde_json::json!([
+        {"tool_call_key":"pending","node_did":"n","await_mode":"background","lifecycle_state":"completed","status":"completionPending:success"},
+        {"tool_call_key":"bare-prefix","node_did":"n","await_mode":"background","lifecycle_state":"failed","status":"completionPending"},
+        {"tool_call_key":"unicode","node_did":"n","await_mode":"background","lifecycle_state":"cancelled","status":"completionPending:é"},
+        {"tool_call_key":"running","node_did":"n","await_mode":"background","lifecycle_state":"running","status":"completionPending:success"},
+        {"tool_call_key":"foreground","node_did":"n","await_mode":"foreground","lifecycle_state":"completed","status":"completionPending:success"},
+        {"tool_call_key":"foreign","node_did":"other","await_mode":"background","lifecycle_state":"completed","status":"completionPending:success"},
+        {"tool_call_key":"past-prefix","node_did":"n","await_mode":"background","lifecycle_state":"completed","status":"completionPendinh"}
+    ]);
+    let input = gents_protocol::graphql::graphql_input_literal(&cases).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{ create_AgentToolCall(input:{input}) {{_docID}} }}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let legacy = query.replace(",_ge:\"completionPending\",_lt:\"completionPendinh\"", "");
+    let mut observed = Vec::new();
+    for q in [query, &legacy] {
+        let result = node.execute(q).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+        let mut keys = result.data.unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["tool_call_key"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        keys.sort();
+        observed.push(keys);
+    }
+    assert_eq!(observed[0], ["bare-prefix", "pending", "unicode"]);
+    assert_eq!(observed[0], observed[1]);
+    assert_indexed_query(node.as_ref(), query, index.name, 4).await;
+    assert_eq!(
+        before.version_id,
+        node.get_collection(AGENT_TOOL_CALL_NAME)
+            .unwrap()
+            .unwrap()
+            .version_id
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
+    use gents_protocol::schemas::{AGENT_MESSAGE, AGENT_MESSAGE_NAME};
+    let node = fresh_node().await;
+    node.add_schema(AGENT_MESSAGE).await.unwrap();
+    let before = node.get_collection(AGENT_MESSAGE_NAME).unwrap().unwrap();
+    let input=Value::Array((0..160).map(|i|serde_json::json!({"message_key":format!("message-{i}"),"node_did":"n","session_id":"s","sequence":i})).collect());
+    let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{create_AgentMessage(input:{input}){{_docID}}}}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let query = r#"query {AgentMessage(filter:{session_id:{_eq:"s"}},order:[{sequence:DESC},{_docID:ASC}],limit:30){_docID sequence}}"#;
+    let original = node.execute(query).await;
+    assert!(!original.has_errors(), "{:?}", original.errors);
+    let baseline = DEFAULT_BASELINE
+        .iter()
+        .find(|c| c.name == AGENT_MESSAGE_NAME)
+        .unwrap();
+    let index = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|i| i.name == "AgentMessage_session_sequence")
+        .unwrap();
+    let registry = Registry {
+        baseline: std::slice::from_ref(baseline),
+        steps: &[],
+        ordinary_indexes: std::slice::from_ref(index),
+    };
+    ensure_migrations_with_registry(node.as_ref(), &registry)
+        .await
+        .unwrap();
+    let result = node.execute(query).await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    assert_eq!(original.data, result.data);
+    assert_indexed_query(node.as_ref(), query, index.name, 31).await;
+    assert_eq!(
+        before.version_id,
+        node.get_collection(AGENT_MESSAGE_NAME)
+            .unwrap()
+            .unwrap()
+            .version_id
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn transcript_tool_page_streams_sequence_and_key_order() {
+    use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
+    let node = fresh_node().await;
+    node.add_schema(AGENT_TOOL_CALL).await.unwrap();
+    let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
+    let rows = (0..160).map(|i| serde_json::json!({
+        "tool_call_key": format!("tool-{i:03}"),
+        "session_id": if i < 80 { "s" } else { "other-session" },
+        "node_did": "n",
+        "requester_did": "r",
+        "message_sequence": i / 2,
+    })).chain([
+        serde_json::json!({"tool_call_key":"foreign-node", "session_id":"s", "node_did":"other", "requester_did":"r", "message_sequence":100}),
+        serde_json::json!({"tool_call_key":"foreign-requester", "session_id":"s", "node_did":"n", "requester_did":"other", "message_sequence":100}),
+    ]).collect::<Vec<_>>();
+    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(rows)).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{ create_AgentToolCall(input:{input}) {{_docID}} }}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let query = r#"query { AgentToolCall(filter:{session_id:{_eq:"s"},node_did:{_eq:"n"},requester_did:{_eq:"r"}},order:[{message_sequence:DESC},{tool_call_key:DESC}],limit:10){_docID message_sequence tool_call_key} }"#;
+    let original = node.execute(query).await;
+    assert!(!original.has_errors(), "{:?}", original.errors);
+    let baseline = DEFAULT_BASELINE
+        .iter()
+        .find(|c| c.name == AGENT_TOOL_CALL_NAME)
+        .unwrap();
+    let index = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|i| i.name == "AgentToolCall_session_sequence_key")
+        .unwrap();
+    let registry = Registry {
+        baseline: std::slice::from_ref(baseline),
+        steps: &[],
+        ordinary_indexes: std::slice::from_ref(index),
+    };
+    for _ in 0..2 {
+        ensure_migrations_with_registry(node.as_ref(), &registry)
+            .await
+            .unwrap();
+        let result = node.execute(query).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+        assert_eq!(original.data, result.data);
+        let keys = result.data.as_ref().unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["tool_call_key"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            (70..80)
+                .rev()
+                .map(|i| format!("tool-{i:03}"))
+                .collect::<Vec<_>>()
+        );
+        assert_indexed_query(node.as_ref(), query, index.name, 12).await;
+        assert_eq!(
+            before.version_id,
+            node.get_collection(AGENT_TOOL_CALL_NAME)
+                .unwrap()
+                .unwrap()
+                .version_id
+        );
+    }
+    node.shutdown().await;
+}
