@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 pub const OBJECTIVES: [&str; 2] = ["Verify active goal removal", "Verify paused goal removal"];
 pub const DRAFT: &str = "Keep this unsent removal draft";
 pub const QUEUED: &str = "Run this queued follow-up after goal removal";
+pub const OBSERVER_DRAFT: &str = "Keep this observer conversation draft";
+pub const OBSERVER_EDIT: &str = "Keep this unsaved observer goal edit";
 
 pub struct Provider {
     gates: [Arc<tokio::sync::Semaphore>; 2],
@@ -68,7 +70,7 @@ pub async fn verify(
 ) -> Result<Value> {
     let node_literal = gents::graphql::escape_graphql_string(node);
     let query = format!(
-        r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_literal}"}}, purpose: {{_eq: "normal"}}}}) {{ {} interrupt_requested_at }} Goal(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ {} }} }}"#,
+        r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_literal}"}}, purpose: {{_eq: "normal"}}}}) {{ {} interrupt_requested_at }} Goal(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ intent_json }} }}"#,
         gents::SIGNED_REQUEST_FIELDS,
         gents::goal::GOAL_FIELDS,
     );
@@ -121,7 +123,9 @@ pub async fn verify(
     ensure!(
         captured
             .iter()
-            .all(|request| !request.to_string().contains(DRAFT)),
+            .all(|request| ![DRAFT, OBSERVER_DRAFT, OBSERVER_EDIT]
+                .iter()
+                .any(|draft| request.to_string().contains(draft))),
         "removal submitted the unsent composer draft"
     );
     ensure!(
@@ -132,8 +136,38 @@ pub async fn verify(
             == 1,
         "queued input was cancelled or replayed"
     );
+    let commands: Vec<Value> = value["data"]["AgentSessionGoalControl"]
+        .as_array()
+        .context("goal control rows")?
+        .iter()
+        .map(|row| {
+            serde_json::from_str(row["intent_json"].as_str().context("goal control intent")?)
+                .map_err(anyhow::Error::from)
+        })
+        .collect::<Result<_>>()?;
+    ensure!(
+        commands.len() == 5,
+        "observer window published an unexpected goal control: {commands:?}"
+    );
+    for (kind, count) in [("create", 2), ("pause", 1), ("stop", 2)] {
+        ensure!(
+            commands
+                .iter()
+                .filter(|command| command["operation"]["kind"] == kind)
+                .count()
+                == count,
+            "unexpected {kind} controls: {commands:?}"
+        );
+    }
     let ui: Value =
         serde_json::from_slice(&std::fs::read(root.join("editor-goal-removal-ui.json"))?)?;
+    for field in [
+        "twoWindowsObserved",
+        "staleGoalEditPreserved",
+        "observerDraftPreserved",
+    ] {
+        ensure!(ui[field] == true, "editor removal evidence omitted {field}");
+    }
     Ok(
         json!({"nodeDid":node,"goals":goals,"verifiedRequestSignatures":rows.len(),"noAutonomousContinuation":true,"noInterrupt":true,"ui":ui}),
     )
