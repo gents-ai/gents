@@ -1108,21 +1108,47 @@ async fn bind_interruptible_request_with_requester(
         lifecycle.claim().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
+    bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
+}
+
+async fn bind_signed_hook_request(
+    hook: &DefraSessionHook,
+    request_id: &str,
+    deadline_at: chrono::DateTime<chrono::Utc>,
+) {
+    let identity = crate::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
+        .expect("the hook fixture has a registered signing identity");
+    let session_id = hook.session_id().await.expect("hook session");
+    let lifecycle = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request(
+        &hook.node,
+        request_id,
+        &session_id,
+        &identity,
+        None,
+    )
+    .await;
+    bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
+}
+
+async fn bind_claimed_hook_request(
+    hook: &DefraSessionHook,
+    mut lifecycle: crate::lifecycle::RequestLifecycle,
+    deadline_at: chrono::DateTime<chrono::Utc>,
+) {
+    let request_id = lifecycle.request().request_id.clone();
+    let requester_did = lifecycle.request().requester_did.clone();
     let writer = crate::streaming::DefraStreamWriter::new(
         hook.node.clone(),
         &hook.node_did,
         std::time::Duration::ZERO,
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
-    hook.set_active_request_lineage(
-        Some(request_id.to_string()),
-        requester_did.map(str::to_owned),
-    )
-    .await
-    .expect("bind persisted request lineage");
+    hook.set_active_request_lineage(Some(request_id.clone()), requester_did)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(deadline_at)).await;
     hook_execution_fixtures().lock().await.insert(
-        hook_execution_fixture_key(hook, request_id),
+        hook_execution_fixture_key(hook, &request_id),
         HookExecutionFixture {
             lifecycle,
             writer,

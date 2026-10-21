@@ -464,8 +464,14 @@ mod tests {
         ensure_runtime_schemas(&node).await.unwrap();
         crate::test_support::install_test_agent(&node, identity.did(), "general").await;
         let node_did = identity.did().to_string();
-        let mut request =
-            claimed_request(&node, "request-custom", "session-custom", &node_did).await;
+        let mut request = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request(
+            &node,
+            "request-custom",
+            "session-custom",
+            identity.as_ref(),
+            None,
+        )
+        .await;
         let writer = DefraStreamWriter::new(node.clone(), &node_did, Duration::from_millis(1));
         request.begin_owned_execution(&writer).await.unwrap();
         writer
@@ -500,7 +506,7 @@ mod tests {
         let mut lifecycle = ToolCallLifecycle::from_accepted(
             node.clone(),
             node_did.clone(),
-            None,
+            request.request().requester_did.clone(),
             accepted,
             deadline,
             AwaitMode::Background,
@@ -558,7 +564,10 @@ mod tests {
         let notification = &notifications[0];
         assert_eq!(notification["session_id"].as_str(), Some("session-custom"));
         assert_eq!(notification["node_did"].as_str(), Some(node_did.as_str()));
-        assert!(notification["requester_did"].is_null());
+        assert_eq!(
+            notification["requester_did"].as_str(),
+            Some(node_did.as_str())
+        );
         assert_eq!(notification["role"].as_str(), Some("user"));
         let escaped_session = crate::graphql::escape_graphql_string("session-custom");
         let escaped_agent = crate::graphql::escape_graphql_string(&node_did);

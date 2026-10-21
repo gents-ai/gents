@@ -320,7 +320,6 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
     let now = created_at
         .map(str::to_owned)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    ensure_fixture_session(node, session_id, identity.did(), Some(identity.did()), &now).await;
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
@@ -338,12 +337,28 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
         create.caused_by_trigger_kind = Some("schedule".to_owned());
     }
     create.caused_by_correlation = correlation.map(str::to_owned);
+    claimed_signed_request_create(node, identity, create).await
+}
+
+pub(crate) async fn claimed_signed_request_create(
+    node: &Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
+    mut create: gents_protocol::request_admission::AgentRequestCreate,
+) -> RequestLifecycle {
+    ensure_fixture_session(
+        node,
+        &create.session_id,
+        &create.node_did,
+        Some(&create.requester_did),
+        &create.created_at,
+    )
+    .await;
     crate::sign_agent_request_create(identity, &mut create)
         .await
         .expect("sign canonical admission fixture request");
     let created = node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!created.has_errors(), "{:#?}", created.errors);
-    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let request_id = crate::graphql::escape_graphql_string(&create.request_id);
     let row = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,

@@ -299,6 +299,27 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .expect("the caused request names its session")
                         .to_owned()
                 };
+                if name != "session_message_request_completed_no_goal_to_completed" {
+                    let response = crate::ConfigAccess::local(admission.node.clone())
+                        .execute(&format!(
+                            r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{{}}}}}"#,
+                            crate::graphql::escape_graphql_string(&message.caused_request_doc_id),
+                            crate::request_admission::SIGNED_REQUEST_FIELDS,
+                        ))
+                        .await
+                        .unwrap();
+                    let caller: gents_protocol::row::AgentRequestRow =
+                        serde_json::from_value(response["data"]["AgentRequest"][0].clone())
+                            .unwrap();
+                    crate::goal::create_goal_for_request(
+                        &admission.node,
+                        &caller,
+                        "Handoff assignment",
+                        None,
+                    )
+                    .await
+                    .expect("bind the modeled Goal to its physical caused request");
+                }
                 match name {
                     // The reasonless success form must be produced by an
                     // actually-complete assignment, not by a missing Goal:
