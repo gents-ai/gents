@@ -459,7 +459,7 @@ pub struct RetryEligibilityView {
 pub struct SessionCompactionView {
     pub compaction_key: String,
     pub sequence: Option<i64>,
-    pub messages_compacted: i64,
+    pub messages_compacted: Option<i64>,
     pub original_tokens: Option<i64>,
     pub compacted_tokens: Option<i64>,
     pub created_at: Option<String>,
