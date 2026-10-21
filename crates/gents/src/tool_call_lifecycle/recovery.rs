@@ -950,7 +950,11 @@ async fn load_pending_background_completion_rows(
                 node_did: {{ _eq: "{node_did}" }},
                 await_mode: {{ _eq: "background" }},
                 lifecycle_state: {{ _in: ["completed", "failed", "timedOut", "cancelled"] }},
-                status: {{ _like: "completionPending%" }}
+                status: {{
+                    _like: "completionPending%",
+                    _ge: "completionPending",
+                    _lt: "completionPendinh"
+                }}
             }}) {{
                 _docID
                 request_id

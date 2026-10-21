@@ -45,6 +45,10 @@ pub async fn send_chat_message(
     if node_did.is_empty() {
         bail!("node_did is required");
     }
+    if let Some(request_id) = super::chat_resolve::resolve_target(&request) {
+        return super::chat_resolve::resolve_chat_submission(core, &node_did, &request, request_id)
+            .await;
+    }
 
     let captured_context = request.captured_context.unwrap_or_default();
     let content = match &request.answer {
@@ -109,9 +113,9 @@ pub async fn send_chat_message(
                 ..SubmitRequestOptions::default()
             },
         )
-        .await?;
+        .await;
 
-    Ok(submitted.into())
+    super::chat_resolve::sent(submitted)
 }
 
 pub async fn retry_request(

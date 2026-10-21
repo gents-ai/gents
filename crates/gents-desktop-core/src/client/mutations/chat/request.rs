@@ -20,7 +20,7 @@ use super::binding::resolve_agent_binding;
 
 /// The durable submission receipt. Replica observation may still be pending;
 /// callers must not replay the mutation when a subsequent refresh fails.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubmittedRequest {
     pub request_id: String,
     pub session_id: String,
@@ -73,9 +73,21 @@ pub async fn submit_request(
         None,
     )
     .await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    access.write("submit_request", &mutation).await?;
-    Ok(result)
+    // Owner submissions, including resends routed through this function, are
+    // receipt-reconciled. An unknown outcome returns `SubmissionOutcomeUnknown`
+    // carrying the original signed payload, so reconciliation replays identical
+    // bytes instead of minting a new request identity.
+    let pending = receipt::UnresolvedSubmission::new(create, result)?;
+    receipt::journal::save(node, &pending).await?;
+    let result = receipt::commit_signed_submission(access, pending.clone()).await;
+    if !result
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.is::<receipt::SubmissionOutcomeUnknown>())
+    {
+        receipt::journal::forget(node, &pending.request_id).await;
+    }
+    result
 }
 
 #[cfg(test)]
@@ -993,3 +1005,10 @@ mod lean_vocab_test;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) mod receipt;
+
+pub use receipt::{
+    reconcile_unretained_submission, resolve_unresolved_submission, DeliveryUnconfirmed,
+    SubmissionOutcomeUnknown, UnresolvedSubmission,
+};

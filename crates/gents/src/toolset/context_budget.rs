@@ -39,6 +39,45 @@ pub struct LastRequestContextSnapshot {
     pub accounting: gents_protocol::rendered_request::ContextAccounting,
 }
 
+/// Identity the snapshot is scoped to. Every persisted row the tool reads must
+/// belong to this node, this agent and this session; a node-wide scan would
+/// attribute other agents' (and other sessions') provider dispatches to the
+/// caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextBudgetScope {
+    pub node_did: String,
+    pub agent_id: String,
+    pub session_id: String,
+}
+
+impl ContextBudgetScope {
+    /// Resolve the scope from the in-flight tool call. Fails closed when the
+    /// runtime did not install an agent or session identity.
+    fn from_tool_runtime(node_did: &str) -> Result<Self> {
+        let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+        let agent_id = runtime
+            .as_ref()
+            .and_then(|runtime| runtime.agent_id.clone())
+            .filter(|value| !value.trim().is_empty())
+            .context("context_budget tool requires the calling agent identity")?;
+        let session_id = runtime
+            .as_ref()
+            .and_then(|runtime| runtime.session_id.clone())
+            .filter(|value| !value.trim().is_empty())
+            .context("context_budget tool requires the calling session identity")?;
+        let node_did = runtime
+            .as_ref()
+            .and_then(|runtime| runtime.node_did.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| node_did.to_string());
+        Ok(Self {
+            node_did,
+            agent_id,
+            session_id,
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ContextEnvelope {
     #[serde(rename = "Agent", default)]
@@ -47,6 +86,10 @@ struct ContextEnvelope {
     profiles: Vec<ProfileRow>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<AgentRequestRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InferenceCallEnvelope {
     #[serde(rename = "InferenceCall", default)]
     inference_calls: Vec<InferenceCallRow>,
 }
@@ -158,7 +201,8 @@ impl Tool for ContextBudgetTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let snapshot = load_context_budget_snapshot(&self.node, &self.node_did).await?;
+        let scope = ContextBudgetScope::from_tool_runtime(&self.node_did)?;
+        let snapshot = load_context_budget_snapshot(&self.node, &scope).await?;
         crate::tool_output::render(
             &snapshot,
             &[
@@ -187,18 +231,39 @@ pub fn build_context_budget_tool(
 
 pub async fn load_context_budget_snapshot(
     node: &EmbeddedNode,
-    node_did: &str,
+    scope: &ContextBudgetScope,
 ) -> Result<ContextBudgetSnapshot> {
-    let node_did = node_did.trim();
+    let node_did = scope.node_did.trim();
     if node_did.is_empty() {
         bail!("context_budget tool requires a running node DID");
     }
+    let agent_id = scope.agent_id.trim();
+    let session_id = scope.session_id.trim();
+    if agent_id.is_empty() || session_id.is_empty() {
+        bail!("context_budget tool requires the calling agent and session identity");
+    }
 
-    let resp =
-        graphql_with_transaction_retry(node, &context_query(node_did), "loading context budget")
-            .await?;
+    let resp = graphql_with_transaction_retry(
+        node,
+        &context_query(node_did, agent_id, session_id),
+        "loading context budget",
+    )
+    .await?;
     let envelope: ContextEnvelope = decode(resp.data.as_ref(), "context budget")?;
-    let last_request = latest_request_context(&envelope.inference_calls)?;
+    let request_ids = distinct_request_ids(&envelope.requests);
+    let last_request = if request_ids.is_empty() {
+        None
+    } else {
+        let resp = graphql_with_transaction_retry(
+            node,
+            &inference_call_query(node_did, agent_id, &request_ids),
+            "loading context budget inference calls",
+        )
+        .await?;
+        let calls: InferenceCallEnvelope =
+            decode(resp.data.as_ref(), "context budget inference calls")?;
+        latest_request_context(&calls.inference_calls)?
+    };
     let max_tokens = last_request
         .as_ref()
         .map(|request| request.accounting.context_window as i64)
@@ -230,27 +295,51 @@ pub async fn load_context_budget_snapshot(
     ))
 }
 
-fn context_query(node_did: &str) -> String {
+fn context_query(node_did: &str, agent_id: &str, session_id: &str) -> String {
     let node_did = escape_graphql_string(node_did);
+    let agent_id = escape_graphql_string(agent_id);
+    let session_id = escape_graphql_string(session_id);
     format!(
         r#"{{
-            Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ agent_id: ASC }}) {{
+            Agent(filter: {{ _and: [
+                {{ node_did: {{ _eq: "{node_did}" }} }},
+                {{ agent_id: {{ _eq: "{agent_id}" }} }}
+            ] }}, order: {{ agent_id: ASC }}) {{
                 inference_profile_id
                 enabled
             }}
-            InferenceProfile(order: {{ profile_id: ASC }}) {{
+            InferenceProfile(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ profile_id: ASC }}) {{
                 profile_id
                 context_window
             }}
-            AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
+            AgentRequest(filter: {{ _and: [
+                {{ node_did: {{ _eq: "{node_did}" }} }},
+                {{ session_id: {{ _eq: "{session_id}" }} }}
+            ] }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
                 request_id
                 session_id
             }}
+        }}"#
+    )
+}
+
+fn inference_call_query(node_did: &str, agent_id: &str, request_ids: &[String]) -> String {
+    let node_did = escape_graphql_string(node_did);
+    let agent_id = escape_graphql_string(agent_id);
+    let list = request_ids
+        .iter()
+        .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"{{
             InferenceCall(
-                filter: {{
-                    node_did: {{ _eq: "{node_did}" }},
-                    call_kind: {{ _eq: "inference" }}
-                }},
+                filter: {{ _and: [
+                    {{ node_did: {{ _eq: "{node_did}" }} }},
+                    {{ agent_id: {{ _eq: "{agent_id}" }} }},
+                    {{ call_kind: {{ _eq: "inference" }} }},
+                    {{ request_id: {{ _in: [{list}] }} }}
+                ] }},
                 order: {{ queued_at: DESC }},
                 limit: {RECENT_REQUEST_SCAN}
             ) {{
@@ -317,6 +406,18 @@ fn max_context_window(agents: &[AgentRow], profiles: &[ProfileRow]) -> Option<i6
         .filter_map(|agent| agent.inference_profile_id.as_deref())
         .filter_map(|profile_id| profiles.get(profile_id.trim()).copied())
         .max()
+}
+
+fn distinct_request_ids(requests: &[AgentRequestRow]) -> Vec<String> {
+    requests
+        .iter()
+        .filter_map(|request| {
+            let request_id = request.request_id.trim();
+            (!request_id.is_empty()).then(|| request_id.to_string())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn distinct_session_ids(requests: &[AgentRequestRow]) -> Vec<String> {
@@ -413,6 +514,7 @@ mod tests {
             r#"mutation {
                 create_InferenceProfile(input: {
                     profile_id: "profile-context",
+                    node_did: "did:key:z-context",
                     context_window: 1000
                 }) { _docID }
             }"#,
@@ -508,6 +610,7 @@ mod tests {
                         request_id: "request-context",
                         request_doc_id: "request-context-doc",
                         node_did: "did:key:z-context",
+                        agent_id: "agent-context",
                         call_kind: "inference",
                         call_seq: 1,
                         queued_at: "2026-06-03T11:00:00Z",
@@ -521,12 +624,200 @@ mod tests {
         node
     }
 
+    async fn call_as(tool: &ContextBudgetTool, agent_id: &str, session_id: &str) -> String {
+        crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+            None,
+            Some("did:key:z-context".into()),
+            Some(agent_id.into()),
+            Some("caller-request".into()),
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                Some(session_id.into()),
+                async { Tool::call(tool, ContextBudgetParams {}).await.unwrap() },
+            ),
+        )
+        .await
+    }
+
+    /// Seed a newer, larger provider dispatch for a different agent on the
+    /// same node (the reported Codex background-completion shape), plus a
+    /// newer dispatch by the same agent in a different session.
+    async fn seed_foreign_dispatches(node: &EmbeddedNode) {
+        for (agent_id, session_id, request_id, call_id, queued_at) in [
+            (
+                "agent-codex",
+                "session-codex",
+                "request-codex",
+                "codex-call",
+                "2026-06-03T12:00:00Z",
+            ),
+            (
+                "agent-context",
+                "session-other",
+                "request-other",
+                "other-call",
+                "2026-06-03T12:30:00Z",
+            ),
+        ] {
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{
+                        create_AgentRequest(input: {{
+                            request_id: "{request_id}",
+                            purpose: "normal",
+                            node_did: "did:key:z-context",
+                            session_id: "{session_id}",
+                            lifecycle_state: "completed",
+                            created_at: "{queued_at}"
+                        }}) {{ _docID }}
+                    }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{
+                        create_CompactionEntry(input: {{
+                            compaction_key: "{session_id}:1",
+                            session_id: "{session_id}",
+                            node_did: "did:key:z-context",
+                            sequence: 1,
+                            original_tokens: 9000,
+                            compacted_tokens: 9000,
+                            created_at: "{queued_at}"
+                        }}) {{ _docID }}
+                    }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+            let accounting = gents_protocol::rendered_request::ContextAccounting {
+                accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+                turn_index: 0,
+                attempt: 0,
+                estimator: "foreign".to_string(),
+                components: gents_protocol::rendered_request::ContextInputComponents {
+                    messages: 59_000,
+                    documents: 0,
+                    tool_schemas: 0,
+                    additional_parameters: 0,
+                    output_schema: 0,
+                },
+                estimated_input_tokens: 59_000,
+                context_window: 272_000,
+                compaction_threshold_basis_points: 7_500,
+                compaction_threshold_tokens: 204_000,
+                configured_max_output_tokens: None,
+                effective_max_output_tokens: None,
+                compaction_reason:
+                    gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
+                pre_compaction_input_tokens: None,
+            };
+            let accounting = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{
+                        create_InferenceCall(input: {{
+                            call_id: "{call_id}",
+                            request_id: "{request_id}",
+                            request_doc_id: "{request_id}-doc",
+                            node_did: "did:key:z-context",
+                            agent_id: "{agent_id}",
+                            call_kind: "inference",
+                            call_seq: 1,
+                            queued_at: "{queued_at}",
+                            context_accounting_json: "{accounting}"
+                        }}) {{ _docID }}
+                    }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+        }
+    }
+
+    #[tokio::test]
+    async fn context_budget_tool_ignores_other_agents_and_sessions_on_the_node() {
+        let node = seeded_node().await;
+        seed_foreign_dispatches(node.as_ref()).await;
+        let tool = ContextBudgetTool::new(node, "did:key:z-context");
+
+        let output = call_as(&tool, "agent-context", "session-context").await;
+        let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
+
+        let last = parsed.last_request.expect("own request accounting");
+        assert_eq!(last.call_id, "context-call");
+        assert_eq!(last.request_id, "request-context");
+        assert_eq!(parsed.max_tokens, Some(1000));
+        assert_eq!(parsed.current_estimate, Some(650));
+        assert_eq!(parsed.sessions_considered, 1);
+        assert_eq!(parsed.compaction_count, 2);
+
+        // The other agent sees only its own dispatch, never the caller's.
+        let output = call_as(&tool, "agent-codex", "session-codex").await;
+        let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            parsed.last_request.expect("codex accounting").call_id,
+            "codex-call"
+        );
+        assert_eq!(parsed.compaction_count, 1);
+
+        // A different agent inside the caller's session gets no foreign accounting.
+        let output = call_as(&tool, "agent-codex", "session-context").await;
+        let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed.last_request, None);
+    }
+
+    #[tokio::test]
+    async fn fallback_context_window_does_not_use_another_nodes_profile() {
+        let node = seeded_node().await;
+        let tool = ContextBudgetTool::new(Arc::clone(&node), "did:key:z-context");
+        let output = call_as(&tool, "agent-context", "session-without-accounting").await;
+        let own: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
+        assert_eq!(own.max_tokens, Some(1000));
+
+        for mutation in [
+            r#"mutation {
+                create_InferenceProfile(input: {
+                    profile_id: "foreign-profile",
+                    node_did: "did:key:z-foreign",
+                    context_window: 9000
+                }) { _docID }
+            }"#,
+            r#"mutation {
+                update_Agent(filter: { agent_id: { _eq: "agent-context" } },
+                    input: { inference_profile_id: "foreign-profile" }) { _docID }
+            }"#,
+        ] {
+            let response = node.execute(mutation).await;
+            assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+        }
+        let output = call_as(&tool, "agent-context", "session-without-accounting").await;
+        let scoped: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
+        assert_eq!(scoped.max_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn context_budget_tool_fails_closed_without_caller_identity() {
+        let node = seeded_node().await;
+        let tool = ContextBudgetTool::new(node, "did:key:z-context");
+
+        let error = Tool::call(&tool, ContextBudgetParams {})
+            .await
+            .expect_err("unscoped call must not fall back to a node-wide scan");
+        assert!(
+            error.to_string().contains("calling agent identity"),
+            "{error}"
+        );
+    }
+
     #[tokio::test]
     async fn context_budget_tool_reports_persisted_context_signal() {
         let node = seeded_node().await;
         let tool = ContextBudgetTool::new(node, "did:key:z-context");
 
-        let output = Tool::call(&tool, ContextBudgetParams {}).await.unwrap();
+        let output = call_as(&tool, "agent-context", "session-context").await;
         let parsed: ContextBudgetSnapshot = serde_json::from_str(&output).unwrap();
 
         assert_eq!(parsed.max_tokens, Some(1000));

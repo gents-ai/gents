@@ -50,6 +50,7 @@ mod tests {
         for sensitive in gents_protocol::schemas::LOCAL_AUDIT_COLLECTION_NAMES
             .iter()
             .chain(gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES)
+            .chain(gents_protocol::schemas::LOCAL_ONLY_COLLECTION_NAMES)
         {
             assert!(
                 !names.contains(sensitive),
@@ -89,6 +90,9 @@ mod tests {
         assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&"NetworkAdminPin"));
         assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
             .contains(&"EnrollmentOperatorNonce"));
+        assert!(!names.contains(&gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
+            .contains(&gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME));
     }
 
     #[test]

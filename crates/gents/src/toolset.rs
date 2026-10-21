@@ -67,8 +67,8 @@ pub(crate) fn cli_tool_for_test(config: CliToolConfig) -> Box<dyn crate::llm::to
 }
 
 pub use context_budget::{
-    build_context_budget_tool, load_context_budget_snapshot, ContextBudgetSnapshot,
-    LastRequestContextSnapshot, CONTEXT_BUDGET_TOOL_NAME,
+    build_context_budget_tool, load_context_budget_snapshot, ContextBudgetScope,
+    ContextBudgetSnapshot, LastRequestContextSnapshot, CONTEXT_BUDGET_TOOL_NAME,
 };
 pub use gents_loop::tool_policy::CommandPolicyDenial;
 pub(crate) use gents_loop::tool_policy::DenialReason;

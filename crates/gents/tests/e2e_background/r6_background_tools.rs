@@ -1272,20 +1272,22 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }).await.expect("follow-up request was not claimed with an execution deadline");
-    let release_at = persisted_deadline_at - chrono::Duration::milliseconds(900);
-    let delay = (release_at - chrono::Utc::now())
-        .to_std()
-        .unwrap_or_default();
-    tokio::time::sleep(delay).await;
     turn.runtime.backend.release(prompt);
     let wait_row =
         wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "wait_process").await;
     let wait_tool_call_id = wait_row.tool_call_id.expect("accepted wait handle");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let until_deadline = (persisted_deadline_at - chrono::Utc::now())
+        .to_std()
+        .unwrap_or_default();
+    let deadline = tokio::time::Instant::now() + until_deadline + Duration::from_secs(3);
     loop {
         let current =
             load_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
         if current.lifecycle_state.as_deref() == Some("timedOut") {
+            assert!(
+                chrono::Utc::now() >= persisted_deadline_at - chrono::Duration::milliseconds(500),
+                "wait call timed out before the claimed execution deadline"
+            );
             break;
         }
         if tokio::time::Instant::now() >= deadline {

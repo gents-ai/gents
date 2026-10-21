@@ -25,6 +25,14 @@ on:
         required: true
         type: boolean
         default: false
+      candidate_runner:
+        description: Runner lane for manual signed candidates; reserve ci-release-candidate before selecting it.
+        required: true
+        type: choice
+        default: ci-desktop
+        options:
+          - ci-desktop
+          - ci-release-candidate
       dry_run_unsigned:
         description: Manual dry-run only. Builds and packages an unsigned artifact that must not be deployed.
         required: true
@@ -74,7 +82,7 @@ jobs:
     # release links from a clean tree and never sees PR-built artifacts.
     # SCCACHE_RECACHE stays enabled above: rustc invocations still cannot
     # consume PR-populated cache objects.
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-desktop]
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, "${{ github.event_name == 'workflow_dispatch' && inputs.signed_unnotarized_candidate && inputs.candidate_runner == 'ci-release-candidate' && 'ci-release-candidate' || 'ci-desktop' }}"]
     timeout-minutes: 180
 
     steps:

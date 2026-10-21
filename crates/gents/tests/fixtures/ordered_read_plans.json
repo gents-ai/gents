@@ -637,12 +637,13 @@
     "read": {
       "path": "crates/gents/src/toolset/context_budget.rs",
       "collection": "AgentRequest",
-      "arguments": "filter: { node_did: { _eq: \"$GENTS_node_did$\" } }, order: { created_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
+      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_node_did$\" } }, { session_id: { _eq: \"$GENTS_session_id$\" } } ] }, order: { created_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
     },
     "bindings": [
       {
         "node_did": "probe",
-        "RECENT_REQUEST_SCAN": "1"
+        "RECENT_REQUEST_SCAN": "1",
+        "session_id": "probe"
       }
     ]
   },
@@ -650,12 +651,14 @@
     "read": {
       "path": "crates/gents/src/toolset/context_budget.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { node_did: { _eq: \"$GENTS_node_did$\" }, call_kind: { _eq: \"inference\" } }, order: { queued_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
+      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_node_did$\" } }, { agent_id: { _eq: \"$GENTS_agent_id$\" } }, { call_kind: { _eq: \"inference\" } }, { request_id: { _in: [$GENTS_list$] } } ] }, order: { queued_at: DESC }, limit: $GENTS_RECENT_REQUEST_SCAN$"
     },
     "bindings": [
       {
         "node_did": "probe",
-        "RECENT_REQUEST_SCAN": "1"
+        "RECENT_REQUEST_SCAN": "1",
+        "agent_id": "probe",
+        "list": "\"probe\""
       }
     ]
   },
