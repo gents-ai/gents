@@ -324,15 +324,12 @@ pub async fn load_context_budget_snapshot(
     )
     .await?;
     let envelope: CompactionEnvelope = decode(resp.data.as_ref(), "context compactions")?;
-    let compactions = (envelope.compactions, envelope.provider_context_reductions);
-
-    let (session_compactions, request_reductions) = compactions;
 
     Ok(build_snapshot(
         scope.clone(),
         max_tokens,
-        session_compactions,
-        request_reductions,
+        envelope.compactions,
+        envelope.provider_context_reductions,
         last_request,
     ))
 }
@@ -345,7 +342,7 @@ fn compaction_query(node_did: &str, session_id: &str) -> String {
             CompactionEntry(filter: {{ _and: [
                 {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _eq: "{session_id}" }} }}
-            ] }}, order: {{ created_at: DESC }}) {{
+            ] }}, order: [{{ created_at: DESC }}, {{ compaction_key: DESC }}]) {{
                 compaction_key
                 request_id
                 messages_compacted
@@ -357,7 +354,7 @@ fn compaction_query(node_did: &str, session_id: &str) -> String {
             ProviderContextReduction(filter: {{ _and: [
                 {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _eq: "{session_id}" }} }}
-            ] }}, order: {{ created_at: DESC }}) {{
+            ] }}, order: [{{ created_at: DESC }}, {{ reduction_key: DESC }}]) {{
                 reduction_key
                 request_id
                 turn_index
@@ -469,22 +466,10 @@ fn distinct_request_ids(requests: &[AgentRequestRow]) -> Vec<String> {
 fn build_snapshot(
     scope: ContextBudgetScope,
     max_tokens: Option<i64>,
-    mut session_compactions: Vec<CompactionRow>,
-    mut request_reductions: Vec<ProviderReductionRow>,
+    session_compactions: Vec<CompactionRow>,
+    request_reductions: Vec<ProviderReductionRow>,
     last_request: Option<LastRequestContextSnapshot>,
 ) -> ContextBudgetSnapshot {
-    session_compactions.sort_by(|left, right| {
-        right
-            .created_at
-            .cmp(&left.created_at)
-            .then_with(|| right.compaction_key.cmp(&left.compaction_key))
-    });
-    request_reductions.sort_by(|left, right| {
-        right
-            .created_at
-            .cmp(&left.created_at)
-            .then_with(|| right.reduction_key.cmp(&left.reduction_key))
-    });
     let session_compaction_count = session_compactions.len() as i64;
     let request_reduction_count = request_reductions.len() as i64;
     let compaction_count = session_compaction_count.saturating_add(request_reduction_count);
@@ -492,7 +477,11 @@ fn build_snapshot(
     let latest = session_compactions
         .iter()
         .filter_map(|row| row.created_at.as_ref())
-        .chain(request_reductions.iter().filter_map(|row| row.created_at.as_ref()))
+        .chain(
+            request_reductions
+                .iter()
+                .filter_map(|row| row.created_at.as_ref()),
+        )
         .max();
     let current_estimate = last_request
         .as_ref()
@@ -847,8 +836,14 @@ mod tests {
         assert_eq!(parsed.session_compaction_count, 1);
         assert_eq!(parsed.request_reduction_count, 1);
         assert_eq!(parsed.compaction_count, 2);
-        assert_eq!(parsed.recent_session_compactions[0].key, "session-context:1");
-        assert_eq!(parsed.recent_request_reductions[0].key, "context-reduction:1");
+        assert_eq!(
+            parsed.recent_session_compactions[0].key,
+            "session-context:1"
+        );
+        assert_eq!(
+            parsed.recent_request_reductions[0].key,
+            "context-reduction:1"
+        );
 
         // The other agent sees only its own dispatch, never the caller's.
         let output = call_as(&tool, "agent-codex", "session-codex").await;
@@ -922,7 +917,7 @@ mod tests {
         assert_eq!(parsed.compaction_count, 2);
         assert_eq!(
             parsed.last_compacted_at.as_deref(),
-            Some("2026-06-03T10:30:00Z")
+            Some("2026-06-03T10:45:00Z")
         );
         assert_eq!(parsed.session_compaction_count, 1);
         assert_eq!(parsed.request_reduction_count, 1);
