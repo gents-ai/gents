@@ -78,7 +78,8 @@ async fn generated_assignment_histories_drive_goal_version_selection() {
     ];
     for case in contracts.goal_assignment_history_cases {
         let entry = entry(&case["entry"], &identities).await;
-        let actual = observe_assignment_history(&versions(&case["versions"], &identities), &entry);
+        let actual = latest_assignment_goals(&versions(&case["versions"], &identities))
+            .map(|goals| observe_request_assignment(&goals, &entry));
         assert_eq!(
             observation(actual, None),
             case["expected"],

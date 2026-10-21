@@ -205,14 +205,6 @@ pub(crate) fn latest_assignment_goals(
     Ok(goals)
 }
 
-pub(super) fn observe_assignment_history(
-    versions: &[super::GoalVersion],
-    entry: &AgentRequestRow,
-) -> anyhow::Result<RequestAssignmentObservation> {
-    let goals = latest_assignment_goals(versions)?;
-    Ok(observe_request_assignment(&goals, entry))
-}
-
 pub(crate) async fn load_request_assignment(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request: &AgentRequestRow,
@@ -283,11 +275,7 @@ impl RequestAssignments {
         let current = by_doc
             .get(doc)
             .context("assignment request is absent from its owner/session")?;
-        let openings = self
-            .goals
-            .iter()
-            .filter_map(|goal| goal.assignment_root_request_doc_id.as_deref())
-            .collect();
+        let openings = super::request_head::assignment_openings(&self.goals);
         super::request_head::authenticated_assignment_entry(
             &self.owner,
             &self.session,

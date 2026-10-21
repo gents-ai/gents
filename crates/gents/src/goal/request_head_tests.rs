@@ -17,7 +17,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         goal_wake_ancestry_cases: Vec<serde_json::Value>,
     }
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_wake_ancestry_cases.len(), 14);
+    assert_eq!(contracts.goal_wake_ancestry_cases.len(), 16);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
@@ -142,12 +142,25 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         let expected_goal = value["expected_goal"]
             .as_u64()
             .map(|goal| format!("goal-{goal}"));
-        let openings = rows
+        let opening_facts = rows
             .iter()
-            .filter(|row| row["opening"] == true)
-            .map(|row| format!("physical-{}", row["request"]["doc"].as_u64().unwrap()))
+            .filter(|row| !row["opening_goals"].as_array().unwrap().is_empty())
+            .map(|row| {
+                (
+                    format!("physical-{}", row["request"]["doc"].as_u64().unwrap()),
+                    row["opening_goals"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|goal| format!("goal-{}", goal.as_u64().unwrap()))
+                        .collect::<Vec<_>>(),
+                )
+            })
             .collect::<Vec<_>>();
-        let openings = openings.iter().map(String::as_str).collect();
+        let openings = opening_facts
+            .iter()
+            .map(|(doc, goals)| (doc.as_str(), goals.iter().map(String::as_str).collect()))
+            .collect();
         let actual = authenticated_assignment_entry(
             owner,
             "session-1",
