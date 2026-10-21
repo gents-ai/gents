@@ -268,6 +268,21 @@ pub(crate) struct RequestAssignments {
 }
 
 impl RequestAssignments {
+    pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
+        use anyhow::Context;
+        let by_doc =
+            super::request_head::request_rows_by_doc(&self.owner, &self.session, &self.rows)?;
+        let row = *by_doc
+            .get(doc)
+            .context("request is absent from its owner/session observation")?;
+        anyhow::ensure!(
+            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            "assignment request is auxiliary"
+        );
+        verify_request_receipt_signature(row)?;
+        Ok(row)
+    }
+
     fn entry(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         use anyhow::Context;
         let by_doc =
