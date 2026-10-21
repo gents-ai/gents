@@ -50,7 +50,11 @@ async fn set_hop_cap(node: &EmbeddedNode, node_did: &str, cap: u32) {
             escape_graphql_string(node_did)
         ))
         .await;
-    assert!(!response.has_errors(), "Node hop cap: {:?}", response.errors);
+    assert!(
+        !response.has_errors(),
+        "Node hop cap: {:?}",
+        response.errors
+    );
 }
 
 fn goal_status(case: &LeanR6BackgroundingCase) -> Option<GoalStatus> {
@@ -771,7 +775,10 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     assert_eq!(successor.len(), 1);
     let hop = successor[0]["request_hop"].as_u64().unwrap() as u32;
     assert_eq!(hop, over_bound);
-    assert!(!crate::lifecycle::request_hop_within_bound(Some(bound), hop));
+    assert!(!crate::lifecycle::request_hop_within_bound(
+        Some(bound),
+        hop
+    ));
     admission.node.shutdown().await;
     std::fs::remove_dir_all(admission.path).unwrap();
 }

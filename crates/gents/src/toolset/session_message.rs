@@ -8,18 +8,17 @@ use crate::background_tools::{
     MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
 use crate::session_message::{
-    AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionControlArgs, AgentSessionListArgs,
-    AgentSessionReadArgs,
+    AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionControlArgs,
+    AgentSessionListArgs, AgentSessionReadArgs,
 };
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
 
 use super::shared::ToolError;
 use super::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
-    AGENT_SESSION_LIST_TOOL_NAME, AGENT_SESSION_READ_TOOL_NAME, AGENT_STOP_TOOL_NAME,
-    AGENT_RESUME_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME,
-    LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
-    WAIT_PROCESS_TOOL_NAME,
+    AGENT_RESUME_TOOL_NAME, AGENT_SESSION_LIST_TOOL_NAME, AGENT_SESSION_READ_TOOL_NAME,
+    AGENT_STOP_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };
 
 const SESSION_SERVICE_ID: &str = "session";
@@ -279,7 +278,11 @@ impl Tool for AgentStopTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         if args.session_id.trim().is_empty() {
-            return Err(invalid_arguments_error(Self::NAME, "/session_id", "session_id is required"));
+            return Err(invalid_arguments_error(
+                Self::NAME,
+                "/session_id",
+                "session_id is required",
+            ));
         }
         Err(not_yet_executable_error(Self::NAME))
     }
@@ -306,7 +309,11 @@ impl Tool for AgentResumeTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         if args.session_id.trim().is_empty() {
-            return Err(invalid_arguments_error(Self::NAME, "/session_id", "session_id is required"));
+            return Err(invalid_arguments_error(
+                Self::NAME,
+                "/session_id",
+                "session_id is required",
+            ));
         }
         Err(not_yet_executable_error(Self::NAME))
     }

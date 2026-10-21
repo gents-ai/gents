@@ -3096,7 +3096,8 @@ async fn bash_schema_advertises_the_configured_background_lifetime() {
         );
         assert!(
             description.contains("omitting timeout_secs uses the smaller limit")
-                && description.contains("explicit values are floored at 1s and capped by both limits")
+                && description
+                    .contains("explicit values are floored at 1s and capped by both limits")
                 && description.contains(&format!(
                     "{}s background command budget",
                     crate::toolset::BACKGROUND_COMMAND_TIMEOUT_SECS

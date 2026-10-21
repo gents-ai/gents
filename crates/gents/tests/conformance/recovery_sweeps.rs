@@ -72,12 +72,10 @@ fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecovery
     let action = tick_action(&facts);
     let after = match action {
         TickAction::Untouched => row,
-        TickAction::Kill(_) => {
-            LeanPluginJobRecoveryRow {
-                running: false,
-                ..row
-            }
-        }
+        TickAction::Kill(_) => LeanPluginJobRecoveryRow {
+            running: false,
+            ..row
+        },
         TickAction::Step => {
             let observed = row.terminal_children;
             let stalled = is_stalled(row.live, observed, row.terminal_children, row.step_new);
@@ -122,7 +120,11 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
             "{name}"
         );
         let (action, after) = tick_row(case.row);
-        assert_eq!(matches!(action, TickAction::Untouched), !case.stale, "{name}: stale flag");
+        assert_eq!(
+            matches!(action, TickAction::Untouched),
+            !case.stale,
+            "{name}: stale flag"
+        );
         assert_eq!(after, case.expected_row, "{name}: row after one tick");
         assert_eq!(
             case.step_commit_allowed,

@@ -358,13 +358,8 @@ pub async fn build_session_snapshot_for_node_with_transcript_and_access(
     });
     let loaded_context = match (node_did, session_requester) {
         (Some(node_did), Some(requester_did)) => {
-            match load_latest_session_request_context(
-                access,
-                node_did,
-                requester_did,
-                session_id,
-            )
-            .await
+            match load_latest_session_request_context(access, node_did, requester_did, session_id)
+                .await
             {
                 Ok(context) => context,
                 Err(error) => {
@@ -528,16 +523,11 @@ fn attach_context_reduction_timeline_events(
             }
             _ => continue,
         };
-        let (Some(request_doc_id), Some(sequence)) =
-            (entry.request_doc_id, entry.anchor_sequence)
+        let (Some(request_doc_id), Some(sequence)) = (entry.request_doc_id, entry.anchor_sequence)
         else {
             continue;
         };
-        let order = (
-            entry.queued_at.clone(),
-            entry.call_sequence,
-            entry.call_id,
-        );
+        let order = (entry.queued_at.clone(), entry.call_sequence, entry.call_id);
         let summary = summaries
             .entry(request_doc_id)
             .or_insert_with(|| RequestSummary {
@@ -558,8 +548,8 @@ fn attach_context_reduction_timeline_events(
         }
         if order > summary.latest_order {
             summary.latest_order = order;
-            summary.latest_estimate = i64::try_from(entry.accounting.estimated_input_tokens)
-                .unwrap_or(i64::MAX);
+            summary.latest_estimate =
+                i64::try_from(entry.accounting.estimated_input_tokens).unwrap_or(i64::MAX);
             summary.latest_timestamp = entry.queued_at;
         }
     }
@@ -583,7 +573,9 @@ fn attach_context_reduction_timeline_events(
                 RenderedTimelineItem::UserMessage { sequence, .. }
                 | RenderedTimelineItem::AutomatedInput { sequence, .. }
                 | RenderedTimelineItem::AssistantMessage { sequence, .. } => *sequence,
-                RenderedTimelineItem::ToolGroup { message_sequence, .. } => *message_sequence,
+                RenderedTimelineItem::ToolGroup {
+                    message_sequence, ..
+                } => *message_sequence,
                 RenderedTimelineItem::RequestContextReductionSummary { sequence, .. }
                 | RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(*sequence),
                 RenderedTimelineItem::PendingUserTurn { .. }
@@ -702,7 +694,9 @@ fn attach_session_compaction_timeline_events(
                 RenderedTimelineItem::UserMessage { sequence, .. }
                 | RenderedTimelineItem::AutomatedInput { sequence, .. }
                 | RenderedTimelineItem::AssistantMessage { sequence, .. } => *sequence,
-                RenderedTimelineItem::ToolGroup { message_sequence, .. } => *message_sequence,
+                RenderedTimelineItem::ToolGroup {
+                    message_sequence, ..
+                } => *message_sequence,
                 RenderedTimelineItem::RequestContextReductionSummary { sequence, .. }
                 | RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(*sequence),
                 RenderedTimelineItem::PendingUserTurn { .. }
@@ -874,7 +868,8 @@ mod paging_coverage_tests {
                     index % 60
                 )),
                 accounting: gents_protocol::rendered_request::ContextAccounting {
-                    accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+                    accounting_version:
+                        gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
                     turn_index: index as usize,
                     attempt: 0,
                     estimator: "test".into(),
@@ -891,7 +886,8 @@ mod paging_coverage_tests {
                     compaction_threshold_tokens: 800,
                     configured_max_output_tokens: None,
                     effective_max_output_tokens: None,
-                    compaction_reason: gents_protocol::rendered_request::ContextCompactionReason::Compacted,
+                    compaction_reason:
+                        gents_protocol::rendered_request::ContextCompactionReason::Compacted,
                     pre_compaction_input_tokens: Some(900),
                 },
             })
@@ -909,18 +905,20 @@ mod paging_coverage_tests {
                 ..
             }]
         ));
-        snapshot.timeline_items.push(RenderedTimelineItem::AssistantMessage {
-            item_key: "assistant-2".into(),
-            sequence: Some(2),
-            content: None,
-            reasoning: None,
-            timestamp: None,
-            reconstruction: MessageReconstructionView {
-                state: ReconstructionState::Ready,
-                error: None,
-                denied_dependency_doc_id: None,
-            },
-        });
+        snapshot
+            .timeline_items
+            .push(RenderedTimelineItem::AssistantMessage {
+                item_key: "assistant-2".into(),
+                sequence: Some(2),
+                content: None,
+                reasoning: None,
+                timestamp: None,
+                reconstruction: MessageReconstructionView {
+                    state: ReconstructionState::Ready,
+                    error: None,
+                    denied_dependency_doc_id: None,
+                },
+            });
         let full_snapshot = snapshot;
         let mut newest = full_snapshot.clone();
         apply_session_timeline_page(&mut newest, None, Some(1)).unwrap();

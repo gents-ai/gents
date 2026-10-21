@@ -22,18 +22,28 @@ where
 /// A pending spawned child is a durable admission reservation created in the
 /// same transaction as its slot check; pending provider calls are not admitted.
 fn decode_live_backgrounded_rows(value: serde_json::Value) -> anyhow::Result<usize> {
-    let rows: Vec<BackgroundedRow> = serde_json::from_value(value)
-        .context("decode background row count")?;
+    let rows: Vec<BackgroundedRow> =
+        serde_json::from_value(value).context("decode background row count")?;
     for row in &rows {
-        anyhow::ensure!(row.await_mode == "background"
-            && matches!(row.lifecycle_state.as_str(), "running" | "pending"),
-            "background row count returned a row outside its requested state");
-        anyhow::ensure!(row.spawned_by_tool_call_doc_id.as_deref()
-            .is_none_or(|parent| !parent.trim().is_empty()),
-            "background row count returned a blank parent identity");
+        anyhow::ensure!(
+            row.await_mode == "background"
+                && matches!(row.lifecycle_state.as_str(), "running" | "pending"),
+            "background row count returned a row outside its requested state"
+        );
+        anyhow::ensure!(
+            row.spawned_by_tool_call_doc_id
+                .as_deref()
+                .is_none_or(|parent| !parent.trim().is_empty()),
+            "background row count returned a blank parent identity"
+        );
     }
-    Ok(rows.into_iter().filter(|row| row.lifecycle_state == "running"
-        || (row.lifecycle_state == "pending" && row.spawned_by_tool_call_doc_id.is_some())).count())
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            row.lifecycle_state == "running"
+                || (row.lifecycle_state == "pending" && row.spawned_by_tool_call_doc_id.is_some())
+        })
+        .count())
 }
 
 pub(super) async fn count_live_backgrounded_rows(
@@ -68,7 +78,7 @@ pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::Con
         }}"#
     );
     let response = reader.execute_read(&query).await.map_err(|error| {
-            error.context(format!(
+        error.context(format!(
             "query live backgrounded tool count for request document {request_doc_id} failed"
         ))
     })?;
@@ -100,16 +110,18 @@ mod background_count_tests {
         assert!(decode_live_backgrounded_rows(json!([{
             "lifecycle_state":"mystery","await_mode":"background",
             "spawned_by_tool_call_doc_id":null
-        }])).is_err());
+        }]))
+        .is_err());
         assert!(decode_live_backgrounded_rows(json!([{
             "lifecycle_state":"pending","await_mode":"background"
-        }])).is_err());
+        }]))
+        .is_err());
         assert!(decode_live_backgrounded_rows(json!([{
             "lifecycle_state":"pending","await_mode":"background",
             "spawned_by_tool_call_doc_id":" "
-        }])).is_err());
+        }]))
+        .is_err());
     }
-
 }
 
 pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {

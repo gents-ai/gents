@@ -715,7 +715,10 @@ pub async fn load_session_compaction_entries(
     requester_did: Option<&str>,
 ) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
     load_session_compaction_entries_with_access(
-        TranscriptAccess::Local(node), session_id, node_did, requester_did,
+        TranscriptAccess::Local(node),
+        session_id,
+        node_did,
+        requester_did,
     )
     .await
 }
@@ -727,7 +730,10 @@ pub async fn load_session_compaction_entries_on(
     requester_did: Option<&str>,
 ) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
     load_session_compaction_entries_with_access(
-        TranscriptAccess::Config(access), session_id, node_did, requester_did,
+        TranscriptAccess::Config(access),
+        session_id,
+        node_did,
+        requester_did,
     )
     .await
 }
@@ -738,8 +744,14 @@ async fn load_session_compaction_entries_with_access(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
-    anyhow::ensure!(!session_id.trim().is_empty(), "session compactions require a session id");
-    anyhow::ensure!(!node_did.trim().is_empty(), "session compactions require a node DID");
+    anyhow::ensure!(
+        !session_id.trim().is_empty(),
+        "session compactions require a session id"
+    );
+    anyhow::ensure!(
+        !node_did.trim().is_empty(),
+        "session compactions require a node DID"
+    );
     let session_id = escape_graphql_string(session_id.trim());
     let scope = scope_filter(node_did.trim(), requester_did);
     let query = format!(

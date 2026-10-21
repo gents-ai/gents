@@ -1386,7 +1386,10 @@ mod tests {
             live_background: 8,
             ..base_context()
         };
-        assert_eq!(code(&busy, &job, &out), Some("background_tool_budget_exceeded"));
+        assert_eq!(
+            code(&busy, &job, &out),
+            Some("background_tool_budget_exceeded")
+        );
 
         let nested = StepContext {
             started_by_job: true,

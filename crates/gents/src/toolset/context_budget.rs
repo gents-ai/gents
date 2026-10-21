@@ -492,7 +492,11 @@ fn build_snapshot(
     let latest = session_compactions
         .iter()
         .filter_map(|row| row.created_at.as_ref())
-        .chain(request_reductions.iter().filter_map(|row| row.created_at.as_ref()))
+        .chain(
+            request_reductions
+                .iter()
+                .filter_map(|row| row.created_at.as_ref()),
+        )
         .max();
     let current_estimate = last_request
         .as_ref()
@@ -847,8 +851,14 @@ mod tests {
         assert_eq!(parsed.session_compaction_count, 1);
         assert_eq!(parsed.request_reduction_count, 1);
         assert_eq!(parsed.compaction_count, 2);
-        assert_eq!(parsed.recent_session_compactions[0].key, "session-context:1");
-        assert_eq!(parsed.recent_request_reductions[0].key, "context-reduction:1");
+        assert_eq!(
+            parsed.recent_session_compactions[0].key,
+            "session-context:1"
+        );
+        assert_eq!(
+            parsed.recent_request_reductions[0].key,
+            "context-reduction:1"
+        );
 
         // The other agent sees only its own dispatch, never the caller's.
         let output = call_as(&tool, "agent-codex", "session-codex").await;

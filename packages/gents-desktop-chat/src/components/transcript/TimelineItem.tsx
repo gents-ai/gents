@@ -54,16 +54,27 @@ export const TimelineItem = memo(function TimelineItem({
       return <LiveAssistantItem item={item} />;
     case "requestContextReductionSummary":
       return (
-        <div className="turn-block" data-testid="request-context-reduction-summary">
-          <span>Request context reductions · {item.reductionCount} model inputs affected</span>
-          <span> · {item.compactedCount} compacted · {item.repairedCount} repaired</span>
+        <div
+          className="turn-block"
+          data-testid="request-context-reduction-summary"
+        >
+          <span>
+            Request context reductions · {item.reductionCount} model inputs
+            affected
+          </span>
+          <span>
+            {" "}
+            · {item.compactedCount} compacted · {item.repairedCount} repaired
+          </span>
         </div>
       );
     case "sessionCompaction":
       return (
         <div className="turn-block" data-testid="session-compaction-event">
           <span>Session history compacted</span>
-          {item.messagesCompacted != null && <span> · {item.messagesCompacted} messages</span>}
+          {item.messagesCompacted != null && (
+            <span> · {item.messagesCompacted} messages</span>
+          )}
         </div>
       );
     default:

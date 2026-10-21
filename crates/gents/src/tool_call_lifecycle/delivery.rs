@@ -3595,17 +3595,24 @@ pub(crate) async fn start_running_in_txn(
     );
     let current = &physical_rows[0];
     if current["lifecycle_state"].as_str() == Some("running") {
-        anyhow::ensure!(current["await_mode"].as_str() == Some(start.await_mode),
-            "running dispatch replay changed await mode");
-        let started = current["started_at"].as_str()
+        anyhow::ensure!(
+            current["await_mode"].as_str() == Some(start.await_mode),
+            "running dispatch replay changed await mode"
+        );
+        let started = current["started_at"]
+            .as_str()
             .context("running dispatch replay omitted start time")?;
-        return Ok(Some(DateTime::parse_from_rfc3339(started)?.with_timezone(&Utc)));
+        return Ok(Some(
+            DateTime::parse_from_rfc3339(started)?.with_timezone(&Utc),
+        ));
     }
-    anyhow::ensure!(current["lifecycle_state"].as_str() == Some("pending"),
-        "dispatch physical tool is no longer pending");
+    anyhow::ensure!(
+        current["lifecycle_state"].as_str() == Some("pending"),
+        "dispatch physical tool is no longer pending"
+    );
     if start.await_mode == "background" {
-        let live = crate::hook::persistence::count_live_backgrounded_rows_in(txn, &start.request)
-            .await?;
+        let live =
+            crate::hook::persistence::count_live_backgrounded_rows_in(txn, &start.request).await?;
         if live >= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
             return Err(crate::hook::persistence::BackgroundCapacityExceeded(live).into());
         }

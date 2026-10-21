@@ -385,15 +385,15 @@ mod pack_page_tests {
     fn pack_page_mentions_the_workflow_tool_name() {
         let page = page("pack").expect("pack help page exists");
         assert!(
-            page.notes.contains("workflow plugins")
-                && page.notes.contains("integrations.plugins"),
+            page.notes.contains("workflow plugins") && page.notes.contains("integrations.plugins"),
             "pack page should explain workflow plugins and their selection: {}",
             page.notes
         );
         // The tool is exposed under the plugin's own name (the name part of
         // its namespace/name); runs are listed only via the operator CLI.
         assert!(
-            page.notes.contains("named after the plugin (the name part of its namespace/name)")
+            page.notes
+                .contains("named after the plugin (the name part of its namespace/name)")
                 && page.next.contains("gents job list"),
             "pack page should name the job tool surface and run listing: {} | {}",
             page.notes,

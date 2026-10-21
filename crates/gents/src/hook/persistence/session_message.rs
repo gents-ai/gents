@@ -446,19 +446,23 @@ impl DefraSessionHook {
                 | crate::toolset::AGENT_RESUME_TOOL_NAME
         );
         if !control_tool {
-            return Ok(invalid_tool_arguments_payload(tool_name, "/", "unknown session tool"));
+            return Ok(invalid_tool_arguments_payload(
+                tool_name,
+                "/",
+                "unknown session tool",
+            ));
         }
-        let parsed = match serde_json::from_str::<crate::session_message::AgentSessionControlArgs>(args)
-        {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                return Ok(invalid_tool_arguments_payload(
-                    tool_name,
-                    "/",
-                    format!("invalid {tool_name} arguments: {error}"),
-                ))
-            }
-        };
+        let parsed =
+            match serde_json::from_str::<crate::session_message::AgentSessionControlArgs>(args) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    return Ok(invalid_tool_arguments_payload(
+                        tool_name,
+                        "/",
+                        format!("invalid {tool_name} arguments: {error}"),
+                    ))
+                }
+            };
         let session = parsed.session_id.trim();
         let Some(target) = crate::session_message::resolve_send_target(
             &self.node,
@@ -497,7 +501,8 @@ impl DefraSessionHook {
         }
         match tool_name {
             crate::toolset::AGENT_INTERRUPT_TOOL_NAME => {
-                let interrupted = crate::session_message::interrupt_session(&self.node, &target).await?;
+                let interrupted =
+                    crate::session_message::interrupt_session(&self.node, &target).await?;
                 Ok(json_string(json!({
                     "ok": true,
                     "session_id": session,
@@ -507,9 +512,12 @@ impl DefraSessionHook {
             }
             crate::toolset::AGENT_STOP_TOOL_NAME => {
                 let receipt = crate::session::stop_session(
-                    &self.node, &target.node_did, &target.session_id,
+                    &self.node,
+                    &target.node_did,
+                    &target.session_id,
                     target.requester_did.as_deref(),
-                ).await?;
+                )
+                .await?;
                 Ok(json_string(json!({"ok": true, "session_id": session,
                     "status": receipt.status,
                     "interrupted_request_id": receipt.interrupted_request_id,
@@ -518,10 +526,15 @@ impl DefraSessionHook {
             }
             crate::toolset::AGENT_RESUME_TOOL_NAME => {
                 crate::session::resume_session(
-                    &self.node, &target.node_did, &target.session_id,
+                    &self.node,
+                    &target.node_did,
+                    &target.session_id,
                     target.requester_did.as_deref(),
-                ).await?;
-                Ok(json_string(json!({"ok": true, "session_id": session, "status": "resumed"})))
+                )
+                .await?;
+                Ok(json_string(
+                    json!({"ok": true, "session_id": session, "status": "resumed"}),
+                ))
             }
             _ => unreachable!(),
         }

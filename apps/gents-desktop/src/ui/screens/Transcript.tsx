@@ -107,7 +107,9 @@ function ModelInputReduction({
     >
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <span className="font-medium text-foreground">Request context reductions</span>
-        {item.latestTimestamp && <time dateTime={item.latestTimestamp}>{item.latestTimestamp}</time>}
+        {item.latestTimestamp && (
+          <time dateTime={item.latestTimestamp}>{item.latestTimestamp}</time>
+        )}
       </div>
       <p className="mt-1">
         {item.reductionCount.toLocaleString()} affected model inputs

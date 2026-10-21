@@ -211,7 +211,10 @@ pub(crate) async fn interrupt_active_session_in_txn(
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
         .context("active session request query omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "multiple active requests in exact session scope");
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "multiple active requests in exact session scope"
+    );
     let Some(row) = rows.first() else {
         return Ok(None);
     };

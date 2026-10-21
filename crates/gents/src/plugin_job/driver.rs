@@ -778,10 +778,7 @@ pub(super) async fn step_context_for(
 }
 
 /// The target node's optional `max_request_hop`, read through `txn`.
-async fn max_request_hop_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    node_did: &str,
-) -> Result<Option<u32>> {
+async fn max_request_hop_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Option<u32>> {
     let response = txn
         .execute(&format!(
             r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ max_request_hop }} }}"#,

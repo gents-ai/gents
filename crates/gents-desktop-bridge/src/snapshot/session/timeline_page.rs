@@ -30,7 +30,9 @@ fn rendered_timeline_durable_sequence(
         RenderedTimelineItem::ToolGroup {
             message_sequence, ..
         } => Some(*message_sequence),
-        RenderedTimelineItem::RequestContextReductionSummary { sequence, .. } => Some(Some(*sequence)),
+        RenderedTimelineItem::RequestContextReductionSummary { sequence, .. } => {
+            Some(Some(*sequence))
+        }
         RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(Some(*sequence)),
         RenderedTimelineItem::PendingUserTurn { .. }
         | RenderedTimelineItem::LiveAssistant { .. } => None,

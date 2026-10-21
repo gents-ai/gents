@@ -268,7 +268,10 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
     .await
     .expect("lightweight session compaction metadata");
     assert_eq!(compaction_metadata.len(), 1);
-    assert_eq!(compaction_metadata[0].compaction_key, "resident:compaction:1");
+    assert_eq!(
+        compaction_metadata[0].compaction_key,
+        "resident:compaction:1"
+    );
     assert_eq!(compaction_metadata[0].compacted_through_sequence, Some(1));
 }
 

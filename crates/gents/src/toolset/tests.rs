@@ -2489,7 +2489,6 @@ fn command_timeout_resolution_matches_advertised_schema() {
         resolve_command_timeout(Some(0), foreground_default, foreground_max, true),
         Duration::from_secs(1)
     );
-
 }
 
 #[cfg(unix)]

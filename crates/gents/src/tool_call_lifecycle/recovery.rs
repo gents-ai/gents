@@ -259,15 +259,23 @@ impl super::ToolCallLifecycle {
             };
             let task_deleted = owner_task_deleted(node, node_did, &parent).await?;
             let session_stopped = crate::ConfigAccess::transact_local_readonly(
-                node, None, "background_recovery.session_stop", |txn| {
+                node,
+                None,
+                "background_recovery.session_stop",
+                |txn| {
                     let row = &row;
                     Box::pin(async move {
                         crate::session::session_stopped_in_txn(
-                            txn, node_did, &row.session_id, row.requester_did.as_deref(),
-                        ).await
+                            txn,
+                            node_did,
+                            &row.session_id,
+                            row.requester_did.as_deref(),
+                        )
+                        .await
                     })
                 },
-            ).await?;
+            )
+            .await?;
             if registered && !task_deleted && !session_stopped {
                 continue;
             }
@@ -285,35 +293,23 @@ impl super::ToolCallLifecycle {
                     );
                     continue;
                 };
-                let updated = match recover_tool_call_row(
-                    node,
-                    &row,
-                    deadline_at,
-                    cause,
-                    true,
-                )
-                .await
-                {
-                    Ok(updated) => updated,
-                    Err(error) => {
-                        tracing::warn!(
-                            doc_id = %row.doc_id,
-                            tool_call_id = %row.tool_call_id,
-                            error = %error,
-                            "failed to recover stopped-session background tool"
-                        );
-                        continue;
-                    }
-                };
+                let updated =
+                    match recover_tool_call_row(node, &row, deadline_at, cause, true).await {
+                        Ok(updated) => updated,
+                        Err(error) => {
+                            tracing::warn!(
+                                doc_id = %row.doc_id,
+                                tool_call_id = %row.tool_call_id,
+                                error = %error,
+                                "failed to recover stopped-session background tool"
+                            );
+                            continue;
+                        }
+                    };
                 // The worker may have won the terminal CAS while stop was in
                 // flight. Its own completion owns the durable outcome.
                 if updated {
-                    append_recovered_background_tool_completion(
-                        node,
-                        &row,
-                        cause,
-                    )
-                    .await;
+                    append_recovered_background_tool_completion(node, &row, cause).await;
                     report.tool_calls_terminalized += 1;
                 }
                 continue;
@@ -321,26 +317,19 @@ impl super::ToolCallLifecycle {
 
             if registered {
                 let cause = RecoveryOutcome::TaskDeleted;
-                let updated = match recover_tool_call_row(
-                    node,
-                    &row,
-                    deadline_at,
-                    cause,
-                    true,
-                )
-                .await
-                {
-                    Ok(updated) => updated,
-                    Err(error) => {
-                        tracing::warn!(
-                            doc_id = %row.doc_id,
-                            tool_call_id = %row.tool_call_id,
-                            error = %error,
-                            "failed to cancel background tool after owner stop"
-                        );
-                        continue;
-                    }
-                };
+                let updated =
+                    match recover_tool_call_row(node, &row, deadline_at, cause, true).await {
+                        Ok(updated) => updated,
+                        Err(error) => {
+                            tracing::warn!(
+                                doc_id = %row.doc_id,
+                                tool_call_id = %row.tool_call_id,
+                                error = %error,
+                                "failed to cancel background tool after owner stop"
+                            );
+                            continue;
+                        }
+                    };
                 let process = executions
                     .stop_execution(&row.tool_call_id, &row.doc_id)
                     .await;
@@ -353,12 +342,7 @@ impl super::ToolCallLifecycle {
                     );
                 }
                 if updated {
-                    append_recovered_background_tool_completion(
-                        node,
-                        &row,
-                        cause,
-                    )
-                    .await;
+                    append_recovered_background_tool_completion(node, &row, cause).await;
                     report.tool_calls_terminalized += 1;
                 }
                 continue;
@@ -367,9 +351,13 @@ impl super::ToolCallLifecycle {
             let process = executions
                 .stop_execution(&row.tool_call_id, &row.doc_id)
                 .await;
-            let Some(outcome) =
-                classify_orphaned_background_tool(&row, process, task_deleted, session_stopped, Utc::now())
-            else {
+            let Some(outcome) = classify_orphaned_background_tool(
+                &row,
+                process,
+                task_deleted,
+                session_stopped,
+                Utc::now(),
+            ) else {
                 tracing::warn!(
                     doc_id = %row.doc_id,
                     tool_call_id = %row.tool_call_id,
@@ -738,9 +726,7 @@ mod tests {
         }
         let mut registered_session_stop_cases = 0;
         for case in crate::lean_vocab_test::lean_recovery_sweep_cases() {
-            if case.execution_registered != Some(true)
-                || case.owner_session_stopped != Some(true)
-            {
+            if case.execution_registered != Some(true) || case.owner_session_stopped != Some(true) {
                 continue;
             }
             let Some(process) = case.process_outcome.as_deref() else {
@@ -1125,7 +1111,9 @@ async fn lookup_background_parent(
         return Ok(None);
     };
     let scope = crate::session::session_scope_filter(
-        node_did, &row.session_id, row.requester_did.as_deref(),
+        node_did,
+        &row.session_id,
+        row.requester_did.as_deref(),
     );
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }}, {scope} }}, limit: 2) {{
@@ -1133,12 +1121,19 @@ async fn lookup_background_parent(
             caused_by_trigger_id request_hop workspace_id workspace_authority
             workspace_owner_node_did workspace_seal_hash
         }} }}"#,
-        escape_graphql_string(doc_id), escape_graphql_string(request_id),
+        escape_graphql_string(doc_id),
+        escape_graphql_string(request_id),
     );
     let response = crate::graphql::graphql_with_transaction_retry(
-        node, &query, "background_recovery.physical_parent",
-    ).await?;
-    let value = response.data.as_ref().and_then(|data| data.get("AgentRequest"))
+        node,
+        &query,
+        "background_recovery.physical_parent",
+    )
+    .await?;
+    let value = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
         .context("background parent query omitted rows")?;
     let mut parents: Vec<AgentRequestRow> = serde_json::from_value(value.clone())?;
     anyhow::ensure!(parents.len() <= 1, "background parent scope is ambiguous");
@@ -1465,9 +1460,10 @@ impl RecoveryOutcome {
     fn lifecycle_state(self) -> ToolCallState {
         match self {
             Self::TimedOut => ToolCallState::TimedOut,
-            Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted | Self::SessionStopped => {
-                ToolCallState::Cancelled
-            }
+            Self::Cancelled
+            | Self::BackgroundInterrupted
+            | Self::TaskDeleted
+            | Self::SessionStopped => ToolCallState::Cancelled,
             Self::Failed | Self::ProcessLost => ToolCallState::Failed,
         }
     }
@@ -1475,7 +1471,10 @@ impl RecoveryOutcome {
     fn failure_class(self) -> Option<FailureClass> {
         match self {
             Self::TimedOut | Self::Failed | Self::ProcessLost => Some(FailureClass::External),
-            Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted | Self::SessionStopped => None,
+            Self::Cancelled
+            | Self::BackgroundInterrupted
+            | Self::TaskDeleted
+            | Self::SessionStopped => None,
         }
     }
 
@@ -1506,7 +1505,9 @@ impl RecoveryOutcome {
             Self::TaskDeleted => {
                 "background process stopped because its task was deleted".to_string()
             }
-            Self::SessionStopped => "background process stopped because its session was stopped".to_string(),
+            Self::SessionStopped => {
+                "background process stopped because its session was stopped".to_string()
+            }
         }
     }
 

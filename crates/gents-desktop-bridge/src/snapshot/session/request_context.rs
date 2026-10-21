@@ -26,7 +26,9 @@ pub(super) async fn load_latest_session_request_context(
             .get("_docID")
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("session AgentRequest row has no physical document ID"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("session AgentRequest row has no physical document ID")
+            })?;
         let request_id = row
             .get("request_id")
             .and_then(serde_json::Value::as_str)
@@ -74,7 +76,9 @@ pub(super) async fn load_latest_session_request_context(
         .pointer("/data/InferenceCall")
         .and_then(serde_json::Value::as_array)
         .map(Vec::as_slice)
-        .ok_or_else(|| anyhow::anyhow!("session InferenceCall response omitted its result array"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("session InferenceCall response omitted its result array")
+        })?;
     let mut scoped_rows = Vec::with_capacity(rows.len());
     for row in rows {
         validated_call_request_identity(row, &request_bindings)?;
@@ -97,7 +101,12 @@ pub(super) async fn load_session_request_context_history(
     }
     let request_doc_ids = request_doc_ids
         .iter()
-        .map(|request_doc_id| format!(r#""{}""#, gents::graphql::escape_graphql_string(request_doc_id)))
+        .map(|request_doc_id| {
+            format!(
+                r#""{}""#,
+                gents::graphql::escape_graphql_string(request_doc_id)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let requester = requester_did
@@ -157,17 +166,23 @@ pub(super) async fn load_session_request_context_history(
             .get("sequence")
             .and_then(serde_json::Value::as_i64)
             .ok_or_else(|| anyhow::anyhow!("page AgentMessage row has no sequence"))?;
-        anchors.entry(doc_id.to_owned()).and_modify(|current| *current = (*current).min(sequence)).or_insert(sequence);
+        anchors
+            .entry(doc_id.to_owned())
+            .and_modify(|current| *current = (*current).min(sequence))
+            .or_insert(sequence);
     }
     let mut history = Vec::new();
     let mut offset = 0_usize;
     const PAGE: usize = 250;
     const MAX_ROWS: usize = 2_000;
     loop {
-        anyhow::ensure!(offset <= MAX_ROWS, "page context history exceeds bounded limit of {MAX_ROWS} calls");
+        anyhow::ensure!(
+            offset <= MAX_ROWS,
+            "page context history exceeds bounded limit of {MAX_ROWS} calls"
+        );
         let page_limit = if offset == MAX_ROWS { 1 } else { PAGE };
         let query = format!(
-        r#"query {{
+            r#"query {{
             InferenceCall(
                 filter: {{ _and: [
                     {{ node_did: {{ _eq: "{node_did}" }} }},
@@ -176,52 +191,62 @@ pub(super) async fn load_session_request_context_history(
                 ] }}, order: [{{ queued_at: ASC }}, {{ request_doc_id: ASC }}, {{ call_seq: ASC }}, {{ call_id: ASC }}], limit: {page_limit}, offset: {offset}
             ) {{ request_doc_id request_id call_id call_seq queued_at context_accounting_json }}
         }}"#,
-        node_did = gents::graphql::escape_graphql_string(node_did),
-    );
+            node_did = gents::graphql::escape_graphql_string(node_did),
+        );
         let data = access.execute(&query).await?;
         let rows = data
             .pointer("/data/InferenceCall")
             .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| anyhow::anyhow!("page InferenceCall response omitted its result array"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("page InferenceCall response omitted its result array")
+            })?;
         if offset == MAX_ROWS {
-            anyhow::ensure!(rows.is_empty(), "page context history exceeds bounded limit of {MAX_ROWS} calls");
+            anyhow::ensure!(
+                rows.is_empty(),
+                "page context history exceeds bounded limit of {MAX_ROWS} calls"
+            );
             break;
         }
         for row in rows {
-        let Some(encoded) = row
-            .get("context_accounting_json")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        else {
-            continue;
-        };
-        let accounting = serde_json::from_str(encoded)
-            .map_err(|error| anyhow::anyhow!("decoding context_accounting_json: {error}"))?;
-        let required = |field: &str| {
-            row.get(field)
+            let Some(encoded) = row
+                .get("context_accounting_json")
                 .and_then(serde_json::Value::as_str)
                 .filter(|value| !value.trim().is_empty())
-                .map(str::to_owned)
-                .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no {field}"))
-        };
-        let (request_doc_id, request_id) =
-            validated_call_request_identity(row, &request_bindings)?;
-        anyhow::ensure!(
-            anchors.contains_key(&request_doc_id),
-            "page AgentRequest has context accounting but no canonical message anchor"
-        );
-        history.push(LoadedRequestContext {
-            request_id,
-            request_doc_id: Some(request_doc_id.clone()),
-            anchor_sequence: anchors.get(&request_doc_id).copied(),
-            call_id: required("call_id")?,
-            call_sequence: row
-                .get("call_seq")
-                .and_then(serde_json::Value::as_i64)
-                .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no call_seq"))?,
-            queued_at: row.get("queued_at").and_then(serde_json::Value::as_str).map(str::to_owned),
-            accounting,
-        });
+            else {
+                continue;
+            };
+            let accounting = serde_json::from_str(encoded)
+                .map_err(|error| anyhow::anyhow!("decoding context_accounting_json: {error}"))?;
+            let required = |field: &str| {
+                row.get(field)
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no {field}"))
+            };
+            let (request_doc_id, request_id) =
+                validated_call_request_identity(row, &request_bindings)?;
+            anyhow::ensure!(
+                anchors.contains_key(&request_doc_id),
+                "page AgentRequest has context accounting but no canonical message anchor"
+            );
+            history.push(LoadedRequestContext {
+                request_id,
+                request_doc_id: Some(request_doc_id.clone()),
+                anchor_sequence: anchors.get(&request_doc_id).copied(),
+                call_id: required("call_id")?,
+                call_sequence: row
+                    .get("call_seq")
+                    .and_then(serde_json::Value::as_i64)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("InferenceCall accounting row has no call_seq")
+                    })?,
+                queued_at: row
+                    .get("queued_at")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                accounting,
+            });
         }
         if rows.len() < PAGE {
             break;
@@ -307,14 +332,20 @@ pub(super) fn decode_latest_request_context(
     let encoded = required_string("context_accounting_json")?;
     Ok(Some(LoadedRequestContext {
         request_id: required_string("request_id")?,
-        request_doc_id: row.get("_validated_request_doc_id").and_then(serde_json::Value::as_str).map(str::to_owned),
+        request_doc_id: row
+            .get("_validated_request_doc_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
         anchor_sequence: None,
         call_id: required_string("call_id")?,
         call_sequence: row
             .get("call_seq")
             .and_then(serde_json::Value::as_i64)
             .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no call_seq"))?,
-        queued_at: row.get("queued_at").and_then(serde_json::Value::as_str).map(str::to_owned),
+        queued_at: row
+            .get("queued_at")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
         accounting: serde_json::from_str(&encoded)
             .map_err(|error| anyhow::anyhow!("decoding context_accounting_json: {error}"))?,
     }))

@@ -140,7 +140,10 @@ export function SessionContext({
               : `~${formatTokens(used)} / ${formatTokens(window)}`}
           </span>
         )}
-        <span className="text-xs text-muted-foreground" title="Durable session compactions">
+        <span
+          className="text-xs text-muted-foreground"
+          title="Durable session compactions"
+        >
           {sessionCompactionCount == null
             ? "compactions unavailable"
             : `${sessionCompactionCount} ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`}
@@ -194,7 +197,10 @@ export function SessionContext({
           </dd>
         </dl>
         {context.lastRequest && (
-          <section className="mt-4 border-t border-border pt-3" data-testid="last-context-dispatch">
+          <section
+            className="mt-4 border-t border-border pt-3"
+            data-testid="last-context-dispatch"
+          >
             <p className="text-sm font-medium text-heading">Latest model input</p>
             <p className="mt-1 text-sm text-muted-foreground">
               {compactionReason(context.lastRequest.compactionReason)}
@@ -219,21 +225,30 @@ export function SessionContext({
           </p>
         )}
         {context.compactions.length > 0 && (
-          <section className="mt-4 border-t border-border pt-3" data-testid="session-compactions">
+          <section
+            className="mt-4 border-t border-border pt-3"
+            data-testid="session-compactions"
+          >
             <p className="text-sm font-medium text-heading">Session compactions</p>
             <ul className="mt-2 space-y-2 text-sm">
-              {context.compactions.slice(-5).reverse().map((entry) => (
-                <li key={entry.compactionKey} className="flex justify-between gap-3">
-                  <span className="text-muted-foreground">
-                    {entry.createdAt ? `${entry.createdAt} · ` : ""}{entry.messagesCompacted == null ? "Message count unavailable" : `${entry.messagesCompacted.toLocaleString()} messages`}
-                  </span>
-                  <span className="text-right font-mono text-xs">
-                    {entry.originalTokens == null || entry.compactedTokens == null
-                      ? "Token estimates unavailable"
-                      : `${entry.originalTokens.toLocaleString()} → ${entry.compactedTokens.toLocaleString()}`}
-                  </span>
-                </li>
-              ))}
+              {context.compactions
+                .slice(-5)
+                .reverse()
+                .map((entry) => (
+                  <li key={entry.compactionKey} className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">
+                      {entry.createdAt ? `${entry.createdAt} · ` : ""}
+                      {entry.messagesCompacted == null
+                        ? "Message count unavailable"
+                        : `${entry.messagesCompacted.toLocaleString()} messages`}
+                    </span>
+                    <span className="text-right font-mono text-xs">
+                      {entry.originalTokens == null || entry.compactedTokens == null
+                        ? "Token estimates unavailable"
+                        : `${entry.originalTokens.toLocaleString()} → ${entry.compactedTokens.toLocaleString()}`}
+                    </span>
+                  </li>
+                ))}
             </ul>
           </section>
         )}

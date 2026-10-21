@@ -104,19 +104,47 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     assert_eq!(batch.iter().filter(|case| case.legal).count(), 8);
     assert_eq!(batch.iter().filter(|case| !case.legal).count(), 2);
     assert_eq!(
-        batch.iter().map(|case| case.pre_live_count).collect::<Vec<_>>(),
+        batch
+            .iter()
+            .map(|case| case.pre_live_count)
+            .collect::<Vec<_>>(),
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 8]
     );
     assert_eq!(
-        batch.iter().map(|case| case.error_code.as_deref()).collect::<Vec<_>>(),
-        [None, None, None, None, None, None, None, None,
+        batch
+            .iter()
+            .map(|case| case.error_code.as_deref())
+            .collect::<Vec<_>>(),
+        [
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             Some("background_tool_budget_exceeded"),
-            Some("background_tool_budget_exceeded")]
+            Some("background_tool_budget_exceeded")
+        ]
     );
     assert_eq!(
-        batch.iter().map(|case| case.action.as_str()).collect::<Vec<_>>(),
-        ["agent_new", "spawn_process", "agent_message", "plugin_job", "agent_new",
-            "spawn_process", "agent_message", "plugin_job", "agent_new", "spawn_process"]
+        batch
+            .iter()
+            .map(|case| case.action.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "agent_new",
+            "spawn_process",
+            "agent_message",
+            "plugin_job",
+            "agent_new",
+            "spawn_process",
+            "agent_message",
+            "plugin_job",
+            "agent_new",
+            "spawn_process"
+        ]
     );
 
     let completed = lean_r6_backgrounding_case("tool_kind_bridge_complete_persists_result");
