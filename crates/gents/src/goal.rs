@@ -24,7 +24,9 @@ pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
 pub use client_submission::submit_session_goal_control;
 pub(crate) use edit::{edit_active_goal, GoalEdit};
 pub(crate) use history::{load_goal_versions_for_session, GoalVersion};
-pub use observation::load_session_goal_observation;
+pub use observation::{
+    load_session_goal_observation, load_session_goal_observation_state, SessionGoalObservationState,
+};
 pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERVATION_SOURCES};
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
