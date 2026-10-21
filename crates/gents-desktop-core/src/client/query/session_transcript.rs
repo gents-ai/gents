@@ -708,6 +708,53 @@ async fn load_session_context_store_with_access(
     }))
 }
 
+pub async fn load_session_compaction_entries(
+    node: &EmbeddedNode,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
+    load_session_compaction_entries_with_access(
+        TranscriptAccess::Local(node), session_id, node_did, requester_did,
+    )
+    .await
+}
+
+pub async fn load_session_compaction_entries_on(
+    access: &gents::config_client::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
+    load_session_compaction_entries_with_access(
+        TranscriptAccess::Config(access), session_id, node_did, requester_did,
+    )
+    .await
+}
+
+async fn load_session_compaction_entries_with_access(
+    access: TranscriptAccess<'_>,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<gents_protocol::row::CompactionEntryRow>> {
+    anyhow::ensure!(!session_id.trim().is_empty(), "session compactions require a session id");
+    anyhow::ensure!(!node_did.trim().is_empty(), "session compactions require a node DID");
+    let session_id = escape_graphql_string(session_id.trim());
+    let scope = scope_filter(node_did.trim(), requester_did);
+    let query = format!(
+        r#"query DesktopSessionCompactions {{
+  CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }}, {scope} }},
+    order: [{{ sequence: ASC }}, {{ compaction_key: ASC }}]) {{
+      compaction_key session_id requester_did sequence messages_compacted
+      compacted_through_sequence original_tokens compacted_tokens created_at
+  }}
+}}"#
+    );
+    let data = access.execute(&query, "session compactions").await?;
+    parse_query_rows(&data, COMPACTION_ENTRY_NAME)
+}
+
 pub async fn load_session_diagnostics_store(
     node: &EmbeddedNode,
     session_id: &str,

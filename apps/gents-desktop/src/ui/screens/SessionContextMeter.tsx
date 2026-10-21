@@ -84,7 +84,7 @@ export function SessionContext({
   const windowError = context.contextWindowError ?? null;
   const window = Math.max(1, context.contextWindow);
   const threshold = Math.max(0, context.compactionThresholdTokens);
-  const sessionCompactionCount = context.compactions.length;
+  const sessionCompactionCount = context.sessionCompactionCount;
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {
@@ -141,7 +141,9 @@ export function SessionContext({
           </span>
         )}
         <span className="text-xs text-muted-foreground" title="Durable session compactions">
-          {sessionCompactionCount} {sessionCompactionCount === 1 ? "compaction" : "compactions"}
+          {sessionCompactionCount == null
+            ? "compactions unavailable"
+            : `${sessionCompactionCount} ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`}
         </span>
       </PopoverTrigger>
       <PopoverContent
@@ -210,6 +212,11 @@ export function SessionContext({
               </dd>
             </dl>
           </section>
+        )}
+        {context.requestReductionHistoryLoaded == null && (
+          <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">
+            Per-request model-input history is unavailable for this view.
+          </p>
         )}
         {context.compactions.length > 0 && (
           <section className="mt-4 border-t border-border pt-3" data-testid="session-compactions">

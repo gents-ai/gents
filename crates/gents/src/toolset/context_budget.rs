@@ -469,16 +469,26 @@ fn distinct_request_ids(requests: &[AgentRequestRow]) -> Vec<String> {
 fn build_snapshot(
     scope: ContextBudgetScope,
     max_tokens: Option<i64>,
-    session_compactions: Vec<CompactionRow>,
-    request_reductions: Vec<ProviderReductionRow>,
+    mut session_compactions: Vec<CompactionRow>,
+    mut request_reductions: Vec<ProviderReductionRow>,
     last_request: Option<LastRequestContextSnapshot>,
 ) -> ContextBudgetSnapshot {
+    session_compactions.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.compaction_key.cmp(&left.compaction_key))
+    });
+    request_reductions.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.reduction_key.cmp(&left.reduction_key))
+    });
     let session_compaction_count = session_compactions.len() as i64;
     let request_reduction_count = request_reductions.len() as i64;
     let compaction_count = session_compaction_count.saturating_add(request_reduction_count);
-    let latest_session = session_compactions
-        .iter()
-        .max_by(|a, b| a.created_at.cmp(&b.created_at));
+    let latest_session = session_compactions.first();
     let latest = session_compactions
         .iter()
         .filter_map(|row| row.created_at.as_ref())
@@ -576,6 +586,15 @@ mod tests {
     use crate::llm::tool::Tool;
 
     use super::*;
+
+    #[test]
+    fn omitted_reduction_collections_are_not_reported_as_zero() {
+        let result = decode::<CompactionEnvelope>(
+            Some(&json!({ "CompactionEntry": [] })),
+            "context compactions",
+        );
+        assert!(result.is_err());
+    }
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());

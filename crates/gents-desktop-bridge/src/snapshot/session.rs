@@ -146,8 +146,11 @@ pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {
 
 struct LoadedRequestContext {
     request_id: String,
+    request_doc_id: Option<String>,
+    anchor_sequence: Option<i64>,
     call_id: String,
     call_sequence: i64,
+    queued_at: Option<String>,
     accounting: gents_protocol::rendered_request::ContextAccounting,
 }
 
@@ -210,6 +213,43 @@ pub async fn build_session_snapshot_for_node(
 
 pub async fn build_session_snapshot_for_node_with_transcript(
     core: &ClientCore,
+    node_did: Option<&str>,
+    session_id: &str,
+    preferred_request_id: Option<&str>,
+    transcript_store: Option<&ClientStore>,
+    canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
+    context_store: Option<&ClientStore>,
+    prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
+    hydration_observation: Option<(
+        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        Option<String>,
+    )>,
+    context_totals_exact: bool,
+    include_live_tail: bool,
+    request_projection: Option<&[AgentRequestRow]>,
+) -> Option<DesktopSessionSnapshot> {
+    let access = ConfigAccess::local(core.node_arc());
+    build_session_snapshot_for_node_with_transcript_and_access(
+        core,
+        &access,
+        node_did,
+        session_id,
+        preferred_request_id,
+        transcript_store,
+        canonical_dependencies,
+        context_store,
+        prompt_ownership,
+        hydration_observation,
+        context_totals_exact,
+        include_live_tail,
+        request_projection,
+    )
+    .await
+}
+
+pub async fn build_session_snapshot_for_node_with_transcript_and_access(
+    core: &ClientCore,
+    access: &ConfigAccess,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
@@ -319,7 +359,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     let loaded_context = match (node_did, session_requester) {
         (Some(node_did), Some(requester_did)) => {
             match load_latest_session_request_context(
-                core.node(),
+                access,
                 node_did,
                 requester_did,
                 session_id,
@@ -382,6 +422,75 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             ),
             None => {}
         }
+        if let (Some(node_did), Some(requester_did)) = (node_did, session_requester) {
+            let page_sequences = transcript_store
+                .unwrap_or(store.as_ref())
+                .transcript_messages
+                .iter()
+                .map(|row| i64::from(row.message.sequence))
+                .collect::<std::collections::HashSet<_>>();
+            match gents_desktop_core::client::load_session_compaction_entries_on(
+                access,
+                session_id,
+                node_did,
+                requester_did,
+            )
+            .await
+            {
+                Ok(entries) => {
+                    snapshot.context.session_compaction_count =
+                        Some(i64::try_from(entries.len()).unwrap_or(i64::MAX));
+                    snapshot.context.compactions = entries
+                        .iter()
+                        .map(|entry| SessionCompactionView {
+                            compaction_key: entry.compaction_key.clone(),
+                            sequence: entry.sequence,
+                            messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
+                            original_tokens: entry.original_tokens,
+                            compacted_tokens: entry.compacted_tokens,
+                            created_at: entry.created_at.clone(),
+                        })
+                        .collect();
+                    attach_session_compaction_timeline_events(snapshot, &entries, &page_sequences);
+                }
+                Err(error) => tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading session compaction history failed"
+                ),
+            }
+            let request_doc_ids = transcript_store
+                .unwrap_or(store.as_ref())
+                .transcript_messages
+                .iter()
+                .filter_map(|row| row.message.request_doc_id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            match request_context::load_session_request_context_history(
+                access,
+                node_did,
+                session_id,
+                requester_did,
+                &request_doc_ids,
+            )
+            .await
+            {
+                Ok(history) => {
+                    snapshot.context.request_reduction_history_loaded = Some(true);
+                    attach_context_reduction_timeline_events(snapshot, history, &page_sequences);
+                }
+                Err(error) => tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading page context reduction history failed"
+                ),
+            }
+        }
         snapshot.projection_revision = Some(SessionProjectionRevisionView {
             store_version: projection_revision.store_version,
             provenance_version: projection_revision.provenance_version,
@@ -393,6 +502,60 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         }
     }
     snapshot
+}
+
+fn attach_context_reduction_timeline_events(
+    snapshot: &mut DesktopSessionSnapshot,
+    history: Vec<LoadedRequestContext>,
+    page_sequences: &std::collections::HashSet<i64>,
+) {
+    for entry in history {
+        let reason = match entry.accounting.compaction_reason {
+            gents_protocol::rendered_request::ContextCompactionReason::Compacted => "compacted",
+            gents_protocol::rendered_request::ContextCompactionReason::ProviderViewRepaired => {
+                "provider_view_repaired"
+            }
+            _ => continue,
+        };
+        let Some(sequence) = entry.anchor_sequence.filter(|sequence| page_sequences.contains(sequence)) else {
+            continue;
+        };
+        let item = RenderedTimelineItem::ModelInputReduction {
+            item_key: format!(
+                "model-input:{}:{}:{}:{}",
+                entry.request_id, entry.call_id, entry.accounting.turn_index, entry.accounting.attempt
+            ),
+            sequence,
+            request_id: entry.request_id,
+            call_id: entry.call_id,
+            call_sequence: entry.call_sequence,
+            turn_index: i64::try_from(entry.accounting.turn_index).unwrap_or(i64::MAX),
+            attempt: i64::from(entry.accounting.attempt),
+            reason: reason.to_owned(),
+            estimated_input_tokens: i64::try_from(entry.accounting.estimated_input_tokens).unwrap_or(i64::MAX),
+            pre_compaction_input_tokens: entry.accounting.pre_compaction_input_tokens.map(|value| i64::try_from(value).unwrap_or(i64::MAX)),
+            compaction_threshold_tokens: i64::try_from(entry.accounting.compaction_threshold_tokens).unwrap_or(i64::MAX),
+            timestamp: entry.queued_at,
+        };
+        let insertion = snapshot.timeline_items.iter().position(|existing| {
+            let existing_sequence = match existing {
+                RenderedTimelineItem::UserMessage { sequence, .. }
+                | RenderedTimelineItem::AutomatedInput { sequence, .. }
+                | RenderedTimelineItem::AssistantMessage { sequence, .. } => *sequence,
+                RenderedTimelineItem::ToolGroup { message_sequence, .. } => *message_sequence,
+                RenderedTimelineItem::ModelInputReduction { sequence, .. }
+                | RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(*sequence),
+                RenderedTimelineItem::PendingUserTurn { .. }
+                | RenderedTimelineItem::LiveAssistant { .. } => None,
+            };
+            existing_sequence.is_none_or(|existing_sequence| existing_sequence > sequence)
+        });
+        if let Some(index) = insertion {
+            snapshot.timeline_items.insert(index, item);
+        } else {
+            snapshot.timeline_items.push(item);
+        }
+    }
 }
 
 /// The sync builder holds no `ConfigAccess`, so a failed or timed-out job
@@ -469,6 +632,47 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
                     tool.job_next_calls = next_calls;
                 }
             }
+        }
+    }
+}
+
+fn attach_session_compaction_timeline_events(
+    snapshot: &mut DesktopSessionSnapshot,
+    entries: &[gents_protocol::row::CompactionEntryRow],
+    page_sequences: &std::collections::HashSet<i64>,
+) {
+    for entry in entries {
+        let Some(sequence) = entry
+            .compacted_through_sequence
+            .filter(|sequence| *sequence >= 0 && page_sequences.contains(sequence))
+        else {
+            continue;
+        };
+        let item = RenderedTimelineItem::SessionCompaction {
+            item_key: format!("session-compaction:{}", entry.compaction_key),
+            sequence,
+            messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
+            original_tokens: entry.original_tokens,
+            compacted_tokens: entry.compacted_tokens,
+            timestamp: entry.created_at.clone(),
+        };
+        let insertion = snapshot.timeline_items.iter().position(|existing| {
+            let existing_sequence = match existing {
+                RenderedTimelineItem::UserMessage { sequence, .. }
+                | RenderedTimelineItem::AutomatedInput { sequence, .. }
+                | RenderedTimelineItem::AssistantMessage { sequence, .. } => *sequence,
+                RenderedTimelineItem::ToolGroup { message_sequence, .. } => *message_sequence,
+                RenderedTimelineItem::ModelInputReduction { sequence, .. }
+                | RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(*sequence),
+                RenderedTimelineItem::PendingUserTurn { .. }
+                | RenderedTimelineItem::LiveAssistant { .. } => None,
+            };
+            existing_sequence.is_none_or(|existing_sequence| existing_sequence > sequence)
+        });
+        if let Some(index) = insertion {
+            snapshot.timeline_items.insert(index, item);
+        } else {
+            snapshot.timeline_items.push(item);
         }
     }
 }

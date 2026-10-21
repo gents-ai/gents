@@ -15,12 +15,24 @@ const context = (overrides: Partial<Context> = {}): Context => ({
   durableMessageCount: 1,
   providerMessageCount: 1,
   totalCompactedMessages: 0,
+  sessionCompactionCount: null,
+  requestReductionHistoryLoaded: null,
   compactions: [],
   lastRequest: null,
   ...overrides,
 });
 
 describe("session context meter (#1618)", () => {
+  it("does not report an unavailable compaction count as zero", () => {
+    render(<SessionContext context={context()} />);
+    expect(screen.getByTestId("context-meter")).toHaveTextContent("compactions unavailable");
+  });
+
+  it("shows a queried zero session compaction count", () => {
+    render(<SessionContext context={context({ sessionCompactionCount: 0 })} />);
+    expect(screen.getByTestId("context-meter")).toHaveTextContent("0 compactions");
+  });
+
   it("shows the configured window the next request runs with, not the last request's", () => {
     render(
       <SessionContext

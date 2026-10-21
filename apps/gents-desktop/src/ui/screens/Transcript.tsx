@@ -94,6 +94,63 @@ function copyActions(text: string | null | undefined) {
 
 const ParentContext = createContext<ParentWork | null>(null);
 
+function ModelInputReduction({
+  item,
+}: {
+  item: Extract<RenderedTimelineItem, { kind: "modelInputReduction" }>;
+}) {
+  const reason =
+    item.reason === "provider_view_repaired"
+      ? "Provider history repaired"
+      : "Context reduced before model input";
+  return (
+    <div
+      className="mx-auto my-2 w-full max-w-3xl rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+      data-testid="model-input-reduction"
+      data-request-id={item.requestId}
+      data-call-id={item.callId}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <span className="font-medium text-foreground">{reason}</span>
+        {item.timestamp && <time dateTime={item.timestamp}>{item.timestamp}</time>}
+      </div>
+      <p className="mt-1">
+        Model input estimate: {item.preCompactionInputTokens == null
+          ? `${item.estimatedInputTokens.toLocaleString()} tokens`
+          : `${item.preCompactionInputTokens.toLocaleString()} → ${item.estimatedInputTokens.toLocaleString()} tokens`}
+        {` · turn ${item.turnIndex + 1}`}
+      </p>
+    </div>
+  );
+}
+
+function SessionCompaction({
+  item,
+}: {
+  item: Extract<RenderedTimelineItem, { kind: "sessionCompaction" }>;
+}) {
+  return (
+    <div
+      className="mx-auto my-2 w-full max-w-3xl rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+      data-testid="session-compaction-event"
+      data-compaction-key={item.itemKey}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <span className="font-medium text-foreground">Session history compacted</span>
+        {item.timestamp && <time dateTime={item.timestamp}>{item.timestamp}</time>}
+      </div>
+      <p className="mt-1">
+        {item.messagesCompacted == null
+          ? "Message count unavailable"
+          : `${item.messagesCompacted.toLocaleString()} messages compacted`}
+        {item.originalTokens == null || item.compactedTokens == null
+          ? " · Token estimates unavailable"
+          : ` · ${item.originalTokens.toLocaleString()} → ${item.compactedTokens.toLocaleString()} tokens`}
+      </p>
+    </div>
+  );
+}
+
 const TranscriptItem = memo(function TranscriptItem({
   item,
   final = false,
@@ -165,6 +222,10 @@ const TranscriptItem = memo(function TranscriptItem({
       return <Reply item={item} final={final} />;
     case "toolGroup":
       return null;
+    case "modelInputReduction":
+      return <ModelInputReduction item={item} />;
+    case "sessionCompaction":
+      return <SessionCompaction item={item} />;
   }
 });
 
