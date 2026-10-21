@@ -523,9 +523,10 @@ fn attach_context_reduction_timeline_events(
         if !page_sequences.contains(&summary.sequence) {
             continue;
         }
+        let sequence = summary.sequence;
         let item = RenderedTimelineItem::RequestContextReductionSummary {
             item_key: format!("request-context-reduction:{request_doc_id}"),
-            sequence: summary.sequence,
+            sequence,
             request_doc_id,
             request_id: summary.request_id,
             reduction_count: summary.reductions,
