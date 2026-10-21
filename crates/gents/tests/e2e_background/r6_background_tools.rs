@@ -1284,6 +1284,10 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         let current =
             load_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
         if current.lifecycle_state.as_deref() == Some("timedOut") {
+            assert!(
+                chrono::Utc::now() >= persisted_deadline_at - chrono::Duration::milliseconds(500),
+                "wait call timed out before the claimed execution deadline"
+            );
             break;
         }
         if tokio::time::Instant::now() >= deadline {
