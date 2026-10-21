@@ -7,7 +7,7 @@ use anyhow::Context;
 pub const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_id \
 created_at closed_at stopped_at title provenance observation tags _docID";
 
-pub(super) async fn session_stopped_in_txn(
+pub(crate) async fn session_stopped_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
@@ -37,7 +37,7 @@ pub(super) async fn session_stopped_in_txn(
     }
 }
 
-pub(super) async fn session_is_stopped(
+pub(crate) async fn session_is_stopped(
     node: &EmbeddedNode,
     node_did: &str,
     session_id: &str,
