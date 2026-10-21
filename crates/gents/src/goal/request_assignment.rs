@@ -28,16 +28,16 @@ pub(super) fn request_belongs_to_goal(goal: &GoalDocument, entry: &AgentRequestR
     }
 }
 
-pub(crate) enum RequestAssignmentObservation<'a> {
+pub(crate) enum RequestAssignmentObservation {
     None,
     Unknown,
-    Assigned(&'a GoalDocument),
+    Assigned(GoalDocument),
 }
 
-pub(super) fn observe_request_assignment<'a>(
-    goals: &'a [GoalDocument],
+pub(super) fn observe_request_assignment(
+    goals: &[GoalDocument],
     entry: &AgentRequestRow,
-) -> RequestAssignmentObservation<'a> {
+) -> RequestAssignmentObservation {
     if verify_request_receipt_signature(entry).is_err() {
         return RequestAssignmentObservation::Unknown;
     }
@@ -46,7 +46,7 @@ pub(super) fn observe_request_assignment<'a>(
     });
     if let Some(goal) = candidates.next() {
         return if candidates.next().is_none() {
-            RequestAssignmentObservation::Assigned(goal)
+            RequestAssignmentObservation::Assigned(goal.clone())
         } else {
             RequestAssignmentObservation::Unknown
         };
@@ -69,3 +69,142 @@ pub(super) fn observe_request_assignment<'a>(
 
 #[cfg(test)]
 mod contract_tests;
+
+fn same_assignment(left: &super::GoalVersion, right: &super::GoalVersion) -> bool {
+    left.goal.doc_id == right.goal.doc_id
+        && left.goal.node_did == right.goal.node_did
+        && left.goal.session_id == right.goal.session_id
+        && left.goal.goal_id == right.goal.goal_id
+        && left.goal.assignment_root_request_doc_id == right.goal.assignment_root_request_doc_id
+}
+
+pub(super) fn latest_assignment_goals(
+    versions: &[super::GoalVersion],
+) -> anyhow::Result<Vec<GoalDocument>> {
+    use std::collections::{HashMap, HashSet};
+    let mut by_commit = HashMap::new();
+    for version in versions {
+        anyhow::ensure!(
+            version.height >= 0
+                && !version.commit_cid.is_empty()
+                && !version.goal.doc_id.is_empty()
+                && version.goal.parsed_status().is_some(),
+            "Goal history has an invalid native revision or status"
+        );
+        anyhow::ensure!(
+            by_commit
+                .insert(
+                    (version.goal.doc_id.as_str(), version.commit_cid.as_str()),
+                    version
+                )
+                .is_none(),
+            "Goal history contains a duplicate native revision"
+        );
+    }
+    for version in versions {
+        for parent in &version.parent_commit_cids {
+            let prior = by_commit
+                .get(&(version.goal.doc_id.as_str(), parent.as_str()))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Goal history is incomplete at revision {}",
+                        version.commit_cid
+                    )
+                })?;
+            anyhow::ensure!(
+                prior.height < version.height,
+                "Goal history has a cyclic or invalid native parent"
+            );
+        }
+    }
+    let mut superseded = HashSet::new();
+    for later in versions {
+        let mut pending = later
+            .parent_commit_cids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let mut visited = HashSet::new();
+        while let Some(cid) = pending.pop() {
+            if !visited.insert(cid) {
+                continue;
+            }
+            let ancestor = by_commit[&(later.goal.doc_id.as_str(), cid)];
+            if same_assignment(ancestor, later) {
+                superseded.insert((later.goal.doc_id.as_str(), cid));
+            }
+            pending.extend(ancestor.parent_commit_cids.iter().map(String::as_str));
+        }
+    }
+    let mut unique_assignments = HashSet::new();
+    let mut goals = Vec::new();
+    for version in versions {
+        if superseded.contains(&(version.goal.doc_id.as_str(), version.commit_cid.as_str())) {
+            continue;
+        }
+        let goal = &version.goal;
+        anyhow::ensure!(
+            unique_assignments.insert((
+                &goal.doc_id,
+                &goal.node_did,
+                &goal.session_id,
+                &goal.goal_id,
+                &goal.assignment_root_request_doc_id
+            )),
+            "Goal assignment has concurrent native revisions; refresh before observing its outcome"
+        );
+        goals.push(goal.clone());
+    }
+    Ok(goals)
+}
+
+pub(super) fn observe_assignment_history(
+    versions: &[super::GoalVersion],
+    entry: &AgentRequestRow,
+) -> anyhow::Result<RequestAssignmentObservation> {
+    let goals = latest_assignment_goals(versions)?;
+    Ok(observe_request_assignment(&goals, entry))
+}
+
+pub(crate) async fn load_request_assignment(
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    request: &AgentRequestRow,
+) -> anyhow::Result<RequestAssignmentObservation> {
+    use anyhow::Context;
+    let owner = request
+        .node_did
+        .as_deref()
+        .context("assignment request has no owner")?;
+    let session = request
+        .session_id
+        .as_deref()
+        .context("assignment request has no session")?;
+    let doc = request
+        .doc_id
+        .as_deref()
+        .context("assignment request has no physical identity")?;
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let rows = access
+        .transact_readonly("goal.assignment_requests", |txn| {
+            Box::pin(async move {
+                super::request_head::load_session_requests(txn, owner, session).await
+            })
+        })
+        .await?;
+    let by_doc = super::request_head::request_rows_by_doc(owner, session, &rows)?;
+    let current = by_doc
+        .get(doc)
+        .context("assignment request is absent from its owner/session")?;
+    anyhow::ensure!(
+        current.request_id == request.request_id
+            && current.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        "assignment request differs from its physical owner/session observation"
+    );
+    let entry =
+        super::request_head::authenticated_entry(owner, session, current, &by_doc, None)?.clone();
+    let versions = super::load_goal_versions_for_session(&access, owner, session).await?;
+    observe_assignment_history(&versions, &entry)
+}
+
+#[cfg(test)]
+mod history_tests;

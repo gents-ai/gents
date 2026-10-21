@@ -10,6 +10,7 @@ mod claimed_publication;
 mod client_control;
 mod client_submission;
 mod edit;
+mod history;
 mod observation;
 mod operator_resume;
 mod readiness_gate;
@@ -22,6 +23,7 @@ pub(crate) use claimed_publication::{
 pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
 pub use client_submission::submit_session_goal_control;
 pub(crate) use edit::{edit_active_goal, GoalEdit};
+pub(crate) use history::{load_goal_versions_for_session, GoalVersion};
 pub use observation::load_session_goal_observation;
 pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERVATION_SOURCES};
 pub use operator_resume::{
@@ -34,6 +36,7 @@ pub use readiness_gate::{
     GoalClaimedDecision, GoalContinuationFacts, GoalFailureCause, GoalGatedDecision,
     ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX,
 };
+pub(crate) use request_assignment::{load_request_assignment, RequestAssignmentObservation};
 #[cfg(test)]
 pub(crate) use request_head::assignment_allows;
 pub(crate) use request_head::{

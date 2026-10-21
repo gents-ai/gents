@@ -35,6 +35,8 @@ mod notification_delivery;
 mod observer;
 mod rendering;
 mod session_message;
+#[cfg(test)]
+pub(crate) use session_message::turn_assignment_handoff;
 mod side_effects;
 
 pub(crate) use notification_delivery::append_background_tool_completion;

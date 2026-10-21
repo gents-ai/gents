@@ -6,7 +6,7 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::GoalAssignmentInput;
 use serde_json::{json, Value};
 
-fn goal(value: &Value, identities: &[KeyIdentity]) -> GoalDocument {
+pub(super) fn goal(value: &Value, identities: &[KeyIdentity]) -> GoalDocument {
     serde_json::from_value(json!({
         "_docID":format!("goal-doc-{}-{}",value["goal"],value["root"]),
         "goal_id":format!("goal-{}",value["goal"]),
@@ -17,7 +17,7 @@ fn goal(value: &Value, identities: &[KeyIdentity]) -> GoalDocument {
     })).unwrap()
 }
 
-async fn entry(value: &Value, identities: &[KeyIdentity]) -> AgentRequestRow {
+pub(super) async fn entry(value: &Value, identities: &[KeyIdentity]) -> AgentRequestRow {
     let identity = &identities[value["owner"].as_u64().unwrap() as usize - 1];
     let mut request = AgentRequestCreate::base(
         RequestPurpose::Normal,
