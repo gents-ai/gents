@@ -10,11 +10,14 @@ use gents_protocol::session::SessionTitle;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+#[path = "replacement_tests.rs"]
+mod replacement_tests;
+
 const SESSION: &str = "start-session";
 
 #[derive(Deserialize)]
 struct Contracts {
-    goal_client_start_cases: Vec<Case>,
+    goal_client_start_cases: Vec<Value>,
 }
 
 #[derive(Deserialize)]
@@ -46,8 +49,13 @@ fn agent(value: &Value) -> String {
 #[tokio::test]
 async fn generated_goal_starts_commit_the_session_goal_and_first_request_together() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_client_start_cases.len(), 19);
-    for case in contracts.goal_client_start_cases {
+    assert_eq!(contracts.goal_client_start_cases.len(), 40);
+    for value in contracts.goal_client_start_cases {
+        if value.get("replacement").is_some() {
+            replacement_tests::run(&value).await;
+            continue;
+        }
+        let case: Case = serde_json::from_value(value).unwrap();
         let temp = tempfile::tempdir().unwrap();
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap());

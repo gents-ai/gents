@@ -954,6 +954,29 @@ async fn fence_opened_graph_goal_in_txn(
     Ok(())
 }
 
+pub(crate) struct GoalCreationIdentity {
+    pub goal_id: String,
+    pub creation_key: String,
+}
+
+pub(crate) fn replacement_goal_identity(
+    node_did: &str,
+    session_id: &str,
+    command_id: &str,
+) -> GoalCreationIdentity {
+    let scope = format!(
+        "{}:{node_did}:{}:{session_id}:{}:{command_id}",
+        node_did.len(),
+        session_id.len(),
+        command_id.len()
+    );
+    GoalCreationIdentity {
+        goal_id: format!("goal-assignment:{scope}"),
+        creation_key: format!("goal-assignment-create:{scope}"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn stage_goal_and_claim(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -962,6 +985,7 @@ async fn stage_goal_and_claim(
     token_budget: Option<i64>,
     initial_state: GoalState,
     now: &str,
+    identity: Option<&GoalCreationIdentity>,
 ) -> Result<StagedGoal> {
     let create_request = GoalCreateRequest {
         caller: node_did.to_string(),
@@ -980,8 +1004,12 @@ async fn stage_goal_and_claim(
     );
     let fingerprint = goal_creation_fingerprint(&create_request);
     let objective = fingerprint.objective.as_str();
-    let goal_id = deterministic_goal_id(node_did, session_id);
-    let creation_key = deterministic_goal_creation_key(node_did, session_id);
+    let goal_id = identity
+        .map(|identity| identity.goal_id.clone())
+        .unwrap_or_else(|| deterministic_goal_id(node_did, session_id));
+    let creation_key = identity
+        .map(|identity| identity.creation_key.clone())
+        .unwrap_or_else(|| deterministic_goal_creation_key(node_did, session_id));
     let escaped_did = escape_graphql_string(node_did);
     let escaped_session = escape_graphql_string(session_id);
     let response = txn
@@ -1183,6 +1211,7 @@ pub async fn create_goal_for_session(
                         wrapup_completed: false,
                     },
                     &Utc::now().to_rfc3339(),
+                    None,
                 )
                 .await
             })
@@ -1435,6 +1464,7 @@ async fn stage_goal_backed_request(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
+    identity: Option<&GoalCreationIdentity>,
 ) -> Result<StagedGoalBackedRequest> {
     let objective = objective.trim();
     anyhow::ensure!(!objective.is_empty(), "goal objective must be non-empty");
@@ -1465,6 +1495,7 @@ async fn stage_goal_backed_request(
             wrapup_completed: false,
         },
         &Utc::now().to_rfc3339(),
+        identity,
     )
     .await?;
     let mut submission_state = goal_submission_step(
@@ -1550,6 +1581,7 @@ pub async fn submit_goal_backed_request(
                     objective,
                     token_budget,
                     request,
+                    None,
                 )
                 .await
                 .and_then(authorize_goal_submission_commit)
@@ -1822,9 +1854,38 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
-    stage_goal_backed_request(txn, node_did, session_id, objective, token_budget, request)
-        .await
-        .and_then(authorize_goal_submission_commit)?;
+    stage_goal_backed_request_with_identity_in_txn(
+        txn,
+        node_did,
+        session_id,
+        objective,
+        token_budget,
+        request,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    objective: &str,
+    token_budget: Option<i64>,
+    request: &gents_protocol::request_admission::AgentRequestCreate,
+    identity: Option<&GoalCreationIdentity>,
+) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
+    stage_goal_backed_request(
+        txn,
+        node_did,
+        session_id,
+        objective,
+        token_budget,
+        request,
+        identity,
+    )
+    .await
+    .and_then(authorize_goal_submission_commit)?;
     let retry_key = request
         .retry_key
         .as_deref()
@@ -1875,6 +1936,7 @@ pub async fn submit_goal_backed_request_local(
                     objective,
                     token_budget,
                     request,
+                    None,
                 )
                 .await
                 .and_then(authorize_goal_submission_commit)
@@ -1957,6 +2019,7 @@ pub async fn load_goal_by_id(
         r#"{{
             Goal(
                 filter: {{ node_did: {{ _eq: "{node_did}" }}, goal_id: {{ _eq: "{goal_id}" }} }},
+                showDeleted: true,
                 order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
             ) {{ {GOAL_FIELDS} }}
         }}"#

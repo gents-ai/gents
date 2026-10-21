@@ -12,7 +12,7 @@ pub(crate) async fn ensure_goal_stop_supported(record: Option<&PeerRecord>) -> R
         return Ok(());
     };
     let status = peer_status(record).await?.context(
-        "Cannot verify goal removal support. Reconnect this runtime through its HTTP address.",
+        "Cannot verify goal assignment controls. Reconnect this runtime through its HTTP address.",
     )?;
     decode(&status, &record.node_did)
 }
@@ -23,14 +23,14 @@ fn decode(status: &Value, expected_did: &str) -> Result<()> {
             serving_runtime(status, expected_did)?,
             ObservedServeLifecycle::Ready
         ),
-        "The runtime is not ready. Reconnect it before removing this goal."
+        "The runtime is not ready. Reconnect it before changing this goal."
     );
     ensure!(
         status
             .get(STATUS_GOAL_STOP_CONTRACT_FIELD)
             .and_then(Value::as_u64)
             == Some(u64::from(GOAL_STOP_CONTRACT_VERSION)),
-        "Update this runtime to remove goals. The goal is unchanged."
+        "Update this runtime to remove or replace goals. This chat is unchanged."
     );
     Ok(())
 }
