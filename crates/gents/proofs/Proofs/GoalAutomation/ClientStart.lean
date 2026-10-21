@@ -20,6 +20,8 @@ structure Facts where
   currentSessionDocument : Option String
   expectedSessionDocument : Option String
   existingClaim : Option Fingerprint := none
+  firstGoalId : Option String := some "initial-assignment"
+  firstRoot : Option String := none
   deriving DecidableEq, Repr
 
 def creationRequest (requested : AgentSession.Document) (objective : String)
@@ -37,16 +39,20 @@ def creationAllowed (requested : AgentSession.Document) (objective : String)
   | .fresh | .idempotent => true
   | _ => false
 
+def firstBindingValid (facts : Facts) (goalId : String) : Bool :=
+  facts.firstGoalId == some goalId && facts.firstRoot.isNone
+
 /-- The first ordinary request has already passed the existing signature,
 admission and configuration owners. A fresh client goal starts only while
 the whole session is idle, so its usage baseline excludes earlier work.
 The native transaction commits the reserved session, Goal, creation claim,
 first request and signed command receipt together. -/
 def start? (s : State) (requested : AgentSession.Document) (objective : String)
-    (budget : Option Int) (facts : Facts) (commit : Bool) : Option State := do
+    (budget : Option Int) (facts : Facts) (commit : Bool)
+    (goalId : String := "initial-assignment") : Option State := do
   if !commit ||
       !AgentSession.CommandAuthority.authorized facts.authority facts.hasPeer facts.now facts.expiresAt ||
-      !facts.firstRequestValid || facts.unfinishedRequest ||
+      !facts.firstRequestValid || !firstBindingValid facts goalId || facts.unfinishedRequest ||
       facts.currentSessionDocument != facts.expectedSessionDocument ||
       s.submission.durableGoal || s.submission.runnableRequest ||
       !creationAllowed requested objective budget facts.existingClaim then none
@@ -57,18 +63,18 @@ def start? (s : State) (requested : AgentSession.Document) (objective : String)
     some ⟨some session, submissionStep stagedRequest .commit⟩
 
 theorem discarded_start_is_not_published (s : State) (requested : AgentSession.Document)
-    (objective : String) (budget : Option Int) (facts : Facts) :
-    start? s requested objective budget facts false = none := by simp [start?]
+    (objective : String) (budget : Option Int) (facts : Facts) (goalId : String) :
+    start? s requested objective budget facts false goalId = none := by simp [start?]
 
 theorem busy_session_cannot_start (s : State) (requested : AgentSession.Document)
-    (objective : String) (budget : Option Int) (facts : Facts) (commit : Bool)
+    (objective : String) (budget : Option Int) (facts : Facts) (commit : Bool) (goalId : String)
     (h : facts.unfinishedRequest = true) :
-    start? s requested objective budget facts commit = none := by simp [start?, h]
+    start? s requested objective budget facts commit goalId = none := by simp [start?, h]
 
 theorem publication_has_reserved_session_and_goal (s post : State)
     (requested : AgentSession.Document) (objective : String) (budget : Option Int)
-    (facts : Facts) (commit : Bool)
-    (h : start? s requested objective budget facts commit = some post) :
+    (facts : Facts) (commit : Bool) (goalId : String)
+    (h : start? s requested objective budget facts commit goalId = some post) :
     post.session.isSome = true ∧ post.submission.durableGoal = true ∧
       post.submission.runnableRequest = true := by
   unfold start? at h
@@ -80,6 +86,18 @@ theorem publication_has_reserved_session_and_goal (s post : State)
       simp [hs, submissionStep] at h
       cases h
       exact ⟨rfl, rfl, rfl⟩
+
+theorem wrong_goal_reference_cannot_start (s : State) (requested : AgentSession.Document)
+    (objective : String) (budget : Option Int) (facts : Facts) (commit : Bool) (goalId : String)
+    (wrong : facts.firstGoalId ≠ some goalId) :
+    start? s requested objective budget facts commit goalId = none := by
+  simp [start?, firstBindingValid, wrong]
+
+theorem first_request_must_open_itself (s : State) (requested : AgentSession.Document)
+    (objective : String) (budget : Option Int) (facts : Facts) (commit : Bool) (goalId : String)
+    (bound : facts.firstRoot.isNone = false) :
+    start? s requested objective budget facts commit goalId = none := by
+  simp [start?, firstBindingValid, bound]
 
 /-- Each logical assignment keeps its own immutable creation claim and opening
 request. Retiring a terminal Goal uses DefraDB's retained tombstone/history;
@@ -134,7 +152,7 @@ def replace? (s : State) (assignments : Assignments) (replacement : Replacement)
           prior.snapshot.revision.document == replacement.nextRevision.document) then none
   else
     let post ← start? { s with submission := ⟨false, false, false, false⟩ }
-      requested objective budget facts commit
+      requested objective budget facts commit replacement.nextId
     let fresh : Assignment :=
       { id := replacement.nextId, creationKey := replacement.creationKey
         snapshot :=
@@ -157,7 +175,7 @@ theorem replacement_keeps_prior_assignments (s : State) (assignments : Assignmen
   split at h
   · contradiction
   · cases hs : start? { s with submission := ⟨false, false, false, false⟩ }
-        requested objective budget facts commit with
+        requested objective budget facts commit replacement.nextId with
     | none => simp [hs] at h
     | some started =>
       simp only [hs, Option.bind_some, Option.some.injEq] at h
@@ -177,7 +195,7 @@ theorem replacement_resets_only_new_accounting (s : State) (assignments : Assign
   split at h
   · contradiction
   · cases hs : start? { s with submission := ⟨false, false, false, false⟩ }
-        requested objective budget facts commit with
+        requested objective budget facts commit replacement.nextId with
     | none => simp [hs] at h
     | some started =>
       simp only [hs, Option.bind_some, Option.some.injEq] at h

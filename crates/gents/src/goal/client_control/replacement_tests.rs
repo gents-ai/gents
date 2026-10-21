@@ -142,6 +142,22 @@ pub(super) async fn run(case: &Value) {
     )
     .await
     .unwrap();
+    initial.input.goal_assignment = start["first_goal"].as_str().map(|goal| {
+        gents_protocol::request_input::GoalAssignmentInput {
+            goal_id: match goal {
+                "new-assignment" => fresh_identity.goal_id.clone(),
+                "old-assignment" => original.goal_id.clone(),
+                other => other.to_owned(),
+            },
+            root_request_doc_id: start["first_root"].as_str().map(|root| {
+                if root == "old-first-request" {
+                    old_root.clone()
+                } else {
+                    root.into()
+                }
+            }),
+        }
+    });
     initial.retry_key = Some(format!("session-goal:{command_id}"));
     crate::sign_agent_request_create(identity.as_ref(), &mut initial)
         .await

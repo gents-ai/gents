@@ -30,6 +30,8 @@ struct Case {
     budget: Option<i64>,
     signature_valid: bool,
     first_request_valid: bool,
+    first_goal: Option<String>,
+    first_root: Option<String>,
     now: i64,
     expires_at: i64,
     busy: bool,
@@ -49,7 +51,7 @@ fn agent(value: &Value) -> String {
 #[tokio::test]
 async fn generated_goal_starts_commit_the_session_goal_and_first_request_together() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_client_start_cases.len(), 40);
+    assert_eq!(contracts.goal_client_start_cases.len(), 46);
     for value in contracts.goal_client_start_cases {
         if value.get("replacement").is_some() {
             replacement_tests::run(&value).await;
@@ -159,6 +161,16 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         )
         .await
         .unwrap();
+        initial.input.goal_assignment = case.first_goal.as_ref().map(|goal| {
+            gents_protocol::request_input::GoalAssignmentInput {
+                goal_id: if goal == "initial-assignment" {
+                    deterministic_goal_id(identity.did(), SESSION)
+                } else {
+                    goal.clone()
+                },
+                root_request_doc_id: case.first_root.clone(),
+            }
+        });
         initial.retry_key = Some(format!("session-goal:{command_id}"));
         crate::sign_agent_request_create(identity.as_ref(), &mut initial)
             .await
