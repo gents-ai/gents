@@ -16,6 +16,10 @@ inductive GuardObservation where
   | acquired | busy | unavailable
   deriving DecidableEq, Repr
 
+inductive LegacyObservation where
+  | empty | records | unavailable
+  deriving DecidableEq, Repr
+
 /-- `installed` describes the physical candidate after a write attempt. An effect
 requires both a durable receipt and its acknowledgement. The native owner must
 flush the file and its replacement directory before acknowledging; an unsupported
@@ -34,9 +38,11 @@ structure Proposal where
   deriving DecidableEq, Repr
 
 /-- `caller` names an existing owned helper connection, not an actor identity,
-lease or source grant. Its OS advisory guard is held through reads, checkpoints
-and the actual editor/save promise. Webview cancellation cannot retire that guard
-or settle the promise. Only the real host continuation may report settlement. -/
+lease or source grant. While that connection lives, its OS advisory guard spans
+reads, checkpoints and the actual editor/save promise. Helper loss releases the
+guard without settling the promise; the existing durable unresolved sequence
+then blocks new connections. Webview cancellation cannot retire a live guard or
+settle the promise. Only the real host continuation may report settlement. -/
 structure Holder where
   caller : Nat
   loaded : Bool := false
@@ -52,17 +58,19 @@ structure Holder where
 structure World where
   stored : Stored := .absent
   holder : Option Holder := none
+  orphans : List (Nat × Effect) := []
   deriving DecidableEq, Repr
 
 inductive Output where
   | acquired | busy | loaded | checkpoint | acknowledged | refused
   | effect (value : Effect)
   | settled | cancelled | held | released
+  | helperLost | orphanSettled
   deriving DecidableEq, Repr
 
 inductive Input where
   | acquire (caller : Nat) (observation : GuardObservation)
-  | load (caller : Nat)
+  | load (caller : Nat) (legacy : LegacyObservation)
   | admit (caller : Nat) (id : String) (targets : List Target)
       (documents : List Document) (observations : Observations)
   | advance (caller : Nat) (action : Action)
@@ -71,6 +79,8 @@ inductive Input where
   | settle (caller : Nat)
   | cancel (caller : Nat)
   | release (caller : Nat)
+  | helperLost (caller : Nat) (candidateInstalled : Bool)
+  | settleOrphan (caller : Nat)
   deriving DecidableEq, Repr
 
 private def owned (world : World) (caller : Nat)
@@ -88,12 +98,25 @@ private def usable (holder : Holder) : Bool :=
 private def refuse (world : World) (holder : Holder) : World × Output :=
   keep world {holder with refused := true, grant := .none} .refused
 
-private def read (world : World) (holder : Holder) : World × Output :=
+/-- A lost helper releases its OS lock independently of the editor/save promise.
+An unresolved existing operation therefore blocks the whole workspace on a new
+connection, not only matching physical actions. A closed definitively untouched,
+rejected or settled operation preserves the existing per-action reservation
+policy. No timestamp, PID, new postimage or observed orphan settlement clears an
+unresolved operation automatically. -/
+def unresolved (ledger : Ledger) : Bool :=
+  ledger.any fun operation => !operation.sequence.closed || operation.sequence.items.any fun progress =>
+    progress.restore == .pending || progress.restore == .unknown ||
+    (progress.restore == .applied &&
+      (progress.save.state == .pending || progress.save.state == .saving || progress.save.state == .unknown))
+
+private def read (world : World) (holder : Holder) (legacy : LegacyObservation) : World × Output :=
   if holder.loaded || holder.refused || holder.pending.isSome then (world, .refused)
+  else if legacy != .empty then refuse world holder
   else match world.stored with
   | .absent => keep world {holder with loaded := true, ledger := []} .loaded
   | .present version ledger =>
-    if version == 1 && ledgerValid ledger then
+    if version == 1 && ledgerValid ledger && !unresolved ledger then
       keep world {holder with loaded := true, ledger} .loaded
     else refuse world holder
   | .corrupt | .unavailable => refuse world holder
@@ -142,11 +165,12 @@ def step (world : World) (input : Input) : World × Output :=
   match input with
   | .acquire caller observation =>
     if world.holder.isSome then (world, .busy)
+    else if world.orphans.any (fun orphan => orphan.1 == caller) then (world, .refused)
     else match observation with
     | .acquired => keep world {caller} .acquired
     | .busy => (world, .busy)
     | .unavailable => (world, .refused)
-  | .load caller => owned world caller (read world)
+  | .load caller legacy => owned world caller (fun holder => read world holder legacy)
   | .admit caller id targets documents observations =>
     owned world caller (fun holder => admit world holder id targets documents observations)
   | .advance caller action => owned world caller (fun holder => advance world holder action)
@@ -160,6 +184,17 @@ def step (world : World) (input : Input) : World × Output :=
   | .release caller => owned world caller fun holder =>
     if holder.pending.isSome || holder.running != .none then (world, .held)
     else ({world with holder := none}, .released)
+  | .helperLost caller candidateInstalled => owned world caller fun holder =>
+    let stored := match holder.pending with
+      | some proposal => if candidateInstalled then Stored.present 1 proposal.ledger else world.stored
+      | none => world.stored
+    let orphans := if holder.running == .none then world.orphans
+      else world.orphans ++ [(caller, holder.running)]
+    ({world with stored, holder := none, orphans}, .helperLost)
+  | .settleOrphan caller =>
+    if world.orphans.any (fun orphan => orphan.1 == caller) then
+      ({world with orphans := world.orphans.filter (fun orphan => orphan.1 != caller)}, .orphanSettled)
+    else (world, .refused)
 
 /-- Every other output is an observation or checkpoint request, never an effect. -/
 def Output.editorEffect : Output → Effect
@@ -167,27 +202,42 @@ def Output.editorEffect : Output → Effect
   | _ => .none
 
 theorem empty_guard_cannot_launch (stored : Stored) (caller : Nat) :
-    (step ⟨stored, none⟩ (.launch caller)).2 = .refused := by
+    (step ⟨stored, none, []⟩ (.launch caller)).2 = .refused := by
   simp [step, owned]
 
 theorem held_guard_cannot_be_replaced (stored : Stored) (holder : Holder)
     (caller : Nat) (observation : GuardObservation) :
-    step ⟨stored, some holder⟩ (.acquire caller observation) = (⟨stored, some holder⟩, .busy) := by
+    step ⟨stored, some holder, []⟩ (.acquire caller observation) = (⟨stored, some holder, []⟩, .busy) := by
   simp [step]
 
 theorem cancellation_preserves_running_promise (stored : Stored) (holder : Holder) :
-    (step ⟨stored, some holder⟩ (.cancel holder.caller)).1.holder =
+    (step ⟨stored, some holder, []⟩ (.cancel holder.caller)).1.holder =
       some {holder with cancelled := true, grant := .none} := by
   simp [step, owned, keep]
 
 theorem running_promise_cannot_release (stored : Stored) (holder : Holder)
     (running : (holder.running != .none) = true) :
-    step ⟨stored, some holder⟩ (.release holder.caller) = (⟨stored, some holder⟩, .held) := by
+    step ⟨stored, some holder, []⟩ (.release holder.caller) = (⟨stored, some holder, []⟩, .held) := by
   simp [step, owned, running]
 
 theorem pending_checkpoint_cannot_release (stored : Stored) (holder : Holder)
     (pending : holder.pending.isSome = true) :
-    step ⟨stored, some holder⟩ (.release holder.caller) = (⟨stored, some holder⟩, .held) := by
+    step ⟨stored, some holder, []⟩ (.release holder.caller) = (⟨stored, some holder, []⟩, .held) := by
   simp [step, owned, pending]
+
+theorem helper_loss_releases_guard (world : World) (holder : Holder) (installed : Bool)
+    (owns : world.holder = some holder) :
+    (step world (.helperLost holder.caller installed)).1.holder = none := by
+  simp [step, owned, owns]
+
+theorem orphan_settlement_cannot_rewrite_journal (world : World) (caller : Nat) :
+    (step world (.settleOrphan caller)).1.stored = world.stored := by
+  simp only [step]
+  split <;> rfl
+
+theorem unresolved_journal_refuses_new_connection (ledger : Ledger) (caller : Nat)
+    (orphans : List (Nat × Effect)) (blocked : unresolved ledger = true) :
+    (step ⟨.present 1 ledger, some {caller}, orphans⟩ (.load caller .empty)).2 = .refused := by
+  simp [step, owned, read, blocked, refuse, keep]
 
 end Workspace.ChangeReview.Editor.Checkpoint

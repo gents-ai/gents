@@ -15,7 +15,7 @@ private def durable : Receipt := ⟨true, true, true⟩
 private def admit (caller : Nat := 1) (id : String := "operation") : Input :=
   .admit caller id [target] [document] observations
 private def reserveInputs : List Input :=
-  [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 durable]
+  [.acquire 1 .acquired, .load 1 .empty, admit, .finishWrite 1 durable]
 private def startRestore : List Input :=
   [.advance 1 (.startRestore 0 true true), .finishWrite 1 durable, .launch 1]
 private def restored : List Input :=
@@ -31,8 +31,8 @@ private def restoredSequence : Sequence :=
 private def savingSequence : Sequence := (Workspace.ChangeReview.Editor.step restoredSequence (.startSave 0 saveObservations true)).1
 private def completedSequence : Sequence :=
   (Workspace.ChangeReview.Editor.step savingSequence (.observeSave 0 ⟨.saved, true⟩ true)).1
-private def retained (sequence : Sequence) : World := ⟨.present 1 [⟨"old", sequence⟩], none⟩
-private def replay : List Input := [.acquire 2 .acquired, .load 2, admit 2 "new", .launch 2, .release 2]
+private def retained (sequence : Sequence) : World := ⟨.present 1 [⟨"old", sequence⟩], none, []⟩
+private def replay : List Input := [.acquire 2 .acquired, .load 2 .empty, admit 2 "new", .launch 2, .release 2]
 
 structure Case where
   name : String
@@ -46,62 +46,77 @@ private def restoreOutputs : List Output :=
 private def saveOutputs : List Output :=
   [.checkpoint, .acknowledged, .effect .save, .settled, .checkpoint, .acknowledged]
 private def noReplay : List Output := [.acquired, .loaded, .refused, .refused, .released]
+private def unresolvedReplay : List Output := [.acquired, .refused, .refused, .refused, .released]
+private def differentTarget (sameUri : Bool) : Target :=
+  let uri := if sameUri then target.uri else "file:///project/other"
+  {target with reference := "different-retained-reference", actions := ["different-physical-action"], uri}
+private def differentAdmission (sameUri : Bool) : Input :=
+  let next := differentTarget sameUri
+  .admit 2 "different-operation" [next] [{document with uri := next.uri}] observations
+private def deadRestore : List Input := reserveInputs ++ startRestore ++ [.helperLost 1 false]
+private def deadSave : List Input := reserveInputs ++ restored ++ startSave ++ [.helperLost 1 false]
+private def afterDeath (sameUri : Bool) : List Input :=
+  [.acquire 2 .acquired, .load 2 .empty, differentAdmission sameUri,
+   .finishWrite 1 durable, .launch 1, .settle 1, .settleOrphan 1,
+   differentAdmission sameUri, .release 2]
+private def afterDeathOutputs : List Output :=
+  [.acquired, .refused, .refused, .refused, .refused, .refused, .orphanSettled, .refused, .released]
 
 def cases : List Case :=
   [ {name := "restore_and_normal_save_require_separate_durable_acknowledgements",
       inputs := reserveInputs ++ restored ++ saved ++ [.release 1],
       expected := accepted ++ restoreOutputs ++ saveOutputs ++ [.released]}
   , {name := "second_window_cannot_acquire_held_guard", inputs :=
-      [.acquire 1 .acquired, .acquire 2 .acquired, .load 2, .release 2, .load 1],
+      [.acquire 1 .acquired, .acquire 2 .acquired, .load 2 .empty, .release 2, .load 1 .empty],
       expected := [.acquired, .busy, .refused, .refused, .loaded]}
-  , {name := "real_os_lock_busy", inputs := [.acquire 1 .busy, .load 1, .launch 1],
+  , {name := "real_os_lock_busy", inputs := [.acquire 1 .busy, .load 1 .empty, .launch 1],
       expected := [.busy, .refused, .refused]}
-  , {name := "unavailable_guard_refuses", inputs := [.acquire 1 .unavailable, .load 1],
+  , {name := "unavailable_guard_refuses", inputs := [.acquire 1 .unavailable, .load 1 .empty],
       expected := [.refused, .refused]}
-  , {name := "corrupt_or_truncated_journal_refuses", initial := ⟨.corrupt, none⟩,
-      inputs := [.acquire 1 .acquired, .load 1, admit, .launch 1],
+  , {name := "corrupt_or_truncated_journal_refuses", initial := ⟨.corrupt, none, []⟩,
+      inputs := [.acquire 1 .acquired, .load 1 .empty, admit, .launch 1],
       expected := [.acquired, .refused, .refused, .refused]}
-  , {name := "unreadable_journal_is_not_empty", initial := ⟨.unavailable, none⟩,
-      inputs := [.acquire 1 .acquired, .load 1, admit], expected := [.acquired, .refused, .refused]}
-  , {name := "unsupported_envelope_version_refuses", initial := ⟨.present 2 [], none⟩,
-      inputs := [.acquire 1 .acquired, .load 1, admit], expected := [.acquired, .refused, .refused]}
-  , {name := "malformed_ref_only_ledger_refuses", initial := ⟨.present 1 [⟨"", reservedSequence⟩], none⟩,
-      inputs := [.acquire 1 .acquired, .load 1, admit], expected := [.acquired, .refused, .refused]}
+  , {name := "unreadable_journal_is_not_empty", initial := ⟨.unavailable, none, []⟩,
+      inputs := [.acquire 1 .acquired, .load 1 .empty, admit], expected := [.acquired, .refused, .refused]}
+  , {name := "unsupported_envelope_version_refuses", initial := ⟨.present 2 [], none, []⟩,
+      inputs := [.acquire 1 .acquired, .load 1 .empty, admit], expected := [.acquired, .refused, .refused]}
+  , {name := "malformed_ref_only_ledger_refuses", initial := ⟨.present 1 [⟨"", reservedSequence⟩], none, []⟩,
+      inputs := [.acquire 1 .acquired, .load 1 .empty, admit], expected := [.acquired, .refused, .refused]}
   , {name := "reservation_write_failure_poisoned_until_new_explicit_session", inputs :=
-      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨false, false, false⟩,
-       .finishWrite 1 durable, .launch 1, .release 1, .acquire 2 .acquired, .load 2, admit 2 "new"],
+      [.acquire 1 .acquired, .load 1 .empty, admit, .finishWrite 1 ⟨false, false, false⟩,
+       .finishWrite 1 durable, .launch 1, .release 1, .acquire 2 .acquired, .load 2 .empty, admit 2 "new"],
       expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .refused,
        .released, .acquired, .loaded, .checkpoint]}
   , {name := "installed_reservation_lost_ack_is_inert_and_reserved", inputs :=
-      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨true, true, false⟩,
+      [.acquire 1 .acquired, .load 1 .empty, admit, .finishWrite 1 ⟨true, true, false⟩,
        .launch 1, .release 1] ++ replay,
-      expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .released] ++ noReplay}
+      expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .released] ++ unresolvedReplay}
   , {name := "directory_sync_unknown_never_grants_effect", inputs :=
-      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨true, false, false⟩,
+      [.acquire 1 .acquired, .load 1 .empty, admit, .finishWrite 1 ⟨true, false, false⟩,
        .launch 1, .release 1] ++ replay,
-      expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .released] ++ noReplay}
+      expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .released] ++ unresolvedReplay}
   , {name := "ack_without_durability_is_not_success", inputs :=
-      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨true, false, true⟩, .launch 1],
+      [.acquire 1 .acquired, .load 1 .empty, admit, .finishWrite 1 ⟨true, false, true⟩, .launch 1],
       expected := [.acquired, .loaded, .checkpoint, .refused, .refused]}
   , {name := "durability_without_installation_is_not_success", inputs :=
-      [.acquire 1 .acquired, .load 1, admit, .finishWrite 1 ⟨false, true, true⟩, .launch 1],
+      [.acquire 1 .acquired, .load 1 .empty, admit, .finishWrite 1 ⟨false, true, true⟩, .launch 1],
       expected := [.acquired, .loaded, .checkpoint, .refused, .refused]}
   , {name := "pending_restoration_replay_is_inert", initial := retained pendingSequence,
-      inputs := replay, expected := noReplay}
+      inputs := replay, expected := unresolvedReplay}
   , {name := "pending_save_replay_is_inert", initial := retained savingSequence,
-      inputs := replay, expected := noReplay}
+      inputs := replay, expected := unresolvedReplay}
   , {name := "completed_operation_replay_is_inert", initial := retained completedSequence,
       inputs := replay, expected := noReplay}
   , {name := "known_rejected_allows_only_a_new_explicit_attempt", initial := retained
       ⟨[{reference := target.reference, actions := target.actions, uri := target.uri,
           restore := .rejected, save := ⟨.pending, false⟩}], true⟩,
-      inputs := [.acquire 2 .acquired, .load 2, admit 2 "new"],
+      inputs := [.acquire 2 .acquired, .load 2 .empty, admit 2 "new"],
       expected := [.acquired, .loaded, .checkpoint]}
   , {name := "cancel_during_checkpoint_cannot_release_or_launch", inputs :=
-      [.acquire 1 .acquired, .load 1, admit, .cancel 1, .release 1,
+      [.acquire 1 .acquired, .load 1 .empty, admit, .cancel 1, .release 1,
        .finishWrite 1 durable, .launch 1, .release 1] ++ replay,
       expected := [.acquired, .loaded, .checkpoint, .cancelled, .held, .acknowledged,
-       .refused, .released] ++ noReplay}
+       .refused, .released] ++ unresolvedReplay}
   , {name := "cancelled_restore_keeps_guard_until_actual_settlement", inputs :=
       reserveInputs ++ startRestore ++ [.cancel 1, .release 1, .acquire 2 .acquired,
        .advance 1 (.observeRestore 0 .applied true true), .settle 1,
@@ -117,19 +132,73 @@ def cases : List Case :=
   , {name := "restore_marker_installed_but_lost_ack_never_launches", inputs := reserveInputs ++
       [.advance 1 (.startRestore 0 true true), .finishWrite 1 ⟨true, true, false⟩,
        .launch 1, .release 1] ++ replay,
-      expected := accepted ++ [.checkpoint, .refused, .refused, .released] ++ noReplay}
+      expected := accepted ++ [.checkpoint, .refused, .refused, .released] ++ unresolvedReplay}
   , {name := "checkpoint_in_flight_holds_guard", inputs :=
-      [.acquire 1 .acquired, .load 1, admit, .release 1, .acquire 2 .acquired],
+      [.acquire 1 .acquired, .load 1 .empty, admit, .release 1, .acquire 2 .acquired],
       expected := [.acquired, .loaded, .checkpoint, .held, .busy]}
   , {name := "stale_connection_cannot_use_released_effect", inputs := reserveInputs ++
       [.advance 1 (.startRestore 0 true true), .finishWrite 1 durable, .release 1,
-       .acquire 2 .acquired, .launch 1, .settle 1, .load 2, admit 2 "new"],
+       .acquire 2 .acquired, .launch 1, .settle 1, .load 2 .empty, admit 2 "new"],
       expected := accepted ++ [.checkpoint, .acknowledged, .released, .acquired,
-       .refused, .refused, .loaded, .refused]}
+       .refused, .refused, .refused, .refused]}
   , {name := "foreign_write_cannot_change_owned_pending_candidate", inputs :=
-      [.acquire 1 .acquired, .load 1, admit, .finishWrite 2 durable, .launch 2,
+      [.acquire 1 .acquired, .load 1 .empty, admit, .finishWrite 2 durable, .launch 2,
        .finishWrite 1 durable],
       expected := [.acquired, .loaded, .checkpoint, .refused, .refused, .acknowledged]}
+  , {name := "helper_death_during_restore_blocks_different_action_same_uri",
+      inputs := deadRestore ++ afterDeath true,
+      expected := accepted ++ [.checkpoint, .acknowledged, .effect .restore, .helperLost] ++ afterDeathOutputs}
+  , {name := "helper_death_during_restore_blocks_different_action_different_uri",
+      inputs := deadRestore ++ afterDeath false,
+      expected := accepted ++ [.checkpoint, .acknowledged, .effect .restore, .helperLost] ++ afterDeathOutputs}
+  , {name := "helper_death_during_save_blocks_different_action_same_uri",
+      inputs := deadSave ++ afterDeath true,
+      expected := accepted ++ restoreOutputs ++ [.checkpoint, .acknowledged, .effect .save, .helperLost] ++ afterDeathOutputs}
+  , {name := "helper_death_during_save_blocks_different_action_different_uri",
+      inputs := deadSave ++ afterDeath false,
+      expected := accepted ++ restoreOutputs ++ [.checkpoint, .acknowledged, .effect .save, .helperLost] ++ afterDeathOutputs}
+  , {name := "late_orphan_settlement_does_not_clear_barrier_for_third_window",
+      inputs := deadRestore ++ [.settleOrphan 1, .acquire 3 .acquired, .load 3 .empty,
+        .admit 3 "third-operation" [differentTarget false] [{document with uri := "file:///project/other"}] observations],
+      expected := accepted ++ [.checkpoint, .acknowledged, .effect .restore, .helperLost,
+        .orphanSettled, .acquired, .refused, .refused]}
+  , {name := "cancel_then_helper_death_preserves_same_workspace_barrier",
+      inputs := reserveInputs ++ startRestore ++ [.cancel 1, .release 1, .helperLost 1 false] ++ afterDeath true,
+      expected := accepted ++ [.checkpoint, .acknowledged, .effect .restore,
+        .cancelled, .held, .helperLost] ++ afterDeathOutputs}
+  , {name := "helper_death_during_unacknowledged_admission_before_install_has_no_effect",
+      inputs := [.acquire 1 .acquired, .load 1 .empty, admit, .helperLost 1 false,
+        .finishWrite 1 durable, .launch 1, .acquire 2 .acquired, .load 2 .empty, admit 2 "new"],
+      expected := [.acquired, .loaded, .checkpoint, .helperLost, .refused, .refused,
+        .acquired, .loaded, .checkpoint]}
+  , {name := "helper_death_during_unacknowledged_admission_after_install_is_inert",
+      inputs := [.acquire 1 .acquired, .load 1 .empty, admit, .helperLost 1 true] ++ replay,
+      expected := [.acquired, .loaded, .checkpoint, .helperLost] ++ unresolvedReplay}
+  , {name := "closed_untouched_allows_new_explicit_attempt", initial := retained {reservedSequence with closed := true},
+      inputs := [.acquire 2 .acquired, .load 2 .empty, admit 2 "new"],
+      expected := [.acquired, .loaded, .checkpoint]}
+  , {name := "closed_unknown_blocks_distinct_action_same_uri", initial := retained
+      {reservedSequence with items := reservedSequence.items.map fun progress => {progress with restore := .unknown}, closed := true},
+      inputs := [.acquire 2 .acquired, .load 2 .empty, differentAdmission true],
+      expected := [.acquired, .refused, .refused]}
+  , {name := "closed_unknown_save_blocks_distinct_action_different_uri", initial := retained
+      {restoredSequence with items := restoredSequence.items.map fun progress => {progress with save := ⟨.unknown, false⟩}, closed := true},
+      inputs := [.acquire 2 .acquired, .load 2 .empty, differentAdmission false],
+      expected := [.acquired, .refused, .refused]}
+  , {name := "known_save_conflict_permits_disjoint_explicit_operation", initial := retained
+      (Workspace.ChangeReview.Editor.step restoredSequence (.startSave 0 {saveObservations with diskPostimageCurrent := false} true)).1,
+      inputs := [.acquire 2 .acquired, .load 2 .empty, differentAdmission false],
+      expected := [.acquired, .loaded, .checkpoint]}
+  , {name := "absent_journal_with_known_old_memento_records_refuses",
+      inputs := [.acquire 1 .acquired, .load 1 .records, admit, .launch 1],
+      expected := [.acquired, .refused, .refused, .refused]}
+  , {name := "absent_journal_with_unavailable_old_memento_observation_refuses",
+      inputs := [.acquire 1 .acquired, .load 1 .unavailable, admit, .launch 1],
+      expected := [.acquired, .refused, .refused, .refused]}
+  , {name := "present_journal_does_not_silently_discard_old_memento_records",
+      initial := retained completedSequence,
+      inputs := [.acquire 1 .acquired, .load 1 .records, admit, .launch 1],
+      expected := [.acquired, .refused, .refused, .refused]}
   ]
 
 def trace (world : World) : List Input → List (World × Output)
@@ -176,12 +245,15 @@ private def holderJson (holder : Holder) := object
    ("pending", (holder.pending.map proposalJson).getD "null"),
    ("grant", effectJson holder.grant), ("running", effectJson holder.running)]
 private def worldJson (world : World) := object
-  [("stored", storedJson world.stored), ("holder", (world.holder.map holderJson).getD "null")]
+  [("stored", storedJson world.stored), ("holder", (world.holder.map holderJson).getD "null"),
+   ("orphans", jsonArray (world.orphans.map fun (caller, effect) =>
+     object [("caller", toString caller), ("effect", effectJson effect)]))]
 private def outputJson : Output → String
   | .acquired => "\"acquired\"" | .busy => "\"busy\"" | .loaded => "\"loaded\""
   | .checkpoint => "\"checkpoint\"" | .acknowledged => "\"acknowledged\"" | .refused => "\"refused\""
   | .effect effect => object [("effect", effectJson effect)]
   | .settled => "\"settled\"" | .cancelled => "\"cancelled\"" | .held => "\"held\"" | .released => "\"released\""
+  | .helperLost => "\"helperLost\"" | .orphanSettled => "\"orphanSettled\""
 private def targetJson (t : Target) := object
   [("reference", jsonString t.reference), ("actions", jsonArray (t.actions.map jsonString)), ("uri", jsonString t.uri),
    ("before", jsonString t.before), ("after", jsonString t.after), ("version", toString t.version),
@@ -213,7 +285,8 @@ private def actionJson : Action → String
 private def inputJson : Input → String
   | .acquire caller observation => object [("kind", "\"acquire\""), ("caller", toString caller),
       ("observation", jsonString (match observation with | .acquired => "acquired" | .busy => "busy" | .unavailable => "unavailable"))]
-  | .load caller => object [("kind", "\"load\""), ("caller", toString caller)]
+  | .load caller legacy => object [("kind", "\"load\""), ("caller", toString caller),
+      ("legacy", jsonString (match legacy with | .empty => "empty" | .records => "records" | .unavailable => "unavailable"))]
   | .admit caller id targets documents o => object [("kind", "\"admit\""), ("caller", toString caller),
       ("id", jsonString id), ("targets", jsonArray (targets.map targetJson)),
       ("documents", jsonArray (documents.map documentJson)), ("observations", observationsJson o)]
@@ -225,6 +298,8 @@ private def inputJson : Input → String
   | .settle caller => object [("kind", "\"settle\""), ("caller", toString caller)]
   | .cancel caller => object [("kind", "\"cancel\""), ("caller", toString caller)]
   | .release caller => object [("kind", "\"release\""), ("caller", toString caller)]
+  | .helperLost caller installed => object [("kind", "\"helperLost\""), ("caller", toString caller), ("candidateInstalled", boolJson installed)]
+  | .settleOrphan caller => object [("kind", "\"settleOrphan\""), ("caller", toString caller)]
 private def traceJson (world : World) : List Input → List String
   | [] => []
   | input :: rest =>
