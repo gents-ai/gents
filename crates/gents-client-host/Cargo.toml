@@ -37,6 +37,7 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
+base64.workspace = true
 bs58 = "0.5"
 axum = "0.8"
 futures-util = "0.3"
