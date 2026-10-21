@@ -41,6 +41,11 @@ def renderedCaptureStorageCaseJson (witness : RenderedCaptureStorageCase) : Stri
       "{\"ref\":" ++ toString block.ref
         ++ ",\"pinned_witness\":" ++ toString block.pinnedWitness
         ++ ",\"stored_witness\":" ++ jsonOptionalNat block.storedWitness ++ "}") ++ ","
+    ++ "\"manifest_root\":" ++ (match witness.manifestRoot with
+      | none => "null"
+      | some block => "{\"ref\":" ++ toString block.ref
+          ++ ",\"pinned_witness\":" ++ toString block.pinnedWitness
+          ++ ",\"stored_witness\":" ++ jsonOptionalNat block.storedWitness ++ "}") ++ ","
     ++ "\"decoded_request\":" ++ jsonOptionalNat witness.decodedRequest ++ ","
     ++ "\"send_permitted\":" ++ boolString witness.sendPermitted
     ++ "}"

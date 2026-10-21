@@ -783,6 +783,13 @@ impl CaptureBaseReader for crate::config_client::ConfigAccess {
 }
 
 #[async_trait::async_trait]
+impl CaptureBaseReader for crate::config_client::ConfigApplyTxn<'_> {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+        self.execute(query).await
+    }
+}
+
+#[async_trait::async_trait]
 impl CaptureBaseReader for defra_node::EmbeddedNode {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
         let response = crate::graphql::graphql_with_transaction_retry(
@@ -825,6 +832,10 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
             encoding::DecodedRecord::Legacy(_) | encoding::DecodedRecord::Full(_) => break,
             encoding::DecodedRecord::Manifest { blocks } => {
                 read_manifest_blocks(reader, &blocks, &mut cache.blocks).await?;
+                break;
+            }
+            encoding::DecodedRecord::Tree(tree) => {
+                read_manifest_tree(reader, &tree, &mut cache.blocks).await?;
                 break;
             }
             encoding::DecodedRecord::Delta { base, .. } => {
@@ -920,6 +931,59 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
             Ok((block.bytes.clone(), block.field_commit_cid.clone()))
         },
     )
+}
+
+async fn read_manifest_tree<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    tree: &encoding::ManifestTree,
+    cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,
+) -> Result<()> {
+    let leaves = manifest_tree_leaves(reader, tree, cache).await?;
+    read_manifest_blocks(reader, &leaves, cache).await
+}
+
+async fn manifest_tree_leaves<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    tree: &encoding::ManifestTree,
+    cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,
+) -> Result<Vec<encoding::ManifestEntry>> {
+    tree.validate()?;
+    let mut entries = vec![tree.root.clone()];
+    let mut remaining =
+        encoding::MAX_MANIFEST_BLOCKS * 2 + usize::from(encoding::MAX_MANIFEST_HEIGHT);
+    for _ in 0..tree.height {
+        anyhow::ensure!(
+            entries.len() <= remaining,
+            "capture manifest exhausted resolution fuel"
+        );
+        remaining -= entries.len();
+        read_manifest_blocks(reader, &entries, cache).await?;
+        entries = manifest_children_cached(&entries, cache)?;
+    }
+    anyhow::ensure!(
+        entries.len() == tree.leaves && entries.len() <= remaining,
+        "capture manifest leaf count mismatch"
+    );
+    Ok(entries)
+}
+
+fn manifest_children_cached(
+    entries: &[encoding::ManifestEntry],
+    cache: &std::collections::BTreeMap<String, CachedCaptureBlock>,
+) -> Result<Vec<encoding::ManifestEntry>> {
+    let mut children = Vec::new();
+    for entry in entries {
+        let block = cache
+            .get(&entry.doc_id)
+            .context("capture manifest node is missing")?;
+        encoding::verify_manifest_block(entry, &block.bytes, &block.field_commit_cid)?;
+        children.extend(encoding::manifest_children(&block.bytes)?);
+        anyhow::ensure!(
+            children.len() <= encoding::MAX_MANIFEST_BLOCKS,
+            "capture manifest exceeds leaf bound"
+        );
+    }
+    Ok(children)
 }
 
 async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
@@ -1040,6 +1104,61 @@ pub(crate) async fn preload_manifest_blocks<R: CaptureBaseReader + Sync>(
         }
     }
     Ok(())
+}
+
+pub(crate) async fn preload_manifest_trees<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    trees: &[encoding::ManifestTree],
+    cache: &mut CaptureReadCache,
+) -> Result<()> {
+    let mut pending = trees
+        .iter()
+        .filter(|tree| tree.validate().is_ok())
+        .map(|tree| {
+            (
+                vec![tree.root.clone()],
+                tree.height,
+                tree.leaves,
+                encoding::MAX_MANIFEST_BLOCKS * 2 + usize::from(encoding::MAX_MANIFEST_HEIGHT),
+            )
+        })
+        .collect::<Vec<_>>();
+    while !pending.is_empty() {
+        let manifests = pending
+            .iter()
+            .map(|(entries, _, _, _)| entries.clone())
+            .collect::<Vec<_>>();
+        preload_manifest_blocks(reader, &manifests, cache).await?;
+        pending = pending
+            .into_iter()
+            .filter_map(|(entries, height, leaves, remaining)| {
+                if height == 0 || entries.len() > remaining {
+                    return None;
+                }
+                let remaining = remaining - entries.len();
+                let children = manifest_children_cached(&entries, &cache.blocks).ok()?;
+                if children.len() > remaining || (height == 1 && children.len() != leaves) {
+                    return None;
+                }
+                Some((children, height - 1, leaves, remaining))
+            })
+            .collect();
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) async fn manifest_leaf_entries<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    record: encoding::DecodedRecord,
+) -> Result<Vec<encoding::ManifestEntry>> {
+    match record {
+        encoding::DecodedRecord::Manifest { blocks } => Ok(blocks),
+        encoding::DecodedRecord::Tree(tree) => {
+            manifest_tree_leaves(reader, &tree, &mut Default::default()).await
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 async fn preload_isolate_verification_failures<R: CaptureBaseReader + Sync>(

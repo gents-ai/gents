@@ -17,6 +17,31 @@ use crate::graphql::escape_graphql_string;
 #[derive(Clone)]
 pub struct DefraRenderedRequestSink {
     node: Arc<EmbeddedNode>,
+    block_pins: Arc<std::sync::Mutex<CapturePinCache>>,
+}
+
+type CapturePinCache =
+    std::collections::BTreeMap<CapturePinScope, std::collections::BTreeMap<String, BlockPin>>;
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CapturePinScope {
+    node_did: String,
+    requester_did: String,
+    session_id: String,
+    source: String,
+    capture_scope: String,
+}
+
+impl CapturePinScope {
+    fn for_capture(rendered: &RenderedCompletionRequest) -> Result<Self> {
+        Ok(Self {
+            node_did: rendered.node_did.clone(),
+            requester_did: rendered.requester_did.clone(),
+            session_id: rendered.session_id.clone(),
+            source: serde_json::to_string(&rendered.source)?,
+            capture_scope: rendered.capture_scope.clone(),
+        })
+    }
 }
 
 impl std::fmt::Debug for DefraRenderedRequestSink {
@@ -27,7 +52,10 @@ impl std::fmt::Debug for DefraRenderedRequestSink {
 
 impl DefraRenderedRequestSink {
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
-        Self { node }
+        Self {
+            node,
+            block_pins: Default::default(),
+        }
     }
 
     async fn stored_fact(&self, capture_key: &str) -> Result<Option<Value>> {
@@ -281,6 +309,14 @@ impl DefraRenderedRequestSink {
             super::encoding::chunk_capture_payloads([&request_layout, &provenance_payload_layout]);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
 
+        let pin_scope = CapturePinScope::for_capture(&rendered)?;
+        let cached_pins = self
+            .block_pins
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&pin_scope)
+            .cloned()
+            .unwrap_or_default();
         let capture_container = crate::config_client::ConfigAccess::transact_local_write(
             &self.node,
             None,
@@ -288,13 +324,19 @@ impl DefraRenderedRequestSink {
             |txn| {
                 let (request_chunks, provenance_chunks) = (&request_chunks, &provenance_chunks);
                 let (blocks, rendered, provenance_json) = (&blocks, &rendered, &provenance_json);
+                let cached_pins = &cached_pins;
                 let context_accounting = &context_accounting;
                 Box::pin(async move {
-                    let pins = pin_capture_blocks(txn, rendered, blocks).await?;
-                    let container = super::encoding::encode_container(
-                        &encode_payload_manifest(request_chunks, &pins)?,
-                        &encode_payload_manifest(provenance_chunks, &pins)?,
-                    )?;
+                    let mut pins = pin_capture_blocks(txn, rendered, blocks, cached_pins).await?;
+                    let mut used = std::collections::BTreeSet::new();
+                    let request =
+                        encode_payload_tree(txn, rendered, request_chunks, &mut pins, &mut used)
+                            .await?;
+                    let provenance =
+                        encode_payload_tree(txn, rendered, provenance_chunks, &mut pins, &mut used)
+                            .await?;
+                    let container = super::encoding::encode_container(&request, &provenance)?;
+                    pins.retain(|key, _| used.contains(key));
                     Self::create_in_txn(txn, rendered, &container, provenance_json).await?;
                     if let Some((call_id, accounting_json)) = context_accounting {
                         Self::persist_inference_call_context_accounting_in_txn(
@@ -304,14 +346,18 @@ impl DefraRenderedRequestSink {
                         )
                         .await?;
                     }
-                    Ok(container)
+                    Ok((container, pins))
                 })
             },
         )
         .await;
 
         match capture_container {
-            Ok(_) => {
+            Ok((_, pins)) => {
+                self.block_pins
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .insert(pin_scope, pins);
                 tracing::debug!(
                     capture_key = %rendered.capture_key,
                     request_id = %rendered.request_id,
@@ -491,6 +537,7 @@ fn unique_blocks<'a>(
         .collect()
 }
 
+#[derive(Clone)]
 struct BlockPin {
     doc_id: String,
     field_commit_cid: String,
@@ -544,23 +591,46 @@ async fn prior_block_pins_in_txn(
     let (Some(version), Some(stored)) = (version, stored) else {
         return Ok(pins);
     };
+    let mut cache = std::collections::BTreeMap::new();
     for kind in [
         super::CapturePayloadKind::RequestBody,
         super::CapturePayloadKind::ProvenancePayload,
     ] {
-        if let Ok(super::encoding::DecodedRecord::Manifest { blocks }) =
-            super::encoding::decode_capture_record(version, stored, kind)
-        {
-            for entry in blocks {
-                pins.insert(
-                    entry.content_key,
-                    BlockPin {
-                        doc_id: entry.doc_id,
-                        field_commit_cid: entry.field_commit_cid,
-                    },
-                );
+        let Ok(record) = super::encoding::decode_capture_record(version, stored, kind) else {
+            continue;
+        };
+        let entries = match record {
+            super::encoding::DecodedRecord::Manifest { blocks } => blocks,
+            super::encoding::DecodedRecord::Tree(tree) => {
+                super::manifest_tree_leaves(txn, &tree, &mut cache)
+                    .await
+                    .map_err(
+                        |error| match error.downcast::<super::CaptureStoreReadError>() {
+                            Ok(error) => error.0,
+                            Err(error) => error,
+                        },
+                    )?
             }
+            _ => continue,
+        };
+        for entry in entries {
+            pins.insert(
+                entry.content_key,
+                BlockPin {
+                    doc_id: entry.doc_id,
+                    field_commit_cid: entry.field_commit_cid,
+                },
+            );
         }
+    }
+    for (doc_id, block) in cache {
+        pins.insert(
+            block.content_key,
+            BlockPin {
+                doc_id,
+                field_commit_cid: block.field_commit_cid,
+            },
+        );
     }
     Ok(pins)
 }
@@ -670,18 +740,31 @@ async fn pin_capture_blocks(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     rendered: &RenderedCompletionRequest,
     blocks: &[&super::encoding::ChunkedBlock],
+    cached: &std::collections::BTreeMap<String, BlockPin>,
 ) -> Result<std::collections::BTreeMap<String, BlockPin>> {
-    let mut pins = prior_block_pins_in_txn(txn, rendered).await?;
+    let mut pins = cached.clone();
+    if pins.is_empty() {
+        pins = prior_block_pins_in_txn(txn, rendered).await?;
+    }
+    let keys = blocks
+        .iter()
+        .map(|block| block.content_key.as_str())
+        .collect::<Vec<_>>();
+    let mut doc_ids = stored_block_doc_ids_in_txn(txn, &keys).await?;
+    for block in blocks {
+        if let Some(pin) = pins.get(&block.content_key) {
+            anyhow::ensure!(
+                doc_ids.get(&block.content_key) == Some(&pin.doc_id),
+                "capture block {} was deleted or replaced; refusing to publish a stale reference",
+                pin.doc_id
+            );
+        }
+    }
     let unpinned: Vec<&super::encoding::ChunkedBlock> = blocks
         .iter()
         .copied()
         .filter(|block| !pins.contains_key(&block.content_key))
         .collect();
-    let keys: Vec<&str> = unpinned
-        .iter()
-        .map(|block| block.content_key.as_str())
-        .collect();
-    let mut doc_ids = stored_block_doc_ids_in_txn(txn, &keys).await?;
     let missing = unpinned
         .iter()
         .copied()
@@ -707,10 +790,10 @@ async fn pin_capture_blocks(
     Ok(pins)
 }
 
-fn encode_payload_manifest(
+fn payload_entries(
     chunks: &[super::encoding::ChunkedBlock],
     pins: &std::collections::BTreeMap<String, BlockPin>,
-) -> Result<super::encoding::EncodedJson> {
+) -> Result<Vec<super::encoding::ManifestEntry>> {
     let entries = chunks
         .iter()
         .map(|chunk| {
@@ -726,7 +809,51 @@ fn encode_payload_manifest(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    super::encoding::encode_manifest(&entries)
+    Ok(entries)
+}
+
+async fn encode_payload_tree(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    rendered: &RenderedCompletionRequest,
+    chunks: &[super::encoding::ChunkedBlock],
+    pins: &mut std::collections::BTreeMap<String, BlockPin>,
+    used: &mut std::collections::BTreeSet<String>,
+) -> Result<super::encoding::EncodedJson> {
+    use super::encoding::{self, ChunkedBlock, ManifestTree};
+    anyhow::ensure!(
+        !chunks.is_empty() && chunks.len() <= encoding::MAX_MANIFEST_BLOCKS,
+        "capture manifest exceeds leaf bound"
+    );
+    used.extend(chunks.iter().map(|chunk| chunk.content_key.clone()));
+    let leaves = chunks.len();
+    let mut entries = payload_entries(chunks, pins)?;
+    let mut height = 0;
+    while entries.len() > 1 {
+        anyhow::ensure!(
+            height < encoding::MAX_MANIFEST_HEIGHT,
+            "capture manifest exceeds maximum height"
+        );
+        let nodes = encoding::manifest_groups(&entries)
+            .into_iter()
+            .map(|group| {
+                let bytes = serde_json::to_vec(group)?;
+                Ok(ChunkedBlock {
+                    content_key: encoding::block_content_key(&bytes),
+                    bytes,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let blocks = unique_blocks(&[&nodes]);
+        *pins = pin_capture_blocks(txn, rendered, &blocks, pins).await?;
+        used.extend(nodes.iter().map(|node| node.content_key.clone()));
+        entries = payload_entries(&nodes, pins)?;
+        height += 1;
+    }
+    encoding::encode_tree(ManifestTree {
+        root: entries.remove(0),
+        height,
+        leaves,
+    })
 }
 
 fn single_mutation_result(data: &Value) -> Option<&Value> {
@@ -958,21 +1085,27 @@ mod tests {
         sink.capture(rendered.clone()).await.expect("capture");
 
         let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
-        assert_eq!(row["capture_version"].as_u64(), Some(3));
+        assert_eq!(
+            row["capture_version"].as_u64(),
+            Some(u64::from(gents_protocol::rendered_request::CAPTURE_VERSION))
+        );
         let stored = row["request_json"].as_str().unwrap();
         let container: Value = serde_json::from_str(stored).unwrap();
-        assert_eq!(container["request_body"]["kind"], "manifest");
-        assert_eq!(container["provenance_payload"]["kind"], "manifest");
+        assert_eq!(container["request_body"]["kind"], "tree");
+        assert_eq!(container["provenance_payload"]["kind"], "tree");
         let blocks = block_rows(node.as_ref()).await;
         assert!(
             blocks.len() > 1,
             "a body spanning several blocks must be stored as blocks"
         );
 
-        let (request, provenance) =
-            super::super::decode_capture_pair_embedded(node.as_ref(), 3, stored)
-                .await
-                .expect("decode v3 capture pair");
+        let (request, provenance) = super::super::decode_capture_pair_embedded(
+            node.as_ref(),
+            gents_protocol::rendered_request::CAPTURE_VERSION,
+            stored,
+        )
+        .await
+        .expect("decode captured pair");
         assert_eq!(
             request,
             super::super::canonical_json(&rendered.request_json)
@@ -1015,7 +1148,7 @@ mod tests {
         let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
         let decoded = super::super::decode_capture_pair_embedded(
             node.as_ref(),
-            3,
+            super::super::CAPTURE_VERSION,
             row["request_json"].as_str().unwrap(),
         )
         .await
@@ -1084,7 +1217,7 @@ mod tests {
         assert_eq!(
             super::super::decode_capture_json_embedded(
                 node.as_ref(),
-                3,
+                gents_protocol::rendered_request::CAPTURE_VERSION,
                 stored,
                 super::super::CapturePayloadKind::RequestBody,
             )
@@ -1109,8 +1242,12 @@ mod tests {
         sink.capture(first).await.expect("first capture");
         let first_row =
             stored_capture(node.as_ref(), &rendered_turn(0, json!({})).capture_key).await;
-        let first_entries =
-            manifest_entries(&first_row["request_json"].as_str().unwrap(), "request_body");
+        let first_entries = manifest_entries(
+            node.as_ref(),
+            first_row["request_json"].as_str().unwrap(),
+            "request_body",
+        )
+        .await;
         let first_blocks = block_rows(node.as_ref()).await;
 
         let mut messages = json!([{"role": "user", "content": body}]);
@@ -1123,9 +1260,11 @@ mod tests {
 
         let second_row = stored_capture(node.as_ref(), &second.capture_key).await;
         let second_entries = manifest_entries(
-            &second_row["request_json"].as_str().unwrap(),
+            node.as_ref(),
+            second_row["request_json"].as_str().unwrap(),
             "request_body",
-        );
+        )
+        .await;
         let by_key = |entries: &[(String, String, String)]| {
             entries
                 .iter()
@@ -1155,20 +1294,217 @@ mod tests {
         node.shutdown().await;
     }
 
-    fn manifest_entries(stored: &str, payload: &str) -> Vec<(String, String, String)> {
-        let container: Value = serde_json::from_str(stored).unwrap();
-        container[payload]["blocks"]
-            .as_array()
+    async fn manifest_entries(
+        node: &EmbeddedNode,
+        stored: &str,
+        payload: &str,
+    ) -> Vec<(String, String, String)> {
+        let kind = if payload == "request_body" {
+            super::super::CapturePayloadKind::RequestBody
+        } else {
+            super::super::CapturePayloadKind::ProvenancePayload
+        };
+        let super::super::encoding::DecodedRecord::Tree(tree) =
+            super::super::encoding::decode_capture_record(
+                gents_protocol::rendered_request::CAPTURE_VERSION,
+                stored,
+                kind,
+            )
             .unwrap()
-            .iter()
-            .map(|entry| {
-                (
-                    entry["doc_id"].as_str().unwrap().to_owned(),
-                    entry["content_key"].as_str().unwrap().to_owned(),
-                    entry["field_commit_cid"].as_str().unwrap().to_owned(),
-                )
-            })
+        else {
+            panic!("expected shared manifest")
+        };
+        let mut cache = std::collections::BTreeMap::new();
+        super::super::read_manifest_tree(node, &tree, &mut cache)
+            .await
+            .unwrap();
+        cache
+            .into_iter()
+            .map(|(doc_id, block)| (doc_id, block.content_key, block.field_commit_cid))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn cached_capture_pins_survive_interleaved_scopes() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let body = json!({"messages":[{"role":"user","content":capture_text(83, 24 * 1024)}]});
+        let first = rendered_turn(0, body.clone());
+        let mut other = first.clone();
+        other.session_id = "other-session".into();
+        other.capture_key = super::super::capture_key(
+            &other.node_did,
+            &other.session_id,
+            &other.request_doc_id,
+            &other.capture_scope,
+            other.turn_index,
+            other.attempt,
+        )
+        .unwrap();
+        sink.capture(first.clone()).await.unwrap();
+        sink.capture(other.clone()).await.unwrap();
+        sink.capture(rendered_turn(1, body)).await.unwrap();
+        {
+            let cache = sink.block_pins.lock().unwrap();
+            assert_eq!(cache.len(), 2);
+            assert!(cache.contains_key(&CapturePinScope::for_capture(&first).unwrap()));
+            assert!(cache.contains_key(&CapturePinScope::for_capture(&other).unwrap()));
+        }
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn deleted_blocks_never_publish_cached_or_reloaded_references() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let body = json!({"messages":[{"role":"user","content":capture_text(89, 24 * 1024)}]});
+        let first = rendered_turn(0, body.clone());
+        sink.capture(first.clone()).await.unwrap();
+        let row = stored_capture(node.as_ref(), &first.capture_key).await;
+        let record = super::super::encoding::decode_capture_record(
+            super::super::CAPTURE_VERSION,
+            row["request_json"].as_str().unwrap(),
+            super::super::CapturePayloadKind::RequestBody,
+        )
+        .unwrap();
+        let leaves = super::super::manifest_leaf_entries(node.as_ref(), record)
+            .await
+            .unwrap();
+        let id = escape_graphql_string(&leaves[0].doc_id);
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "test.delete_capture_block",
+            &format!(r#"mutation {{ delete_RenderedRequestBlock(docID: "{id}") {{ _docID }} }}"#),
+        )
+        .await
+        .unwrap();
+        let next = rendered_turn(1, body);
+        let error = sink.capture(next.clone()).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("stale reference"),
+            "{error:#}"
+        );
+        assert!(sink.stored_fact(&next.capture_key).await.unwrap().is_none());
+        let reopened = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let error = reopened.capture(next.clone()).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("stale reference"),
+            "{error:#}"
+        );
+        assert!(reopened
+            .stored_fact(&next.capture_key)
+            .await
+            .unwrap()
+            .is_none());
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
+        let _trace = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_env_filter("off,gents::rendered_request::sink=info")
+                .with_test_writer()
+                .finish(),
+        );
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let mut sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let mut messages = vec![json!({"role": "user", "content": capture_text(71, 256 * 1024)})];
+        let mut first_pins = std::collections::BTreeSet::new();
+        let mut flat_bytes = 0;
+        let mut root_bytes = 0;
+        let mut shared_nodes = std::collections::BTreeMap::new();
+        for turn in 0..12 {
+            if turn == 6 {
+                sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+            }
+            messages
+                .push(json!({"role": "user", "content": capture_text(100 + turn as u64, 4096)}));
+            let rendered = rendered_turn(turn, json!({"model":"m","messages":messages}));
+            sink.capture(rendered.clone()).await.unwrap();
+            let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
+            let stored = row["request_json"].as_str().unwrap();
+            assert!(
+                stored.len() < 1200,
+                "capture rewrote a growing manifest: {} bytes",
+                stored.len()
+            );
+            root_bytes += stored.len();
+            let mut cache = std::collections::BTreeMap::new();
+            let mut flat = Vec::new();
+            for kind in [
+                super::super::CapturePayloadKind::RequestBody,
+                super::super::CapturePayloadKind::ProvenancePayload,
+            ] {
+                let super::super::encoding::DecodedRecord::Tree(tree) =
+                    super::super::encoding::decode_capture_record(
+                        super::super::CAPTURE_VERSION,
+                        stored,
+                        kind,
+                    )
+                    .unwrap()
+                else {
+                    panic!("expected shared manifest");
+                };
+                let leaves = super::super::manifest_tree_leaves(node.as_ref(), &tree, &mut cache)
+                    .await
+                    .unwrap();
+                flat.push(super::super::encoding::encode_manifest(&leaves).unwrap());
+            }
+            flat_bytes += super::super::encoding::encode_container(&flat[0], &flat[1])
+                .unwrap()
+                .len();
+            if turn > 0 {
+                assert!(
+                    cache
+                        .values()
+                        .any(|block| shared_nodes.contains_key(&block.content_key)),
+                    "turn {turn} must reuse internal manifest nodes, including after reopening"
+                );
+            }
+            for block in cache.values() {
+                shared_nodes.insert(block.content_key.clone(), block.bytes.len());
+            }
+            let pins = manifest_entries(node.as_ref(), stored, "request_body").await;
+            if turn == 0 {
+                first_pins.extend(pins.iter().cloned());
+            } else {
+                assert!(
+                    pins.iter().any(|pin| first_pins.contains(pin)),
+                    "turn {turn} must retain original immutable references"
+                );
+            }
+            let decoded = super::super::decode_capture_pair_embedded(
+                node.as_ref(),
+                gents_protocol::rendered_request::CAPTURE_VERSION,
+                stored,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decoded.0,
+                super::super::canonical_json(&rendered.request_json)
+            );
+            assert_eq!(
+                decoded.1,
+                super::super::canonical_json(&rendered.provenance_payload_json)
+            );
+        }
+        let shared_bytes = root_bytes + shared_nodes.values().sum::<usize>();
+        assert!(
+            shared_bytes < flat_bytes,
+            "shared={shared_bytes}, flat={flat_bytes}"
+        );
+        tracing::info!(
+            flat_bytes,
+            root_bytes,
+            shared_bytes,
+            "capture reference storage across growing turns"
+        );
+        node.shutdown().await;
     }
 
     #[tokio::test]
@@ -1255,7 +1591,7 @@ mod tests {
             assert_eq!(
                 super::super::decode_capture_json_embedded(
                     node.as_ref(),
-                    3,
+                    super::super::CAPTURE_VERSION,
                     row["request_json"].as_str().unwrap(),
                     super::super::CapturePayloadKind::RequestBody,
                 )

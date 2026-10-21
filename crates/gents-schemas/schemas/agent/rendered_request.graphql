@@ -3,7 +3,7 @@
 # a send is legal only after the matching (capture_key, canonical request) is
 # durable. `@branchable` is deliberate and irreversible; it is the bulk-backfill
 # and collection-scoped-ACP precondition, not the content address: integrity
-# comes from the DefraDB field commit CID for `request_json`. v3 rows are
+# comes from the DefraDB field commit CID for `request_json`. Capture payloads are
 # manifests of RenderedRequestBlock references; the two collections are one
 # sync unit. No `@policy` and no encryption: rows on this node remain
 # anonymously readable, so #840's participant boundary is NOT met as shipped.
@@ -29,7 +29,7 @@ type RenderedRequest @branchable @index(fields: ["node_did", "requester_did", "s
     # The owned completion loop's turn and retry counters.
     turn_index: Int @immutable
     attempt: Int @immutable
-    # Capture format version; gates how `provenance_json` is interpreted.
+    # Capture format version; selects the request and provenance readers.
     capture_version: Int @immutable
     model_name: String @immutable
     # Provider wire shape the request was sent on, derived from the request

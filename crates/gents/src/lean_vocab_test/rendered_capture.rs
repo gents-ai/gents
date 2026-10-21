@@ -29,6 +29,7 @@ pub(crate) struct LeanRenderedCaptureStorageCase {
     pub(crate) max_depth: usize,
     pub(crate) base_verified: bool,
     pub(crate) manifest_blocks: Vec<LeanRenderedCaptureManifestBlock>,
+    pub(crate) manifest_root: Option<LeanRenderedCaptureManifestBlock>,
     pub(crate) decoded_request: Option<u64>,
     pub(crate) send_permitted: bool,
 }

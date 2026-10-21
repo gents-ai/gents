@@ -1725,6 +1725,7 @@ async fn preload_replay_capture_blocks(
     cache: &mut crate::rendered_request::CaptureReadCache,
 ) -> Result<()> {
     let mut manifests = Vec::new();
+    let mut trees = Vec::new();
     for rows in capture_rows.values() {
         let [capture] = rows.as_slice() else {
             continue;
@@ -1741,17 +1742,20 @@ async fn preload_replay_capture_blocks(
         else {
             continue;
         };
-        if let Ok(crate::rendered_request::encoding::DecodedRecord::Manifest { blocks }) =
-            crate::rendered_request::encoding::decode_capture_record(
-                version,
-                stored,
-                crate::rendered_request::CapturePayloadKind::RequestBody,
-            )
-        {
-            manifests.push(blocks);
+        match crate::rendered_request::encoding::decode_capture_record(
+            version,
+            stored,
+            crate::rendered_request::CapturePayloadKind::RequestBody,
+        ) {
+            Ok(crate::rendered_request::encoding::DecodedRecord::Manifest { blocks }) => {
+                manifests.push(blocks)
+            }
+            Ok(crate::rendered_request::encoding::DecodedRecord::Tree(tree)) => trees.push(tree),
+            _ => {}
         }
     }
-    crate::rendered_request::preload_manifest_blocks(node, &manifests, cache).await
+    crate::rendered_request::preload_manifest_blocks(node, &manifests, cache).await?;
+    crate::rendered_request::preload_manifest_trees(node, &trees, cache).await
 }
 
 /// Validate a restored replay's physical request and bounded transcript view
@@ -2178,7 +2182,7 @@ fn warn_unverifiable_replay_capture(capture_key: &str, error: &anyhow::Error) {
 /// Capture versions whose stored request body can be decoded for reasoning
 /// replay. v1 rows keep their own readers and never carry a replayable
 /// provenance manifest; later versions decode through the versioned container.
-const REPLAY_CAPTURE_VERSIONS: &[u32] = &[2, 3];
+const REPLAY_CAPTURE_VERSIONS: &[u32] = &[2, 3, 4];
 
 #[allow(clippy::too_many_arguments)]
 async fn verify_replay_capture(

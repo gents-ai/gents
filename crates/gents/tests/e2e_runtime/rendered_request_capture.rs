@@ -303,6 +303,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     let mut old_bytes = 0usize;
     let mut new_bytes = 0usize;
     let mut referenced_blocks = 0usize;
+    let mut leaf_keys = std::collections::BTreeSet::new();
     let mut previous_body_bytes = 0usize;
     let mut last_turn_new_content_bytes = 0usize;
     let mut last_turn_row_bytes = 0usize;
@@ -353,13 +354,18 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         let response = db.node.execute(&query).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let row = response.data.unwrap()["RenderedRequest"][0].clone();
-        assert_eq!(row["capture_version"].as_u64(), Some(3));
+        assert_eq!(
+            row["capture_version"].as_u64(),
+            Some(u64::from(gents::rendered_request::CAPTURE_VERSION))
+        );
         let stored = row["request_json"].as_str().unwrap();
         let container: Value = serde_json::from_str(stored).unwrap();
         for payload in ["request_body", "provenance_payload"] {
             let record = stored_payload_record(&container, payload);
-            assert_eq!(record["kind"], "manifest", "payload {payload}");
-            referenced_blocks += record["blocks"].as_array().unwrap().len();
+            assert_eq!(record["kind"], "tree", "payload {payload}");
+            referenced_blocks += record["tree"]["leaves"].as_u64().unwrap() as usize;
+            assert!(record["tree"]["height"].as_u64().unwrap() <= 1);
+            leaf_keys.extend(manifest_payload_keys(db.node.as_ref(), &container, payload).await);
         }
         let decoded = gents::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
@@ -408,12 +414,12 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
          anything"
     );
     assert!(
-        block_rows < 4 * turns,
+        leaf_keys.len() < 4 * turns && block_rows <= leaf_keys.len() + 2 * turns,
         "{block_rows} stored blocks for {turns} turns: storage must grow linearly, not with \
          the conversation"
     );
     assert!(
-        block_rows * 2 < referenced_blocks,
+        leaf_keys.len() * 2 < referenced_blocks,
         "{block_rows} stored blocks against {referenced_blocks} referenced: turns must reuse \
          blocks rather than re-store them"
     );
@@ -516,22 +522,33 @@ fn stored_payload_record(container: &Value, payload: &str) -> Value {
     record
 }
 
-fn manifest_payload_keys(container: &Value, payload: &str) -> Vec<String> {
+async fn manifest_payload_keys(
+    node: &EmbeddedNode,
+    container: &Value,
+    payload: &str,
+) -> Vec<String> {
     let record = stored_payload_record(container, payload);
-    assert_eq!(
-        record["kind"], "manifest",
-        "payload {payload} must stay a block manifest"
-    );
-    record["blocks"]
-        .as_array()
-        .expect("manifest block references")
+    assert_eq!(record["kind"], "tree");
+    let mut entries = vec![record["tree"]["root"].clone()];
+    for _ in 0..record["tree"]["height"].as_u64().unwrap() {
+        let mut children = Vec::new();
+        for entry in entries {
+            let id = escape_graphql_string(entry["doc_id"].as_str().unwrap());
+            let response = node
+                .execute(&format!(
+                    r#"{{ RenderedRequestBlock(docIDs:["{id}"]) {{ payload }} }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            let data = response.data.unwrap();
+            let payload = data["RenderedRequestBlock"][0]["payload"].as_str().unwrap();
+            children.extend(serde_json::from_str::<Vec<Value>>(payload).unwrap());
+        }
+        entries = children;
+    }
+    entries
         .iter()
-        .map(|entry| {
-            entry["content_key"]
-                .as_str()
-                .expect("manifest entry content key")
-                .to_string()
-        })
+        .map(|entry| entry["content_key"].as_str().unwrap().to_owned())
         .collect()
 }
 
@@ -604,7 +621,8 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     let pre_edit_container: Value =
         serde_json::from_str(&stored_capture_request_json(db.node.as_ref(), &pre_edit_key).await)
             .unwrap();
-    let pre_edit_body = manifest_payload_keys(&pre_edit_container, "request_body");
+    let pre_edit_body =
+        manifest_payload_keys(db.node.as_ref(), &pre_edit_container, "request_body").await;
     assert!(
         pre_edit_body.len() >= 16,
         "the pre-edit body must span many blocks for tail reuse to mean anything: {}",
@@ -628,8 +646,9 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
 
     let edited_stored = stored_capture_request_json(db.node.as_ref(), &edited_key).await;
     let edited_container: Value = serde_json::from_str(&edited_stored).unwrap();
-    let post_edit_body = manifest_payload_keys(&edited_container, "request_body");
-    manifest_payload_keys(&edited_container, "provenance_payload");
+    let post_edit_body =
+        manifest_payload_keys(db.node.as_ref(), &edited_container, "request_body").await;
+    manifest_payload_keys(db.node.as_ref(), &edited_container, "provenance_payload").await;
 
     assert!(
         !post_edit_body.contains(&pre_edit_body[0]),
@@ -2762,4 +2781,176 @@ async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint:
     gents::backend_registry::set_backend_probe_status(node, owner, CAPTURE_BACKEND_ID, "healthy")
         .await
         .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an exported capture workload and an isolated output home"]
+async fn capture_storage_workload_measurement() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::time::Instant;
+    let input = std::env::var("GENTS_CAPTURE_WORKLOAD").expect("GENTS_CAPTURE_WORKLOAD");
+    let home_path = std::env::var("GENTS_CAPTURE_BENCH_HOME").expect("GENTS_CAPTURE_BENCH_HOME");
+    let report_path =
+        std::env::var("GENTS_CAPTURE_BENCH_REPORT").expect("GENTS_CAPTURE_BENCH_REPORT");
+    let input: Value = serde_json::from_slice(&std::fs::read(input).unwrap()).unwrap();
+    let samples = input["captures"].as_array().unwrap();
+    assert!(!samples.is_empty());
+    let home = gents::eval::runner::embedded::EmbeddedHome::create_retained(std::path::Path::new(
+        &home_path,
+    ))
+    .await
+    .unwrap();
+    let node = home.node.clone();
+    let cold_sink = std::env::var_os("GENTS_CAPTURE_COLD_SINK").is_some();
+    let mut sink = gents::rendered_request::DefraRenderedRequestSink::new(node.clone());
+    let mut writes = Vec::new();
+    let mut expected = Vec::new();
+    for (turn, sample) in samples.iter().enumerate() {
+        if cold_sink && turn > 0 {
+            sink = gents::rendered_request::DefraRenderedRequestSink::new(node.clone());
+        }
+        let body: Value = serde_json::from_str(sample["request_json"].as_str().unwrap()).unwrap();
+        let provenance: Value =
+            serde_json::from_str(sample["provenance_payload_json"].as_str().unwrap()).unwrap();
+        let mut rendered = rendered_fixture(body.clone());
+        rendered.turn_index = turn;
+        rendered.capture_key = gents::rendered_request::capture_key(
+            &rendered.node_did,
+            &rendered.session_id,
+            &rendered.request_doc_id,
+            &rendered.capture_scope,
+            turn,
+            rendered.attempt,
+        )
+        .unwrap();
+        rendered.provenance_payload_json = provenance.clone();
+        rendered.provenance_json =
+            serde_json::from_str(sample["provenance_json"].as_str().unwrap()).unwrap();
+        let started = Instant::now();
+        sink.capture(rendered.clone()).await.unwrap();
+        writes.push(started.elapsed().as_secs_f64() * 1000.0);
+        expected.push((
+            rendered.capture_key,
+            canonical(&body),
+            canonical(&provenance),
+        ));
+    }
+    let rows = node
+        .execute("{ RenderedRequest { capture_key request_json provenance_json } }")
+        .await;
+    assert!(!rows.has_errors(), "{:?}", rows.errors);
+    let rows = rows.data.unwrap()["RenderedRequest"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let blocks = node
+        .execute("{ RenderedRequestBlock { _docID payload } }")
+        .await;
+    assert!(!blocks.has_errors(), "{:?}", blocks.errors);
+    let blocks = blocks.data.unwrap()["RenderedRequestBlock"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["_docID"].as_str().unwrap().to_owned(),
+                row["payload"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut containers = 0usize;
+    let mut provenance_bytes = 0usize;
+    let mut stored_references = 0usize;
+    let mut logical_references = 0usize;
+    let mut unique_pairs = BTreeSet::new();
+    let mut nodes = BTreeSet::new();
+    for row in &rows {
+        let raw = row["request_json"].as_str().unwrap();
+        containers += raw.len();
+        provenance_bytes += row["provenance_json"].as_str().unwrap().len();
+        let container: Value = serde_json::from_str(raw).unwrap();
+        for payload in ["request_body", "provenance_payload"] {
+            let record = stored_payload_record(&container, payload);
+            let mut frontier = if record["kind"] == "manifest" {
+                record["blocks"].as_array().unwrap().clone()
+            } else {
+                vec![record["tree"]["root"].clone()]
+            };
+            stored_references += frontier.len();
+            let height = record["tree"]["height"].as_u64().unwrap_or(0);
+            for _ in 0..height {
+                let mut children = Vec::new();
+                for entry in frontier {
+                    let id = entry["doc_id"].as_str().unwrap();
+                    let next: Vec<Value> = serde_json::from_str(&blocks[id]).unwrap();
+                    if nodes.insert(id.to_owned()) {
+                        stored_references += next.len();
+                    }
+                    children.extend(next);
+                }
+                frontier = children;
+            }
+            logical_references += frontier.len();
+            for entry in frontier {
+                unique_pairs.insert((
+                    entry["doc_id"].as_str().unwrap().to_owned(),
+                    entry["field_commit_cid"].as_str().unwrap().to_owned(),
+                ));
+            }
+        }
+    }
+    let mut reads = Vec::new();
+    for _ in 0..3 {
+        for (key, body, provenance) in &expected {
+            let started = Instant::now();
+            let response = node.execute(&format!(
+                r#"{{ RenderedRequest(filter: {{capture_key: {{_eq: "{}"}}}}, limit: 1) {{ request_json }} }}"#,
+                escape_graphql_string(key))).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            let data = response.data.unwrap();
+            let stored = data["RenderedRequest"][0]["request_json"].as_str().unwrap();
+            let decoded = gents::rendered_request::decode_capture_pair_embedded(
+                node.as_ref(),
+                gents::rendered_request::CAPTURE_VERSION,
+                stored,
+            )
+            .await
+            .unwrap();
+            reads.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(&decoded.0, body);
+            assert_eq!(&decoded.1, provenance);
+        }
+    }
+    let summary = |mut values: Vec<f64>| {
+        values.sort_by(f64::total_cmp);
+        serde_json::json!({"count":values.len(),"p50_ms":values[values.len()/2],
+            "p95_ms":values[((values.len()*95).div_ceil(100)-1).min(values.len()-1)],
+            "total_ms":values.iter().sum::<f64>()})
+    };
+    let payload_bytes: usize = blocks.values().map(String::len).sum();
+    let node_bytes: usize = nodes.iter().map(|id| blocks[id].len()).sum();
+    let mut report = serde_json::json!({"capture_version":gents::rendered_request::CAPTURE_VERSION,
+        "captures":rows.len(),"cold_sink":cold_sink,"manifest_nodes":nodes.len(),"container_bytes":containers,"container_bytes_per_capture":containers as f64 / rows.len() as f64,
+        "provenance_metadata_bytes":provenance_bytes,"block_payload_bytes":payload_bytes,"manifest_node_bytes":node_bytes,
+        "capture_component_bytes":containers+provenance_bytes+payload_bytes,
+        "stored_reference_occurrences":stored_references,"logical_leaf_references":logical_references,
+        "unique_leaf_pairs":unique_pairs.len(),"write":summary(writes),"resolve":summary(reads)});
+    node.shutdown().await;
+    fn home_bytes(path: &std::path::Path) -> u64 {
+        std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() {
+                    home_bytes(&entry.path())
+                } else {
+                    metadata.len()
+                }
+            })
+            .sum()
+    }
+    report["closed_home_file_bytes"] =
+        serde_json::json!(home_bytes(std::path::Path::new(&home_path)));
+    std::fs::write(report_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
 }
