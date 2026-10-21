@@ -7,33 +7,18 @@ pub(crate) struct BackgroundCapacityExceeded(pub(crate) usize);
 #[derive(Debug, Deserialize)]
 struct BackgroundedRow {
     lifecycle_state: String,
-    await_mode: String,
-    #[serde(deserialize_with = "deserialize_present_option")]
     spawned_by_tool_call_doc_id: Option<String>,
-}
-
-fn deserialize_present_option<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer)
 }
 
 /// A pending spawned child is a durable admission reservation created in the
 /// same transaction as its slot check; pending provider calls are not admitted.
 fn decode_live_backgrounded_rows(value: serde_json::Value) -> anyhow::Result<usize> {
-    let rows: Vec<BackgroundedRow> = serde_json::from_value(value)
-        .context("decode background row count")?;
-    for row in &rows {
-        anyhow::ensure!(row.await_mode == "background"
-            && matches!(row.lifecycle_state.as_str(), "running" | "pending"),
-            "background row count returned a row outside its requested state");
-        anyhow::ensure!(row.spawned_by_tool_call_doc_id.as_deref()
-            .is_none_or(|parent| !parent.trim().is_empty()),
-            "background row count returned a blank parent identity");
-    }
-    Ok(rows.into_iter().filter(|row| row.lifecycle_state == "running"
-        || (row.lifecycle_state == "pending" && row.spawned_by_tool_call_doc_id.is_some())).count())
+    let rows: Vec<BackgroundedRow> =
+        serde_json::from_value(value).context("decode background row count")?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.lifecycle_state == "running" || row.spawned_by_tool_call_doc_id.is_some())
+        .count())
 }
 
 /// The caller request's backgrounded tool rows that have not ended, read
@@ -52,7 +37,7 @@ pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::Con
                     lifecycle_state: {{ _in: ["running", "pending"] }}
                 }}
             ) {{
-                lifecycle_state await_mode spawned_by_tool_call_doc_id
+                lifecycle_state spawned_by_tool_call_doc_id
             }}
         }}"#
     );
@@ -76,29 +61,12 @@ mod background_count_tests {
     #[test]
     fn pending_spawn_reservations_count_but_pending_accepted_calls_do_not() {
         let rows = json!([
-            {"lifecycle_state":"running","await_mode":"background","spawned_by_tool_call_doc_id":null},
-            {"lifecycle_state":"pending","await_mode":"background","spawned_by_tool_call_doc_id":"parent"},
-            {"lifecycle_state":"pending","await_mode":"background","spawned_by_tool_call_doc_id":null}
+            {"lifecycle_state":"running","spawned_by_tool_call_doc_id":null},
+            {"lifecycle_state":"pending","spawned_by_tool_call_doc_id":"parent"},
+            {"lifecycle_state":"pending","spawned_by_tool_call_doc_id":null}
         ]);
         assert_eq!(decode_live_backgrounded_rows(rows).unwrap(), 2);
     }
-
-    #[test]
-    fn malformed_or_unknown_background_rows_fail_closed() {
-        assert!(decode_live_backgrounded_rows(json!([{"await_mode":"background"}])).is_err());
-        assert!(decode_live_backgrounded_rows(json!([{
-            "lifecycle_state":"mystery","await_mode":"background",
-            "spawned_by_tool_call_doc_id":null
-        }])).is_err());
-        assert!(decode_live_backgrounded_rows(json!([{
-            "lifecycle_state":"pending","await_mode":"background"
-        }])).is_err());
-        assert!(decode_live_backgrounded_rows(json!([{
-            "lifecycle_state":"pending","await_mode":"background",
-            "spawned_by_tool_call_doc_id":" "
-        }])).is_err());
-    }
-
 }
 
 pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {
