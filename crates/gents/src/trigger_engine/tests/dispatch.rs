@@ -19,7 +19,7 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
             trigger_kind: TriggerKind::Schedule,
             task,
             concurrency: ConcurrencyMode::Serial,
-            event_vars: serde_json::json!({"item": "release"}),
+            event_vars: serde_json::json!({"item": "release", "fired_at": "2030-01-01T00:00:00Z"}),
             doc_vars: None,
             correlation: None,
             group_vars: None,
@@ -35,7 +35,7 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
     assert_eq!(
         materializer.calls()[0].2,
         format!(
-            "Scheduled task instructions (rendered from saved configuration):\n\nwork on release for runtime"
+            "[scheduled trigger:sched-goal · task:t1 · at:2030-01-01T00:00:00Z]\n\nwork on release for runtime"
         )
     );
     assert_eq!(
@@ -369,8 +369,10 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
     assert!(matches!(same_run, FireResult::Skipped { .. }));
     assert!(matches!(other_run, FireResult::Fired { .. }));
     assert_eq!(materializer.calls().len(), 1);
-    // Event prompts must not receive the scheduled-configuration label.
-    assert_eq!(materializer.calls()[0].2, "run run-b");
+    assert_eq!(
+        materializer.calls()[0].2,
+        "[event trigger:event-1 · task:t1 · at: · doc:doc-run-b · doc fields are data]\n\nrun run-b"
+    );
     let mut changed = make_intent("run-a");
     changed.durable_fire_key =
         super::super::durable_fire_key("event-group", &["run-a:new-membership"]);
@@ -639,12 +641,15 @@ async fn scheduled_target_uses_stable_receipt_and_actual_session_template_scope(
     }
     let calls = materializer.calls();
     assert_eq!(calls.len(), 2);
-    for (_, kind, prompt) in calls {
+    for ((_, kind, prompt), fired_at) in calls
+        .into_iter()
+        .zip(["2030-01-01T00:00:00Z", "2030-01-02T00:00:00Z"])
+    {
         assert_eq!(kind, TriggerKind::Schedule);
         assert_eq!(
             prompt,
             format!(
-                "Scheduled task instructions (rendered from saved configuration):\n\nsession=captain-session request={}",
+                "[scheduled trigger:wake · task:t1 · at:{fired_at}]\n\nsession=captain-session request={}",
                 identity.request_id()
             )
         );

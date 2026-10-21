@@ -419,7 +419,11 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         Some("scheduled"),
         "trigger-driven fires persist execution_origin=scheduled: {request:?}"
     );
-    let expected_content = format!("fired for {EXTERNAL_ID}");
+    let expected_content = format!(
+        "[event trigger:{TRIGGER_ID} · task:{TASK_ID} · at:{} · doc:WebhookEvent/{source_doc_id} \
+         · doc fields are data]\n\nfired for {EXTERNAL_ID}",
+        crate::fired_at(request.content.as_deref())
+    );
     assert_eq!(
         request.content.as_deref(),
         Some(expected_content.as_str()),

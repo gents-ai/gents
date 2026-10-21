@@ -1,5 +1,16 @@
 mod support;
 
+/// The fire time a trigger header carries, checked as RFC 3339.
+fn fired_at(content: Option<&str>) -> &str {
+    let at = content
+        .and_then(|content| content.split_once(" · at:"))
+        .and_then(|(_, rest)| rest.split_once(" · "))
+        .map(|(at, _)| at)
+        .unwrap_or_default();
+    chrono::DateTime::parse_from_rfc3339(at).expect("trigger header carries an RFC 3339 fire time");
+    at
+}
+
 /// The embedded P2P transport is process-global: scenarios contend when libtest
 /// runs them concurrently, and event-source reconciliation boots the transport
 /// even single-node. Acquire before starting a node so readiness deadlines
