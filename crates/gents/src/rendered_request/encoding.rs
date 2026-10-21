@@ -1216,6 +1216,8 @@ mod tests {
                     })
                 }
                 "manifest" | "manifest_tree" => {
+                    assert_eq!(case.encoding == "manifest_tree", case.manifest_root.is_some(),
+                        "{}: the tree adapter requires one root child", case.name);
                     let chunks = if case.manifest_blocks.is_empty() {
                         Vec::new()
                     } else {

@@ -85,7 +85,11 @@ private def storageCase (name encoding : String) (store : ArtifactStore)
     (request : Nat) (baseWitness : Option Nat) (baseDepth maxDepth : Nat)
     (baseVerified : Bool) : RenderedCaptureStorageCase :=
   let decoded := resolveRequest store (maxDepth + 1) 1 10
-  let root := if encoding == "manifest_tree" then (manifestBlocks store).head? else none
+  let root := if encoding == "manifest_tree" then
+    match manifestBlocks store with
+    | [root] => some root
+    | _ => none
+    else none
   let children := match root with
     | some block => manifestBlocks (fun ref => if ref = 1 then store block.ref else store ref)
     | none => manifestBlocks store
