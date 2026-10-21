@@ -458,6 +458,8 @@ struct OwnerRow {
 
 #[derive(Deserialize)]
 struct SessionPin {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     tool_call_id: String,
     #[serde(default)]
     job_pin: Option<serde_json::Value>,
@@ -473,7 +475,7 @@ pub(crate) type ResumeTarget = (
 /// Lean `resumeTarget` and `resumeIsHead` for `row_doc_id`, read through
 /// `txn`: `(row_doc_id, head, Some((owner, same_plugin, prior, root)))`, or
 /// `(row_doc_id, false, None)` when no such row exists, with the address
-/// (`session_id:tool_call_id`) of the row that resumed it when it is not the head.
+/// (`session_id:tool_call_id`) of the run's newest row when it is not the head.
 pub(crate) async fn resume_target_in_txn(
     txn: &ConfigApplyTxn<'_>,
     plugin: &str,
@@ -502,7 +504,7 @@ pub(crate) async fn resume_target_in_txn(
         .is_some_and(|pin| pin.plugin_ref == plugin);
     let session = txn
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ tool_call_id job_pin }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_id job_pin }} }}"#,
             escape_graphql_string(&owner.session_id)
         ))
         .await?;
@@ -513,15 +515,19 @@ pub(crate) async fn resume_target_in_txn(
             .context("session job query omitted rows")?,
     )
     .context("decoding session job rows")?;
-    let resumed_by = rows
+    let continuations: Vec<(String, String, String)> = rows
         .into_iter()
-        .find(|row| {
-            row.job_pin
-                .clone()
-                .and_then(|pin| serde_json::from_value::<JobPin>(pin).ok())
-                .is_some_and(|pin| pin.resume_of.as_deref() == Some(row_doc_id))
+        .filter_map(|row| {
+            let pin = serde_json::from_value::<JobPin>(row.job_pin?).ok()?;
+            Some((pin.resume_of?, row.doc_id, row.tool_call_id))
         })
-        .map(|row| format!("{}:{}", owner.session_id, row.tool_call_id));
+        .collect();
+    let mut resumed_by = None;
+    let mut at = row_doc_id;
+    while let Some((_, doc_id, call)) = continuations.iter().find(|(of, ..)| of == at) {
+        resumed_by = Some(format!("{}:{call}", owner.session_id));
+        at = doc_id;
+    }
     let owner = ProcessControlScope {
         request_id: String::new(),
         session_id: owner.session_id,
@@ -1535,6 +1541,19 @@ mod tests {
         assert!(!head);
         assert_eq!(resumed_by, Some(format!("{}:call-2", caller().session_id)));
         assert!(target(&job, PLUGIN, &resumed).await.0 .1);
+
+        let newest = finished(
+            &mut job,
+            "call-3",
+            Some(&p),
+            Some(&resumed),
+            JobState::Completed,
+        )
+        .await;
+        let ((_, head, _), resumed_by) = target(&job, PLUGIN, &p).await;
+        assert!(!head);
+        assert_eq!(resumed_by, Some(format!("{}:call-3", caller().session_id)));
+        assert!(target(&job, PLUGIN, &newest).await.0 .1);
         job.node.shutdown().await;
     }
 }
