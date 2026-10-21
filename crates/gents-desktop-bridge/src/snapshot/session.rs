@@ -509,33 +509,74 @@ fn attach_context_reduction_timeline_events(
     history: Vec<LoadedRequestContext>,
     page_sequences: &std::collections::HashSet<i64>,
 ) {
+    struct RequestSummary {
+        sequence: i64,
+        request_id: String,
+        reductions: i64,
+        compacted: i64,
+        repaired: i64,
+        latest_order: (Option<String>, i64, String),
+        latest_estimate: i64,
+        latest_timestamp: Option<String>,
+    }
+    let mut summaries = std::collections::BTreeMap::<String, RequestSummary>::new();
     for entry in history {
-        let reason = match entry.accounting.compaction_reason {
-            gents_protocol::rendered_request::ContextCompactionReason::Compacted => "compacted",
+        let compacted = match entry.accounting.compaction_reason {
+            gents_protocol::rendered_request::ContextCompactionReason::Compacted => true,
             gents_protocol::rendered_request::ContextCompactionReason::ProviderViewRepaired => {
-                "provider_view_repaired"
+                false
             }
             _ => continue,
         };
-        let Some(sequence) = entry.anchor_sequence.filter(|sequence| page_sequences.contains(sequence)) else {
+        let (Some(request_doc_id), Some(sequence)) =
+            (entry.request_doc_id, entry.anchor_sequence)
+        else {
             continue;
         };
-        let item = RenderedTimelineItem::ModelInputReduction {
-            item_key: format!(
-                "model-input:{}:{}:{}:{}",
-                entry.request_id, entry.call_id, entry.accounting.turn_index, entry.accounting.attempt
-            ),
-            sequence,
-            request_id: entry.request_id,
-            call_id: entry.call_id,
-            call_sequence: entry.call_sequence,
-            turn_index: i64::try_from(entry.accounting.turn_index).unwrap_or(i64::MAX),
-            attempt: i64::from(entry.accounting.attempt),
-            reason: reason.to_owned(),
-            estimated_input_tokens: i64::try_from(entry.accounting.estimated_input_tokens).unwrap_or(i64::MAX),
-            pre_compaction_input_tokens: entry.accounting.pre_compaction_input_tokens.map(|value| i64::try_from(value).unwrap_or(i64::MAX)),
-            compaction_threshold_tokens: i64::try_from(entry.accounting.compaction_threshold_tokens).unwrap_or(i64::MAX),
-            timestamp: entry.queued_at,
+        let order = (
+            entry.queued_at.clone(),
+            entry.call_sequence,
+            entry.call_id,
+        );
+        let summary = summaries
+            .entry(request_doc_id)
+            .or_insert_with(|| RequestSummary {
+                sequence,
+                request_id: entry.request_id.clone(),
+                reductions: 0,
+                compacted: 0,
+                repaired: 0,
+                latest_order: (None, i64::MIN, String::new()),
+                latest_estimate: 0,
+                latest_timestamp: None,
+            });
+        summary.reductions = summary.reductions.saturating_add(1);
+        if compacted {
+            summary.compacted = summary.compacted.saturating_add(1);
+        } else {
+            summary.repaired = summary.repaired.saturating_add(1);
+        }
+        if order > summary.latest_order {
+            summary.latest_order = order;
+            summary.latest_estimate = i64::try_from(entry.accounting.estimated_input_tokens)
+                .unwrap_or(i64::MAX);
+            summary.latest_timestamp = entry.queued_at;
+        }
+    }
+    for (request_doc_id, summary) in summaries {
+        if !page_sequences.contains(&summary.sequence) {
+            continue;
+        }
+        let item = RenderedTimelineItem::RequestContextReductionSummary {
+            item_key: format!("request-context-reduction:{request_doc_id}"),
+            sequence: summary.sequence,
+            request_doc_id,
+            request_id: summary.request_id,
+            reduction_count: summary.reductions,
+            compacted_count: summary.compacted,
+            repaired_count: summary.repaired,
+            latest_estimated_input_tokens: Some(summary.latest_estimate),
+            latest_timestamp: summary.latest_timestamp,
         };
         let insertion = snapshot.timeline_items.iter().position(|existing| {
             let existing_sequence = match existing {
@@ -543,7 +584,7 @@ fn attach_context_reduction_timeline_events(
                 | RenderedTimelineItem::AutomatedInput { sequence, .. }
                 | RenderedTimelineItem::AssistantMessage { sequence, .. } => *sequence,
                 RenderedTimelineItem::ToolGroup { message_sequence, .. } => *message_sequence,
-                RenderedTimelineItem::ModelInputReduction { sequence, .. }
+                RenderedTimelineItem::RequestContextReductionSummary { sequence, .. }
                 | RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(*sequence),
                 RenderedTimelineItem::PendingUserTurn { .. }
                 | RenderedTimelineItem::LiveAssistant { .. } => None,
@@ -662,7 +703,7 @@ fn attach_session_compaction_timeline_events(
                 | RenderedTimelineItem::AutomatedInput { sequence, .. }
                 | RenderedTimelineItem::AssistantMessage { sequence, .. } => *sequence,
                 RenderedTimelineItem::ToolGroup { message_sequence, .. } => *message_sequence,
-                RenderedTimelineItem::ModelInputReduction { sequence, .. }
+                RenderedTimelineItem::RequestContextReductionSummary { sequence, .. }
                 | RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(*sequence),
                 RenderedTimelineItem::PendingUserTurn { .. }
                 | RenderedTimelineItem::LiveAssistant { .. } => None,
@@ -800,6 +841,93 @@ mod retry_eligibility_tests;
 mod paging_coverage_tests {
     use super::*;
     use gents_desktop_core::client::ClientStoreRows;
+
+    #[test]
+    fn many_reduction_rows_collapse_to_one_request_summary_that_pages() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![gents_protocol::session::AgentSession {
+                session_id: "session".into(),
+                node_did: "node".into(),
+                requester_did: None,
+                agent_id: "agent".into(),
+                created_at: "2026-10-21T00:00:00Z".into(),
+                closed_at: None,
+                title: None,
+                tags: Vec::new(),
+                provenance: None,
+                observation: None,
+            }],
+            ..ClientStoreRows::default()
+        });
+        let mut snapshot = build_session_snapshot_from_store(&store, "session", None).unwrap();
+        let history = (0..81)
+            .map(|index| LoadedRequestContext {
+                request_id: "request-logical".into(),
+                request_doc_id: Some("AgentRequest/physical".into()),
+                anchor_sequence: Some(1),
+                call_id: format!("call-{index}"),
+                call_sequence: index,
+                queued_at: Some(format!("2026-10-21T00:00:{index:02}Z")),
+                accounting: gents_protocol::rendered_request::ContextAccounting {
+                    accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+                    turn_index: index as usize,
+                    attempt: 0,
+                    estimator: "test".into(),
+                    components: gents_protocol::rendered_request::ContextInputComponents {
+                        messages: 100,
+                        documents: 0,
+                        tool_schemas: 0,
+                        additional_parameters: 0,
+                        output_schema: 0,
+                    },
+                    estimated_input_tokens: 100,
+                    context_window: 1_000,
+                    compaction_threshold_basis_points: 8000,
+                    compaction_threshold_tokens: 800,
+                    configured_max_output_tokens: None,
+                    effective_max_output_tokens: None,
+                    compaction_reason: gents_protocol::rendered_request::ContextCompactionReason::Compacted,
+                    pre_compaction_input_tokens: Some(900),
+                },
+            })
+            .collect();
+        attach_context_reduction_timeline_events(
+            &mut snapshot,
+            history,
+            &std::collections::HashSet::from([1]),
+        );
+        assert!(matches!(
+            snapshot.timeline_items.as_slice(),
+            [RenderedTimelineItem::RequestContextReductionSummary {
+                reduction_count: 81,
+                compacted_count: 81,
+                ..
+            }]
+        ));
+        snapshot.timeline_items.push(RenderedTimelineItem::AssistantMessage {
+            item_key: "assistant-2".into(),
+            sequence: Some(2),
+            content: None,
+            reasoning: None,
+            timestamp: None,
+            reconstruction: MessageReconstructionView {
+                state: ReconstructionState::Ready,
+                error: None,
+                denied_dependency_doc_id: None,
+            },
+        });
+        apply_session_timeline_page(&mut snapshot, None, Some(1)).unwrap();
+        let cursor = snapshot.timeline_page.unwrap().oldest_item_key.unwrap();
+        assert_eq!(cursor, "assistant-2");
+        apply_session_timeline_page(&mut snapshot, Some(&cursor), Some(1)).unwrap();
+        assert!(matches!(
+            snapshot.timeline_items.as_slice(),
+            [RenderedTimelineItem::RequestContextReductionSummary {
+                reduction_count: 81,
+                ..
+            }]
+        ));
+    }
 
     #[test]
     fn paged_pending_prompt_uses_lean_read_coverage() {

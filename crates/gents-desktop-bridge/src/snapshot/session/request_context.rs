@@ -148,10 +148,15 @@ pub(super) async fn load_session_request_context_history(
         .ok_or_else(|| anyhow::anyhow!("page AgentMessage response omitted its result array"))?;
     let mut anchors = std::collections::BTreeMap::<String, i64>::new();
     for row in message_rows {
-        let (Some(doc_id), Some(sequence)) = (
-            row.get("request_doc_id").and_then(serde_json::Value::as_str),
-            row.get("sequence").and_then(serde_json::Value::as_i64),
-        ) else { continue };
+        let doc_id = row
+            .get("request_doc_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("page AgentMessage row has no physical request ID"))?;
+        let sequence = row
+            .get("sequence")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("page AgentMessage row has no sequence"))?;
         anchors.entry(doc_id.to_owned()).and_modify(|current| *current = (*current).min(sequence)).or_insert(sequence);
     }
     let mut history = Vec::new();
@@ -201,6 +206,10 @@ pub(super) async fn load_session_request_context_history(
         };
         let (request_doc_id, request_id) =
             validated_call_request_identity(row, &request_bindings)?;
+        anyhow::ensure!(
+            anchors.contains_key(&request_doc_id),
+            "page AgentRequest has context accounting but no canonical message anchor"
+        );
         history.push(LoadedRequestContext {
             request_id,
             request_doc_id: Some(request_doc_id.clone()),

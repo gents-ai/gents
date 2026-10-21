@@ -946,7 +946,7 @@ fn timeline_keys(snapshot: &DesktopSessionSnapshot) -> Vec<&str> {
             | RenderedTimelineItem::AutomatedInput { item_key, .. }
             | RenderedTimelineItem::AssistantMessage { item_key, .. }
             | RenderedTimelineItem::ToolGroup { item_key, .. }
-            | RenderedTimelineItem::ModelInputReduction { item_key, .. }
+            | RenderedTimelineItem::RequestContextReductionSummary { item_key, .. }
             | RenderedTimelineItem::SessionCompaction { item_key, .. }
             | RenderedTimelineItem::PendingUserTurn { item_key, .. }
             | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key.as_str(),
@@ -1092,19 +1092,16 @@ fn context_events_page_with_their_durable_message_anchor() {
     let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = vec![
         assistant_item("message-1", 1),
-        RenderedTimelineItem::ModelInputReduction {
-            item_key: "model-input:req-1:call-2:1:0".into(),
+        RenderedTimelineItem::RequestContextReductionSummary {
+            item_key: "request-context-reduction:physical-req-1".into(),
             sequence: 1,
+            request_doc_id: "physical-req-1".into(),
             request_id: "req-1".into(),
-            call_id: "call-2".into(),
-            call_sequence: 2,
-            turn_index: 1,
-            attempt: 0,
-            reason: "compacted".into(),
-            estimated_input_tokens: 120,
-            pre_compaction_input_tokens: Some(240),
-            compaction_threshold_tokens: 200,
-            timestamp: Some("2026-10-20T12:00:00Z".into()),
+            reduction_count: 81,
+            compacted_count: 80,
+            repaired_count: 1,
+            latest_estimated_input_tokens: Some(120),
+            latest_timestamp: Some("2026-10-20T12:00:00Z".into()),
         },
         RenderedTimelineItem::SessionCompaction {
             item_key: "session-compaction:checkpoint-1".into(),
@@ -1123,19 +1120,16 @@ fn context_events_page_with_their_durable_message_anchor() {
     let mut older = empty_timeline_snapshot();
     older.timeline_items = vec![
         assistant_item("message-1", 1),
-        RenderedTimelineItem::ModelInputReduction {
-            item_key: "model-input:req-1:call-2:1:0".into(),
+        RenderedTimelineItem::RequestContextReductionSummary {
+            item_key: "request-context-reduction:physical-req-1".into(),
             sequence: 1,
+            request_doc_id: "physical-req-1".into(),
             request_id: "req-1".into(),
-            call_id: "call-2".into(),
-            call_sequence: 2,
-            turn_index: 1,
-            attempt: 0,
-            reason: "compacted".into(),
-            estimated_input_tokens: 120,
-            pre_compaction_input_tokens: Some(240),
-            compaction_threshold_tokens: 200,
-            timestamp: Some("2026-10-20T12:00:00Z".into()),
+            reduction_count: 81,
+            compacted_count: 80,
+            repaired_count: 1,
+            latest_estimated_input_tokens: Some(120),
+            latest_timestamp: Some("2026-10-20T12:00:00Z".into()),
         },
         RenderedTimelineItem::SessionCompaction {
             item_key: "session-compaction:checkpoint-1".into(),
