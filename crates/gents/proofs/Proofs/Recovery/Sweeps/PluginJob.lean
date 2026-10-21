@@ -199,8 +199,8 @@ theorem pluginJobRecoveryTick_not_stale (row : PluginJobRow)
     ¬ (pluginJobStale (pluginJobRecoveryTick row) ∨
       pluginJobStoppedSessionStale (pluginJobRecoveryTick row)) := by
   by_cases h_stopped : pluginJobStoppedSessionStale row
-  · unfold pluginJobRecoveryTick
-    simp [h_stopped, pluginJobStoppedSessionStale, pluginJobStale]
+  · rw [pluginJobRecoveryTick, if_pos h_stopped]
+    simp [pluginJobStoppedSessionStale, pluginJobStale]
   · have h_stale : pluginJobStale row := by
       rcases h with h_old | h_stopped_row
       · exact h_old
@@ -209,9 +209,10 @@ theorem pluginJobRecoveryTick_not_stale (row : PluginJobRow)
       cases h_session : row.sessionStopped
       · rfl
       · exact (h_stopped ⟨h_stale.1, h_session⟩).elim
-    unfold pluginJobRecoveryTick
-    simp [h_stopped, pluginJobRow_tick_not_stale row h_stale,
-      pluginJobStoppedSessionStale, h_session_open]
+    rw [pluginJobRecoveryTick, if_neg h_stopped, not_or]
+    constructor
+    · exact pluginJobRow_tick_not_stale row h_stale
+    · simp [pluginJobStoppedSessionStale, h_session_open]
 
 def pluginJobRecoverySweep : RecoverySweep :=
   { Row := PluginJobRow
