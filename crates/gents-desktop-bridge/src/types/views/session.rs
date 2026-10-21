@@ -393,6 +393,30 @@ pub enum RenderedTimelineItem {
         tools: Vec<RenderedToolCallView>,
     },
     #[serde(rename_all = "camelCase")]
+    ModelInputReduction {
+        item_key: String,
+        sequence: i64,
+        request_id: String,
+        call_id: String,
+        call_sequence: i64,
+        turn_index: i64,
+        attempt: i64,
+        reason: String,
+        estimated_input_tokens: i64,
+        pre_compaction_input_tokens: Option<i64>,
+        compaction_threshold_tokens: i64,
+        timestamp: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    SessionCompaction {
+        item_key: String,
+        sequence: i64,
+        messages_compacted: Option<i64>,
+        original_tokens: Option<i64>,
+        compacted_tokens: Option<i64>,
+        timestamp: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
     PendingUserTurn {
         item_key: String,
         request_id: String,
@@ -518,6 +542,8 @@ pub struct SessionContextView {
     pub durable_message_count: i64,
     pub provider_message_count: i64,
     pub total_compacted_messages: i64,
+    pub session_compaction_count: Option<i64>,
+    pub request_reduction_history_loaded: Option<bool>,
     pub compactions: Vec<SessionCompactionView>,
     pub last_request: Option<SessionRequestContextView>,
 }

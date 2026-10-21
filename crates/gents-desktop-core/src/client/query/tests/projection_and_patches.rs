@@ -259,6 +259,17 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
         context.compaction_entries[0].summary.as_deref(),
         Some("summary")
     );
+    let compaction_metadata = load_session_compaction_entries(
+        node.as_ref(),
+        "resident",
+        "did:test:selected",
+        Some("did:test:local"),
+    )
+    .await
+    .expect("lightweight session compaction metadata");
+    assert_eq!(compaction_metadata.len(), 1);
+    assert_eq!(compaction_metadata[0].compaction_key, "resident:compaction:1");
+    assert_eq!(compaction_metadata[0].compacted_through_sequence, Some(1));
 }
 
 #[tokio::test]

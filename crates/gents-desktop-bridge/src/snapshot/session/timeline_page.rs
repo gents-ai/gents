@@ -11,6 +11,8 @@ fn rendered_timeline_item_key(item: &crate::types::RenderedTimelineItem) -> &str
         | RenderedTimelineItem::AutomatedInput { item_key, .. }
         | RenderedTimelineItem::AssistantMessage { item_key, .. }
         | RenderedTimelineItem::ToolGroup { item_key, .. }
+        | RenderedTimelineItem::ModelInputReduction { item_key, .. }
+        | RenderedTimelineItem::SessionCompaction { item_key, .. }
         | RenderedTimelineItem::PendingUserTurn { item_key, .. }
         | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key,
     }
@@ -28,6 +30,8 @@ fn rendered_timeline_durable_sequence(
         RenderedTimelineItem::ToolGroup {
             message_sequence, ..
         } => Some(*message_sequence),
+        RenderedTimelineItem::ModelInputReduction { sequence, .. } => Some(Some(*sequence)),
+        RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(Some(*sequence)),
         RenderedTimelineItem::PendingUserTurn { .. }
         | RenderedTimelineItem::LiveAssistant { .. } => None,
     }

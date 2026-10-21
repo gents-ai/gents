@@ -946,6 +946,8 @@ fn timeline_keys(snapshot: &DesktopSessionSnapshot) -> Vec<&str> {
             | RenderedTimelineItem::AutomatedInput { item_key, .. }
             | RenderedTimelineItem::AssistantMessage { item_key, .. }
             | RenderedTimelineItem::ToolGroup { item_key, .. }
+            | RenderedTimelineItem::ModelInputReduction { item_key, .. }
+            | RenderedTimelineItem::SessionCompaction { item_key, .. }
             | RenderedTimelineItem::PendingUserTurn { item_key, .. }
             | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key.as_str(),
         })
@@ -1083,4 +1085,75 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
     let page = timeline_page(2, true, false);
     apply_session_timeline_page_with_query(&mut full, None, Some(1), Some(&page)).unwrap();
     assert_eq!(timeline_keys(&full), ["latest", "pending-current"]);
+}
+
+#[test]
+fn context_events_page_with_their_durable_message_anchor() {
+    let mut snapshot = empty_timeline_snapshot();
+    snapshot.timeline_items = vec![
+        assistant_item("message-1", 1),
+        RenderedTimelineItem::ModelInputReduction {
+            item_key: "model-input:req-1:call-2:1:0".into(),
+            sequence: 1,
+            request_id: "req-1".into(),
+            call_id: "call-2".into(),
+            call_sequence: 2,
+            turn_index: 1,
+            attempt: 0,
+            reason: "compacted".into(),
+            estimated_input_tokens: 120,
+            pre_compaction_input_tokens: Some(240),
+            compaction_threshold_tokens: 200,
+            timestamp: Some("2026-10-20T12:00:00Z".into()),
+        },
+        RenderedTimelineItem::SessionCompaction {
+            item_key: "session-compaction:checkpoint-1".into(),
+            sequence: 1,
+            messages_compacted: Some(4),
+            original_tokens: Some(300),
+            compacted_tokens: Some(90),
+            timestamp: Some("2026-10-20T11:00:00Z".into()),
+        },
+        assistant_item("message-2", 2),
+    ];
+
+    apply_session_timeline_page(&mut snapshot, None, Some(3)).unwrap();
+    assert_eq!(timeline_keys(&snapshot), ["message-2"]);
+    let cursor = snapshot.timeline_page.unwrap().oldest_item_key.unwrap();
+    let mut older = empty_timeline_snapshot();
+    older.timeline_items = vec![
+        assistant_item("message-1", 1),
+        RenderedTimelineItem::ModelInputReduction {
+            item_key: "model-input:req-1:call-2:1:0".into(),
+            sequence: 1,
+            request_id: "req-1".into(),
+            call_id: "call-2".into(),
+            call_sequence: 2,
+            turn_index: 1,
+            attempt: 0,
+            reason: "compacted".into(),
+            estimated_input_tokens: 120,
+            pre_compaction_input_tokens: Some(240),
+            compaction_threshold_tokens: 200,
+            timestamp: Some("2026-10-20T12:00:00Z".into()),
+        },
+        RenderedTimelineItem::SessionCompaction {
+            item_key: "session-compaction:checkpoint-1".into(),
+            sequence: 1,
+            messages_compacted: Some(4),
+            original_tokens: Some(300),
+            compacted_tokens: Some(90),
+            timestamp: Some("2026-10-20T11:00:00Z".into()),
+        },
+        assistant_item("message-2", 2),
+    ];
+    apply_session_timeline_page(&mut older, Some(&cursor), Some(3)).unwrap();
+    assert_eq!(
+        timeline_keys(&older),
+        [
+            "message-1",
+            "model-input:req-1:call-2:1:0",
+            "session-compaction:checkpoint-1"
+        ]
+    );
 }

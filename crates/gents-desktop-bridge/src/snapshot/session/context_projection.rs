@@ -218,6 +218,8 @@ pub(super) fn build_session_context_view(
         durable_message_count: usize_to_i64(durable_message_count),
         provider_message_count: usize_to_i64(active_provider_messages.len()),
         total_compacted_messages: usize_to_i64(total_compacted_messages),
+        session_compaction_count: None,
+        request_reduction_history_loaded: None,
         compactions,
         last_request: None,
     }
