@@ -47,6 +47,20 @@ pub(crate) fn verify_goal_continuation_edge(
         .as_ref()
         .and_then(|input| input.goal_continuation.as_ref())
         .context("continuation receipt lacks its original issuance facts")?;
+    let parent_reference = parent_row
+        .input
+        .as_ref()
+        .and_then(|input| input.goal_assignment.as_ref());
+    let expected_reference = parent_reference.map(|reference| reference.continuation(parent_doc));
+    anyhow::ensure!(
+        child
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.as_ref())
+            == expected_reference.as_ref()
+            && parent_reference.is_none_or(|reference| reference.goal_id == goal_id),
+        "continuation receipt changed its signed goal assignment"
+    );
     let sequence = facts.sequence;
     let identity = goal_continuation_identity(goal_id, &parent_row.request_id, sequence)?;
     anyhow::ensure!(
@@ -104,22 +118,34 @@ pub(crate) fn latest_goal_request<'a>(
     goal: &GoalDocument,
     rows: &'a [AgentRequestRow],
 ) -> Option<&'a AgentRequestRow> {
-    let members = goal
-        .assignment_root_request_doc_id
-        .as_deref()
-        .map(|root| {
-            authenticated_goal_request_members(&goal.node_did, &goal.session_id, root, rows)
-        })
-        .transpose()
-        .ok()?;
+    let members = if goal.assignment_root_request_doc_id.is_some() {
+        let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, rows).ok()?;
+        Some(
+            rows.iter()
+                .filter_map(|row| {
+                    let entry = authenticated_entry(
+                        &goal.node_did,
+                        &goal.session_id,
+                        row,
+                        &by_doc,
+                        Some(&goal.goal_id),
+                    )
+                    .ok()?;
+                    super::request_assignment::request_belongs_to_goal(goal, entry)
+                        .then(|| row.doc_id.clone())
+                        .flatten()
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
     latest_scoped_request(
         &goal.node_did,
         &goal.session_id,
         Some(&goal.goal_id),
         rows,
-        members
-            .as_ref()
-            .map(|membership| membership.member_doc_ids.as_slice()),
+        members.as_deref(),
     )
 }
 
@@ -179,22 +205,11 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     current_doc_id: &str,
     rows: &'a [AgentRequestRow],
 ) -> Result<AuthenticatedGoalRequestMembers<'a>> {
-    let mut by_doc = std::collections::HashMap::new();
-    for row in rows.iter().filter(|row| {
-        row.node_did.as_deref() == Some(node_did) && row.session_id.as_deref() == Some(session_id)
-    }) {
-        let Some(doc) = row.doc_id.as_deref().filter(|doc| !doc.is_empty()) else {
-            continue;
-        };
-        anyhow::ensure!(
-            by_doc.insert(doc, row).is_none(),
-            "duplicate physical request document in ancestry observation"
-        );
-    }
+    let by_doc = request_rows_by_doc(node_did, session_id, rows)?;
     let current = *by_doc
         .get(current_doc_id)
         .context("current request is absent from its owner/session observation")?;
-    let entry = authenticated_entry(node_did, session_id, current, &by_doc)?;
+    let entry = authenticated_entry(node_did, session_id, current, &by_doc, None)?;
     let entry_doc = entry
         .doc_id
         .as_deref()
@@ -202,7 +217,7 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     let mut member_doc_ids = by_doc
         .iter()
         .filter_map(|(doc, row)| {
-            authenticated_entry(node_did, session_id, row, &by_doc)
+            authenticated_entry(node_did, session_id, row, &by_doc, None)
                 .ok()
                 .filter(|root| root.doc_id.as_deref() == Some(entry_doc))
                 .map(|_| (*doc).to_owned())
@@ -227,11 +242,32 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     })
 }
 
-fn authenticated_entry<'a>(
+pub(super) fn request_rows_by_doc<'a>(
+    node_did: &str,
+    session_id: &str,
+    rows: &'a [AgentRequestRow],
+) -> Result<std::collections::HashMap<&'a str, &'a AgentRequestRow>> {
+    let mut by_doc = std::collections::HashMap::new();
+    for row in rows.iter().filter(|row| {
+        row.node_did.as_deref() == Some(node_did) && row.session_id.as_deref() == Some(session_id)
+    }) {
+        let Some(doc) = row.doc_id.as_deref().filter(|doc| !doc.is_empty()) else {
+            continue;
+        };
+        anyhow::ensure!(
+            by_doc.insert(doc, row).is_none(),
+            "duplicate physical request document in ancestry observation"
+        );
+    }
+    Ok(by_doc)
+}
+
+pub(super) fn authenticated_entry<'a>(
     node_did: &str,
     session_id: &str,
     mut row: &'a AgentRequestRow,
     by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
+    expected_goal: Option<&str>,
 ) -> Result<&'a AgentRequestRow> {
     let mut visited = std::collections::HashSet::new();
     loop {
@@ -248,6 +284,10 @@ fn authenticated_entry<'a>(
             .caused_by_trigger_id
             .as_deref()
             .context("Goal continuation has no original Goal ID")?;
+        anyhow::ensure!(
+            expected_goal.is_none_or(|expected| expected == goal_id),
+            "Goal continuation belongs to another assignment"
+        );
         let parent_doc = row
             .caused_by_parent_request_doc_id
             .as_deref()
@@ -273,6 +313,7 @@ pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {
 #[path = "request_head_tests.rs"]
 mod tests;
 
+#[cfg(test)]
 pub(crate) fn assignment_allows(assigned: Option<&str>, observed: Option<&str>) -> bool {
     assigned.is_none_or(|root| observed == Some(root))
 }
@@ -318,7 +359,9 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
             .context("Goal continuation has no document ID")?;
         let members =
             authenticated_goal_request_members(&goal.node_did, &goal.session_id, doc, &requests)?;
-        if assignment_allows(Some(root), members.entry.doc_id.as_deref()) {
+        if super::request_assignment::request_belongs_to_goal(goal, members.entry)
+            && row.caused_by_trigger_id.as_deref() == Some(&goal.goal_id)
+        {
             continue;
         }
         allowed = false;

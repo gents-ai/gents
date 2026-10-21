@@ -13,6 +13,7 @@ mod edit;
 mod observation;
 mod operator_resume;
 mod readiness_gate;
+mod request_assignment;
 mod request_head;
 mod reset_resume;
 pub(crate) use claimed_publication::{
