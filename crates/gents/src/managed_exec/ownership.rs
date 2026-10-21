@@ -289,27 +289,7 @@ impl<R: HostRecord> HostRecordStore<R> {
         }
     }
 
-    pub(crate) fn list(&self) -> Vec<R> {
-        let dir = match self {
-            Self::Volatile(records) => return Self::volatile(records).values().cloned().collect(),
-            Self::Durable(dir) => dir,
-        };
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return Vec::new();
-        };
-        entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "json")
-            })
-            .filter_map(|path| std::fs::read(path).ok())
-            .filter_map(|bytes| serde_json::from_slice::<R>(&bytes).ok())
-            .collect()
-    }
-
-    pub(crate) fn try_list(&self) -> anyhow::Result<Vec<R>> {
+    pub(crate) fn list(&self) -> anyhow::Result<Vec<R>> {
         let dir = match self {
             Self::Volatile(records) => {
                 return Ok(Self::volatile(records).values().cloned().collect())
@@ -319,39 +299,18 @@ impl<R: HostRecord> HostRecordStore<R> {
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(anyhow::anyhow!(
-                    "cannot inspect process ownership records: {error}"
-                ))
-            }
+            Err(error) => anyhow::bail!("cannot inspect host records: {error}"),
         };
-        let mut records = Vec::new();
-        for entry in entries {
-            let path = entry
-                .map_err(|error| {
-                    anyhow::anyhow!("cannot enumerate process ownership records: {error}")
-                })?
-                .path();
-            if !path
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                continue;
-            }
-            let bytes = std::fs::read(&path).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot read process ownership record {}: {error}",
-                    path.display()
-                )
-            })?;
-            records.push(serde_json::from_slice::<R>(&bytes).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot decode process ownership record {}: {error}",
-                    path.display()
-                )
-            })?);
-        }
-        Ok(records)
+        Ok(entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .filter_map(|path| std::fs::read(path).ok())
+            .filter_map(|bytes| serde_json::from_slice::<R>(&bytes).ok())
+            .collect())
     }
 }
 
