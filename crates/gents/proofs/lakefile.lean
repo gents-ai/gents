@@ -14,6 +14,8 @@ def proofRoots : Array Lean.Name := #[
   `Proofs,
   `Proofs.Conformance.ClientObservationOrdering,
   `Proofs.Conformance.ClientVoice,
+  `Proofs.Conformance.EditorUndo,
+  `Proofs.Conformance.EditorUndoCheckpoint,
   `Proofs.Conformance.ClientDataPublication,
   `Proofs.Conformance.ClientRequestCacheIdentity,
   `Proofs.Conformance.ClientRequestClosure,
