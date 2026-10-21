@@ -29,6 +29,44 @@ structure Entry where
   signatureValid : Bool
   deriving DecidableEq, Repr
 
+structure InputFacts where
+  captured : Option Reference
+  sessionReadable : Bool
+  observationVerified : Bool
+  observed : Option Reference
+  deriving DecidableEq, Repr
+
+inductive PreparedInput where
+  | pending
+  | prepared (reference : Option Reference)
+  deriving DecidableEq, Repr
+
+/-- A captured reference is immutable intent. Existing chats must wait for a
+source-signed observation; missing or unverifiable projection data does not
+establish absence. Legacy unbound Goals cannot supply a physical root. -/
+def prepareInput (facts : InputFacts) : PreparedInput :=
+  match facts.captured with
+  | some reference => .prepared (some reference)
+  | none =>
+      if !facts.sessionReadable then .prepared none
+      else if !facts.observationVerified then .pending
+      else .prepared (facts.observed.filter fun reference => reference.root.isSome)
+
+theorem captured_input_keeps_its_reference (facts : InputFacts) (reference : Reference)
+    (captured : facts.captured = some reference) :
+    prepareInput facts = .prepared (some reference) := by
+  simp [prepareInput, captured]
+
+theorem unknown_existing_chat_cannot_prepare (facts : InputFacts)
+    (uncaptured : facts.captured = none) (existing : facts.sessionReadable = true)
+    (unknown : facts.observationVerified = false) : prepareInput facts = .pending := by
+  simp [prepareInput, uncaptured, existing, unknown]
+
+theorem fresh_chat_has_no_inherited_assignment (facts : InputFacts)
+    (uncaptured : facts.captured = none) (fresh : facts.sessionReadable = false) :
+    prepareInput facts = .prepared none := by
+  simp [prepareInput, uncaptured, fresh]
+
 def inScope (a : Assignment) (e : Entry) : Bool :=
   a.owner == e.owner && a.session == e.session
 

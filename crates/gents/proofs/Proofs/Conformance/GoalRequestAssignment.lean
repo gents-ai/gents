@@ -44,6 +44,43 @@ def cases : List Case :=
 def referenceJson (reference : Reference) : Json :=
   Json.mkObj [("goal", toJson reference.goal), ("root", toJson reference.root)]
 
+structure InputCase where
+  name : String
+  facts : InputFacts
+  deriving DecidableEq, Repr
+
+def inputCases : List InputCase :=
+  [ ⟨"fresh_chat", ⟨none, false, false, none⟩⟩
+  , ⟨"fresh_chat_ignores_unscoped_observation", ⟨none, false, true, some ⟨2, some 200⟩⟩⟩
+  , ⟨"existing_chat_waits_for_observation", ⟨none, true, false, none⟩⟩
+  , ⟨"unverified_absence_is_unknown", ⟨none, true, false, none⟩⟩
+  , ⟨"unverified_goal_is_unknown", ⟨none, true, false, some ⟨2, some 200⟩⟩⟩
+  , ⟨"verified_absence_is_unassigned", ⟨none, true, true, none⟩⟩
+  , ⟨"legacy_goal_cannot_supply_a_root", ⟨none, true, true, some ⟨1, none⟩⟩⟩
+  , ⟨"followup_inherits_current_assignment", ⟨none, true, true, some ⟨2, some 200⟩⟩⟩
+  , ⟨"captured_old_assignment_survives_replacement",
+      ⟨some ⟨1, some 100⟩, true, true, some ⟨2, some 200⟩⟩⟩
+  , ⟨"captured_opening_request_keeps_self_reference", ⟨some ⟨2, none⟩, true, false, none⟩⟩
+  , ⟨"captured_reference_survives_unknown_state", ⟨some ⟨1, some 100⟩, true, false, none⟩⟩
+  , ⟨"captured_reference_does_not_need_session_read", ⟨some ⟨1, some 100⟩, false, false, none⟩⟩
+  ]
+
+def inputCaseJson (c : InputCase) : Json :=
+  let expected := match prepareInput c.facts with
+    | .pending => Json.mkObj [("kind", toJson "pending")]
+    | .prepared reference => Json.mkObj [("kind", toJson "prepared"),
+        ("reference", reference.map referenceJson |>.getD Json.null)]
+  Json.mkObj [("name", toJson c.name),
+    ("captured", c.facts.captured.map referenceJson |>.getD Json.null),
+    ("session_readable", toJson c.facts.sessionReadable),
+    ("observation_verified", toJson c.facts.observationVerified),
+    ("observed", c.facts.observed.map referenceJson |>.getD Json.null),
+    ("expected", expected)]
+
+def inputCasesJson : String := (toJson (inputCases.map inputCaseJson)).compress
+
+example : inputCases.length = 12 := by decide
+
 def assignmentJson (a : Assignment) : Json :=
   Json.mkObj [("owner", toJson a.owner), ("session", toJson a.session),
     ("goal", toJson a.goal), ("root", toJson a.root)]
