@@ -391,6 +391,18 @@
           "markdownDescription": "Denies the desktop_backend_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_background_tool command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-background-tool",
+          "markdownDescription": "Enables the desktop_background_tool command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_background_tool command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-background-tool",
+          "markdownDescription": "Denies the desktop_background_tool command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_bootstrap_summary command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-bootstrap-summary",
@@ -1879,10 +1891,10 @@
           "markdownDescription": "Operations snapshot, health, session provenance, MCP probe\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`"
         },
         {
-          "description": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`\n- `allow-desktop-job-control`",
+          "description": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`\n- `allow-desktop-background-tool`\n- `allow-desktop-job-control`",
           "type": "string",
           "const": "interrupt-control",
-          "markdownDescription": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`\n- `allow-desktop-job-control`"
+          "markdownDescription": "Interrupt request execution\n#### This permission set includes:\n\n- `allow-desktop-interrupt-request`\n- `allow-desktop-background-tool`\n- `allow-desktop-job-control`"
         },
         {
           "description": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`\n- `allow-desktop-managed-server-set-auto-start`\n- `allow-desktop-managed-server-restart`\n- `allow-desktop-managed-server-reset`\n- `allow-desktop-managed-server-validate-root`\n- `allow-desktop-managed-server-open-login-items`\n- `allow-desktop-open-db-explorer`",

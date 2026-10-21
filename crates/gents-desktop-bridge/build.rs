@@ -117,6 +117,7 @@ const COMMANDS: &[&str] = &[
     "desktop_operations_snapshot",
     "desktop_session_provenance",
     "desktop_interrupt_request",
+    "desktop_background_tool",
     "desktop_job_control",
     "desktop_list_backends_with_health",
     "desktop_list_mcp_services_with_health",

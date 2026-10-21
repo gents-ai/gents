@@ -232,6 +232,32 @@ Denies the desktop_backend_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-background-tool`
+
+</td>
+<td>
+
+Enables the desktop_background_tool command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-background-tool`
+
+</td>
+<td>
+
+Denies the desktop_background_tool command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-bootstrap-summary`
 
 </td>
