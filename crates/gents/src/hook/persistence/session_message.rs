@@ -185,13 +185,6 @@ impl DefraSessionHook {
                 ),
             };
 
-        let live = count_live_backgrounded_rows(&self.node, &request_id).await?;
-        if live >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            refuse!(
-                FailureClass::ArgumentInvalid,
-                background_budget_exceeded_payload(live)
-            );
-        }
         let caller_hop = caller.request_hop;
         let rendered = match crate::session_message::render_body(
             &self.node,
@@ -266,6 +259,12 @@ impl DefraSessionHook {
                     &["status", "session_id", "request_id", "tool_call_id"],
                 )?,
                 Err(error) => {
+                    if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
+                        refuse!(
+                            FailureClass::ServiceUnavailable,
+                            background_budget_exceeded_payload(tool_name, capacity.0)
+                        );
+                    }
                     refuse!(
                         FailureClass::ServiceUnavailable,
                         service_unavailable_payload(
