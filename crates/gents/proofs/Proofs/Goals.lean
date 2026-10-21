@@ -142,12 +142,6 @@ theorem stopped_rejects_later_transitions (state : State) (action : Action)
     (h : state.status = .stopped) : step? state action = none := by
   cases action <;> simp [step?, h]
 
-theorem interrupted_wrapup_does_not_retry
-    (activity requestWrapup : Bool) (retries : Nat) :
-    (decide Status.budgetLimited RequestTerminal.interrupted true false true activity
-      requestWrapup retries true false) ≠ Decision.retry := by
-  simp [Goals.decide]
-
 theorem pause_resume_preserves_pending_wrapup (state paused resumed : State)
     (h_requested : state.wrapupRequested = true)
     (h_incomplete : state.wrapupCompleted = false)
@@ -351,5 +345,11 @@ theorem bound_assignment_rejects_missing (root : String) :
 theorem reassignment_rejects_old_root (old next : String) (different : old ≠ next) :
     assignmentAllows (some next) (some old) = false := by
   simp [assignmentAllows, different]
+
+theorem interrupted_wrapup_does_not_retry
+    (activity requestWrapup : Bool) (retries : Nat) :
+    (decide Status.budgetLimited RequestTerminal.interrupted true false true activity
+      requestWrapup retries true false) ≠ Decision.retry := by
+  simp [Goals.decide]
 
 end Goals
