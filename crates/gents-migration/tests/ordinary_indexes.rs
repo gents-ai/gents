@@ -711,3 +711,74 @@ async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
     );
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn transcript_tool_page_streams_sequence_and_key_order() {
+    use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
+    let node = fresh_node().await;
+    node.add_schema(AGENT_TOOL_CALL).await.unwrap();
+    let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
+    let rows = (0..160).map(|i| serde_json::json!({
+        "tool_call_key": format!("tool-{i:03}"),
+        "session_id": if i < 80 { "s" } else { "other-session" },
+        "node_did": "n",
+        "requester_did": "r",
+        "message_sequence": i / 2,
+    })).chain([
+        serde_json::json!({"tool_call_key":"foreign-node", "session_id":"s", "node_did":"other", "requester_did":"r", "message_sequence":100}),
+        serde_json::json!({"tool_call_key":"foreign-requester", "session_id":"s", "node_did":"n", "requester_did":"other", "message_sequence":100}),
+    ]).collect::<Vec<_>>();
+    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(rows)).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{ create_AgentToolCall(input:{input}) {{_docID}} }}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let query = r#"query { AgentToolCall(filter:{session_id:{_eq:"s"},node_did:{_eq:"n"},requester_did:{_eq:"r"}},order:[{message_sequence:DESC},{tool_call_key:DESC}],limit:10){_docID message_sequence tool_call_key} }"#;
+    let original = node.execute(query).await;
+    assert!(!original.has_errors(), "{:?}", original.errors);
+    let baseline = DEFAULT_BASELINE
+        .iter()
+        .find(|c| c.name == AGENT_TOOL_CALL_NAME)
+        .unwrap();
+    let index = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|i| i.name == "AgentToolCall_session_sequence_key")
+        .unwrap();
+    let registry = Registry {
+        baseline: std::slice::from_ref(baseline),
+        steps: &[],
+        ordinary_indexes: std::slice::from_ref(index),
+    };
+    for _ in 0..2 {
+        ensure_migrations_with_registry(node.as_ref(), &registry)
+            .await
+            .unwrap();
+        let result = node.execute(query).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+        assert_eq!(original.data, result.data);
+        let keys = result.data.as_ref().unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["tool_call_key"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            (70..80)
+                .rev()
+                .map(|i| format!("tool-{i:03}"))
+                .collect::<Vec<_>>()
+        );
+        assert_indexed_query(node.as_ref(), query, index.name, 12).await;
+        assert_eq!(
+            before.version_id,
+            node.get_collection(AGENT_TOOL_CALL_NAME)
+                .unwrap()
+                .unwrap()
+                .version_id
+        );
+    }
+    node.shutdown().await;
+}

@@ -732,6 +732,21 @@ static MESSAGE_SESSION_SEQUENCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
+static TOOL_CALL_SESSION_ORDER_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "message_sequence",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "tool_call_key",
+        descending: false,
+    },
+];
+
 static TOOL_CALL_BACKGROUND_STATUS_FIELDS: &[OrdinaryIndexField<'static>] = &[
     OrdinaryIndexField {
         name: "node_did",
@@ -748,6 +763,11 @@ static TOOL_CALL_BACKGROUND_STATUS_FIELDS: &[OrdinaryIndexField<'static>] = &[
 ];
 
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
+        name: "AgentToolCall_session_sequence_key",
+        fields: TOOL_CALL_SESSION_ORDER_FIELDS,
+    },
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_MESSAGE_NAME,
         name: "AgentMessage_session_sequence",
