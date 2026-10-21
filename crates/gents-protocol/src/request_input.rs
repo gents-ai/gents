@@ -7,6 +7,8 @@ use crate::session::SessionTitle;
 
 mod captured_context;
 pub use captured_context::*;
+#[cfg(test)]
+mod tests;
 
 pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 1;
 pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
@@ -73,6 +75,15 @@ impl RequestInput {
                 .goal_assignment
                 .as_ref()
                 .map(|reference| reference.continuation(source_doc_id)),
+            ..self.clone()
+        }
+    }
+
+    pub fn for_fresh_session(&self) -> Self {
+        Self {
+            queue: None,
+            goal_continuation: None,
+            goal_assignment: None,
             ..self.clone()
         }
     }
