@@ -24,9 +24,12 @@ export function coalesceToolGroups(items: RenderedTimelineItem[]) {
       continue;
     }
     const chunks = [item.tools];
-    while (items[index + 1]?.kind === "toolGroup") {
-      const next = items[++index]!;
-      if (next.kind === "toolGroup") chunks.push(next.tools);
+    for (
+      let next = items[index + 1];
+      next?.kind === "toolGroup";
+      next = items[++index + 1]
+    ) {
+      chunks.push(next.tools);
     }
     result.push({ ...item, tools: chunks.flat() });
   }
