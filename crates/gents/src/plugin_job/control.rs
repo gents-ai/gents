@@ -546,10 +546,9 @@ pub(crate) async fn resume_target_in_txn(
 
 /// Validates a step-0 `effects.resume` inside the adoption transaction: Lean
 /// `resumeValid` over the prior row, the chain root and the owner scope read
-/// through `txn`, with no second rule. The chain-head flag is admission's.
+/// through `txn`, with no second rule.
 /// `guest` and `facts` are the step output's pin and `StepContext.resume_facts`.
-/// A refusal is `Ok(Err(_))`, Lean `resumeRefusal` without the head rule;
-/// `Err` is a storage failure.
+/// A refusal is `Ok(Err(_))`, Lean `resumeRefusal`; `Err` is a storage failure.
 pub async fn validate_resume(
     txn: &ConfigApplyTxn<'_>,
     caller: &ProcessControlScope,
@@ -558,10 +557,20 @@ pub async fn validate_resume(
     guest: &JobGuestPin,
     facts: &HostFacts,
 ) -> Result<std::result::Result<ValidatedResume, Refusal>> {
-    let ((_, _, target), _) = resume_target_in_txn(txn, plugin, &resume.row_doc_id).await?;
+    let ((_, head, target), _) = resume_target_in_txn(txn, plugin, &resume.row_doc_id).await?;
     let Some((owner, same_plugin, prior, root)) = target else {
         return Ok(Err(Refusal::ResumeUnknown));
     };
+    if same_plugin
+        && !head
+        && caller.authorizes(
+            &owner.session_id,
+            &owner.node_did,
+            owner.requester_did.as_deref(),
+        )
+    {
+        return Ok(Err(Refusal::ResumeNotHead));
+    }
     if root.pin.is_none()
         || !resume_valid(caller, &owner, same_plugin, &prior, guest, facts, resume)
     {
@@ -1315,6 +1324,46 @@ mod tests {
         )
         .await;
         assert!(admitted.is_ok());
+        job.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn resume_of_a_continued_row_names_the_head_even_when_resume_is_invalid() {
+        let mut job = new_chain().await;
+        let first = finished(&mut job, "call-1", None, None, JobState::Completed).await;
+        finished(
+            &mut job,
+            "call-2",
+            Some(&first),
+            Some(&first),
+            JobState::Completed,
+        )
+        .await;
+        let moved = facts(&first, "sha256:new-engine", None);
+        let refused = validate(
+            &job,
+            &caller(),
+            PLUGIN,
+            &resume_block(&first),
+            &guest("fixture-script", 4),
+            &moved,
+        )
+        .await;
+        assert_eq!(refused, Err(Refusal::ResumeNotHead));
+        let stranger = ProcessControlScope {
+            session_id: "session-2".to_owned(),
+            ..caller()
+        };
+        let refused = validate(
+            &job,
+            &stranger,
+            PLUGIN,
+            &resume_block(&first),
+            &guest("fixture-script", 4),
+            &moved,
+        )
+        .await;
+        assert_eq!(refused, Err(Refusal::PolicyDenied));
         job.node.shutdown().await;
     }
 
