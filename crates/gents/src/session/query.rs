@@ -38,29 +38,25 @@ pub(crate) async fn session_stopped_in_txn(
 }
 
 pub(crate) async fn session_is_stopped(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<bool> {
-    let scope = session_scope_filter(node_did, session_id, requester_did);
-    let query = format!(r#"{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ stopped_at }} }}"#);
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "load session stop latch")
-            .await?;
-    let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentSession")?;
-    anyhow::ensure!(rows.len() <= 1, "session stop-latch scope is ambiguous");
-    let Some(row) = rows.first() else {
-        return Ok(false);
-    };
-    match row
-        .get("stopped_at")
-        .context("session stop-latch query omitted stopped_at")?
-    {
-        serde_json::Value::Null => Ok(false),
-        serde_json::Value::String(value) if !value.trim().is_empty() => Ok(true),
-        _ => anyhow::bail!("session stopped_at is malformed"),
-    }
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "session.stop_latch",
+        |txn| {
+            Box::pin(session_stopped_in_txn(
+                txn,
+                node_did,
+                session_id,
+                requester_did,
+            ))
+        },
+    )
+    .await
 }
 
 pub(super) fn validate_agent_session(

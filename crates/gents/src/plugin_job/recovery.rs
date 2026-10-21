@@ -65,12 +65,6 @@ pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
     }
 }
 
-/// Lean `pluginJobStepCommitAllowed`: a stop observed in the step transaction
-/// prevents the guest's staged effects from committing.
-pub fn step_commit_allowed(session_stopped: bool) -> bool {
-    !session_stopped
-}
-
 /// Lean `pluginJobRecoverySweep`: one tick per running local job row, that is
 /// `pluginJobRecover` applied twice. The first application kills the row or
 /// re-drives one step; the second is the stall rule over the row that step
@@ -172,40 +166,21 @@ async fn facts_of(
     let runtime = driver.runtime();
     let row = read_step_row(access, row_doc_id).await?;
     let lifecycle = load_lifecycle(access, row_doc_id).await?;
-    let session_node_did = lifecycle.node_did().to_owned();
-    let session_id = lifecycle.session_id().to_owned();
-    let session_requester_did = lifecycle.requester_did().map(str::to_owned);
-    let session_stopped = access
-        .transact_readonly("plugin_job.recovery.session_stop", |txn| {
-            let node_did = session_node_did.clone();
-            let session_id = session_id.clone();
-            let requester_did = session_requester_did.clone();
-            Box::pin(async move {
-                crate::session::session_stopped_in_txn(
-                    txn,
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                )
-                .await
-            })
-        })
-        .await?;
-    let caller = if session_stopped {
-        None
-    } else {
-        Some(
-            load_agent_request_by_doc_id(&runtime.node, request_doc_id)
-                .await?
-                .with_context(|| {
-                    format!("the caller request of job row {row_doc_id} does not exist")
-                })?,
-        )
-    };
+    let session_stopped = crate::session::session_is_stopped(
+        &runtime.node,
+        lifecycle.node_did(),
+        lifecycle.session_id(),
+        lifecycle.requester_did(),
+    )
+    .await?;
     let available = if session_stopped {
         Err(Refusal::NotAvailable)
     } else {
-        let caller = caller.context("an open plugin-job session requires its caller request")?;
+        let caller = load_agent_request_by_doc_id(&runtime.node, request_doc_id)
+            .await?
+            .with_context(|| {
+                format!("the caller request of job row {row_doc_id} does not exist")
+            })?;
         let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
         match parse_coordinate(&pin.plugin_ref)
             .ok()

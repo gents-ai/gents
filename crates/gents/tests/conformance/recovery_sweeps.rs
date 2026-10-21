@@ -1,7 +1,7 @@
 use super::*;
 use crate::lean_vocab_test::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
 use gents::plugin_job::admit::{is_stalled, Refusal};
-use gents::plugin_job::recovery::{step_commit_allowed, tick_action, RecoveryFacts, TickAction};
+use gents::plugin_job::recovery::{tick_action, RecoveryFacts, TickAction};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -127,8 +127,7 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
         );
         assert_eq!(after, case.expected_row, "{name}: row after one tick");
         assert_eq!(
-            case.step_commit_allowed,
-            step_commit_allowed(case.row.session_stopped),
+            case.step_commit_allowed, !case.row.session_stopped,
             "{name}: model-driven step commit gate"
         );
         if case.row.session_stopped {

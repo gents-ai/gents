@@ -173,7 +173,8 @@ impl super::ToolCallLifecycle {
                     if let Some(cached) = parent_cache.get(request_id) {
                         cached.clone()
                     } else {
-                        let loaded = lookup_parent_request(node, node_did, request_id).await?;
+                        let loaded =
+                            lookup_parent_request(node, node_did, request_id, None).await?;
                         parent_cache.insert(request_id.to_string(), loaded.clone());
                         loaded
                     }
@@ -245,7 +246,22 @@ impl super::ToolCallLifecycle {
             }
             running_background.insert(row.tool_call_id.clone());
             let registered = executions.contains(&row.tool_call_id).await;
-            let parent = lookup_background_parent(node, &row).await?;
+            let parent = match (
+                non_empty(row.request_doc_id.as_deref()),
+                non_empty(row.node_did.as_deref()),
+                non_empty(row.request_id.as_deref()),
+            ) {
+                (Some(doc_id), Some(parent_node_did), Some(request_id)) => {
+                    let scope = crate::session::session_scope_filter(
+                        parent_node_did,
+                        &row.session_id,
+                        row.requester_did.as_deref(),
+                    );
+                    lookup_parent_request(node, parent_node_did, request_id, Some((doc_id, &scope)))
+                        .await?
+                }
+                _ => None,
+            };
             let Some(parent) = parent else {
                 if unresolved_parent_warning_due(&row.doc_id) {
                     tracing::warn!(
@@ -258,22 +274,11 @@ impl super::ToolCallLifecycle {
                 continue;
             };
             let task_deleted = owner_task_deleted(node, node_did, &parent).await?;
-            let session_stopped = crate::ConfigAccess::transact_local_readonly(
+            let session_stopped = crate::session::session_is_stopped(
                 node,
-                None,
-                "background_recovery.session_stop",
-                |txn| {
-                    let row = &row;
-                    Box::pin(async move {
-                        crate::session::session_stopped_in_txn(
-                            txn,
-                            node_did,
-                            &row.session_id,
-                            row.requester_did.as_deref(),
-                        )
-                        .await
-                    })
-                },
+                node_did,
+                &row.session_id,
+                row.requester_did.as_deref(),
             )
             .await?;
             if registered && !task_deleted && !session_stopped {
@@ -511,7 +516,7 @@ impl super::ToolCallLifecycle {
             let Some(request_id) = non_empty(row.request_id.as_deref()) else {
                 continue;
             };
-            if lookup_parent_request(node, node_did, request_id)
+            if lookup_parent_request(node, node_did, request_id, None)
                 .await?
                 .is_none()
             {
@@ -851,7 +856,7 @@ async fn recover_stuck_running_tool_calls(
             .as_deref()
             .filter(|request_id| !request_id.is_empty())
         {
-            Some(request_id) => lookup_parent_request(node, node_did, request_id).await?,
+            Some(request_id) => lookup_parent_request(node, node_did, request_id, None).await?,
             None => None,
         };
 
@@ -1099,74 +1104,31 @@ fn background_completion_projection(
     }
 }
 
-async fn lookup_background_parent(
-    node: &std::sync::Arc<EmbeddedNode>,
-    row: &RunningToolCallRow,
-) -> Result<Option<AgentRequestRow>> {
-    let (Some(doc_id), Some(node_did), Some(request_id)) = (
-        non_empty(row.request_doc_id.as_deref()),
-        non_empty(row.node_did.as_deref()),
-        non_empty(row.request_id.as_deref()),
-    ) else {
-        return Ok(None);
-    };
-    let scope = crate::session::session_scope_filter(
-        node_did,
-        &row.session_id,
-        row.requester_did.as_deref(),
-    );
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }}, {scope} }}, limit: 2) {{
-            _docID request_id node_did requester_did session_id lifecycle_state
-            caused_by_trigger_id request_hop workspace_id workspace_authority
-            workspace_owner_node_did workspace_seal_hash
-        }} }}"#,
-        escape_graphql_string(doc_id),
-        escape_graphql_string(request_id),
-    );
-    let response = crate::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "background_recovery.physical_parent",
-    )
-    .await?;
-    let value = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .context("background parent query omitted rows")?;
-    let mut parents: Vec<AgentRequestRow> = serde_json::from_value(value.clone())?;
-    anyhow::ensure!(parents.len() <= 1, "background parent scope is ambiguous");
-    Ok(parents.pop())
-}
-
+/// `exact` narrows the lookup to one physical request (`_docID`) within an
+/// exact session scope filter.
 async fn lookup_parent_request(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     request_id: &str,
+    exact: Option<(&str, &str)>,
 ) -> Result<Option<AgentRequestRow>> {
-    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_request_id = escape_graphql_string(request_id);
+    let filter = match exact {
+        Some((doc_id, scope)) => format!(
+            r#"_docID: {{ _eq: "{}" }}, request_id: {{ _eq: "{escaped_request_id}" }}, {scope}"#,
+            escape_graphql_string(doc_id)
+        ),
+        None => format!(
+            r#"node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{escaped_request_id}" }}"#,
+            escape_graphql_string(node_did)
+        ),
+    };
     let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    node_did: {{ _eq: "{escaped_node_did}" }},
-                    request_id: {{ _eq: "{escaped_request_id}" }}
-                }},
-                limit: 1
-            ) {{
-                request_id
-                node_did
-                lifecycle_state
-                caused_by_trigger_id
-                request_hop
-                workspace_id
-                workspace_authority
-                workspace_owner_node_did
-                workspace_seal_hash
-            }}
-        }}"#
+        r#"{{ AgentRequest(filter: {{ {filter} }}, limit: 2) {{
+            _docID request_id node_did requester_did session_id lifecycle_state
+            caused_by_trigger_id request_hop workspace_id workspace_authority
+            workspace_owner_node_did workspace_seal_hash
+        }} }}"#
     );
 
     let resp =
@@ -1180,6 +1142,10 @@ async fn lookup_parent_request(
         .context("AgentRequest field missing from parent recovery query")?;
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
         .context("decode parent AgentRequest rows for tool-call recovery")?;
+    anyhow::ensure!(
+        exact.is_none() || rows.len() <= 1,
+        "background parent scope is ambiguous"
+    );
     Ok(rows.into_iter().next())
 }
 
