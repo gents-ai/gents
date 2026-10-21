@@ -19,6 +19,10 @@ source consistency checks, not a separate runtime compatibility version.
   authority and a peer's `/status` enrollment token, a node signs and delivers
   its own enrollment request, so the peer approves it with `enrollment approve`
   and pairs with `pairings apply` without the desktop app.
+- `config` write and preview receipts report a text field longer than 2,048
+  bytes as its `chars` and `sha256` instead of echoing it: a 16 KB
+  `system_prompt` update returned 23 KB (the old and new prompts) and now
+  returns under 1 KB, and the `sha256` checks the install against its file.
 - The `p2p` tool's schema is a closed `action` enum (`status`,
   `network_list`, `pairings_apply`, `enrollment_offer`, `enrollment_request`,
   `enrollment_approve`, ...) with typed `peer_id`, `peer_did`, `collections`,
