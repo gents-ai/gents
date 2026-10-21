@@ -622,7 +622,6 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
 | `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
 | `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input, continuation assignment attribution and context-bound activation |
-| `Proofs/GoalAutomation/RequestAssignment.lean` | Signed Goal and physical opening-request attribution, retained assignment handoffs |
 | `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another node and is authorized by the target's `PeerAdmissionAuthority` ACP. Every branch bounds the signed causal hop by `max_request_hop`. Title requests are runtime-internal local control with parent-only provenance |
 | `Proofs/Request/CausalHop.lean` | The only loop bound between agents: `nextHop` (roots 0, tool-caused +1, continuations copy), `admitHop`, and `admitted_chain_sends_le_max`. A plugin job's completion wake is a continuation (`job_completion_wake_is_continuation`) |
 | `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
@@ -654,6 +653,12 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/GoalAutomation/ClientMutation.lean` | Atomic signed command receipts, replay, and stale session and Goal revision rejection. |
 | `Proofs/GoalAutomation/ClientStart.lean` | Atomic session reservation, Goal creation, and first request publication. |
 | `Proofs/GoalAutomation/Observation.lean` | Signed Goal projections bound to the canonical physical session and requester. |
+| `Proofs/GoalAutomation/RequestAssignment.lean` | Signed Goal and physical opening-request attribution, retained assignment handoffs |
+| `Proofs/GoalAutomation/FirstRequestBinding.lean` | Immutable Goal opening-request binding captured in the shared Goal/request transaction; task assignments reuse the session Goal identity. |
+| `Proofs/GoalAutomation/DeliveryInput.lean` | Trigger and plugin-job delivery keep committed signed input; only new ordinary delivery to an existing session captures its assignment. |
+| `Proofs/GoalAutomation/WakeReceipt.lean` | Wake capture by assignment scope and cutoff; captured notifications stay owned by their physical attempt. |
+| `Proofs/GoalAutomation/ToolContext.lean` | Goal tool context from the calling request's assignment; unknown provenance never borrows one, and writes need the current Goal and opening request. |
+| `Proofs/SessionHydration/FileImages.lean` | File-image delivery selection and receipts; stored-image reads limited to the signed creator and the receipt's requester. |
 | `Proofs/Session/CommandAuthority.lean` | Shared session command signature, enrollment, route, and ownership requirements. |
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model. `ToolOperation.pluginJob` is a detached operation (`isDetached`) whose row never foregrounds (`plugin_job_row_never_foregrounds`) |
