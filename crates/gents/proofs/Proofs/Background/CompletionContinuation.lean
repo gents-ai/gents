@@ -2,8 +2,6 @@ import Proofs.Session.Properties.Executable
 import Proofs.AgentSession
 import Proofs.Request
 import Proofs.Goals
-import Proofs.GoalAutomation.RequestAssignment
-import Mathlib.Data.Nat.Pairing
 import Proofs.ToolExecution.State
 import Proofs.Transcript.State
 
@@ -29,17 +27,6 @@ on a terminal `ToolCallState`, so they share this continuation model.
 namespace BackgroundCompletion
 
 open ToolExecution
-
-/-- Native coalescing compares the original queue key together with the
-canonical retained assignment scope. Nat is the existing abstract key identity;
-this encoding introduces no persisted field or alternate authorization. -/
-def assignmentQueueKey (base : SessionQueue.QueueKey)
-    (scope : GoalAutomation.RequestAssignment.QueueScope) : SessionQueue.QueueKey :=
-  let association := match scope with
-    | .unassigned => 0
-    | .unresolved entry => 2 * entry + 1
-    | .referenced goal root => 2 * Nat.pair goal root + 2
-  Nat.pair base association
 
 /-- One parent-visible terminal completion and the wake row it owes. -/
 structure TerminalCompletion where

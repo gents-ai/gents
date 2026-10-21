@@ -45,8 +45,8 @@ def wake (request created key : Nat) : SessionQueue.QueueEntry :=
 def coalesces (c : Case) : Bool := Id.run do
   let some firstScope := queueScope c.observed c.first | return false
   let some secondScope := queueScope c.observed c.second | return false
-  let first := wake 501 1 (BackgroundCompletion.assignmentQueueKey c.firstKey firstScope)
-  let second := wake 502 2 (BackgroundCompletion.assignmentQueueKey c.secondKey secondScope)
+  let first := wake 501 1 (queueScopeKey c.firstKey firstScope)
+  let second := wake 502 2 (queueScopeKey c.secondKey secondScope)
   let pre : SessionQueue.SessionQueueState :=
     {scope := ⟨1, 10, none⟩, active := none, pending := [first], terminal := ∅}
   let some post := SessionQueue.step? pre (.coalescePending second) | return false
@@ -56,7 +56,7 @@ def scopedWakeAccepted (c : Case) : Bool := Id.run do
   let some scope := queueScope c.observed c.first | return false
   let completion := {BackgroundCompletion.canonicalCompletion with
     wake := {BackgroundCompletion.canonicalWake with
-      queueKey := some (BackgroundCompletion.assignmentQueueKey c.firstKey scope)}}
+      queueKey := some (queueScopeKey c.firstKey scope)}}
   let some notified := BackgroundCompletion.appendNotification? completion
     BackgroundCompletion.canonicalWaitReservedTranscript | return false
   return (BackgroundCompletion.enqueueWake? notified BackgroundCompletion.canonicalQueue).isSome

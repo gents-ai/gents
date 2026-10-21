@@ -1,4 +1,5 @@
 import Proofs.GoalAutomation.RequestAncestry
+import Mathlib.Data.Nat.Pairing
 
 namespace GoalAutomation.RequestAssignment
 
@@ -136,6 +137,16 @@ inductive QueueScope where
   | unresolved (entry : Nat)
   | referenced (goal root : Nat)
   deriving DecidableEq, Repr
+
+/-- Native coalescing compares the original queue key together with its
+canonical retained assignment scope. Nat is the existing abstract key identity;
+this encoding introduces no persisted field or alternate authorization. -/
+def queueScopeKey (base : Nat) (scope : QueueScope) : Nat :=
+  let association := match scope with
+    | .unassigned => 0
+    | .unresolved entry => 2 * entry + 1
+    | .referenced goal root => 2 * Nat.pair goal root + 2
+  Nat.pair base association
 
 def queueScope (assignments : List Assignment) (e : Entry) : Option QueueScope :=
   if !e.signatureValid then none
