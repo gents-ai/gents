@@ -89,6 +89,9 @@ fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyh
             });
         }
     }
+    // The loader interpolates every pack_config.json string but never sidecar
+    // contents, so only the JSON is escaped to read back as exactly itself.
+    gents::pack::interpolate::escape_values(&mut value);
     let mut bytes = serde_json::to_vec_pretty(&value)?;
     bytes.push(b'\n');
     fs::write(root.join("pack_config.json"), bytes)?;
@@ -147,6 +150,34 @@ mod tests {
         write_manifest_root(dir.path(), &config(), true).unwrap();
         assert!(!dir.path().join("stale").exists());
     }
+    #[test]
+    fn dollar_text_round_trips_through_export_and_load() {
+        let script = "echo ${HOME} $${X} $$ $";
+        let prompt = "context ${HOME} $${X} $$";
+        let config: DesiredStateManifest = serde_json::from_value(serde_json::json!({
+            "node":{"node_did":"owner"},
+            "contexts":[{"node_did":"owner","context_id":"context","system_prompt":prompt}],
+            "agents":[{"node_did":"owner","agent_id":"agent","context_id":"context",
+                "inference_profile_id":"profile"}],
+            "tasks":[{"node_did":"owner","task_id":"task","agent_id":"agent",
+                "prompt_template":"work","hooks":[
+                    {"hook_id":"gate","phase":"before","command":["sh","-c",script]}
+            ]}]
+        }))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest_root(dir.path(), &config, false).unwrap();
+        let (loaded, report) = super::super::load_manifest_root(dir.path());
+        assert!(report.ok, "{:?}", report.errors);
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.tasks[0].hooks[0].command[2], script);
+        assert_eq!(loaded.contexts[0].system_prompt.as_deref(), Some(prompt));
+        assert_eq!(
+            serde_json::to_value(&loaded).unwrap(),
+            serde_json::to_value(&config).unwrap()
+        );
+    }
+
     #[test]
     fn absent_prompt_has_no_sidecar_or_authored_field() {
         let dir = tempfile::tempdir().unwrap();

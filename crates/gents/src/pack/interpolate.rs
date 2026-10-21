@@ -68,3 +68,13 @@ pub fn interpolate(input: &str) -> Result<String, Vec<String>> {
 pub fn escape(text: &str) -> String {
     text.replace('$', "$$")
 }
+
+/// Escapes every string in `value` so the pack loader reads it back verbatim.
+pub fn escape_values(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => *text = escape(text),
+        serde_json::Value::Array(values) => values.iter_mut().for_each(escape_values),
+        serde_json::Value::Object(values) => values.values_mut().for_each(escape_values),
+        _ => {}
+    }
+}
