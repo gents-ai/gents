@@ -321,6 +321,7 @@ pub(crate) async fn agent_session_list(
                 "agent": agent, "agent_id": session.agent_id,
                 "title": session.title.as_ref().map(|title| &title.text),
                 "relationship": relation, "status": status,
+                "stopped_at": session.stopped_at,
                 "request_id": active.as_ref().map(|request| &request.request_id),
                 "lifecycle_state": active.as_ref().and_then(|request| request.lifecycle_state),
                 "last_activity_at": last_activity(&session),

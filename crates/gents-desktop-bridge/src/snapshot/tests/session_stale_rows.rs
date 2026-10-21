@@ -10,6 +10,7 @@ fn stale_session(state: RequestLifecycleState) -> AgentSession {
         agent_id: "amy-default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
+        stopped_at: None,
         title: None,
         tags: Vec::new(),
         provenance: None,

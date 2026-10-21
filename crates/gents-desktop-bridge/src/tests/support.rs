@@ -306,6 +306,7 @@ pub async fn create_session(
         agent_id: "worker".into(),
         created_at: "2026-05-20T00:00:00Z".into(),
         closed_at: None,
+        stopped_at: None,
         title: None,
         tags: Vec::new(),
         provenance: started_by.map(|doc_id| gents_protocol::session::SessionProvenance {

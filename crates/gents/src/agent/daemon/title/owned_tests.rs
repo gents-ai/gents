@@ -1255,6 +1255,7 @@ impl TitleFixture {
             agent_id: parent.agent_id.clone(),
             created_at: parent.created_at.clone(),
             closed_at: None,
+            stopped_at: None,
             title: None,
             tags: vec![],
             provenance: None,

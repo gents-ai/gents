@@ -572,6 +572,7 @@ pub fn session_document(
         agent_id: agent_id.into(),
         created_at: created_at.into(),
         closed_at: None,
+        stopped_at: None,
         title: None,
         tags: vec![],
         provenance: None,

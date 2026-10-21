@@ -5,7 +5,66 @@ use anyhow::Context;
 /// Fields for one canonical `AgentSession` read. Nested values are DefraDB
 /// JSON scalar columns: read the bare field name, never an object subselection.
 pub const AGENT_SESSION_FIELDS: &str = "session_id node_did requester_did agent_id \
-created_at closed_at title provenance observation tags _docID";
+created_at closed_at stopped_at title provenance observation tags _docID";
+
+pub(super) async fn session_stopped_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<bool> {
+    let scope = session_scope_filter(node_did, session_id, requester_did);
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ stopped_at }} }}"#
+        ))
+        .await?;
+    let rows = response
+        .pointer("/data/AgentSession")
+        .and_then(serde_json::Value::as_array)
+        .context("session stop-latch query omitted rows")?;
+    anyhow::ensure!(rows.len() <= 1, "session stop-latch scope is ambiguous");
+    let Some(row) = rows.first() else {
+        return Ok(false);
+    };
+    match row
+        .get("stopped_at")
+        .context("session stop-latch query omitted stopped_at")?
+    {
+        serde_json::Value::Null => Ok(false),
+        serde_json::Value::String(value) if !value.trim().is_empty() => Ok(true),
+        _ => anyhow::bail!("session stopped_at is malformed"),
+    }
+}
+
+pub(super) async fn session_is_stopped(
+    node: &EmbeddedNode,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<bool> {
+    let scope = session_scope_filter(node_did, session_id, requester_did);
+    let query = format!(r#"{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ stopped_at }} }}"#);
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load session stop latch",
+    )
+    .await?;
+    let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentSession")?;
+    anyhow::ensure!(rows.len() <= 1, "session stop-latch scope is ambiguous");
+    let Some(row) = rows.first() else {
+        return Ok(false);
+    };
+    match row
+        .get("stopped_at")
+        .context("session stop-latch query omitted stopped_at")?
+    {
+        serde_json::Value::Null => Ok(false),
+        serde_json::Value::String(value) if !value.trim().is_empty() => Ok(true),
+        _ => anyhow::bail!("session stopped_at is malformed"),
+    }
+}
 
 pub(super) fn validate_agent_session(
     session: &gents_protocol::session::AgentSession,
@@ -27,6 +86,10 @@ pub(super) fn validate_agent_session(
         .context("session created_at is invalid")?;
     if let Some(closed_at) = session.closed_at.as_deref() {
         chrono::DateTime::parse_from_rfc3339(closed_at).context("session closed_at is invalid")?;
+    }
+    if let Some(stopped_at) = session.stopped_at.as_deref() {
+        chrono::DateTime::parse_from_rfc3339(stopped_at)
+            .context("session stopped_at is invalid")?;
     }
     if let Some(observation) = session.observation.as_ref() {
         chrono::DateTime::parse_from_rfc3339(&observation.last_activity_at)
