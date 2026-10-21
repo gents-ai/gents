@@ -114,7 +114,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
-                request_id node_did session_id retry_key lifecycle_state content
+                _docID request_id node_did session_id retry_key lifecycle_state content input
                 caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
                 caused_by_source_doc_id caused_by_correlation admission_kind
                 runtime_source_request_id runtime_source_kind
@@ -150,6 +150,12 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     assert_eq!(requests.len(), 1, "retry must not duplicate requests");
     assert_eq!(claims.len(), 1, "retry must not duplicate creation claims");
     let request = &requests[0];
+    assert_eq!(
+        goal.assignment_root_request_doc_id.as_deref(),
+        request["_docID"].as_str()
+    );
+    assert_eq!(request["input"]["goal_assignment"]["goal_id"], goal.goal_id);
+    assert!(request["input"]["goal_assignment"]["root_request_doc_id"].is_null());
     assert_eq!(
         request["request_id"].as_str(),
         Some(identity.request_id.as_str())

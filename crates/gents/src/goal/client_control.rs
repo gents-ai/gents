@@ -355,14 +355,6 @@ pub(crate) async fn stage_goal_control(
                             != Some(&submitted.doc_id)),
                 "replacement goal reused its prior identity or ancestry"
             );
-            txn.execute(&format!(
-                r#"mutation {{ update_Goal(docID: "{}", input: {{
-                assignment_root_request_doc_id: "{}"
-            }}) {{_docID}} }}"#,
-                escape_graphql_string(&goal.doc_id),
-                escape_graphql_string(&submitted.doc_id)
-            ))
-            .await?;
             (goal.goal_id, Some(submitted.request_id))
         }
         PreparedGoalControl::Edit { goal, fields } => {

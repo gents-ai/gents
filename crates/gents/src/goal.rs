@@ -10,6 +10,7 @@ mod claimed_publication;
 mod client_control;
 mod client_submission;
 mod edit;
+mod first_request_binding;
 mod history;
 mod observation;
 mod operator_resume;
@@ -23,6 +24,9 @@ pub(crate) use claimed_publication::{
 pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
 pub use client_submission::submit_session_goal_control;
 pub(crate) use edit::{edit_active_goal, GoalEdit};
+pub(crate) use first_request_binding::{
+    bind_goal_first_request_in_txn, task_assignment_goal_id, validate_task_goal_identity_in_txn,
+};
 pub(crate) use history::{load_goal_versions_for_session, GoalVersion};
 pub use observation::{
     load_session_goal_observation, load_session_goal_observation_state, SessionGoalObservationState,
@@ -1523,7 +1527,7 @@ async fn stage_goal_backed_request(
     let existing = txn
         .execute(&format!(
             r#"{{
-                    AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
+                    AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID
                         {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
                     }}
                 }}"#,
@@ -1544,6 +1548,15 @@ async fn stage_goal_backed_request(
             persisted == GoalBackedRequestFingerprint::from_create(request)?,
             "goal request retry key conflicts with different immutable request fields"
         );
+        bind_goal_first_request_in_txn(
+            txn,
+            &staged_goal.goal,
+            existing_request["_docID"]
+                .as_str()
+                .context("persisted Goal request lacks physical identity")?,
+            request.input.goal_assignment.as_ref(),
+        )
+        .await?;
         submission_state =
             goal_submission_step(submission_state, GoalSubmissionAction::StageRequest);
         anyhow::ensure!(
@@ -1561,9 +1574,18 @@ async fn stage_goal_backed_request(
     );
     crate::graph_pipeline::fence_graph_root_request_in_txn(txn, request).await?;
     let request_fields = request.graphql_input_fields().map_err(anyhow::Error::msg)?;
-    txn.execute(&format!(
-        "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
-    ))
+    let created = txn
+        .execute(&format!(
+            "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
+        ))
+        .await?;
+    let request_doc_id = crate::graphql::created_doc_id(&created, "AgentRequest")?;
+    bind_goal_first_request_in_txn(
+        txn,
+        &staged_goal.goal,
+        &request_doc_id,
+        request.input.goal_assignment.as_ref(),
+    )
     .await?;
     submission_state = goal_submission_step(submission_state, GoalSubmissionAction::StageRequest);
     anyhow::ensure!(
@@ -2171,11 +2193,17 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         assignment.session_id == request.session_id,
         "Task receipt session differs from claimed request"
     );
-    anyhow::ensure!(
-        assignment.goal_id.as_deref()
-            == Some(deterministic_goal_id(&request.node_did, &request.session_id).as_str()),
-        "Task receipt has a noncanonical Goal identity"
-    );
+    validate_task_goal_identity_in_txn(
+        txn,
+        &request.node_did,
+        &request.session_id,
+        assignment
+            .goal_id
+            .as_deref()
+            .context("Task assignment lost Goal identity")?,
+        request.input.goal_assignment.as_ref(),
+    )
+    .await?;
     let objective = assignment
         .goal_objective
         .as_deref()

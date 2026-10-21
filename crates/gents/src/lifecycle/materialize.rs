@@ -197,6 +197,38 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     requester_did: Option<&str>,
     trigger_doc_id: Option<&str>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+    let spec = pending_agent_request_spec(
+        node_did,
+        agent_id,
+        content,
+        execution_origin,
+        trigger_lineage,
+        conversation_title,
+        workspace_lineage,
+        request_id,
+        session_id,
+        retry_key,
+        requester_did,
+        trigger_doc_id,
+    )?;
+    build_signed_request(spec, RequestSigner::RegisteredTarget).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pending_agent_request_spec(
+    node_did: &str,
+    agent_id: &str,
+    content: &str,
+    execution_origin: ExecutionOrigin,
+    trigger_lineage: TriggerLineage,
+    conversation_title: Option<&str>,
+    workspace_lineage: Option<&WorkspaceLineage>,
+    request_id: &str,
+    session_id: &str,
+    retry_key: Option<&str>,
+    requester_did: Option<&str>,
+    trigger_doc_id: Option<&str>,
+) -> Result<RequestSpec> {
     validate_trigger_lineage(&trigger_lineage, trigger_doc_id)?;
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
@@ -273,7 +305,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
             admission,
         )
     };
-    build_signed_request(spec, RequestSigner::RegisteredTarget).await
+    Ok(spec)
 }
 
 pub struct RequestIdentity {
@@ -1352,14 +1384,14 @@ async fn stage_task_delivery(
         );
         match &fire.goal_id {
             Some(goal_id) => {
-                anyhow::ensure!(
-                    goal_id
-                        == &crate::goal::deterministic_goal_id(
-                            &create.node_did,
-                            &create.session_id
-                        ),
-                    "Task receipt has a noncanonical Goal identity"
-                );
+                crate::goal::validate_task_goal_identity_in_txn(
+                    txn,
+                    &create.node_did,
+                    &create.session_id,
+                    goal_id,
+                    create.input.goal_assignment.as_ref(),
+                )
+                .await?;
                 anyhow::ensure!(
                     fire.goal_objective
                         .as_deref()
