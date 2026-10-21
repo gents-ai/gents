@@ -867,7 +867,11 @@ mod paging_coverage_tests {
                 anchor_sequence: Some(1),
                 call_id: format!("call-{index}"),
                 call_sequence: index,
-                queued_at: Some(format!("2026-10-21T00:00:{index:02}Z")),
+                queued_at: Some(format!(
+                    "2026-10-21T00:{:02}:{:02}Z",
+                    index / 60,
+                    index % 60
+                )),
                 accounting: gents_protocol::rendered_request::ContextAccounting {
                     accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
                     turn_index: index as usize,
@@ -916,12 +920,15 @@ mod paging_coverage_tests {
                 denied_dependency_doc_id: None,
             },
         });
-        apply_session_timeline_page(&mut snapshot, None, Some(1)).unwrap();
-        let cursor = snapshot.timeline_page.unwrap().oldest_item_key.unwrap();
+        let full_snapshot = snapshot;
+        let mut newest = full_snapshot.clone();
+        apply_session_timeline_page(&mut newest, None, Some(1)).unwrap();
+        let cursor = newest.timeline_page.unwrap().oldest_item_key.unwrap();
         assert_eq!(cursor, "assistant-2");
-        apply_session_timeline_page(&mut snapshot, Some(&cursor), Some(1)).unwrap();
+        let mut older = full_snapshot;
+        apply_session_timeline_page(&mut older, Some(&cursor), Some(1)).unwrap();
         assert!(matches!(
-            snapshot.timeline_items.as_slice(),
+            older.timeline_items.as_slice(),
             [RenderedTimelineItem::RequestContextReductionSummary {
                 reduction_count: 81,
                 ..
