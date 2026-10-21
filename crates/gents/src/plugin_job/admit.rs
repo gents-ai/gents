@@ -91,6 +91,10 @@ pub struct StepContext {
     pub installed_trusted_sources: Vec<String>,
     pub max_hop: Option<u32>,
     pub target_hops: Vec<((String, String), u32)>,
+    /// The host's resolution of the AgentTarget ids the caller can see to
+    /// Lean's `(target_node_did, agent_id)` targets; the protocol, ceilings and
+    /// `dynamic_targets` name targets by these ids.
+    pub target_ids: Vec<(String, (String, String))>,
     pub live_background: u32,
     pub started_by_job: bool,
     pub cwd_allowed: Vec<String>,
@@ -332,7 +336,7 @@ fn empty_ceiling() -> JobCeiling {
     }
 }
 
-/// Lean `Ceiling.meet`; a target list permits the agent ids it lists.
+/// Lean `Ceiling.meet`; a target list permits the AgentTarget ids it lists.
 pub(super) fn meet(a: &JobCeiling, b: &JobCeiling) -> JobCeiling {
     JobCeiling {
         targets: a
@@ -367,22 +371,28 @@ pub(super) fn out_resume(out: &JobStepOutput) -> Option<&JobResume> {
     }
 }
 
-/// The protocol carries a target as its agent id; the first `target_hops`
-/// pair with that id is the target.
-fn resolve_target<'a>(ctx: &'a StepContext, agent_id: &str) -> Option<&'a (String, String)> {
-    ctx.target_hops
+pub(super) fn resolve_target<'a>(
+    ctx: &'a StepContext,
+    target_id: &str,
+) -> Option<&'a (String, String)> {
+    ctx.target_ids
         .iter()
-        .map(|(pair, _)| pair)
-        .find(|pair| pair.1 == agent_id)
+        .find(|(id, _)| id == target_id)
+        .map(|(_, pair)| pair)
+}
+
+/// An id list permits a target when one of its ids resolves to it.
+fn ids_permit(ctx: &StepContext, ids: &[String], pair: &(String, String)) -> bool {
+    ctx.target_ids
+        .iter()
+        .any(|(id, resolved)| resolved == pair && ids.contains(id))
 }
 
 fn effective_targets_permit(ctx: &StepContext, pin: &JobPin, pair: &(String, String)) -> bool {
-    meet(&ctx.live, &pin.ceiling_at_pin)
-        .targets
-        .contains(&pair.1)
+    ids_permit(ctx, &meet(&ctx.live, &pin.ceiling_at_pin).targets, pair)
         && ctx.job_targets.permits(pair)
         && ctx.caller_targets.permits(pair)
-        && (pin.origin != JobOrigin::Dynamic || ctx.policy.dynamic_targets.contains(&pair.1))
+        && (pin.origin != JobOrigin::Dynamic || ids_permit(ctx, &ctx.policy.dynamic_targets, pair))
 }
 
 fn step_pin(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Option<JobPin> {
@@ -940,6 +950,7 @@ mod tests {
             installed_trusted_sources: vec!["source".to_owned()],
             max_hop: Some(8),
             target_hops: vec![(pair("a"), 0), (pair("b"), 0)],
+            target_ids: vec![("a".to_owned(), pair("a")), ("b".to_owned(), pair("b"))],
             live_background: 0,
             started_by_job: false,
             cwd_allowed: Vec::new(),
@@ -1214,7 +1225,7 @@ mod tests {
         assert_eq!(code(&ctx, &job, &out), DENIED);
 
         let ctx = StepContext {
-            target_hops: vec![(pair("b"), 0)],
+            target_ids: vec![("b".to_owned(), pair("b"))],
             ..base_context()
         };
         assert_eq!(code(&ctx, &job, &out), DENIED);

@@ -20,7 +20,7 @@ const TOOL: &str = "workflow";
 const PIN: &str =
     r#""pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"}"#;
 const SPAWN: &str =
-    r#"{"slot": "s", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}"#;
+    r#"{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}"#;
 
 struct Options {
     settings: Option<PluginJobSettings>,
@@ -39,14 +39,14 @@ struct Options {
 /// The job block of `team/plugin` in the caller's Tools: it may start `worker`.
 fn worker_settings(policy: JobPolicy) -> PluginJobSettings {
     let mut settings = live_settings(policy);
-    settings.agent_targets = vec!["worker".into()];
+    settings.agent_targets = vec!["t-worker".into()];
     settings
 }
 
 fn running_policy() -> JobPolicy {
     JobPolicy {
         dynamic: DynamicMode::Run,
-        dynamic_targets: vec!["worker".into()],
+        dynamic_targets: vec!["t-worker".into()],
         ..Default::default()
     }
 }
@@ -769,7 +769,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     step.reinstall(&json!({"effects": {
         "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "ignored"},
         "resume": resume,
-        "spawn": [{"slot": "s2", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s2", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
     }}));
     let answer = step
         .call_as("call-2", r#"{"argv": ["resume", "root"]}"#)
@@ -882,7 +882,7 @@ async fn resume_of_a_continued_row_names_the_newest_rows_address() {
 async fn duplicate_handle_is_suffixed_and_the_scratch_path_is_unchanged() {
     let output = json!({"effects": {
         "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
         "scratch": [{"name": "a.txt", "content": "x"}],
     }});
     let step = step0(
@@ -939,7 +939,7 @@ async fn adoption_writes_no_execution_receipt() {
 async fn background_receipt_shows_address_handle_script_id_and_tier_line() {
     let output = json!({"effects": {
         "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
         "progress": {
             "title": "flow", "state": "running", "phases": [], "active": [], "spawned": 0,
             "budget": {"total": 2, "spent": 0, "remaining": 2},
@@ -971,7 +971,7 @@ async fn adopted_origin_follows_classify() {
     );
     let installed = json!({"effects": {
         "pin": {"script_id": "s", "source_digest": digest, "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
     }});
     let step = step0(
         installed,
@@ -1070,7 +1070,7 @@ async fn step0_budget_pause_with_a_pin_settles_paused_inline_and_is_resumable() 
     step.reinstall(&json!({"effects": {
         "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 3, "handle": "h"},
         "resume": {"row_doc_id": doc, "engine": "current", "budget": 3},
-        "spawn": [{"slot": "s2", "attempt": 0, "target": "worker", "prompt": "go", "title": "t"}],
+        "spawn": [{"slot": "s2", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
     }}));
     let resumed = step.call_as("call-2", r#"{"argv": ["resume", "h"]}"#).await;
     assert_eq!(resumed["status"], "running", "{resumed}");
