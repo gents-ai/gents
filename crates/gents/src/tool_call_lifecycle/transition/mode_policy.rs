@@ -144,8 +144,9 @@ impl ToolCallLifecycle {
         let request_doc_id = self.request_doc_id.as_deref()
             .ok_or_else(|| anyhow!("background called without parent request document"))?;
         let live = crate::hook::persistence::count_live_backgrounded_rows_in(txn, request_doc_id).await?;
-        anyhow::ensure!(live <= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
-            "background process limit reached; wait for background work to finish");
+        if live > crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
+            return Err(crate::hook::persistence::BackgroundCapacityExceeded(live - 1).into());
+        }
         let mut adopted = self.clone();
         adopted.await_mode = AwaitMode::Background;
         adopted.deadline_at = deadline_at;
