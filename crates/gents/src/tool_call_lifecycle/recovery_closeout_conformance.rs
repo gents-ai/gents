@@ -1120,11 +1120,8 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
 
         let registry = crate::BackgroundExecutionRegistry::default();
         let token = tokio_util::sync::CancellationToken::new();
-        let reservation = registry.reserve_scoped(
-            tool_call_id.clone(),
-            Some(tool_doc_id.clone()),
-            token.clone(),
-        );
+        let reservation =
+            registry.reserve(tool_call_id.clone(), tool_doc_id.clone(), token.clone());
         let (identity_tx, identity_rx) = tokio::sync::oneshot::channel();
         let worker = {
             let registry = registry.clone();
@@ -1155,6 +1152,10 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 home: job_home.path().to_path_buf(),
                 tool_root: None,
             });
+        let modeled = crate::lean_vocab_test::lean_session_control_cases()
+            .iter()
+            .find(|case| case["name"] == "resume_waits_for_owned_background")
+            .expect("Lean session-control model includes owned-background settlement");
 
         let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
         for mutation in [
@@ -1199,8 +1200,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 job_driver.clone(),
             )
             .await;
-            assert!(
+            assert_eq!(
                 first_resume.is_err(),
+                modeled["blocked"],
                 "terminal parent request cannot make a registered live process quiescent"
             );
             let stopped = node
@@ -1235,30 +1237,30 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             deleted.name
         );
         if session_stopped {
-            let modeled = crate::lean_vocab_test::lean_session_control_cases()
-                .iter()
-                .find(|case| case["name"] == "resume_waits_for_owned_background")
-                .expect("Lean session-control model includes owned-background settlement");
-            assert_eq!(modeled["blocked"], true);
-            let job_home = tempfile::tempdir().unwrap();
-            let job_driver =
-                crate::plugin_job::driver::JobDriver::new(crate::plugin_job::driver::JobRuntime {
-                    node: node.clone(),
-                    plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
-                    home: job_home.path().to_path_buf(),
-                    tool_root: None,
-                });
             crate::session::resume_session(
                 &node,
                 &node_did,
                 &session_id,
                 tool.requester_did(),
                 registry.clone(),
-                job_driver,
+                job_driver.clone(),
             )
             .await
             .expect("resume succeeds after the existing recovery owner verifies process exit");
-            assert_eq!(modeled["stopped_after_settlement"], false);
+            let resumed = node
+                .execute(&format!(
+                    r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
+                    crate::session::session_scope_filter(
+                        &node_did,
+                        &session_id,
+                        tool.requester_did(),
+                    ),
+                ))
+                .await;
+            assert_eq!(
+                resumed.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
+                modeled["stopped_after_settlement"]
+            );
         }
         let escaped = crate::graphql::escape_graphql_string(&tool_doc_id);
         let response = node
@@ -1316,11 +1318,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
 
     let registry = crate::BackgroundExecutionRegistry::default();
     let token = tokio_util::sync::CancellationToken::new();
-    let reservation = registry.reserve_scoped(
-        tool_call_id.clone(),
-        Some(tool_doc_id.clone()),
-        token.clone(),
-    );
+    let reservation = registry.reserve(tool_call_id.clone(), tool_doc_id.clone(), token.clone());
     let worker_token = token.clone();
     let (identity_tx, identity_rx) = tokio::sync::oneshot::channel();
     let (release_reservation_tx, release_reservation_rx) = tokio::sync::oneshot::channel();
@@ -1395,15 +1393,15 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         job_driver.clone(),
     )
     .await;
-    assert!(
+    assert_eq!(
         blocked.is_err(),
+        modeled["blocked"],
         "terminal tool rows do not prove process quiescence"
     );
     assert!(
         format!("{blocked:#?}").contains("has not been observed exited"),
         "the retained physical process witness should block resume: {blocked:#?}"
     );
-    assert_eq!(modeled["blocked"], true);
 
     let other_session = format!("unrelated-{}", uuid::Uuid::new_v4());
     crate::session::create_session_with_id(&admission.node, &other_session, "general", &node_did)
@@ -1444,7 +1442,17 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     )
     .await
     .expect("resume succeeds after the registered process owner records exit");
-    assert_eq!(modeled["stopped_after_settlement"], false);
+    let resumed = admission
+        .node
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ {} }}, limit: 1) {{ stopped_at }} }}"#,
+            crate::session::session_scope_filter(&node_did, &session_id, tool.requester_did())
+        ))
+        .await;
+    assert_eq!(
+        resumed.data.unwrap()["AgentSession"][0]["stopped_at"].is_string(),
+        modeled["stopped_after_settlement"]
+    );
     admission.node.shutdown().await;
     std::fs::remove_dir_all(admission.path).unwrap();
 }

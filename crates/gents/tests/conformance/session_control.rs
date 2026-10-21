@@ -13,9 +13,6 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     let interrupt_case = model_case("interrupt_idle");
     let stop_case = model_case("stop_drains");
     let resume_case = model_case("resume_terminal_goal");
-    let settle_case = model_case("resume_waits_for_owned_background");
-    assert_eq!(settle_case["blocked"], true);
-    assert_eq!(settle_case["stopped_after_settlement"], false);
     let db = test_db("session-control-generated").await;
     let node_did = db.node_identity.did();
 
@@ -263,18 +260,32 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         Some(predecessor_id.as_str())
     );
 
+    let job_home = tempfile::tempdir().unwrap();
+    let job_driver =
+        gents::plugin_job::driver::JobDriver::new(gents::plugin_job::driver::JobRuntime {
+            node: db.node.clone(),
+            plugins: std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(None)),
+            home: job_home.path().to_path_buf(),
+            tool_root: None,
+        });
+    let resume = || {
+        gents::session::resume_session(
+            &db.node,
+            node_did,
+            &session_id,
+            Some(node_did),
+            gents::hook::BackgroundExecutionRegistry::default(),
+            job_driver.clone(),
+        )
+    };
     assert_eq!(
-        gents::session::resume_session(&db.node, node_did, &session_id, Some(node_did))
-            .await
-            .is_err(),
+        resume().await.is_err(),
         resume_case["refused_while_active"].as_bool().unwrap(),
         "resume must wait for the interrupted request to settle"
     );
 
     support::set_request_lifecycle_state(&db.node, &predecessor_doc, "interrupted").await;
-    gents::session::resume_session(&db.node, node_did, &session_id, Some(node_did))
-        .await
-        .unwrap();
+    resume().await.unwrap();
 
     let session_row = db.node.execute(&format!(
         r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}, limit: 2) {{stopped_at}}}}"#,

@@ -202,10 +202,14 @@ impl BackgroundExecutionRegistry {
             .filter(|record| record.tool_call_doc_id == tool_call_doc_id)
     }
 
-    pub(crate) fn process_record_list(
+    pub(crate) fn process_record_list(&self) -> Vec<crate::managed_exec::ownership::ProcessRecord> {
+        self.process_records.list()
+    }
+
+    pub(crate) fn try_process_record_list(
         &self,
     ) -> anyhow::Result<Vec<crate::managed_exec::ownership::ProcessRecord>> {
-        self.process_records.list()
+        self.process_records.try_list()
     }
 
     pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {

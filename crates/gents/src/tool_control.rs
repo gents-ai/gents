@@ -440,7 +440,7 @@ mod tests {
                     );
                 }
             }
-            assert!(registry.process_record_list().unwrap().is_empty(), "{name}");
+            assert!(registry.process_record_list().is_empty(), "{name}");
             admission.node.shutdown().await;
             let _ = std::fs::remove_dir_all(admission.path);
         }

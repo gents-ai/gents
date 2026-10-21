@@ -101,6 +101,9 @@ pub async fn stop_session(
     .await
 }
 
+/// Resume uses the target node runtime's existing execution registry and job driver as quiescence
+/// witnesses; callers must not substitute fresh owners. This relies on the one-active-runtime-per-
+/// node operating convention while process and job ownership is checked with the session latch.
 pub async fn resume_session(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -212,7 +215,7 @@ async fn ensure_session_executions_settled_in_txn(
         "session-owned background execution is still active; retry agent_resume after it settles"
     );
     let unexited = background_executions
-        .process_record_list()
+        .try_process_record_list()
         .context(
             "cannot verify retained process ownership before resume; retry after runtime recovery",
         )?

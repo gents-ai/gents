@@ -119,7 +119,7 @@ impl TaskHookRecordStore {
     }
 
     pub(crate) fn list(&self) -> Vec<TaskHookRecord> {
-        self.storage.list().unwrap_or_default()
+        self.storage.list()
     }
 
     fn claim(&self, record: TaskHookRecord) -> Option<TaskHookRecordHandle> {

@@ -716,7 +716,7 @@ async fn durable_process_record_survives_a_fresh_store() {
         .process_record("spawned:tool", "other-doc")
         .is_none());
     restarted.remove("spawned:tool");
-    assert!(restarted.list().unwrap().is_empty());
+    assert!(restarted.list().is_empty());
     process.finish().await;
 }
 
