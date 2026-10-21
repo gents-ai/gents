@@ -9,6 +9,11 @@ const PROFILE_TARGET: &str = "bafyreieksrjdkg546ymilx5qrpbtciuyr3cwqyq25u52o64lo
 const TOOL_ROOT: &str = "bafyreiexmbjxfqyg6yhjst6r746spzge27f6mhh2moyrkawbmvtvba4mbi";
 const TOOL_TARGET: &str = "bafyreibo27yezuxj3re6rbppwuqu2gsy27u4vnzlozowglguvg4a7xyeva";
 
+const TOOL_BACKGROUND_PATCH: &str = r#"[{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"background_requested_at","Kind":"DateTime"}}]"#;
+const TOOL_FRESH_ROOT: &str = "bafyreihfkiuhbdzdlmfqf6wm4q5xgrad4wl2zi4fvcj25co3kdjrktjv5a";
+const TOOL_FRESH_BACKGROUND: &str = "bafyreifddp6p4viubjrzhgbrgyjnnyzuq2u5qzpcavw2rkkmrbgfltboza";
+const TOOL_LEGACY_BACKGROUND: &str = "bafyreigxgxq4itlpku2ajqwpb7axfy2pqckgpab3l5zmrljm4lcht7fhoe";
+
 /// DefraDB field positions are persistent identifiers. Existing RC1 lineages
 /// append fields through versioned patches; fresh stores retain the current
 /// canonical roots. Only these exact source and destination versions qualify.
@@ -34,6 +39,22 @@ pub(crate) fn include_existing(
             r#"[{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"job_pin","Kind":"JSON"}},{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"job_progress","Kind":"JSON"}},{"op":"add","path":"/AgentToolCall/Fields/-","value":{"Name":"job_step_state","Kind":"JSON"}}]"#,
             &["job_pin", "job_progress", "job_step_state"][..],
         ),
+        (
+            "AgentToolCall",
+            TOOL_FRESH_ROOT,
+            TOOL_FRESH_BACKGROUND,
+            "agent-tool-call-add-background-request",
+            TOOL_BACKGROUND_PATCH,
+            &["background_requested_at"][..],
+        ),
+        (
+            "AgentToolCall",
+            TOOL_TARGET,
+            TOOL_LEGACY_BACKGROUND,
+            "agent-tool-call-add-background-request",
+            TOOL_BACKGROUND_PATCH,
+            &["background_requested_at"][..],
+        ),
     ] {
         let Some(current) = node
             .get_collection(name)
@@ -41,11 +62,22 @@ pub(crate) fn include_existing(
         else {
             continue;
         };
-        if current.version_id != root && current.version_id != target {
+        let after_job_patch =
+            name == "AgentToolCall" && root == TOOL_TARGET && current.version_id == TOOL_ROOT;
+        let after_background_patch = name == "AgentToolCall"
+            && root == TOOL_ROOT
+            && current.version_id == TOOL_LEGACY_BACKGROUND;
+        if current.version_id != root
+            && current.version_id != target
+            && !after_job_patch
+            && !after_background_patch
+        {
             continue;
         }
         if let Some(entry) = baseline.iter_mut().find(|entry| entry.name == name) {
-            entry.expected_version = Some(root);
+            if !(name == "AgentToolCall" && root == TOOL_TARGET) {
+                entry.expected_version = Some(root);
+            }
             steps.push(MigrationStep::PatchVersioned {
                 id,
                 collection: name,

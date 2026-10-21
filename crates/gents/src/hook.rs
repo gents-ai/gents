@@ -1060,6 +1060,16 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
+    async fn run_foreground_tool(
+        &self,
+        name: &str,
+        internal_id: &str,
+        call: gents_loop::session_hook::ForegroundCall,
+    ) -> gents_loop::session_hook::ForegroundResult {
+        self.run_backgroundable_foreground(name, internal_id, call)
+            .await
+    }
+
     async fn admit_tool_effect(
         &self,
         parent_internal_id: &str,

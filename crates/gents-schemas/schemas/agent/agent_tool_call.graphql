@@ -53,4 +53,5 @@ type AgentToolCall @branchable {
     # Delivery is separate from lifecycle_state; a failed/cancelled/timedOut
     # result can be durably published without changing its execution outcome.
     completion_notification_delivered_at: DateTime
+    background_requested_at: DateTime
 }

@@ -664,13 +664,8 @@ impl ToolCallLifecycle {
 
     pub(crate) fn background_receipt_binding(&self) -> Result<BackgroundReceiptBinding> {
         anyhow::ensure!(
-            self.await_mode == super::AwaitMode::Background
-                && matches!(
-                    self.kind(),
-                    ToolRowKind::SessionMessage | ToolRowKind::PluginJob
-                )
-                && !self.is_spawned_background(),
-            "background receipt requires an accepted background session-message row"
+            self.await_mode == super::AwaitMode::Background && !self.is_spawned_background(),
+            "background receipt requires an accepted direct background invocation"
         );
         Ok(BackgroundReceiptBinding {
             tool_doc_id: self

@@ -247,6 +247,8 @@ export function createBridgeHttpAdapter(
       ),
     interruptRequest: async (request) =>
       client.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
+    backgroundTool: async (request) =>
+      client.postJson<boolean>("/desktop/tool/background", request),
     jobControl: async () => {
       throw new Error("desktop_job_control is not served by the live bridge runner");
     },

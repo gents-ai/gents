@@ -13,6 +13,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
+import { BackgroundToolButton } from "../src/ui/screens/BackgroundToolButton";
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { ToolBody } from "../src/ui/screens/tool-views";
 import {
@@ -21,7 +22,11 @@ import {
   lineCount,
   toolSummary,
 } from "../src/ui/screens/tool-summary";
-import { activityStatus, isStopping } from "../src/ui/screens/activity-status";
+import {
+  activityStatus,
+  interruptTarget,
+  isStopping,
+} from "../src/ui/screens/activity-status";
 import { NO_WORKERS } from "../src/ui/screens/workers";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { renderIn, testApp } from "./app-fixture";
@@ -436,6 +441,26 @@ describe("stop", () => {
     },
   );
 
+  it("stops the running turn while a follow-up message is still syncing", () => {
+    expect(
+      interruptTarget({
+        trackedRequestId: "new-queued-message",
+        latestRequestId: "running-foreground-bash",
+        turnState: "running",
+      }),
+    ).toBe("running-foreground-bash");
+  });
+
+  it("does not interrupt a completed predecessor instead of a new request", () => {
+    expect(
+      interruptTarget({
+        trackedRequestId: "new-request",
+        latestRequestId: "completed-predecessor",
+        turnState: "completed",
+      }),
+    ).toBe("new-request");
+  });
+
   it("binds Stopping to the request being stopped", () => {
     const base = {
       inFlight: true,
@@ -461,5 +486,45 @@ describe("stop", () => {
     const notice = screen.getByTestId("stopped-notice");
     expect(notice).toHaveTextContent("This response was stopped.");
     expect(notice).not.toHaveTextContent("You stopped");
+  });
+});
+
+describe("foreground command control", () => {
+  it("backgrounds the exact running command without stopping its request", async () => {
+    const backgroundTool = vi.fn().mockResolvedValue(true);
+    const app = testApp({ api: { backgroundTool }, session: session({}) });
+    const command = {
+      ...tool({ kind: "generic", summary: null, input: null, output: null }, "running"),
+      toolName: "bash_unrestricted",
+      toolCallId: "command-1",
+      requestId: "request-1",
+      awaitMode: "foreground",
+      backgroundAvailable: true,
+    };
+    renderIn(app, <BackgroundToolButton tool={command} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Run in background" }));
+    });
+    expect(backgroundTool).toHaveBeenCalledWith({
+      nodeDid: "did:test:node",
+      sessionId: "session-1",
+      requestId: "request-1",
+      toolCallId: "command-1",
+    });
+  });
+
+  it("does not offer backgrounding for a completed command", () => {
+    render(
+      <BackgroundToolButton
+        tool={{
+          ...edit,
+          toolName: "bash_unrestricted",
+          toolCallId: "command-1",
+          requestId: "request-1",
+          awaitMode: "foreground",
+        }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Run in background" })).toBeNull();
   });
 });

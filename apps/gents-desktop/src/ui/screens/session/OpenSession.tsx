@@ -25,7 +25,7 @@ import {
   useSelectedSession,
   useSelectedSessionFields,
 } from "../../hooks/useSelectedSession";
-import { isStopping } from "../activity-status";
+import { interruptTarget, isStopping } from "../activity-status";
 import { agentName } from "../behavior";
 import { NodeAgentStack } from "../NodeBehaviorStack";
 import { useParentWork } from "../parentWork";
@@ -92,7 +92,11 @@ export function OpenSession() {
   );
   const sessionNode = useFleet((s) => nodeOf(s, session?.nodeDid));
 
-  const stoppableRequestId = activeRequestId ?? session?.latestRequestId ?? null;
+  const stoppableRequestId = interruptTarget({
+    trackedRequestId: activeRequestId,
+    latestRequestId: session?.latestRequestId ?? null,
+    turnState: session?.turnState ?? null,
+  });
   const stopping = isStopping({
     inFlight,
     requestId: stoppableRequestId,
@@ -296,6 +300,7 @@ type ScreenFacts = Pick<
   | "context"
   | "goal"
   | "latestRequestId"
+  | "turnState"
   | "latestRequestOutcome"
 >;
 
@@ -309,6 +314,7 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
     context: session.context,
     goal: session.goal,
     latestRequestId: session.latestRequestId,
+    turnState: session.turnState,
     latestRequestOutcome: session.latestRequestOutcome,
   };
 }

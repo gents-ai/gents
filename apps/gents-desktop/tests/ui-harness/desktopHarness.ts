@@ -2572,6 +2572,9 @@ export function createDesktopUiHarness(
       };
       return result;
     },
+    async backgroundTool() {
+      return true;
+    },
     async jobControl() {
       const outcome: JobControlOutcome = {
         AlreadyTerminal: { state: "completed" },

@@ -26,6 +26,7 @@ pub(crate) const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
 
 mod background_control;
 mod background_tools;
+mod foreground_handoff;
 mod goal_tools;
 mod helpers;
 mod prompt_hook;

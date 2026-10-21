@@ -1,4 +1,21 @@
-import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
+import {
+  isTerminalTurnState,
+  type RenderedTimelineItem,
+} from "@source-inc/gents-desktop-client";
+
+export function interruptTarget({
+  trackedRequestId,
+  latestRequestId,
+  turnState,
+}: {
+  trackedRequestId: string | null;
+  latestRequestId: string | null;
+  turnState: string | null;
+}): string | null {
+  if (latestRequestId && turnState && !isTerminalTurnState(turnState))
+    return latestRequestId;
+  return trackedRequestId;
+}
 
 export function activityStatus(
   items: readonly RenderedTimelineItem[],

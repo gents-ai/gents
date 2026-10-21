@@ -1042,21 +1042,46 @@ where
                                 fatal: tokio::sync::Mutex::new(None),
                             })
                         });
-                        let outcome = if suppressed {
+                        let execution = if suppressed {
                             drop(live_output);
-                            repeated_tool_failure.suppress()
+                            crate::session_hook::ForegroundResult::Settled(repeated_tool_failure.suppress())
                         } else {
-                            crate::tool_effects::scope(effects.clone().map(|effects| effects as Arc<dyn crate::tool_effects::ToolEffectDispatcher>), tool_dispatch::dispatch_provider_tool(
-                                tools.as_slice(),
-                                &tool_name,
-                                tool_args.clone(),
-                                live_output,
-                                session_id,
-                                activity.as_ref().is_some_and(|activity| activity.token_limit_reached()),
-                            ))
-                            .await
+                            let execution_tools = tools.clone();
+                            let execution_name = tool_name.clone();
+                            let execution_args = tool_args.clone();
+                            let execution_effects = effects.clone();
+                            let scope = current_tool_runtime_context();
+                            let token_limit = activity.as_ref().is_some_and(|activity| activity.token_limit_reached());
+                            let call: crate::session_hook::ForegroundCall = Box::new(move |token| Box::pin(async move {
+                                let execute = crate::tool_effects::scope(
+                                    execution_effects.map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>),
+                                    tool_dispatch::dispatch_provider_tool(
+                                        execution_tools.as_slice(), &execution_name, execution_args,
+                                        live_output, session_id, token_limit,
+                                    ),
+                                );
+                                match scope {
+                                    Some(scope) => crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+                                        scope.requester_did, scope.node_did, scope.agent_id, scope.request_id,
+                                        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                                            scope.deadline_at, token, scope.workspace_cwd, scope.live_output,
+                                            scope.session_id, scope.correlation, scope.source_fields,
+                                            scope.background, execute,
+                                        ),
+                                    ).await,
+                                    None => execute.await,
+                                }
+                            }));
+                            match hook.as_ref() {
+                                Some(hook) => hook.run_foreground_tool(&tool_name, &internal_call_id, call).await,
+                                None => crate::session_hook::ForegroundResult::Settled(call(Default::default()).await),
+                            }
                         };
-                        if let Some(hook) = hook.as_ref() {
+                        let (outcome, already_persisted) = match execution {
+                            crate::session_hook::ForegroundResult::Settled(outcome) => (outcome, false),
+                            crate::session_hook::ForegroundResult::Backgrounded(receipt) => (ToolOutcome::Completed(receipt), true),
+                        };
+                        if let Some(hook) = hook.as_ref().filter(|_| !already_persisted) {
                             let result_action = match effects.as_ref() {
                                 Some(effects) => effects.settle_parent_result(
                                     &tool_name, tool_call.call_id.clone(), &tool_args, &outcome,

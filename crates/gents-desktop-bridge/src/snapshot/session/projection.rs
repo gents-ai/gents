@@ -773,6 +773,15 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 None => (None, None, None),
             };
             ToolCallView {
+                background_available: Some(
+                    row.lifecycle_state.as_deref() == Some("running")
+                        && row.await_mode.as_deref() == Some("foreground")
+                        && row.plugin_parent_tool_call_doc_id.is_none()
+                        && row.spawned_by_tool_call_doc_id.is_none()
+                        && row.tool_name.as_deref().is_some_and(
+                            gents::background_tools::supports_foreground_backgrounding,
+                        ),
+                ),
                 tool_call_key: row.tool_call_key.clone(),
                 request_id: normalize_optional(row.request_id.as_deref()),
                 message_sequence: row.message_sequence,

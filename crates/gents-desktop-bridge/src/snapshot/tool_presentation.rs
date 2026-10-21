@@ -526,6 +526,7 @@ mod tests {
 
     fn tool(name: &str, args: &str, result: &str, state: &str) -> ToolCallView {
         ToolCallView {
+            background_available: None,
             tool_call_key: "tool-1".into(),
             request_id: Some("request-1".into()),
             message_sequence: Some(2),

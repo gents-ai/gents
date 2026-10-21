@@ -25,6 +25,9 @@ mod background_budget;
 #[path = "tests/background_admission.rs"]
 mod background_admission;
 
+#[path = "tests/foreground_handoff.rs"]
+mod foreground_handoff;
+
 #[path = "tests/wait_settlement.rs"]
 mod wait_settlement;
 

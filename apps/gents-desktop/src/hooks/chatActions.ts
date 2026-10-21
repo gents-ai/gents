@@ -310,6 +310,8 @@ export function createChatActions({
     retryMessage,
     renameSession,
     interruptRequest,
+    backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
+      api.backgroundTool(request),
     controlJob: (request: DesktopJobControlRequest) => api.jobControl(request),
     setChatFolder,
   };

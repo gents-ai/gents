@@ -34,6 +34,7 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         project_tool_presentation(&unavailable)
     };
     RenderedToolCallView {
+        background_available: tool.background_available,
         item_key: tool.tool_call_key.clone(),
         tool_name: tool.tool_name.clone().unwrap_or_else(|| "tool".to_string()),
         status_kind: tool_status_kind(tool.lifecycle_state.as_deref()),
@@ -318,6 +319,7 @@ mod tests {
     #[test]
     fn session_message_identity_and_await_mode_reach_rendered_tool() {
         let tool = ToolCallView {
+            background_available: None,
             tool_call_key: "start-1".to_string(),
             request_id: Some("parent-1".to_string()),
             message_sequence: Some(2),

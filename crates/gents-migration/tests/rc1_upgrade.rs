@@ -9,6 +9,7 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
     let node = fresh_node().await;
     let profile = schemas::INFERENCE_PROFILE.replace("    service_tier: String\n", "");
     let tool = schemas::AGENT_TOOL_CALL
+        .replace("    background_requested_at: DateTime\n", "")
         .replace("    job_pin: JSON\n", "")
         .replace("    job_progress: JSON\n", "")
         .replace("    job_step_state: JSON\n", "");
@@ -45,7 +46,7 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
             .to_owned()
     });
     let report = ensure_migrations(node.as_ref()).await.unwrap();
-    assert_eq!(report.steps_applied, 2);
+    assert_eq!(report.steps_applied, 3);
     for (name, previous) in names.into_iter().zip(before) {
         let current = node.get_collection(name).unwrap().unwrap();
         for field in previous.fields {
@@ -61,7 +62,7 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
         .execute(
             r#"{
         InferenceProfile {_docID profile_id context_window max_output_tokens service_tier}
-        AgentToolCall {_docID tool_call_key status latency_ms job_pin job_progress job_step_state}
+        AgentToolCall {_docID tool_call_key status latency_ms job_pin job_progress job_step_state background_requested_at}
     }"#,
         )
         .await;
@@ -81,6 +82,47 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
     assert_eq!(data["AgentToolCall"][0]["status"], "completed");
     let rerun = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(rerun.steps_applied, 0);
-    assert_eq!(rerun.steps_already_current, 2);
+    assert_eq!(rerun.steps_already_current, 3);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn current_tool_schema_adds_background_control_without_moving_fields() {
+    let node = fresh_node().await;
+    let previous = schemas::AGENT_TOOL_CALL.replace("    background_requested_at: DateTime\n", "");
+    node.add_schema(&previous).await.unwrap();
+    let before = node.get_collection("AgentToolCall").unwrap().unwrap();
+    assert_eq!(
+        before.version_id,
+        "bafyreihfkiuhbdzdlmfqf6wm4q5xgrad4wl2zi4fvcj25co3kdjrktjv5a"
+    );
+    ensure_migrations(node.as_ref()).await.unwrap();
+    let after = node.get_collection("AgentToolCall").unwrap().unwrap();
+    assert_eq!(
+        after.version_id,
+        "bafyreifddp6p4viubjrzhgbrgyjnnyzuq2u5qzpcavw2rkkmrbgfltboza"
+    );
+    assert!(after
+        .fields
+        .iter()
+        .any(|field| field.name == "background_requested_at"));
+    for field in before.fields {
+        assert_eq!(
+            after
+                .fields
+                .iter()
+                .find(|current| current.name == field.name)
+                .unwrap()
+                .id,
+            field.id
+        );
+    }
+    assert_eq!(
+        ensure_migrations(node.as_ref())
+            .await
+            .unwrap()
+            .steps_applied,
+        0
+    );
     node.shutdown().await;
 }
