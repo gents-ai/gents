@@ -93,7 +93,22 @@ async fn generated_goal_request_assignments_drive_signed_binding() {
             .iter()
             .map(|value| goal(value, &identities))
             .collect::<Vec<_>>();
-        let actual = match observe_request_assignment(&goals, &entry) {
+        let observation = observe_request_assignment(&goals, &entry);
+        let scope = request_assignment_scope(&entry, &observation).ok().map(|scope| match scope {
+            RequestAssignmentScope::Unassigned => json!({"kind":"unassigned"}),
+            RequestAssignmentScope::Unresolved { entry_doc_id } => json!({"kind":"unresolved",
+                "entry":entry_doc_id.strip_prefix("physical-").unwrap().parse::<u64>().unwrap()}),
+            RequestAssignmentScope::Referenced(reference) => json!({"kind":"referenced",
+                "goal":reference.goal_id.strip_prefix("goal-").unwrap().parse::<u64>().unwrap(),
+                "root":reference.root_request_doc_id.unwrap().strip_prefix("physical-").unwrap().parse::<u64>().unwrap()}),
+        });
+        assert_eq!(
+            scope.unwrap_or(Value::Null),
+            case["expected_queue_scope"],
+            "{}: queue scope",
+            case["name"]
+        );
+        let actual = match observation {
             RequestAssignmentObservation::None => json!({"kind":"unassigned"}),
             RequestAssignmentObservation::Unknown => json!({"kind":"unknown"}),
             RequestAssignmentObservation::Assigned(goal) => json!({"kind":"assigned",

@@ -67,6 +67,51 @@ pub(super) fn observe_request_assignment(
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RequestAssignmentScope {
+    Unassigned,
+    Unresolved { entry_doc_id: String },
+    Referenced(gents_protocol::request_input::GoalAssignmentInput),
+}
+
+fn request_assignment_scope(
+    entry: &AgentRequestRow,
+    observation: &RequestAssignmentObservation,
+) -> anyhow::Result<RequestAssignmentScope> {
+    use anyhow::Context;
+    use gents_protocol::request_input::GoalAssignmentInput;
+    verify_request_receipt_signature(entry)?;
+    let entry_doc_id = entry
+        .doc_id
+        .as_deref()
+        .context("assignment entry has no document ID")?;
+    if let Some(reference) = entry
+        .input
+        .as_ref()
+        .and_then(|input| input.goal_assignment.as_ref())
+    {
+        return Ok(RequestAssignmentScope::Referenced(
+            reference.continuation(entry_doc_id),
+        ));
+    }
+    Ok(match observation {
+        RequestAssignmentObservation::None => RequestAssignmentScope::Unassigned,
+        RequestAssignmentObservation::Unknown => RequestAssignmentScope::Unresolved {
+            entry_doc_id: entry_doc_id.to_owned(),
+        },
+        RequestAssignmentObservation::Assigned(goal) => {
+            RequestAssignmentScope::Referenced(GoalAssignmentInput {
+                goal_id: goal.goal_id.clone(),
+                root_request_doc_id: Some(
+                    goal.assignment_root_request_doc_id
+                        .clone()
+                        .context("observed Goal assignment has no physical opening")?,
+                ),
+            })
+        }
+    })
+}
+
 #[cfg(test)]
 mod contract_tests;
 
@@ -183,39 +228,113 @@ pub(crate) async fn load_request_assignment_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
+    let snapshot = assignment_snapshot_for_request(txn, request).await?;
+    Ok(snapshot.observation(request)?.1)
+}
+
+pub(crate) async fn load_request_assignment_scope_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequestRow,
+) -> anyhow::Result<RequestAssignmentScope> {
+    let snapshot = assignment_snapshot_for_request(txn, request).await?;
+    let (entry, observation) = snapshot.observation(request)?;
+    request_assignment_scope(entry, &observation)
+}
+
+async fn assignment_snapshot_for_request(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequestRow,
+) -> anyhow::Result<RequestAssignments> {
     use anyhow::Context;
-    let owner = request
-        .node_did
-        .as_deref()
-        .context("assignment request has no owner")?;
-    let session = request
-        .session_id
-        .as_deref()
-        .context("assignment request has no session")?;
-    let doc = request
-        .doc_id
-        .as_deref()
-        .context("assignment request has no physical identity")?;
+    load_request_assignments_in_txn(
+        txn,
+        request
+            .node_did
+            .as_deref()
+            .context("assignment request has no owner")?,
+        request
+            .session_id
+            .as_deref()
+            .context("assignment request has no session")?,
+    )
+    .await
+}
+
+pub(crate) struct RequestAssignments {
+    owner: String,
+    session: String,
+    rows: Vec<AgentRequestRow>,
+    goals: Vec<GoalDocument>,
+}
+
+impl RequestAssignments {
+    fn entry(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
+        use anyhow::Context;
+        let by_doc =
+            super::request_head::request_rows_by_doc(&self.owner, &self.session, &self.rows)?;
+        let current = by_doc
+            .get(doc)
+            .context("assignment request is absent from its owner/session")?;
+        let openings = self
+            .goals
+            .iter()
+            .filter_map(|goal| goal.assignment_root_request_doc_id.as_deref())
+            .collect();
+        super::request_head::authenticated_assignment_entry(
+            &self.owner,
+            &self.session,
+            current,
+            &by_doc,
+            None,
+            &openings,
+        )
+    }
+
+    fn observation(
+        &self,
+        request: &AgentRequestRow,
+    ) -> anyhow::Result<(&AgentRequestRow, RequestAssignmentObservation)> {
+        use anyhow::Context;
+        let doc = request
+            .doc_id
+            .as_deref()
+            .context("assignment request has no physical identity")?;
+        let current = self
+            .rows
+            .iter()
+            .find(|row| row.doc_id.as_deref() == Some(doc))
+            .context("assignment request is absent from its owner/session")?;
+        anyhow::ensure!(
+            current.request_id == request.request_id
+                && current.purpose
+                    == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+                && request.node_did.as_deref() == Some(self.owner.as_str())
+                && request.session_id.as_deref() == Some(self.session.as_str()),
+            "assignment request differs from its physical owner/session observation"
+        );
+        let entry = self.entry(doc)?;
+        Ok((entry, observe_request_assignment(&self.goals, entry)))
+    }
+
+    pub(crate) fn scope(&self, request_doc_id: &str) -> anyhow::Result<RequestAssignmentScope> {
+        let entry = self.entry(request_doc_id)?;
+        request_assignment_scope(entry, &observe_request_assignment(&self.goals, entry))
+    }
+}
+
+pub(crate) async fn load_request_assignments_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    session: &str,
+) -> anyhow::Result<RequestAssignments> {
     let rows = super::request_head::load_session_requests(txn, owner, session).await?;
-    let by_doc = super::request_head::request_rows_by_doc(owner, session, &rows)?;
-    let current = by_doc
-        .get(doc)
-        .context("assignment request is absent from its owner/session")?;
-    anyhow::ensure!(
-        current.request_id == request.request_id
-            && current.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        "assignment request differs from its physical owner/session observation"
-    );
     let versions = super::load_goal_versions_for_session(txn, owner, session).await?;
-    let goals = latest_assignment_goals(&versions)?;
-    let openings = goals
-        .iter()
-        .filter_map(|goal| goal.assignment_root_request_doc_id.as_deref())
-        .collect();
-    let entry = super::request_head::authenticated_assignment_entry(
-        owner, session, current, &by_doc, None, &openings,
-    )?;
-    Ok(observe_request_assignment(&goals, entry))
+    Ok(RequestAssignments {
+        owner: owner.to_owned(),
+        session: session.to_owned(),
+        rows,
+        goals: latest_assignment_goals(&versions)?,
+    })
 }
 
 #[cfg(test)]

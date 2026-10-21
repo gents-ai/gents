@@ -127,6 +127,31 @@ def observe (assignments : List Assignment) (e : Entry) : Observation :=
         then .unknown else .unassigned
     | _ => .unknown
 
+/-- A queue scope groups the same signed assignment intent. A retained Goal
+can identify an untagged opening; an unbound legacy observation stays isolated
+at its authenticated entry. A reference is association, never access authority
+or proof that a Goal is present or active. -/
+inductive QueueScope where
+  | unassigned
+  | unresolved (entry : Nat)
+  | referenced (goal root : Nat)
+  deriving DecidableEq, Repr
+
+def queueScope (assignments : List Assignment) (e : Entry) : Option QueueScope :=
+  if !e.signatureValid then none
+  else some (match e.reference with
+    | some reference => .referenced reference.goal (reference.root.getD e.doc)
+    | none => match observe assignments e with
+      | .unassigned => .unassigned
+      | .unknown => .unresolved e.doc
+      | .assigned goal root => .referenced goal root)
+
+theorem unbound_queue_scope_is_not_unassigned (assignments : List Assignment) (entry : Entry)
+    (valid : entry.signatureValid = true) (untagged : entry.reference = none)
+    (unknown : observe assignments entry = .unknown) :
+    queueScope assignments entry = some (.unresolved entry.doc) := by
+  simp [queueScope, valid, untagged, unknown]
+
 theorem invalid_signature_cannot_join (a : Assignment) (e : Entry)
     (h : e.signatureValid = false) : belongs a e = false := by
   simp [belongs, h]

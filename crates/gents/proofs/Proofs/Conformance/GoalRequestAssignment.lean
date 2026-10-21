@@ -135,11 +135,18 @@ def observationJson : Observation → Json
   | .assigned goal root => Json.mkObj [("kind", toJson "assigned"),
       ("goal", toJson goal), ("root", toJson root)]
 
+def queueScopeJson : QueueScope → Json
+  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
+  | .unresolved entry => Json.mkObj [("kind", toJson "unresolved"), ("entry", toJson entry)]
+  | .referenced goal root => Json.mkObj [("kind", toJson "referenced"),
+      ("goal", toJson goal), ("root", toJson root)]
+
 def caseJson (c : Case) : Json :=
   Json.mkObj [("name", toJson c.name), ("assignment", assignmentJson c.assignment),
     ("entry", entryJson c.entry), ("observed", toJson (c.observed.map assignmentJson)),
     ("expected_member", toJson (belongs c.assignment c.entry)),
-    ("expected_observation", observationJson (observe c.observed c.entry))]
+    ("expected_observation", observationJson (observe c.observed c.entry)),
+    ("expected_queue_scope", (queueScope c.observed c.entry).map queueScopeJson |>.getD Json.null)]
 
 def casesJson : String := (toJson (cases.map caseJson)).compress
 
