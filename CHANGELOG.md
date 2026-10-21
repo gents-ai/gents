@@ -19,6 +19,13 @@ source consistency checks, not a separate runtime compatibility version.
   authority and a peer's `/status` enrollment token, a node signs and delivers
   its own enrollment request, so the peer approves it with `enrollment approve`
   and pairs with `pairings apply` without the desktop app.
+- The `p2p` tool's schema is a closed `action` enum (`status`,
+  `network_list`, `pairings_apply`, `enrollment_offer`, `enrollment_request`,
+  `enrollment_approve`, ...) with typed `peer_id`, `peer_did`, `collections`,
+  `request_id`, `offer_token`, `doc_ids` and `details` fields, each described,
+  and `topic` for help; its description lists each action's fields and the
+  four-call joining sequence. Replies, `next_call` hints and errors use the
+  same form. The previous `argv`/`options` form is still accepted.
 - The `p2p` tool adds `enrollment offer`, which returns this node's signed
   offer token (valid 5 minutes), peer ID and DID for a joining node's
   `enrollment request`, so an Engineer no longer reads `/status` through bash;
