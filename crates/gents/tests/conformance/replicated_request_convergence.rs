@@ -690,6 +690,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         );
         create.input = serde_json::from_str(&input).unwrap();
         create.input.queue.as_mut().unwrap().queued_after_request_id = Some(parent_id.into());
+        create.caused_by_parent_request_id = Some(parent_id.into());
         create.caused_by_parent_request_doc_id = Some(parent_doc.into());
         gents::sign_agent_request_create(identity, &mut create)
             .await
