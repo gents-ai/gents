@@ -111,14 +111,40 @@ async fn fixture_with_http(
     .await
     .unwrap();
     let active = case.active_request_id.unwrap().to_string();
-    let doc = insert_request(
-        &node,
-        json!({"request_id":active,"node_did":did,"requester_did":did,
-            "session_id":session,"agent_id":BEHAVIOR,"content":"active",
-            "lifecycle_state":"processing","execution_origin":"interactive",
-            "created_at":"2026-09-01T00:00:00Z"}),
-    )
-    .await;
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        &active,
+        &did,
+        &did,
+        BEHAVIOR,
+        &session,
+        "active",
+        "interactive",
+        "2026-09-01T00:00:00Z",
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+    );
+    crate::sign_agent_request_create(&identity, &mut create)
+        .await
+        .unwrap();
+    let access = ConfigAccess::local(node.clone());
+    let response = access
+        .write(
+            "test.interrupt_queue.active",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    let doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    access
+        .write(
+            "test.interrupt_queue.processing",
+            &format!(
+                "mutation {{ update_AgentRequest(docID: \"{}\", input: {{ lifecycle_state: \"processing\" }}) {{ _docID }} }}",
+                escape_graphql_string(&doc),
+            ),
+        )
+        .await
+        .unwrap();
     let parent = AgentRequest {
         doc_id: doc,
         request_id: active,
