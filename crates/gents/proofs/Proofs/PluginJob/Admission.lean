@@ -964,6 +964,7 @@ theorem messages_within_effective_targets {ctx : StepContext} {p : Pin} {job job
     simp only [hl, decide_eq_true_eq] at hs
     exact ⟨ch, rfl, hs.1⟩
 
+set_option maxHeartbeats 400000 in
 /-- Adoption takes one background slot of the calling request; a full budget
 returns a capacity refusal, while a pinned row's
 steps, and so its children, neither read nor take one. -/
