@@ -8,8 +8,8 @@ use crate::background_tools::{
     MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
 use crate::session_message::{
-    AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionControlArgs,
-    AgentSessionListArgs, AgentSessionReadArgs,
+    AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
+    AgentSessionReadArgs,
 };
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
 
@@ -261,7 +261,7 @@ impl Tool for AgentStopTool {
     const NAME: &'static str = AGENT_STOP_TOOL_NAME;
 
     type Error = ToolError;
-    type Args = AgentSessionControlArgs;
+    type Args = AgentInterruptArgs;
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -292,7 +292,7 @@ impl Tool for AgentResumeTool {
     const NAME: &'static str = AGENT_RESUME_TOOL_NAME;
 
     type Error = ToolError;
-    type Args = AgentSessionControlArgs;
+    type Args = AgentInterruptArgs;
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {

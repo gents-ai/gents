@@ -56,12 +56,6 @@ pub(crate) struct AgentInterruptArgs {
     pub session_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AgentSessionControlArgs {
-    pub session_id: String,
-}
-
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentListArgs {}

@@ -452,17 +452,17 @@ impl DefraSessionHook {
                 "unknown session tool",
             ));
         }
-        let parsed =
-            match serde_json::from_str::<crate::session_message::AgentSessionControlArgs>(args) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    return Ok(invalid_tool_arguments_payload(
-                        tool_name,
-                        "/",
-                        format!("invalid {tool_name} arguments: {error}"),
-                    ))
-                }
-            };
+        let parsed = match serde_json::from_str::<crate::session_message::AgentInterruptArgs>(args)
+        {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return Ok(invalid_tool_arguments_payload(
+                    tool_name,
+                    "/",
+                    format!("invalid {tool_name} arguments: {error}"),
+                ))
+            }
+        };
         let session = parsed.session_id.trim();
         let Some(target) = crate::session_message::resolve_send_target(
             &self.node,
