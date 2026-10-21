@@ -183,6 +183,13 @@ instance (r : PluginJobRow) : Decidable (pluginJobStoppedSessionStale r) := by
   unfold pluginJobStoppedSessionStale
   infer_instance
 
+@[simp] theorem pluginJobRecover_sessionStopped (row : PluginJobRow) :
+    (pluginJobRecover row).sessionStopped = row.sessionStopped := by
+  unfold pluginJobRecover
+  split
+  · split <;> rfl
+  · rfl
+
 def pluginJobRecoveryTick (r : PluginJobRow) : PluginJobRow :=
   if pluginJobStoppedSessionStale r then { r with running := false }
   else pluginJobRecover (pluginJobRecover r)
@@ -203,7 +210,8 @@ theorem pluginJobRecoveryTick_not_stale (row : PluginJobRow)
       · rfl
       · exact (h_stopped ⟨h_stale.1, h_session⟩).elim
     unfold pluginJobRecoveryTick
-    simp [h_stopped, h_session_open, pluginJobRow_tick_not_stale row h_stale]
+    simp [h_stopped, pluginJobRow_tick_not_stale row h_stale,
+      pluginJobStoppedSessionStale, h_session_open]
 
 def pluginJobRecoverySweep : RecoverySweep :=
   { Row := PluginJobRow
