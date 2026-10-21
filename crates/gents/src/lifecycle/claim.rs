@@ -87,7 +87,7 @@ where
                     message_key: {{ _like: "background-completion-notification:%" }}
                 }},
                 order: {{ sequence: ASC }}
-            ) {{ sequence message_key }}
+            ) {{ sequence message_key request_doc_id }}
         }}"#
     );
     let snapshot_query = &snapshot_query;
@@ -109,6 +109,13 @@ where
                     return Ok(None);
                 }
                 let snapshot = if capture_background_snapshot {
+                    let assignments = crate::goal::load_request_assignments_in_txn(
+                        txn,
+                        &request.node_did,
+                        session_id,
+                    )
+                    .await?;
+                    let assignment = assignments.scope(&request.doc_id)?;
                     let response = txn.execute_local_response(&snapshot_query).await?;
                     let through_sequence = response
                         .data
@@ -132,11 +139,23 @@ where
                                 .zip(through_sequence.map(u64::from))
                                 .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
                         })
-                        .filter_map(|row| {
-                            row.get("message_key").and_then(serde_json::Value::as_str)
-                        })
-                        .map(ToOwned::to_owned)
-                        .collect();
+                        .try_fold(Vec::new(), |mut keys, row| -> Result<_> {
+                            let source = row
+                                .get("request_doc_id")
+                                .and_then(serde_json::Value::as_str)
+                                .context(
+                                    "background notification has no physical request binding",
+                                )?;
+                            if assignments.scope(source)? == assignment {
+                                keys.push(
+                                    row.get("message_key")
+                                        .and_then(serde_json::Value::as_str)
+                                        .context("background notification has no key")?
+                                        .to_string(),
+                                );
+                            }
+                            Ok(keys)
+                        })?;
                     BackgroundCompletionClaimSnapshot {
                         through_sequence,
                         notification_keys,
