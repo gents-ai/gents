@@ -246,6 +246,8 @@ pub async fn prepare_goal_input(
     bind_goal_input(input, state)
 }
 
+/// Canonical reads require a locally owned destination. Remote destination
+/// capture uses its runtime-signed observation through the same transaction.
 pub async fn prepare_goal_input_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
@@ -289,29 +291,37 @@ pub async fn load_session_goal_observation_state(
 ) -> Result<SessionGoalObservationState> {
     access
         .transact_readonly("goal.read_observation", |txn| {
-            Box::pin(async move {
-                let Some(session) = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    node_did,
-                    session_id,
-                    requester_did,
-                )
-                .await?
-                else {
-                    return Ok(SessionGoalObservationState::NoReadableSession);
-                };
-                match rows_in_txn(txn, &session).await?.first() {
-                    Some(row) => Ok(match verified(verifier, &session, row).await? {
-                        Some(observation) => {
-                            SessionGoalObservationState::Observed(Box::new(observation))
-                        }
-                        None => SessionGoalObservationState::Unknown,
-                    }),
-                    None => Ok(SessionGoalObservationState::Unknown),
-                }
-            })
+            Box::pin(load_session_goal_observation_state_in_txn(
+                txn,
+                verifier,
+                node_did,
+                session_id,
+                requester_did,
+            ))
         })
         .await
+}
+
+pub async fn load_session_goal_observation_state_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    verifier: &dyn NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<SessionGoalObservationState> {
+    let Some(session) =
+        crate::session::load_agent_session_row_in_txn(txn, node_did, session_id, requester_did)
+            .await?
+    else {
+        return Ok(SessionGoalObservationState::NoReadableSession);
+    };
+    match rows_in_txn(txn, &session).await?.first() {
+        Some(row) => Ok(match verified(verifier, &session, row).await? {
+            Some(observation) => SessionGoalObservationState::Observed(Box::new(observation)),
+            None => SessionGoalObservationState::Unknown,
+        }),
+        None => Ok(SessionGoalObservationState::Unknown),
+    }
 }
 
 pub(crate) async fn project_session_goal(
