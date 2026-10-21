@@ -728,17 +728,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     if matches!(journey, Journey::EditorGoalRecovery) {
         wait_goal(&mut client, &mut id, node_did, session, "active").await?;
-        gents::goal::set_goal_from_access(
-            &access,
-            node_did,
-            session,
-            None,
-            Some(gents::goal::GoalStatus::Blocked),
-            None,
-            None,
-        )
-        .await?;
-        wait_goal(&mut client, &mut id, node_did, session, "blocked").await?;
     }
     if matches!(journey, Journey::Goal) {
         let mut view = wait_goal(&mut client, &mut id, node_did, session, "active").await?;
@@ -1099,6 +1088,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "the paused goal must finish its current turn without a continuation"
         );
     }
+    if matches!(journey, Journey::EditorGoalRecovery) {
+        let blocked =
+            editor_goal_recovery::wait_for_source_blocked(&access, node_did, session).await?;
+        wait_goal(&mut client, &mut id, node_did, session, "blocked").await?;
+        std::fs::write(
+            root.join("editor-goal-blocked-source.json"),
+            serde_json::to_vec_pretty(&blocked)?,
+        )?;
+    }
     let requests = provider.captured_chat_requests();
     let user_rounds = requests
         .iter()
@@ -1119,7 +1117,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .count();
     ensure!(
         user_rounds
-            == if matches!(journey, Journey::EditorSteering) {
+            == if matches!(journey, Journey::EditorGoalRecovery) {
+                7
+            } else if matches!(journey, Journey::EditorSteering) {
                 2
             } else {
                 1
@@ -1247,7 +1247,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             serde_json::to_vec(&json!({
                 "draft":editor_goal_recovery::DRAFT, "captured":editor_goal_recovery::CAPTURED,
                 "resuming":editor_goal_recovery::RESUMING, "wrapup":editor_goal_recovery::WRAPUP,
-                "title":editor_goal_recovery::TITLE,
+                "title":editor_goal_recovery::TITLE, "blockedReason":editor_goal_recovery::BLOCKED_REASON,
             }))?,
         )?;
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
