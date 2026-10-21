@@ -301,6 +301,33 @@ async fn source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnap
     unready_source(db)
 }
 
+async fn wait_for_goal_transition(
+    db: &TestDb,
+    source: &mut GoalSource,
+    description: &str,
+    reached: impl Fn(&gents::goal::GoalDocument) -> bool,
+) -> gents::goal::GoalDocument {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            _ = source.next_fire() => panic!("unexpected goal fire while waiting for {description}"),
+            goal = async {
+                loop {
+                    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+                        .await
+                        .expect("load goal")
+                        .expect("goal exists");
+                    if reached(&goal) {
+                        break goal;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            } => goal,
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("goal transition did not complete: {description}"))
+}
+
 fn unready_source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
     let (tx, rx) = watch::channel(snapshot(db.node_identity.did()));
     let subscriptions: Arc<dyn UpdateSubscriptionSource> =
@@ -2159,15 +2186,10 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
     .expect("set goal");
 
     let (mut source, _snapshot_tx) = source(&db).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(150), source.next_fire())
-            .await
-            .is_err()
-    );
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .expect("load goal")
-        .expect("goal exists");
+    let goal = wait_for_goal_transition(&db, &mut source, "interrupted goal to pause", |goal| {
+        goal.parsed_status() == Some(GoalStatus::Paused)
+    })
+    .await;
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Paused));
     assert!(goal_children(&db).await.is_empty());
 }
@@ -2702,15 +2724,10 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
     .expect("set goal");
 
     let (mut source, _snapshot_tx) = source(&db).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
-            .await
-            .is_err()
-    );
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .expect("load goal")
-        .expect("goal exists");
+    let goal = wait_for_goal_transition(&db, &mut source, "provider usage limit", |goal| {
+        goal.parsed_status() == Some(GoalStatus::UsageLimited)
+    })
+    .await;
     assert_eq!(goal.parsed_status(), Some(GoalStatus::UsageLimited));
     assert!(goal
         .last_failure
@@ -2945,11 +2962,15 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
     let db = test_db(name).await;
     seed_a_passed_reset(&db, opted_in).await;
     let (mut source, _snapshot_tx) = source(&db).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
-            .await
-            .is_err()
-    );
+    wait_for_goal_transition(&db, &mut source, "provider reset decision", |goal| {
+        if opted_in {
+            goal.parsed_status() == Some(GoalStatus::Active)
+                && goal.continuation_sequence == Some(1)
+        } else {
+            goal.parsed_status() == Some(GoalStatus::UsageLimited)
+        }
+    })
+    .await;
     goal_and_children(&db).await
 }
 
@@ -3131,16 +3152,11 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
         set_request_lifecycle_state(db.node.as_ref(), &child.doc_id, "failed").await;
     }
 
-    assert!(
-        tokio::time::timeout(Duration::from_millis(250), source.next_fire())
-            .await
-            .is_err(),
-        "bounded failed wrap-up must not spawn a fourth child"
-    );
-    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
-        .await
-        .expect("load goal")
-        .expect("goal exists");
+    let goal = wait_for_goal_transition(&db, &mut source, "failed wrap-up abandonment", |goal| {
+        goal.parsed_status() == Some(GoalStatus::BudgetLimited)
+            && goal.wrapup_completed == Some(true)
+    })
+    .await;
     assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
     assert_eq!(goal.infrastructure_retry_count, Some(2));
     assert_eq!(goal.wrapup_completed, Some(true));
