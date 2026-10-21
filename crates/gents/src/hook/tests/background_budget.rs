@@ -298,21 +298,11 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         let args = json!({"tool_name": tool, "args": {}}).to_string();
         let receipt = invoke(&hook, &format!("timed-{index}"), "spawn_process", &args).await;
         assert_eq!(receipt["status"], "running", "{receipt}");
-        if tool == "bash" {
-            assert_eq!(
-                receipt["effective_timeout_secs"],
-                json!(60.min(crate::toolset::BACKGROUND_COMMAND_TIMEOUT_SECS)),
-                "{receipt}"
-            );
-            assert!(receipt.get("lifetime_secs").is_none(), "{receipt}");
-        } else {
-            // Non-command targets do not interpret timeout_secs.
-            assert_eq!(receipt["lifetime_secs"], json!(lifetime), "{receipt}");
-            assert!(
-                receipt.get("effective_timeout_secs").is_none(),
-                "{receipt}"
-            );
-        }
+        assert_eq!(
+            receipt["effective_timeout_secs"],
+            json!(lifetime),
+            "{receipt}"
+        );
         let child = receipt["tool_call_id"].as_str().unwrap().to_owned();
         let row = fetch_tool_call_row(&node, &session, &child).await;
         let deadline = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
@@ -347,11 +337,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     let args = json!({"tool_name": "bash", "args": {"timeout_secs": 0}}).to_string();
     let receipt = invoke(&hook, "timed-zero", "spawn_process", &args).await;
     assert_eq!(receipt["status"], "running", "{receipt}");
-    assert_eq!(
-        receipt["effective_timeout_secs"],
-        json!(1),
-        "{receipt}"
-    );
+    assert_eq!(receipt["effective_timeout_secs"], json!(1), "{receipt}");
     children.push(receipt["tool_call_id"].as_str().unwrap().to_owned());
 
     for (index, child) in children.iter().enumerate() {

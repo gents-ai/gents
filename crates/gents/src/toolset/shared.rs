@@ -44,12 +44,7 @@ pub(super) fn resolve_command_timeout(
     }
 }
 
-/// How a backgrounded command run interprets an explicit `timeout_secs`:
-/// floored at 1s, capped at the background command budget; omitted uses the
-/// budget. Callers min this with the run's configured background lifetime.
-pub(crate) fn background_command_timeout(
-    requested_secs: Option<u64>,
-) -> std::time::Duration {
+pub(crate) fn background_command_timeout(requested_secs: Option<u64>) -> std::time::Duration {
     let budget = std::time::Duration::from_secs(super::BACKGROUND_COMMAND_TIMEOUT_SECS);
     match requested_secs {
         Some(secs) => std::time::Duration::from_secs(secs.max(1)).min(budget),

@@ -96,7 +96,8 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     let bash_tool = UnrestrictedBashTool::new(
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
-    );
+    )
+    .with_background_lifetime(Duration::from_secs(7_200));
     let bash_def = crate::llm::tool::Tool::definition(&bash_tool, String::new()).await;
     assert_eq!(
         bash_def.parameters["required"],
@@ -118,8 +119,8 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         .as_str()
         .unwrap();
     assert!(
-        timeout_description.contains(&BACKGROUND_COMMAND_TIMEOUT_SECS.to_string()),
-        "schema must state the background lifetime budget: {timeout_description}"
+        timeout_description.contains("7200"),
+        "schema must state the configured background lifetime: {timeout_description}"
     );
 }
 
