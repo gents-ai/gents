@@ -197,6 +197,14 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         input,
     )
     .await?;
+    let goal_id = prepare_task_run_goal_id(
+        &access,
+        &node_did,
+        &session_id,
+        rendered_goal_objective.is_some(),
+        admitted.as_ref(),
+    )
+    .await?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&node_did);
     let create = gents::build_signed_request(
@@ -231,9 +239,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         task_id: task_id.clone(),
         request_id: request_id.clone(),
         session_id: session_id.clone(),
-        goal_id: rendered_goal_objective
-            .as_ref()
-            .map(|_| gents::goal::deterministic_goal_id(&node_did, &session_id)),
+        goal_id,
         goal_objective: rendered_goal_objective,
         goal_token_budget,
         goal_assignment_applied: false,
@@ -324,6 +330,40 @@ async fn prepare_task_run_input(
     crate::request_helpers::prepare_cli_goal_input(access, node_did, session_id, input).await
 }
 
+/// Duplicate admission preserves the stored fire, so an untagged signed receipt
+/// must not infer its original Task Goal identity from the current Goal row.
+async fn prepare_task_run_goal_id(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    goal_backed: bool,
+    admitted: Option<&AgentRequestRow>,
+) -> Result<Option<String>> {
+    if let Some(admitted) = admitted {
+        return Ok(admitted
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.as_ref())
+            .map(|reference| reference.goal_id.clone()));
+    }
+    if !goal_backed {
+        return Ok(None);
+    }
+    access
+        .transact_readonly("cli.task_run.goal_identity", |txn| {
+            Box::pin(async move {
+                let current =
+                    gents::goal::load_canonical_goal_in_txn(txn, node_did, session_id).await?;
+                Ok(Some(gents::goal::task_assignment_goal_id(
+                    current.as_ref().map(|goal| goal.goal_id.as_str()),
+                    node_did,
+                    session_id,
+                )))
+            })
+        })
+        .await
+}
+
 async fn lookup_request_by_retry_key(
     access: &ConfigAccess,
     node_did: &str,
@@ -394,7 +434,7 @@ mod tests {
     use gents::NodeIdentity;
     use serde_json::json;
 
-    async fn signed_task_receipt(
+    pub(super) async fn signed_task_receipt(
         identity: &gents::KeyIdentity,
         input: RequestInput,
     ) -> Result<Value> {
@@ -521,3 +561,6 @@ mod tests {
         assert!(resolve_invocation_key("task", false, Some(" ")).is_err());
     }
 }
+
+#[cfg(test)]
+mod goal_identity_tests;
