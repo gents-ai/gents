@@ -783,13 +783,6 @@ impl CaptureBaseReader for crate::config_client::ConfigAccess {
 }
 
 #[async_trait::async_trait]
-impl CaptureBaseReader for crate::config_client::ConfigApplyTxn<'_> {
-    async fn execute_capture_query(&self, query: &str) -> Result<Value> {
-        self.execute(query).await
-    }
-}
-
-#[async_trait::async_trait]
 impl CaptureBaseReader for defra_node::EmbeddedNode {
     async fn execute_capture_query(&self, query: &str) -> Result<Value> {
         let response = crate::graphql::graphql_with_transaction_retry(
