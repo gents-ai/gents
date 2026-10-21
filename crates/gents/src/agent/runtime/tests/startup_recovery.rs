@@ -1170,3 +1170,118 @@ async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
         "private diagnostics leaked through the startup error: {error_text}"
     );
 }
+
+#[tokio::test]
+async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-demotion-cascade"));
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_agent_backend(
+        &node,
+        identity.did(),
+        "backend-demotion-cascade",
+        endpoint.endpoint(),
+    )
+    .await;
+    let node_did = identity.did().to_string();
+    let default_agent_id = crate::default_agent_id_for_node(&node_did);
+    let inference_profile_id = format!("{default_agent_id}:inference");
+    let agent_document = |agent_id: &str| {
+        (
+            crate::Collection::Agent,
+            serde_json::json!({"node_did": node_did, "agent_id": agent_id,
+                "context_id": format!("{agent_id}:context"),
+                "inference_profile_id": inference_profile_id}),
+        )
+    };
+    let context_document = |agent_id: &str| {
+        (
+            crate::Collection::AgentContext,
+            serde_json::json!({"node_did": node_did, "context_id": format!("{agent_id}:context"),
+                "tools_id": format!("{agent_id}:tools")}),
+        )
+    };
+    write_runtime_documents(
+        &node,
+        vec![
+            agent_document("web_persona"),
+            context_document("web_persona"),
+            tools_naming_missing_plugin(&node_did, "web_persona:tools"),
+            agent_document("caller"),
+            context_document("caller"),
+            (
+                crate::Collection::Tools,
+                serde_json::json!({"node_did": node_did, "tools_id": "caller:tools",
+                    "agents": {"target_ids": ["target-web-persona"], "enabled": true}}),
+            ),
+            (
+                crate::Collection::AgentTarget,
+                serde_json::json!({"node_did": node_did, "target_id": "target-web-persona",
+                    "target_node_did": node_did, "agent_id": "web_persona", "name": "web"}),
+            ),
+            (
+                crate::Collection::Task,
+                serde_json::json!({"node_did": node_did, "task_id": "task-web", "agent_id": "web_persona",
+                    "prompt_template": "tick", "enabled": true}),
+            ),
+            (
+                crate::Collection::Schedule,
+                serde_json::json!({"node_did": node_did, "schedule_id": "schedule-web",
+                    "cadence": {"kind": "interval", "interval_secs": 300}}),
+            ),
+            (
+                crate::Collection::Trigger,
+                serde_json::json!({"node_did": node_did, "trigger_id": "trigger-web", "task_id": "task-web",
+                    "source": {"kind": "schedule", "schedule_id": "schedule-web"}, "enabled": true}),
+            ),
+        ],
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let tool_runtime = crate::tool_surface::ToolRuntimeContext::new_with_node_did(
+        agent.node.clone(),
+        agent.mcp_pool.clone(),
+        crate::health_checker::ServiceHealthMap::new(),
+        agent.local_hostname.clone(),
+        agent.local_subnet.clone(),
+        node_did.clone(),
+        Some(identity.clone()),
+    )
+    .with_plugins(agent.plugins().clone());
+
+    let mut snapshot = startup::resolve_startup_snapshot(&agent).await.unwrap();
+    startup::validate_startup_snapshot(&agent, &tool_runtime, &mut snapshot)
+        .await
+        .unwrap();
+
+    assert!(snapshot.unavailable_agents.contains_key("web_persona"));
+    assert!(snapshot.agents.contains_key("caller"));
+    assert!(
+        snapshot.tool_surfaces["caller"]
+            .agent_targets()
+            .iter()
+            .all(|target| target.agent_id != "web_persona"),
+        "a demoted agent must not stay offered as a subagent target"
+    );
+    assert!(
+        !snapshot.active_schedules.contains_key("trigger-web")
+            && snapshot.unavailable_schedules.contains("trigger-web"),
+        "a demoted agent's schedule must be unavailable, not active"
+    );
+    assert!(
+        !snapshot.active_tasks.contains_key("task-web"),
+        "a demoted agent's task must not stay active"
+    );
+}

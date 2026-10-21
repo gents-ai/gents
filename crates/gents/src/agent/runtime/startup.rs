@@ -1187,7 +1187,7 @@ fn is_degraded_startup_unavailable_reason(
     )
 }
 
-async fn validate_startup_snapshot(
+pub(super) async fn validate_startup_snapshot(
     agent: &Gents,
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
@@ -1222,9 +1222,7 @@ async fn validate_startup_snapshot(
                 "gents runtime: agent_config {agent_id} unavailable at startup: {}",
                 reason.diagnostic
             ));
-            snapshot.agents.remove(&agent_id);
-            snapshot.tool_surfaces.remove(&agent_id);
-            snapshot.unavailable_agents.insert(agent_id, reason);
+            snapshot.demote_agent(&agent_id, reason);
         }
     }
 
@@ -1289,7 +1287,7 @@ async fn resolve_tool_surfaces(
     Ok(tool_surfaces)
 }
 
-async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapshot> {
+pub(super) async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapshot> {
     match agent.document_runtime_context() {
         Some(resolve_context) => {
             resolve_document_snapshot_with_tools(&agent.node, resolve_context).await
