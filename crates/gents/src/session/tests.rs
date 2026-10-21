@@ -116,7 +116,7 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 
 #[tokio::test]
 async fn history_reconstruction_batches_distinct_requests() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = "session-many-request-scans";
     let count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;

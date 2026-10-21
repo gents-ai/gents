@@ -1902,7 +1902,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        crate::test_support::node_builder()
+        defra_node::EmbeddedNode::builder()
             .data_path(&data_path)
             .build()
             .await
