@@ -26,6 +26,9 @@ pub struct GoalRevision {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ObservedGoal {
     pub revision: GoalRevision,
+    /// Physical attribution stays in the signed read envelope rather than tool-facing Goal text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_root_request_doc_id: Option<String>,
     pub snapshot: GoalSnapshot,
 }
 

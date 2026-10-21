@@ -211,6 +211,7 @@ pub(crate) async fn project_session_goal(
                     txn, &goal.doc_id, "goal.project_observation",
                 ).await?.context("goal has no unambiguous composite revision")?;
                 Some(ObservedGoal {
+                    assignment_root_request_doc_id: goal.assignment_root_request_doc_id.clone(),
                     revision: GoalRevision { document: goal.doc_id.clone(), composite: commit.cid },
                     snapshot: snapshot(&goal, Utc::now()),
                 })
@@ -223,7 +224,9 @@ pub(crate) async fn project_session_goal(
                 "goal observation immutable scope differs from canonical session");
             if let Some(previous) = verified(identity.as_ref(), &session, row).await? {
                 if previous.goal.as_ref().map(|goal| &goal.revision)
-                    == goal.as_ref().map(|goal| &goal.revision) {
+                    == goal.as_ref().map(|goal| &goal.revision)
+                    && previous.goal.as_ref().and_then(|goal| goal.assignment_root_request_doc_id.as_ref())
+                        == goal.as_ref().and_then(|goal| goal.assignment_root_request_doc_id.as_ref()) {
                     return Ok(());
                 }
             }
