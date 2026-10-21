@@ -257,33 +257,40 @@ pub(crate) async fn prepare_goal_control(
             }
             PreparedGoalControl::Stop(goal)
         }
-        GoalOperation::Resume {} => {
-            if state.step(GoalAction::Resume).is_none()
-                || (!idle && state.status != GoalStatus::Paused)
-            {
-                return Ok(Err("goal status does not allow resume".into()));
-            }
-            if !idle {
-                PreparedGoalControl::ResumeCurrent(goal)
-            } else {
-                let Some(parent) = latest_goal_request(&goal, &requests) else {
-                    return Ok(Err("goal has no authenticated predecessor to resume".into()));
-                };
-                if !parent
-                    .lifecycle_state
-                    .is_some_and(RequestLifecycleState::is_terminal)
-                {
-                    return Ok(Err("goal predecessor is not terminal".into()));
-                }
-                PreparedGoalControl::ResumeIdle {
-                    predecessor: parent.request_id.clone(),
-                    goal,
-                }
-            }
-        }
+        GoalOperation::Resume {} => match prepare_goal_resume(goal, state, &requests) {
+            Ok(prepared) => prepared,
+            Err(error) => return Ok(Err(error)),
+        },
         GoalOperation::Create { .. } => unreachable!(),
     };
     Ok(Ok(prepared))
+}
+
+pub(crate) fn prepare_goal_resume(
+    goal: GoalDocument,
+    state: GoalState,
+    requests: &[gents_protocol::row::AgentRequestRow],
+) -> Result<PreparedGoalControl, String> {
+    let idle = goal_session_is_idle(requests);
+    if state.step(GoalAction::Resume).is_none() || (!idle && state.status != GoalStatus::Paused) {
+        return Err("goal status does not allow resume".into());
+    }
+    if !idle {
+        return Ok(PreparedGoalControl::ResumeCurrent(goal));
+    }
+    let Some(parent) = latest_goal_request(&goal, requests) else {
+        return Err("goal has no authenticated predecessor to resume".into());
+    };
+    if !parent
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
+    {
+        return Err("goal predecessor is not terminal".into());
+    }
+    Ok(PreparedGoalControl::ResumeIdle {
+        predecessor: parent.request_id.clone(),
+        goal,
+    })
 }
 
 pub(crate) async fn stage_goal_control(

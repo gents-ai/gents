@@ -60,20 +60,14 @@ pub use reset_resume::resume_at_reset;
 pub(crate) use tool_context::load_goal_tool_context;
 use tool_context::same_goal_assignment;
 
-/// Resume only a paused Goal, using the same signed continuation owner as
-/// operator resume. Queued pending requests resume the existing Goal; an
-/// interrupted/claimed execution must settle before a fresh continuation can
-/// be staged.
+/// Resume only a paused Goal; an interrupted/claimed execution must settle
+/// before a fresh continuation can be staged.
 pub(crate) async fn stage_session_resume_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     identity: &dyn crate::identity::NodeIdentity,
     node_did: &str,
     session_id: &str,
 ) -> Result<()> {
-    anyhow::ensure!(
-        identity.did() == node_did,
-        "session resume requires its node signing identity"
-    );
     let requests = request_head::load_session_requests(txn, node_did, session_id).await?;
     anyhow::ensure!(
         !requests
@@ -87,24 +81,13 @@ pub(crate) async fn stage_session_resume_in_txn(
     let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
         return Ok(());
     };
-    let status = goal.parsed_status().context("Goal has an unknown status")?;
-    if status != GoalStatus::Paused {
+    let state = goal.state().context("Goal has an unknown status")?;
+    if state.status != GoalStatus::Paused {
         return Ok(());
     }
-    if !goal_session_is_idle(&requests) {
-        operator_resume::stage_busy_resume(txn, identity, &goal).await?;
-        return Ok(());
-    }
-    let predecessor = latest_goal_request(&goal, &requests)
-        .context("paused Goal has no canonical continuation predecessor; resume was not applied")?;
-    anyhow::ensure!(
-        predecessor
-            .lifecycle_state
-            .is_some_and(RequestLifecycleState::is_terminal),
-        "paused Goal has no terminal continuation predecessor; resume was not applied"
-    );
-    operator_resume::stage_resume(txn, identity, node_did, session_id, &predecessor.request_id)
-        .await?;
+    let prepared = client_control::prepare_goal_resume(goal, state, &requests)
+        .map_err(|error| anyhow::anyhow!("{error}; resume was not applied"))?;
+    client_control::stage_goal_control(txn, identity, prepared).await?;
     Ok(())
 }
 
