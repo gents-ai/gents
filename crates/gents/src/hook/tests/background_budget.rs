@@ -174,12 +174,11 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     }
     assert_eq!(admitted.len(), batch.iter().filter(|case| case.legal).count());
     assert_eq!(rejected, batch.iter().filter(|case| !case.legal).count());
-    let response = node.execute(&format!(
+    let data = crate::ConfigAccess::local(node.clone()).execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}}, lifecycle_state: {{_eq: "running"}} }}) {{ _docID tool_call_id }} }}"#,
         crate::graphql::escape_graphql_string(&request_id),
-    )).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    assert_eq!(response.data.unwrap()["AgentToolCall"].as_array().unwrap().len(), admitted.len());
+    ), "concurrent background admission results").await.unwrap();
+    assert_eq!(data["AgentToolCall"].as_array().unwrap().len(), admitted.len());
     for (index, child) in admitted.iter().enumerate() {
         let args = json!({"tool_call_id": child}).to_string();
         let result = invoke(&hook, &format!("cancel-concurrent-{index}"), "cancel_process", &args).await;
