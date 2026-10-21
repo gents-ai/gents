@@ -3,8 +3,11 @@ use crate::request_admission::verify_request_receipt_signature;
 use gents_protocol::row::AgentRequestRow;
 
 pub(super) fn request_belongs_to_goal(goal: &GoalDocument, entry: &AgentRequestRow) -> bool {
-    if verify_request_receipt_signature(entry).is_err()
-        || entry.node_did.as_deref() != Some(&goal.node_did)
+    verify_request_receipt_signature(entry).is_ok() && verified_entry_belongs_to_goal(goal, entry)
+}
+
+fn verified_entry_belongs_to_goal(goal: &GoalDocument, entry: &AgentRequestRow) -> bool {
+    if entry.node_did.as_deref() != Some(&goal.node_did)
         || entry.session_id.as_deref() != Some(&goal.session_id)
     {
         return false;
@@ -42,7 +45,7 @@ pub(super) fn observe_request_assignment(
         return RequestAssignmentObservation::Unknown;
     }
     let mut candidates = goals.iter().filter(|goal| {
-        goal.assignment_root_request_doc_id.is_some() && request_belongs_to_goal(goal, entry)
+        goal.assignment_root_request_doc_id.is_some() && verified_entry_belongs_to_goal(goal, entry)
     });
     if let Some(goal) = candidates.next() {
         return if candidates.next().is_none() {
@@ -249,17 +252,18 @@ pub(crate) struct RequestAssignments {
     owner: String,
     session: String,
     rows: Vec<AgentRequestRow>,
+    index: std::collections::HashMap<String, usize>,
     goals: Vec<GoalDocument>,
+    scopes: std::sync::Mutex<std::collections::HashMap<String, RequestAssignmentScope>>,
 }
 
 impl RequestAssignments {
     pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         use anyhow::Context;
-        let by_doc =
-            super::request_head::request_rows_by_doc(&self.owner, &self.session, &self.rows)?;
-        let row = *by_doc
+        let row = &self.rows[*self
+            .index
             .get(doc)
-            .context("request is absent from its owner/session observation")?;
+            .context("request is absent from its owner/session observation")?];
         anyhow::ensure!(
             row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
             "assignment request is auxiliary"
@@ -325,8 +329,23 @@ impl RequestAssignments {
     }
 
     pub(crate) fn scope(&self, request_doc_id: &str) -> anyhow::Result<RequestAssignmentScope> {
+        use std::sync::PoisonError;
+        if let Some(scope) = self
+            .scopes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(request_doc_id)
+        {
+            return Ok(scope.clone());
+        }
         let entry = self.entry(request_doc_id)?;
-        request_assignment_scope(entry, &observe_request_assignment(&self.goals, entry))
+        let scope =
+            request_assignment_scope(entry, &observe_request_assignment(&self.goals, entry))?;
+        self.scopes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(request_doc_id.to_owned(), scope.clone());
+        Ok(scope)
     }
 }
 
@@ -337,11 +356,25 @@ pub(crate) async fn load_request_assignments_in_txn(
 ) -> anyhow::Result<RequestAssignments> {
     let rows = super::request_head::load_session_requests(txn, owner, session).await?;
     let versions = super::load_goal_versions_for_session(txn, owner, session).await?;
+    let by_doc = super::request_head::request_rows_by_doc(owner, session, &rows)?;
+    let index = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(position, row)| {
+            let doc = row.doc_id.as_deref()?;
+            by_doc
+                .get(doc)
+                .is_some_and(|indexed| std::ptr::eq(*indexed, row))
+                .then(|| (doc.to_owned(), position))
+        })
+        .collect();
     Ok(RequestAssignments {
         owner: owner.to_owned(),
         session: session.to_owned(),
         rows,
+        index,
         goals: latest_assignment_goals(&versions)?,
+        scopes: Default::default(),
     })
 }
 
