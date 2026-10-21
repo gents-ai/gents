@@ -116,7 +116,7 @@ theorem admission_crash_after_commit (state : State) (fire : Fire) :
       admitTransaction state fire true := admit_idempotent state fire
 
 def goalEnded (status : Goals.Status) : Bool :=
-  status == .complete || status == .blocked || status == .budgetLimited
+  status == .complete || status == .blocked || status == .budgetLimited || status == .stopped
 
 inductive OutcomeReason where
   | requestTerminal
@@ -136,6 +136,40 @@ def outcomeReason (state : State) (request : Request) : Option OutcomeReason :=
   else match boundGoal state request with
     | some goal => if goalEnded goal.status then some (.goalTerminal goal.status) else none
     | none => none
+
+def retainedOutcomeBinding (request : Request) (retained current : Option GoalBinding) :
+    Option GoalBinding :=
+  match retained.filter (fun goal => goal.owner == request.fire.identity.owner &&
+      goal.session == request.fire.session && goal.assignment == request.fire.identity) with
+  | none => none
+  | some goal =>
+    if goalEnded goal.status then some goal
+    else (current.filter fun next => next.owner == request.fire.identity.owner &&
+      next.session == request.fire.session).orElse (fun _ => some goal)
+
+def retainedOutcomeReason (request : Request) (retained current : Option GoalBinding) :
+    Option OutcomeReason :=
+  let binding := retainedOutcomeBinding request retained current
+  let replaced := binding.any fun goal => goal.assignment != request.fire.identity
+  outcomeReason { goals := binding.toList } { request with assignmentReplaced := replaced }
+
+theorem stopped_assignment_has_terminal_outcome (state : State) (request : Request)
+    (goal : GoalBinding) (emit : request.fire.emitOutcome = true)
+    (backed : request.fire.goalBacked = true) (applied : request.goalAssignmentApplied = true)
+    (replaced : request.assignmentReplaced = false) (bound : boundGoal state request = some goal)
+    (stopped : goal.status = .stopped) :
+    outcomeReason state request = some (.goalTerminal .stopped) := by
+  simp [outcomeReason, emit, backed, applied, replaced, bound, stopped, goalEnded]
+
+theorem missing_retained_assignment_is_unknown (request : Request) (current : Option GoalBinding) :
+    retainedOutcomeBinding request none current = none := rfl
+
+theorem terminal_retained_assignment_ignores_new_goal (request : Request) (goal : GoalBinding)
+    (current : Option GoalBinding) (owner : goal.owner = request.fire.identity.owner)
+    (session : goal.session = request.fire.session) (root : goal.assignment = request.fire.identity)
+    (ended : goalEnded goal.status = true) :
+    retainedOutcomeBinding request (some goal) current = some goal := by
+  simp [retainedOutcomeBinding, Option.filter, owner, session, root, ended]
 
 def outcomeDue (state : State) (request : Request) : Bool :=
   (outcomeReason state request).isSome
