@@ -174,7 +174,8 @@ private def finishWrite (world : World) (holder : Holder) (receipt : Receipt) : 
     let allowed := match world.detached.find? (fun value => value.holder.caller == holder.caller) with
       | none => true
       | some value => value.candidate == some proposal
-    let stored := if receipt.installed && allowed then Stored.present 1 proposal.ledger else world.stored
+    let detached := world.detached.any (fun value => value.holder.caller == holder.caller)
+    let stored := if receipt.installed && allowed && !detached then Stored.present 1 proposal.ledger else world.stored
     let next := {world with stored}
     if allowed && receipt.installed && receipt.durable && receipt.acknowledged then
       let grant := if holder.cancelled then Effect.none else proposal.effect

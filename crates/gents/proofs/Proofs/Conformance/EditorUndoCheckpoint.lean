@@ -266,6 +266,14 @@ def cases : List Case :=
        .helperLost 1 false, .settleOrphan 1, differentAdmission false, .release 2],
       expected := accepted ++ [.checkpoint, .guardLost, .acquired, .refused, .acknowledged,
        .effect .restore, .helperLost, .orphanSettled, .refused, .released]}
+  , {name := "buffered_terminal_reply_cannot_overwrite_a_new_holders_checkpoint", inputs :=
+      reserveInputs ++ restored ++ startSave ++ [.settle 1,
+       .advance 1 (.observeSave 0 ⟨.saved, true⟩ true), .physicalLoss 1 true,
+       .acquire 2 .acquired, .load 2 .empty, differentAdmission false, .finishWrite 2 durable,
+       .finishWrite 1 durable, .release 1, .helperLost 1 false, .release 2],
+      expected := accepted ++ restoreOutputs ++ [.checkpoint, .acknowledged, .effect .save,
+       .settled, .checkpoint, .guardLost, .acquired, .loaded, .checkpoint, .acknowledged,
+       .acknowledged, .refused, .helperLost, .released]}
   ]
 
 def trace (world : World) : List Input → List (World × Output)
