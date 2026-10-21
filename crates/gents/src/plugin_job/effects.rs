@@ -257,12 +257,17 @@ async fn stage_spawn(
         },
         own,
     );
-    let cwd = spawn.cwd.clone().or_else(|| {
-        job.row
-            .pin
-            .as_ref()
-            .map(|pin| pin.cwd.clone())
-            .or_else(|| Some(job.row.caller_cwd.clone()))
+    let base = job
+        .row
+        .pin
+        .as_ref()
+        .map_or(&job.row.caller_cwd, |pin| &pin.cwd);
+    // Admission resolved a relative spawn cwd against the pinned cwd; the child
+    // gets that path, not one its own admission would resolve against the
+    // server process's cwd.
+    let cwd = Some(match &spawn.cwd {
+        Some(dir) => Path::new(base).join(dir).to_string_lossy().into_owned(),
+        None => base.clone(),
     });
     stage_request(
         txn,
@@ -1119,6 +1124,25 @@ mod tests {
         let input = input_of(&rows[0]);
         assert_eq!(input["initial_title"]["text"], "Spawn Title");
         assert_eq!(input["cwd"], "/admitted");
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn child_of_a_relative_cwd_gets_the_path_admission_checked() {
+        let harness = harness("job-stage-relative-cwd").await;
+        let kept = spawn(
+            "kept",
+            0,
+            "guest prompt",
+            "Spawn Title",
+            Some("review_seeded_bug"),
+        );
+        let effects = job_effects(vec![kept.clone()], Vec::new());
+        stage(&harness, &[kept], &effects, &harness.row)
+            .await
+            .unwrap();
+        let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
+        assert_eq!(input_of(&rows[0])["cwd"], "/work/review_seeded_bug");
         harness.close().await;
     }
 }

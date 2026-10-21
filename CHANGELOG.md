@@ -160,6 +160,9 @@ source consistency checks, not a separate runtime compatibility version.
 - The plugin job recovery sweep no longer fails a healthy workflow run as
   `plugin_job_stalled` while one of its steps is in flight; it decides a kill
   on facts re-read while no step of the run can start.
+- A workflow child spawned with a relative `cwd` now starts in that folder
+  under the run's working folder, the path its admission checked, instead of
+  failing `request admission denied: resolve invocation cwd`.
 
 ## 0.21.0-rc0 - 2026-10-17
 
