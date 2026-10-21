@@ -76,13 +76,16 @@ def nextBlockedAudits (current : Nat) : AuditObservation → Nat
 
 def step? (state : State) : Action → Option State
   | .pause =>
-      if state.status = .active then
+      if state.status = .active ∨ state.status = .budgetLimited then
         some { state with status := .paused }
       else none
   | .resume =>
       if state.status = .paused ∨ state.status = .blocked ∨
           state.status = .usageLimited then
-        some { state with status := .active, blockedAudits := 0 }
+        some { state with
+          status := if state.wrapupRequested ∧ !state.wrapupCompleted
+            then .budgetLimited else .active
+          blockedAudits := 0 }
       else none
   | .complete =>
       if state.status = .complete ∨ state.status = .stopped then none
@@ -138,6 +141,27 @@ theorem stop_preserves_history (state post : State)
 theorem stopped_rejects_later_transitions (state : State) (action : Action)
     (h : state.status = .stopped) : step? state action = none := by
   cases action <;> simp [step?, h]
+
+theorem interrupted_wrapup_does_not_retry
+    (activity requestWrapup : Bool) (retries : Nat) :
+    decide .budgetLimited .interrupted true false true activity requestWrapup retries
+      true false ≠ .retry := by
+  simp [decide]
+
+theorem pause_resume_preserves_pending_wrapup (state paused resumed : State)
+    (h_requested : state.wrapupRequested = true)
+    (h_incomplete : state.wrapupCompleted = false)
+    (h_pause : step? state .pause = some paused)
+    (h_resume : step? paused .resume = some resumed) :
+    resumed.status = .budgetLimited ∧ resumed.wrapupRequested = true ∧
+      resumed.wrapupCompleted = false := by
+  simp only [step?] at h_pause h_resume
+  split at h_pause
+  · cases h_pause
+    simp [h_requested, h_incomplete] at h_resume
+    cases h_resume
+    simp [h_requested, h_incomplete]
+  · simp at h_pause
 
 theorem blocked_requires_three_audits
     (state post : State) (observation : AuditObservation)
@@ -247,7 +271,8 @@ def decide
       else if !requestIsWrapup then .wrapup
       else match terminal with
       | .completed => .none
-      | .failed | .dead | .interrupted | .superseded =>
+      | .interrupted | .superseded => .pause
+      | .failed | .dead =>
           if infrastructureRetries < 2 then .retry else .abandonWrapup
   | .paused | .blocked | .usageLimited | .complete | .stopped => .none
 

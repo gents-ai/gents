@@ -113,6 +113,10 @@ def goalDecisionCases : List GoalDecisionCase :=
       sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
       requestIsWrapup := true, infrastructureRetries := 0,
       wrapupRequested := true, wrapupCompleted := false }
+  , { name := "interrupted_wrapup_pauses_without_retry", status := .budgetLimited,
+      terminal := .interrupted, sessionIdle := true, childExists := false,
+      budgetReached := true, hasActivity := true, requestIsWrapup := true,
+      infrastructureRetries := 0, wrapupRequested := true, wrapupCompleted := false }
   , { name := "failed_wrapup_abandons_at_bound", status := .budgetLimited, terminal := .dead,
       sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
       requestIsWrapup := true, infrastructureRetries := 2,
@@ -191,8 +195,10 @@ def goalCaseState (status : Goals.Status) (audits : Nat := 0)
 def goalTransitionCases : List GoalTransitionCase :=
   [ { name := "active_pause", pre := goalCaseState .active,
       action := .pause }
-  , { name := "budget_pause_rejected", pre := goalCaseState .budgetLimited 0 true false,
+  , { name := "budget_wrapup_pauses", pre := goalCaseState .budgetLimited 0 true false,
       action := .pause }
+  , { name := "budget_wrapup_resumes_with_obligation",
+      pre := goalCaseState .paused 0 true false, action := .resume }
   , { name := "blocked_resume_resets_audits", pre := goalCaseState .blocked 3,
       action := .resume }
   , { name := "complete_from_active", pre := goalCaseState .active,
