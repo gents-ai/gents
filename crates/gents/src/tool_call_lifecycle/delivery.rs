@@ -3580,7 +3580,7 @@ pub(crate) async fn start_running_in_txn(
             r#"{{ AgentToolCall(filter: {{
             _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request_id}" }},
             session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}{requester_filter}
-        }}, limit: 2) {{ _docID lifecycle_state }} }}"#,
+        }}, limit: 2) {{ _docID }} }}"#,
             escape_graphql_string(&start.doc_id),
             escape_graphql_string(&start.session),
             escape_graphql_string(&start.agent)
@@ -3593,13 +3593,9 @@ pub(crate) async fn start_running_in_txn(
         physical_rows.len() == 1,
         "dispatch physical tool is missing or ambiguous"
     );
-    anyhow::ensure!(
-        physical_rows[0]["lifecycle_state"].as_str() == Some("pending"),
-        "dispatch physical tool is no longer pending"
-    );
     if start.await_mode == "background" {
-        let live = crate::hook::persistence::count_live_backgrounded_rows_in(txn, &start.request)
-            .await?;
+        let live =
+            crate::hook::persistence::count_live_backgrounded_rows_in(txn, &start.request).await?;
         if live >= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
             return Err(crate::hook::persistence::BackgroundCapacityExceeded(live).into());
         }

@@ -157,8 +157,25 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     publish_and_adopt_tool_turns(&hook, &filler_calls, filler_message).await;
     let overflow_id = filler_ids.pop().unwrap();
     for id in &filler_ids {
-        let mut admitted = hook.adopt_accepted_tool_dispatch(
-            id,
+        let mut admitted = hook
+            .adopt_accepted_tool_dispatch(
+                id,
+                None,
+                "handoff-parent",
+                &session,
+                "held_background_tool",
+                "{}",
+                deadline,
+                crate::tool_call_lifecycle::AwaitMode::Background,
+            )
+            .await
+            .unwrap();
+        admitted.start_running().await.unwrap();
+        fillers.push(admitted);
+    }
+    let mut overflow = hook
+        .adopt_accepted_tool_dispatch(
+            &overflow_id,
             None,
             "handoff-parent",
             &session,
@@ -166,20 +183,9 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
             "{}",
             deadline,
             crate::tool_call_lifecycle::AwaitMode::Background,
-        ).await.unwrap();
-        admitted.start_running().await.unwrap();
-        fillers.push(admitted);
-    }
-    let mut overflow = hook.adopt_accepted_tool_dispatch(
-        &overflow_id,
-        None,
-        "handoff-parent",
-        &session,
-        "held_background_tool",
-        "{}",
-        deadline,
-        crate::tool_call_lifecycle::AwaitMode::Background,
-    ).await.unwrap();
+        )
+        .await
+        .unwrap();
     let refusal = overflow.start_running().await.unwrap_err();
     assert_eq!(
         refusal

@@ -153,9 +153,11 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     publish_and_adopt_tool_turns(&hook, &calls, message).await;
     let results = tokio::time::timeout(
         std::time::Duration::from_secs(60),
-        futures::future::join_all(ids.iter().zip(&batch).map(|(id, case)| {
-            hook.on_tool_call(&case.action, None, id, args)
-        })),
+        futures::future::join_all(
+            ids.iter()
+                .zip(&batch)
+                .map(|(id, case)| hook.on_tool_call(&case.action, None, id, args)),
+        ),
     )
     .await
     .expect("concurrent admissions must settle while their children remain running");
@@ -169,20 +171,35 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         if receipt["status"] == "running" {
             admitted.push(receipt["tool_call_id"].as_str().unwrap().to_owned());
         } else {
-            assert_eq!(receipt["code"], witness.kind_field("error_code_on_violation"));
+            assert_eq!(
+                receipt["code"],
+                witness.kind_field("error_code_on_violation")
+            );
             rejected += 1;
         }
     }
-    assert_eq!(admitted.len(), batch.iter().filter(|case| case.legal).count());
+    assert_eq!(
+        admitted.len(),
+        batch.iter().filter(|case| case.legal).count()
+    );
     assert_eq!(rejected, batch.iter().filter(|case| !case.legal).count());
     let data = crate::ConfigAccess::local(node.clone()).execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}}, lifecycle_state: {{_eq: "running"}} }}) {{ _docID tool_call_id }} }}"#,
         crate::graphql::escape_graphql_string(&request_id),
     )).await.unwrap();
-    assert_eq!(data["data"]["AgentToolCall"].as_array().unwrap().len(), admitted.len());
+    assert_eq!(
+        data["data"]["AgentToolCall"].as_array().unwrap().len(),
+        admitted.len()
+    );
     for (index, child) in admitted.iter().enumerate() {
         let args = json!({"tool_call_id": child}).to_string();
-        let result = invoke(&hook, &format!("cancel-concurrent-{index}"), "cancel_process", &args).await;
+        let result = invoke(
+            &hook,
+            &format!("cancel-concurrent-{index}"),
+            "cancel_process",
+            &args,
+        )
+        .await;
         assert_eq!(result["status"], "cancelled");
         executions.wait_for_completion(child).await;
     }

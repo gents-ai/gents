@@ -43,7 +43,7 @@ pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::Con
         }}"#
     );
     let response = reader.execute_read(&query).await.map_err(|error| {
-            error.context(format!(
+        error.context(format!(
             "query live backgrounded tool count for request document {request_doc_id} failed"
         ))
     })?;

@@ -771,7 +771,8 @@ pub async fn request_foreground_backgrounding(
             row["request_doc_id"]
                 .as_str()
                 .context("background request missing request document identity")?,
-        ).await?
+        )
+        .await?
             < crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
         "background process limit reached; wait for a background process to finish"
     );

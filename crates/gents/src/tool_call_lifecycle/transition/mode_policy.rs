@@ -141,9 +141,12 @@ impl ToolCallLifecycle {
         {
             return Ok(None);
         }
-        let request_doc_id = self.request_doc_id.as_deref()
+        let request_doc_id = self
+            .request_doc_id
+            .as_deref()
             .ok_or_else(|| anyhow!("background called without parent request document"))?;
-        let live = crate::hook::persistence::count_live_backgrounded_rows_in(txn, request_doc_id).await?;
+        let live =
+            crate::hook::persistence::count_live_backgrounded_rows_in(txn, request_doc_id).await?;
         if live > crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
             return Err(crate::hook::persistence::BackgroundCapacityExceeded(live - 1).into());
         }
