@@ -38,10 +38,11 @@ structure Proposal where
   deriving DecidableEq, Repr
 
 /-- `caller` names an existing owned helper connection, not an actor identity,
-lease or source grant. While that connection lives, its OS advisory guard spans
-reads, checkpoints and the actual editor/save promise. Helper loss releases the
-guard without settling the promise; the existing durable unresolved sequence
-then blocks new connections. Webview cancellation cannot retire a live guard or
+lease or source grant. While the helper lives, its OS advisory guard spans reads and checkpoints.
+Physical helper death releases the guard before the host necessarily observes
+connection loss. An already acknowledged unused grant may still be invoked in
+that interval; the durable unresolved sequence blocks every new connection.
+Connection-loss observation revokes unused grants without settling real promises. Webview cancellation cannot retire a live guard or
 settle the promise. Only the real host continuation may report settlement. -/
 structure Holder where
   caller : Nat
@@ -55,17 +56,27 @@ structure Holder where
   running : Effect := .none
   deriving DecidableEq, Repr
 
+/-- A host may observe helper death later than the OS releases its lock. Only a
+reply for the exact candidate installed before death may still arrive; a dead
+helper cannot persist a later proposal. This is transport ordering, not a new
+lease or editor effect policy. -/
+structure Detached where
+  holder : Holder
+  candidate : Option Proposal := none
+  deriving DecidableEq, Repr
+
 structure World where
   stored : Stored := .absent
   holder : Option Holder := none
   orphans : List (Nat × Effect) := []
+  detached : List Detached := []
   deriving DecidableEq, Repr
 
 inductive Output where
   | acquired | busy | loaded | checkpoint | acknowledged | refused
   | effect (value : Effect)
   | settled | cancelled | held | released | withdrawn
-  | helperLost | orphanSettled
+  | guardLost | helperLost | orphanSettled
   deriving DecidableEq, Repr
 
 inductive Input where
@@ -80,18 +91,31 @@ inductive Input where
   | settle (caller : Nat)
   | cancel (caller : Nat)
   | release (caller : Nat)
+  | physicalLoss (caller : Nat) (candidateInstalled : Bool)
   | helperLost (caller : Nat) (candidateInstalled : Bool)
   | settleOrphan (caller : Nat)
   deriving DecidableEq, Repr
 
 private def owned (world : World) (caller : Nat)
     (transition : Holder → World × Output) : World × Output :=
-  match world.holder with
-  | some holder => if holder.caller == caller then transition holder else (world, .refused)
-  | none => (world, .refused)
+  match world.holder.filter (fun holder => holder.caller == caller) with
+  | some holder => transition holder
+  | none => match world.detached.find? (fun value => value.holder.caller == caller) with
+    | some value => transition value.holder
+    | none => (world, .refused)
 
 private def keep (world : World) (holder : Holder) (output : Output) : World × Output :=
-  ({world with holder := some holder}, output)
+  if world.detached.any (fun value => value.holder.caller == holder.caller) then
+    ({world with detached := world.detached.map fun value =>
+       if value.holder.caller == holder.caller then
+         {holder, candidate := if value.holder.pending == holder.pending then value.candidate else none}
+       else value}, output)
+  else ({world with holder := some holder}, output)
+
+@[simp] private theorem keep_stored (world : World) (holder : Holder) (output : Output) :
+    (keep world holder output).1.stored = world.stored := by
+  simp only [keep]
+  split <;> rfl
 
 private def usable (holder : Holder) : Bool :=
   holder.loaded && !holder.refused && holder.pending.isNone && holder.running == .none
@@ -147,9 +171,12 @@ private def finishWrite (world : World) (holder : Holder) (receipt : Receipt) : 
   match holder.pending with
   | none => (world, .refused)
   | some proposal =>
-    let stored := if receipt.installed then Stored.present 1 proposal.ledger else world.stored
+    let allowed := match world.detached.find? (fun value => value.holder.caller == holder.caller) with
+      | none => true
+      | some value => value.candidate == some proposal
+    let stored := if receipt.installed && allowed then Stored.present 1 proposal.ledger else world.stored
     let next := {world with stored}
-    if receipt.installed && receipt.durable && receipt.acknowledged then
+    if allowed && receipt.installed && receipt.durable && receipt.acknowledged then
       let grant := if holder.cancelled then Effect.none else proposal.effect
       keep next {holder with ledger := proposal.ledger, operation := proposal.operation, pending := none, grant} .acknowledged
     else
@@ -166,12 +193,15 @@ def step (world : World) (input : Input) : World × Output :=
   match input with
   | .acquire caller observation =>
     if world.holder.isSome then (world, .busy)
-    else if world.orphans.any (fun orphan => orphan.1 == caller) then (world, .refused)
+    else if world.orphans.any (fun orphan => orphan.1 == caller) ||
+      world.detached.any (fun value => value.holder.caller == caller) then (world, .refused)
     else match observation with
     | .acquired => keep world {caller} .acquired
     | .busy => (world, .busy)
     | .unavailable => (world, .refused)
-  | .load caller legacy => owned world caller (fun holder => read world holder legacy)
+  | .load caller legacy => owned world caller fun holder =>
+    if world.detached.any (fun value => value.holder.caller == caller) then refuse world holder
+    else read world holder legacy
   | .admit caller id targets documents observations =>
     owned world caller (fun holder => admit world holder id targets documents observations)
   | .advance caller action => owned world caller (fun holder => advance world holder action)
@@ -187,14 +217,27 @@ def step (world : World) (input : Input) : World × Output :=
     keep world {holder with cancelled := true, grant := .none} .cancelled
   | .release caller => owned world caller fun holder =>
     if holder.pending.isSome || holder.running != .none then (world, .held)
+    else if world.detached.any (fun value => value.holder.caller == caller) then (world, .refused)
     else ({world with holder := none}, .released)
+  | .physicalLoss caller candidateInstalled =>
+    match world.holder with
+    | none => (world, .refused)
+    | some holder =>
+      if holder.caller != caller then (world, .refused)
+      else
+        let candidate := if candidateInstalled then holder.pending else none
+        let stored := match candidate with
+          | some proposal => Stored.present 1 proposal.ledger
+          | none => world.stored
+        ({world with stored, holder := none, detached := world.detached ++ [⟨holder, candidate⟩]}, .guardLost)
   | .helperLost caller candidateInstalled => owned world caller fun holder =>
+    let alreadyDetached := world.detached.any (fun value => value.holder.caller == caller)
     let stored := match holder.pending with
-      | some proposal => if candidateInstalled then Stored.present 1 proposal.ledger else world.stored
+      | some proposal => if candidateInstalled && !alreadyDetached then Stored.present 1 proposal.ledger else world.stored
       | none => world.stored
     let orphans := if holder.running == .none then world.orphans
       else world.orphans ++ [(caller, holder.running)]
-    ({world with stored, holder := none, orphans}, .helperLost)
+    ({world with stored, holder := world.holder.filter (fun current => current.caller != caller), detached := world.detached.filter (fun value => value.holder.caller != caller), orphans}, .helperLost)
   | .settleOrphan caller =>
     if world.orphans.any (fun orphan => orphan.1 == caller) then
       ({world with orphans := world.orphans.filter (fun orphan => orphan.1 != caller)}, .orphanSettled)
@@ -206,33 +249,33 @@ def Output.editorEffect : Output → Effect
   | _ => .none
 
 theorem empty_guard_cannot_launch (stored : Stored) (caller : Nat) :
-    (step ⟨stored, none, []⟩ (.launch caller)).2 = .refused := by
-  simp [step, owned]
+    (step ⟨stored, none, [], []⟩ (.launch caller)).2 = .refused := by
+  simp [step, owned, Option.filter]
 
 theorem held_guard_cannot_be_replaced (stored : Stored) (holder : Holder)
     (caller : Nat) (observation : GuardObservation) :
-    step ⟨stored, some holder, []⟩ (.acquire caller observation) = (⟨stored, some holder, []⟩, .busy) := by
+    step ⟨stored, some holder, [], []⟩ (.acquire caller observation) = (⟨stored, some holder, [], []⟩, .busy) := by
   simp [step]
 
 theorem cancellation_preserves_running_promise (stored : Stored) (holder : Holder) :
-    (step ⟨stored, some holder, []⟩ (.cancel holder.caller)).1.holder =
+    (step ⟨stored, some holder, [], []⟩ (.cancel holder.caller)).1.holder =
       some {holder with cancelled := true, grant := .none} := by
-  simp [step, owned, keep]
+  simp [step, owned, Option.filter, keep]
 
 theorem running_promise_cannot_release (stored : Stored) (holder : Holder)
     (running : (holder.running != .none) = true) :
-    step ⟨stored, some holder, []⟩ (.release holder.caller) = (⟨stored, some holder, []⟩, .held) := by
-  simp [step, owned, running]
+    step ⟨stored, some holder, [], []⟩ (.release holder.caller) = (⟨stored, some holder, [], []⟩, .held) := by
+  simp [step, owned, Option.filter, running]
 
 theorem pending_checkpoint_cannot_release (stored : Stored) (holder : Holder)
     (pending : holder.pending.isSome = true) :
-    step ⟨stored, some holder, []⟩ (.release holder.caller) = (⟨stored, some holder, []⟩, .held) := by
-  simp [step, owned, pending]
+    step ⟨stored, some holder, [], []⟩ (.release holder.caller) = (⟨stored, some holder, [], []⟩, .held) := by
+  simp [step, owned, Option.filter, pending]
 
 theorem helper_loss_releases_guard (world : World) (holder : Holder) (installed : Bool)
     (owns : world.holder = some holder) :
     (step world (.helperLost holder.caller installed)).1.holder = none := by
-  simp [step, owned, owns]
+  simp [step, owned, Option.filter, owns]
 
 theorem orphan_settlement_cannot_rewrite_journal (world : World) (caller : Nat) :
     (step world (.settleOrphan caller)).1.stored = world.stored := by
@@ -247,14 +290,14 @@ theorem withdrawal_cannot_rewrite_journal (world : World) (caller : Nat) :
     (step world (.withdraw caller)).1.stored = world.stored := by
   simp only [step, owned]
   split
+  · split <;> simp_all
   · split
-    · split <;> rfl
+    · split <;> simp_all
     · rfl
-  · rfl
 
 theorem unresolved_journal_refuses_new_connection (ledger : Ledger) (caller : Nat)
     (orphans : List (Nat × Effect)) (blocked : unresolved ledger = true) :
-    (step ⟨.present 1 ledger, some {caller}, orphans⟩ (.load caller .empty)).2 = .refused := by
-  simp [step, owned, read, blocked, refuse, keep]
+    (step ⟨.present 1 ledger, some {caller}, orphans, []⟩ (.load caller .empty)).2 = .refused := by
+  simp [step, owned, Option.filter, read, blocked, refuse, keep]
 
 end Workspace.ChangeReview.Editor.Checkpoint

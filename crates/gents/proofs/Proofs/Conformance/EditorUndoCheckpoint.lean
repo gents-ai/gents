@@ -31,7 +31,7 @@ private def restoredSequence : Sequence :=
 private def savingSequence : Sequence := (Workspace.ChangeReview.Editor.step restoredSequence (.startSave 0 saveObservations true)).1
 private def completedSequence : Sequence :=
   (Workspace.ChangeReview.Editor.step savingSequence (.observeSave 0 ⟨.saved, true⟩ true)).1
-private def retained (sequence : Sequence) : World := ⟨.present 1 [⟨"old", sequence⟩], none, []⟩
+private def retained (sequence : Sequence) : World := ⟨.present 1 [⟨"old", sequence⟩], none, [], []⟩
 private def replay : List Input := [.acquire 2 .acquired, .load 2 .empty, admit 2 "new", .launch 2, .release 2]
 
 structure Case where
@@ -76,14 +76,14 @@ def cases : List Case :=
       expected := [.busy, .refused, .refused]}
   , {name := "unavailable_guard_refuses", inputs := [.acquire 1 .unavailable, .load 1 .empty],
       expected := [.refused, .refused]}
-  , {name := "corrupt_or_truncated_journal_refuses", initial := ⟨.corrupt, none, []⟩,
+  , {name := "corrupt_or_truncated_journal_refuses", initial := ⟨.corrupt, none, [], []⟩,
       inputs := [.acquire 1 .acquired, .load 1 .empty, admit, .launch 1],
       expected := [.acquired, .refused, .refused, .refused]}
-  , {name := "unreadable_journal_is_not_empty", initial := ⟨.unavailable, none, []⟩,
+  , {name := "unreadable_journal_is_not_empty", initial := ⟨.unavailable, none, [], []⟩,
       inputs := [.acquire 1 .acquired, .load 1 .empty, admit], expected := [.acquired, .refused, .refused]}
-  , {name := "unsupported_envelope_version_refuses", initial := ⟨.present 2 [], none, []⟩,
+  , {name := "unsupported_envelope_version_refuses", initial := ⟨.present 2 [], none, [], []⟩,
       inputs := [.acquire 1 .acquired, .load 1 .empty, admit], expected := [.acquired, .refused, .refused]}
-  , {name := "malformed_ref_only_ledger_refuses", initial := ⟨.present 1 [⟨"", reservedSequence⟩], none, []⟩,
+  , {name := "malformed_ref_only_ledger_refuses", initial := ⟨.present 1 [⟨"", reservedSequence⟩], none, [], []⟩,
       inputs := [.acquire 1 .acquired, .load 1 .empty, admit], expected := [.acquired, .refused, .refused]}
   , {name := "reservation_write_failure_poisoned_until_new_explicit_session", inputs :=
       [.acquire 1 .acquired, .load 1 .empty, admit, .finishWrite 1 ⟨false, false, false⟩,
@@ -240,6 +240,32 @@ def cases : List Case :=
          .advance 1 (.observeSave 1 ⟨.saved, true⟩ true), .finishWrite 1 durable, .release 1],
       expected := accepted ++ restoreOutputs ++ [.checkpoint, .acknowledged, .withdrawn, .checkpoint, .acknowledged] ++
         restoreOutputs ++ saveOutputs ++ [.released]}
+  , {name := "physical_restore_helper_death_before_callback_can_consume_only_prior_grant", inputs :=
+      reserveInputs ++ [.advance 1 (.startRestore 0 true true), .finishWrite 1 durable,
+       .physicalLoss 1 false, .acquire 2 .acquired, .load 2 .empty, differentAdmission true,
+       .launch 1, .release 1, .helperLost 1 false, .settleOrphan 1,
+       differentAdmission false, .release 2],
+      expected := accepted ++ [.checkpoint, .acknowledged, .guardLost, .acquired, .refused,
+       .refused, .effect .restore, .held, .helperLost, .orphanSettled, .refused, .released]}
+  , {name := "physical_save_helper_death_without_callback_keeps_workspace_barrier", inputs :=
+      reserveInputs ++ restored ++ [.advance 1 (.startSave 0 saveObservations true), .finishWrite 1 durable,
+       .physicalLoss 1 false, .acquire 2 .acquired, .load 2 .empty, differentAdmission false,
+       .launch 1, .settle 1, .advance 1 (.observeSave 0 ⟨.saved, true⟩ true),
+       .finishWrite 1 durable, differentAdmission true, .release 2],
+      expected := accepted ++ restoreOutputs ++ [.checkpoint, .acknowledged, .guardLost,
+       .acquired, .refused, .refused, .effect .save, .settled, .checkpoint, .refused, .refused, .released]}
+  , {name := "held_restore_can_settle_before_connection_loss_without_clearing_marker", inputs :=
+      reserveInputs ++ startRestore ++ [.physicalLoss 1 false, .acquire 2 .acquired,
+       .load 2 .empty, .settle 1, .advance 1 (.observeRestore 0 .applied true true),
+       .finishWrite 1 durable, .helperLost 1 false, differentAdmission true, .release 2],
+      expected := accepted ++ [.checkpoint, .acknowledged, .effect .restore, .guardLost,
+       .acquired, .refused, .settled, .checkpoint, .refused, .helperLost, .refused, .released]}
+  , {name := "buffered_exact_durable_reply_after_physical_death_is_not_a_new_write", inputs :=
+      reserveInputs ++ [.advance 1 (.startRestore 0 true true), .physicalLoss 1 true,
+       .acquire 2 .acquired, .load 2 .empty, .finishWrite 1 durable, .launch 1,
+       .helperLost 1 false, .settleOrphan 1, differentAdmission false, .release 2],
+      expected := accepted ++ [.checkpoint, .guardLost, .acquired, .refused, .acknowledged,
+       .effect .restore, .helperLost, .orphanSettled, .refused, .released]}
   ]
 
 def trace (world : World) : List Input → List (World × Output)
@@ -285,8 +311,11 @@ private def holderJson (holder : Holder) := object
    ("ledger", ledgerJson holder.ledger), ("operation", (holder.operation.map jsonString).getD "null"),
    ("pending", (holder.pending.map proposalJson).getD "null"),
    ("grant", effectJson holder.grant), ("running", effectJson holder.running)]
+private def detachedJson (value : Detached) := object
+  [("holder", holderJson value.holder), ("candidate", (value.candidate.map proposalJson).getD "null")]
 private def worldJson (world : World) := object
   [("stored", storedJson world.stored), ("holder", (world.holder.map holderJson).getD "null"),
+   ("detached", jsonArray (world.detached.map detachedJson)),
    ("orphans", jsonArray (world.orphans.map fun (caller, effect) =>
      object [("caller", toString caller), ("effect", effectJson effect)]))]
 private def outputJson : Output → String
@@ -295,6 +324,7 @@ private def outputJson : Output → String
   | .effect effect => object [("effect", effectJson effect)]
   | .settled => "\"settled\"" | .cancelled => "\"cancelled\"" | .held => "\"held\"" | .released => "\"released\""
   | .withdrawn => "\"withdrawn\""
+  | .guardLost => "\"guardLost\""
   | .helperLost => "\"helperLost\"" | .orphanSettled => "\"orphanSettled\""
 private def targetJson (t : Target) := object
   [("reference", jsonString t.reference), ("actions", jsonArray (t.actions.map jsonString)), ("uri", jsonString t.uri),
@@ -341,6 +371,7 @@ private def inputJson : Input → String
   | .settle caller => object [("kind", "\"settle\""), ("caller", toString caller)]
   | .cancel caller => object [("kind", "\"cancel\""), ("caller", toString caller)]
   | .release caller => object [("kind", "\"release\""), ("caller", toString caller)]
+  | .physicalLoss caller installed => object [("kind", "\"physicalLoss\""), ("caller", toString caller), ("candidateInstalled", boolJson installed)]
   | .helperLost caller installed => object [("kind", "\"helperLost\""), ("caller", toString caller), ("candidateInstalled", boolJson installed)]
   | .settleOrphan caller => object [("kind", "\"settleOrphan\""), ("caller", toString caller)]
 private def traceJson (world : World) : List Input → List String
