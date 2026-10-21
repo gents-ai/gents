@@ -76,7 +76,7 @@ def effectiveTargets (ctx : StepContext) (pin : Pin) : EndpointScope Target Unit
 
 inductive Refusal
   | terminal | notAvailable | engineChanged | policyDenied | stalled | depthExceeded | timedOut
-  | stepFailed
+  | stepFailed | backgroundBudgetExceeded
   deriving DecidableEq, Repr
 
 /-- The host terminal codes; `.terminal` is a no-op and has none. -/
@@ -89,6 +89,7 @@ def Refusal.code : Refusal → Option String
   | .depthExceeded => some "plugin_job_depth_exceeded"
   | .timedOut => some "plugin_job_timed_out"
   | .stepFailed => some "plugin_job_step_failed"
+  | .backgroundBudgetExceeded => some "background_tool_budget_exceeded"
 
 def StepOutput.pin : StepOutput → Option GuestPin
   | .result _ _ p _ => p
@@ -410,7 +411,7 @@ def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusa
         .error .policyDenied
       else if job.pin.isNone && ctx.live = Ceiling.empty then .error .notAvailable
       else if job.pin.isNone && (Background.admitBackground ctx.liveBackground).isNone then
-        .error .policyDenied
+        .error .backgroundBudgetExceeded
       else if job.pin.isNone && ctx.startedByJob then .error .depthExceeded
       else if pin.origin = .installed ∧ ctx.installedTrusted pin.sourceDigest = false then
         .error .policyDenied
@@ -429,10 +430,11 @@ def settleStep (ctx : StepContext) (job : Job) (out : StepOutput)
 theorem refusal_code_spellings :
     Refusal.code .terminal = none ∧
       [Refusal.stalled, .policyDenied, .notAvailable, .engineChanged, .timedOut, .depthExceeded,
-          .stepFailed].map Refusal.code =
+          .stepFailed, .backgroundBudgetExceeded].map Refusal.code =
         [some "plugin_job_stalled", some "plugin_job_policy_denied", some "plugin_job_not_available",
           some "plugin_job_engine_changed", some "plugin_job_timed_out",
-          some "plugin_job_depth_exceeded", some "plugin_job_step_failed"] ∧
+          some "plugin_job_depth_exceeded", some "plugin_job_step_failed",
+          some "background_tool_budget_exceeded"] ∧
       ∀ r : Refusal, r.code = none ↔ r = .terminal := by
   refine ⟨rfl, rfl, ?_⟩
   intro r
@@ -962,8 +964,8 @@ theorem messages_within_effective_targets {ctx : StepContext} {p : Pin} {job job
     simp only [hl, decide_eq_true_eq] at hs
     exact ⟨ch, rfl, hs.1⟩
 
-set_option maxHeartbeats 400000 in
-/-- Adoption takes one background slot of the calling request; a pinned row's
+/-- Adoption takes one background slot of the calling request; a full budget
+returns a capacity refusal, while a pinned row's
 steps, and so its children, neither read nor take one. -/
 theorem job_row_consumes_one_background_slot (ctx : StepContext) (job job' : Job)
     (out : StepOutput) (p : Pin) (m : Nat) :
