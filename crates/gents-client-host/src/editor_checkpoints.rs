@@ -282,7 +282,7 @@ impl Session {
                         .downcast_ref::<std::io::Error>()
                         .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
                 {
-                    return Ok(None)
+                    return Ok(None);
                 }
                 Err(error) => return Err(error),
             };
@@ -449,7 +449,7 @@ pub fn serve(directory: &Path, mut input: impl Read, mut output: impl Write) -> 
                         version: VERSION,
                         id,
                     },
-                )
+                );
             }
         };
         if result.is_err() {
@@ -599,6 +599,17 @@ mod tests {
     #[test]
     fn checkpoint_model_ledgers_round_trip_through_actual_durable_owner() {
         let proofs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
+        let prepared = std::process::Command::new("lake")
+            .args(["build", "Proofs.Conformance.EditorUndoCheckpoint"])
+            .current_dir(&proofs)
+            .output()
+            .unwrap();
+        assert!(
+            prepared.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&prepared.stdout),
+            String::from_utf8_lossy(&prepared.stderr)
+        );
         let output = std::process::Command::new("lake")
             .args([
                 "env",
@@ -611,7 +622,8 @@ mod tests {
             .unwrap();
         assert!(
             output.status.success(),
-            "{}",
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         let cases: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
