@@ -728,13 +728,6 @@ struct PersistedMessageShape {
     content: String,
 }
 
-async fn load_message_shapes(
-    node: &defra_node::EmbeddedNode,
-    session_id: &str,
-) -> Vec<PersistedMessageShape> {
-    load_message_shapes_in_scope(node, session_id, "did:test:test", None).await
-}
-
 async fn load_message_shapes_in_scope(
     node: &defra_node::EmbeddedNode,
     session_id: &str,
@@ -1186,7 +1179,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         &session_id,
         "Review background completion",
         "scheduled",
-        chrono::Utc::now().to_rfc3339(),
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
             identity.did(),
             &request_id,

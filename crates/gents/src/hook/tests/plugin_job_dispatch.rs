@@ -285,7 +285,7 @@ async fn bind_request_at_hop(
         session_id,
         "run",
         "interactive",
-        Utc::now().to_rfc3339(),
+        Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(identity.did()),
     );
     create.request_hop = hop;

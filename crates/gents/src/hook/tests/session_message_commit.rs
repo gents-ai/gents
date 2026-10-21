@@ -161,7 +161,6 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let did = identity.did().to_owned();
     enable_agents_tools(&node, &did).await;
     let hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
-    let session_id = hook.session_id().await.unwrap();
     bind_signed_hook_request(
         &hook,
         "request-commit-receipt-loss",
