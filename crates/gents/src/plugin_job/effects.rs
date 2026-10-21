@@ -408,8 +408,7 @@ fn same_fingerprint(existing: &StoredRequest, create: &AgentRequestCreate) -> bo
     existing.node_did.as_deref() == Some(create.node_did.as_str())
         && existing.agent_id.as_deref() == Some(create.agent_id.as_str())
         && existing.session_id.as_deref() == Some(create.session_id.as_str())
-        && existing.content.as_deref().map(content_digest).as_deref()
-            == Some(content_digest(&create.content).as_str())
+        && existing.content.as_deref().map(body_digest) == Some(body_digest(&create.content))
         && existing.request_hop == Some(i64::from(create.request_hop))
         && existing
             .input
@@ -418,8 +417,14 @@ fn same_fingerprint(existing: &StoredRequest, create: &AgentRequestCreate) -> bo
             == create.input.goal_assignment.as_ref()
 }
 
-fn content_digest(content: &str) -> String {
-    format!("{:x}", Sha256::digest(content.as_bytes()))
+/// The sender header carries its send time, so a re-staged message compares
+/// only what follows it.
+fn body_digest(content: &str) -> String {
+    let body = content
+        .strip_prefix("[message ")
+        .and_then(|rest| rest.split_once("]\n\n"))
+        .map_or(content, |(_, body)| body);
+    format!("{:x}", Sha256::digest(body.as_bytes()))
 }
 
 #[cfg(test)]
@@ -678,6 +683,8 @@ mod tests {
                 .unwrap();
         let cause = SessionMessageCause {
             caller_node_did: admission.node_did.clone(),
+            caller_agent_id: "caller-agent".to_owned(),
+            caller_session_id: "caller-session".to_owned(),
             caller_request_id: caller.request_id,
             caller_request_doc_id: request_doc_id,
             caller_hop: 0,
@@ -863,7 +870,7 @@ mod tests {
     async fn by_key(node: &std::sync::Arc<EmbeddedNode>, key: &str) -> Vec<serde_json::Value> {
         let query = format!(
             r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
-                _docID content request_hop
+                _docID content request_hop created_at
                 caused_by_parent_request_id caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
                 input
@@ -935,7 +942,16 @@ mod tests {
             .unwrap();
         let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["content"], "first");
+        assert_eq!(
+            rows[0]["content"],
+            format!(
+                "{}\n\nfirst",
+                crate::lifecycle::materialize::session_message_sender_header(
+                    &harness.cause,
+                    rows[0]["created_at"].as_str().unwrap()
+                )
+            )
+        );
         harness.close().await;
     }
 
@@ -1020,7 +1036,16 @@ mod tests {
         assert!(error.to_string().contains("integrity"), "{error:#}");
         let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["content"], "first");
+        assert_eq!(
+            rows[0]["content"],
+            format!(
+                "{}\n\nfirst",
+                crate::lifecycle::materialize::session_message_sender_header(
+                    &harness.cause,
+                    rows[0]["created_at"].as_str().unwrap()
+                )
+            )
+        );
         harness.close().await;
     }
 
@@ -1047,7 +1072,16 @@ mod tests {
         let key = job_message_key("root", "slot", 0, 3);
         let rows = by_key(&harness.node, &key).await;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["content"], "third");
+        assert_eq!(
+            rows[0]["content"],
+            format!(
+                "{}\n\nthird",
+                crate::lifecycle::materialize::session_message_sender_header(
+                    &harness.cause,
+                    rows[0]["created_at"].as_str().unwrap()
+                )
+            )
+        );
         assert!(
             by_key(&harness.node, &job_message_key("root", "slot", 0, 1))
                 .await
@@ -1066,7 +1100,16 @@ mod tests {
             .unwrap();
         let rows = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["content"], "guest prompt");
+        assert_eq!(
+            rows[0]["content"],
+            format!(
+                "{}\n\nguest prompt",
+                crate::lifecycle::materialize::session_message_sender_header(
+                    &harness.cause,
+                    rows[0]["created_at"].as_str().unwrap()
+                )
+            )
+        );
         let input = input_of(&rows[0]);
         assert_eq!(input["initial_title"]["text"], "Spawn Title");
         assert_eq!(input["cwd"], "/admitted");
