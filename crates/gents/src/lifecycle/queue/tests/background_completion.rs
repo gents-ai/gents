@@ -1310,17 +1310,10 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
         None,
         Some(TEST_AGENT_ID),
         true,
+        Some(8),
     )
     .await
     .unwrap();
-    let node_update = db
-        .node
-        .execute(&format!(
-            r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
-            escape_graphql_string(db.node_did())
-        ))
-        .await;
-    assert!(!node_update.has_errors(), "{:?}", node_update.errors);
     let parent = root_parent(&db, "wake-hop-refusal-session").await;
     let bound = 8;
     let hop_of = |doc_id: String| {

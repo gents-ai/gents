@@ -40,19 +40,6 @@ async fn update(node: &EmbeddedNode, collection: &str, doc_id: &str, fields: &st
     );
 }
 
-async fn set_hop_cap(node: &EmbeddedNode, node_did: &str, cap: u32) {
-    crate::document_config::upsert_node(node, node_did, None, Some("general"), true)
-        .await
-        .expect("ensure node configuration before setting hop cap");
-    let response = node
-        .execute(&format!(
-            r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: {cap} }}) {{ _docID }} }}"#,
-            escape_graphql_string(node_did)
-        ))
-        .await;
-    assert!(!response.has_errors(), "Node hop cap: {:?}", response.errors);
-}
-
 fn goal_status(case: &LeanR6BackgroundingCase) -> Option<GoalStatus> {
     case.goal_status.as_deref().map(|status| match status {
         "active" => GoalStatus::Active,
@@ -697,7 +684,9 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let admission = admitted_parent(case, "over-bound-redrive").await;
     let node = &admission.node;
     let did = admission.node_did.as_str();
-    set_hop_cap(node, did, 8).await;
+    crate::document_config::upsert_node(node, did, None, Some("general"), true, Some(8))
+        .await
+        .expect("set node hop cap");
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent = rows(
@@ -771,7 +760,10 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     assert_eq!(successor.len(), 1);
     let hop = successor[0]["request_hop"].as_u64().unwrap() as u32;
     assert_eq!(hop, over_bound);
-    assert!(!crate::lifecycle::request_hop_within_bound(Some(bound), hop));
+    assert!(!crate::lifecycle::request_hop_within_bound(
+        Some(bound),
+        hop
+    ));
     admission.node.shutdown().await;
     std::fs::remove_dir_all(admission.path).unwrap();
 }

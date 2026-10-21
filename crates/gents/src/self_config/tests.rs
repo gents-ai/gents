@@ -4003,7 +4003,7 @@ async fn agent_default_commits_through_the_agent_owner() {
     for agent in ["seed", "working"] {
         crate::test_support::install_test_agent(&node, &node_did, agent).await;
     }
-    crate::document_config::upsert_node(&node, &node_did, None, Some("seed"), true)
+    crate::document_config::upsert_node(&node, &node_did, None, Some("seed"), true, None)
         .await
         .unwrap();
     let mut tool_config = config(&["node"]);
@@ -4625,7 +4625,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let owner = identity.did().to_string();
     let seed_agent = "beh-test";
     crate::test_support::install_test_agent(&node, &owner, seed_agent).await;
-    crate::upsert_node(&node, &owner, None, Some(seed_agent), true)
+    crate::upsert_node(&node, &owner, None, Some(seed_agent), true, None)
         .await
         .expect("bind default agent");
 
@@ -7023,7 +7023,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
     for id in ["current", "default"] {
         crate::test_support::install_test_agent(&node, &owner, id).await;
     }
-    crate::document_config::upsert_node(&node, &owner, None, Some("default"), true)
+    crate::document_config::upsert_node(&node, &owner, None, Some("default"), true, None)
         .await
         .unwrap();
     let mut grants = config(&["node"]);

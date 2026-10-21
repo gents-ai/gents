@@ -35,7 +35,7 @@ async fn bind_default_agent_backend(
     agent_id: &str,
 ) {
     crate::test_support::install_test_agent(node, node_did, agent_id).await;
-    crate::upsert_node(node, node_did, None, Some(agent_id), true)
+    crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
         .await
         .unwrap();
     crate::backend_registry::set_backend_probe_status(
@@ -1291,7 +1291,7 @@ async fn bind_subscription_backend(
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     crate::test_support::install_test_agent(node, node_did, agent_id).await;
-    crate::upsert_node(node, node_did, None, Some(agent_id), true)
+    crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
         .await
         .unwrap();
     crate::backend_registry::set_backend_probe_status(

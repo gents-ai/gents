@@ -89,6 +89,7 @@ pub(crate) async fn upsert_node(
     display_name: Option<&str>,
     default_agent_id: Option<&str>,
     enabled: bool,
+    max_request_hop: Option<u32>,
 ) -> Result<()> {
     use super::serde_helpers::{default_display_name_for_did, normalize_optional_string};
     let escaped_node_did = escape_graphql_string(node_did);
@@ -99,6 +100,7 @@ pub(crate) async fn upsert_node(
     let default_agent_id = normalize_optional_string(default_agent_id)
         .map(|id| format!("\"{}\"", escape_graphql_string(id)))
         .unwrap_or_else(|| "null".to_string());
+    let max_request_hop = max_request_hop.map_or_else(|| "null".to_string(), |hop| hop.to_string());
     let escaped_created_by = escape_graphql_string(node_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
@@ -110,13 +112,15 @@ pub(crate) async fn upsert_node(
                     display_name: "{escaped_display_name}",
                     default_agent_id: {default_agent_id},
                     enabled: {enabled},
+                    max_request_hop: {max_request_hop},
                     created_at: "{created_at}",
                     created_by: "{escaped_created_by}"
                 }},
                 update: {{
                     display_name: "{escaped_display_name}",
                     default_agent_id: {default_agent_id},
-                    enabled: {enabled}
+                    enabled: {enabled},
+                    max_request_hop: {max_request_hop}
                 }}
             ) {{ _docID }}
         }}"#
