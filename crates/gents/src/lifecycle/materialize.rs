@@ -558,6 +558,33 @@ pub(crate) async fn build_session_message_request(
     queue: Option<gents_protocol::request_input::RequestQueue>,
     cwd: Option<String>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+    build_session_message_request_with_input(
+        cause,
+        target,
+        content,
+        title,
+        request_id,
+        retry_key,
+        hop,
+        gents_protocol::request_input::RequestInput {
+            queue,
+            cwd,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+pub(crate) async fn build_session_message_request_with_input(
+    cause: &SessionMessageCause,
+    target: &SessionMessageTarget,
+    content: &str,
+    title: Option<&str>,
+    request_id: &str,
+    retry_key: Option<String>,
+    hop: u32,
+    mut input: gents_protocol::request_input::RequestInput,
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     anyhow::ensure!(
         !cause.caller_request_id.trim().is_empty()
@@ -582,19 +609,14 @@ pub(crate) async fn build_session_message_request(
         execution_origin: ExecutionOrigin::Interactive,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     };
-    let input = gents_protocol::request_input::RequestInput {
-        selected_skill_ids: prompt_selection.selected_skill_ids,
-        initial_title: title
-            .map(str::trim)
-            .filter(|title| !title.is_empty())
-            .map(|text| gents_protocol::session::SessionTitle {
-                text: text.to_owned(),
-                source: gents_protocol::session::SessionTitleSource::Task,
-            }),
-        queue,
-        cwd,
-        ..Default::default()
-    };
+    input.selected_skill_ids = prompt_selection.selected_skill_ids;
+    input.initial_title = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(|text| gents_protocol::session::SessionTitle {
+            text: text.to_owned(),
+            source: gents_protocol::session::SessionTitleSource::Task,
+        });
     let spec = RequestSpec {
         trigger_lineage: TriggerLineage {
             correlation: cause.correlation.clone(),
