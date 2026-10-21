@@ -838,8 +838,10 @@ pub async fn interrupt_session(
                         requester_did.as_deref(),
                     )
                     .await?;
-                    crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
-                        .await?;
+                    if active.is_none() {
+                        crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
+                            .await?;
+                    }
                     Ok(active)
                 })
             },

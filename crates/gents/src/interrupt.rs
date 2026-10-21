@@ -166,6 +166,7 @@ async fn interrupt_request_matching_in_txn(
         .as_str()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow::anyhow!("interrupt request missing node identity"))?;
+    crate::goal::pause_goal_for_interrupt_in_txn(txn, node_did, session_id).await?;
     if row["interrupt_requested_at"]
         .as_str()
         .is_some_and(|value| !value.is_empty())
@@ -182,7 +183,6 @@ async fn interrupt_request_matching_in_txn(
         updated.len() == 1 && updated[0]["_docID"] == row["_docID"],
         "interrupt mutation did not update the selected physical request"
     );
-    crate::goal::pause_goal_for_interrupt_in_txn(txn, node_did, session_id).await?;
     drain_automated_wakeups_in_txn(
         txn,
         session_id,

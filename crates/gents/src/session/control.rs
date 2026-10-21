@@ -65,7 +65,6 @@ pub async fn stop_session(
                         == Some(&serde_json::Value::String(owner.doc_id.clone())),
                     "session stop latch was not committed to the selected session"
                 );
-                crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id).await?;
                 let drained_request_ids =
                     crate::lifecycle::queue::drain_all_pending_session_requests_in_txn(
                         txn,
@@ -82,6 +81,10 @@ pub async fn stop_session(
                     requester_did.as_deref(),
                 )
                 .await?;
+                if interrupted_request_id.is_none() {
+                    crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
+                        .await?;
+                }
                 Ok(SessionStopReceipt {
                     session_id,
                     status: if interrupted_request_id.is_some() {

@@ -45,13 +45,12 @@ def step? (target : AgentSession.Scope) (state : State) : Action → Option Stat
         let latched := interruptCurrent target state |>.getD state
         some { latched with
           queue := latched.queue.drainAllPending
-          goal := pauseGoal latched.goal
           stopped := true }
       else none
   | .resume =>
       if state.queue.scope = target ∧
-          ((state.request.isNone || state.request.all fun request =>
-            decide (request.state ≠ .claimed ∧ request.state ≠ .processing)) = true) then
+          (state.request.all fun request =>
+            decide (request.state ≠ .claimed ∧ request.state ≠ .processing)) = true then
         some { state with goal := resumeGoal state.goal, stopped := false }
       else none
   | .enqueue entry =>
