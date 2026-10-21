@@ -24,6 +24,16 @@
 
   <key>ProcessType</key>
   <string>Interactive</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>65536</integer>
+  </dict>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>65536</integer>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
