@@ -177,8 +177,8 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     let data = crate::ConfigAccess::local(node.clone()).execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}}, lifecycle_state: {{_eq: "running"}} }}) {{ _docID tool_call_id }} }}"#,
         crate::graphql::escape_graphql_string(&request_id),
-    ), "concurrent background admission results").await.unwrap();
-    assert_eq!(data["AgentToolCall"].as_array().unwrap().len(), admitted.len());
+    )).await.unwrap();
+    assert_eq!(data["data"]["AgentToolCall"].as_array().unwrap().len(), admitted.len());
     for (index, child) in admitted.iter().enumerate() {
         let args = json!({"tool_call_id": child}).to_string();
         let result = invoke(&hook, &format!("cancel-concurrent-{index}"), "cancel_process", &args).await;
