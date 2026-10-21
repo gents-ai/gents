@@ -336,7 +336,13 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         .goals
         .iter()
         .filter(|row| {
-            row.session_id == session_id && node_did.is_none_or(|node_did| row.node_did == node_did)
+            row.session_id == session_id
+                && node_did.is_none_or(|node_did| row.node_did == node_did)
+                && row
+                    .status
+                    .as_deref()
+                    .and_then(gents::goal::GoalStatus::parse)
+                    != Some(gents::goal::GoalStatus::Stopped)
         })
         .min_by(|left, right| {
             left.created_at
