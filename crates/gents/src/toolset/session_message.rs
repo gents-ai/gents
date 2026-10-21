@@ -231,7 +231,7 @@ impl Tool for AgentInterruptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Stop an agent session's current turn without sending it a message. Allowed only for sessions this conversation started; the session stays available for agent_message."
+            description: "Interrupt the current turn and pause its Goal, preserving ordinary queued messages. Allowed only for sessions this conversation started. agent_message queues further input; agent_resume resumes paused Goal work."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
