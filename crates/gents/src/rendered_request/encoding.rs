@@ -589,7 +589,7 @@ pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
 pub(crate) fn resolve_manifest_with_limit<F>(
     fuel: usize,
     stored: &str,
-    mut fetch_block: F,
+    fetch_block: F,
 ) -> Result<Value>
 where
     F: FnMut(&ManifestEntry) -> Result<(Vec<u8>, String)>,
@@ -598,11 +598,22 @@ where
         DecodedRecord::Manifest { blocks } => blocks,
         _ => anyhow::bail!("capture record is not a block manifest"),
     };
+    resolve_manifest_blocks(fuel, &blocks, fetch_block)
+}
+
+fn resolve_manifest_blocks<F>(
+    fuel: usize,
+    blocks: &[ManifestEntry],
+    mut fetch_block: F,
+) -> Result<Value>
+where
+    F: FnMut(&ManifestEntry) -> Result<(Vec<u8>, String)>,
+{
     let mut remaining = fuel;
     let mut assembled = Vec::new();
     anyhow::ensure!(remaining > 0, "capture manifest exhausted resolution fuel");
     remaining -= 1;
-    for entry in &blocks {
+    for entry in blocks {
         anyhow::ensure!(remaining > 0, "capture manifest exhausted resolution fuel");
         remaining -= 1;
         let (bytes, actual_commit) = fetch_block(entry)?;
@@ -919,7 +930,7 @@ pub(crate) fn resolve_capture_with<B, F>(
     stored: &str,
     kind: CapturePayloadKind,
     mut fetch_base: F,
-    mut fetch_block: B,
+    fetch_block: B,
 ) -> Result<Value>
 where
     F: FnMut(&BaseWitness) -> Result<(u32, String, String)>,
@@ -936,20 +947,13 @@ where
                 Ok((2, select_container_record(&container, kind)?, commit))
             })
         }
-        3 | 4 => {
-            let selected = select_container_record(stored, kind)?;
-            match decode_capture_record(capture_version, stored, kind)? {
-                DecodedRecord::Tree(tree) if capture_version == 4 => {
-                    resolve_tree(tree, fetch_block)
-                }
-                DecodedRecord::Manifest { .. } => {
-                    resolve_manifest_with_limit(MANIFEST_RESOLUTION_FUEL, &selected, |entry| {
-                        fetch_block(entry)
-                    })
-                }
-                _ => anyhow::bail!("v3 capture record is not a block manifest"),
+        3 | 4 => match decode_capture_record(capture_version, stored, kind)? {
+            DecodedRecord::Tree(tree) => resolve_tree(tree, fetch_block),
+            DecodedRecord::Manifest { blocks } => {
+                resolve_manifest_blocks(MANIFEST_RESOLUTION_FUEL, &blocks, fetch_block)
             }
-        }
+            _ => anyhow::bail!("capture version does not match manifest format"),
+        },
         other => anyhow::bail!("unsupported rendered-request capture version {other}"),
     }
 }
