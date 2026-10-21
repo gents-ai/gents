@@ -726,14 +726,23 @@ pub(super) async fn step_context_for(
 async fn max_request_hop_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Option<u32>> {
     let response = txn
         .execute(&format!(
-            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ max_request_hop }} }}"#,
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ max_request_hop }} }}"#,
             escape_graphql_string(node_did)
         ))
         .await?;
-    Ok(response
-        .pointer("/data/Node/0/max_request_hop")
-        .and_then(Value::as_u64)
-        .and_then(|hop| u32::try_from(hop).ok()))
+    let rows = response
+        .pointer("/data/Node")
+        .and_then(Value::as_array)
+        .context("Node hop-cap query returned no row array")?;
+    anyhow::ensure!(rows.len() <= 1, "multiple Node rows matched a DID");
+    match rows.first().map(|row| &row["max_request_hop"]) {
+        None | Some(Value::Null) => Ok(None),
+        Some(hop) => hop
+            .as_u64()
+            .and_then(|hop| u32::try_from(hop).ok())
+            .map(Some)
+            .context("Node.max_request_hop must be a nonnegative u32"),
+    }
 }
 
 async fn read_lifecycle_state(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<String> {
