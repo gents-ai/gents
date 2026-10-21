@@ -113,14 +113,6 @@ async fn serve_image(
         && !matches!(selection, FileImageSelection::Rejected)
         && delivered == HydrationDeliveryResult::Indeterminate
     {
-        debug_assert!(completed_image_selection(
-            &selection,
-            before,
-            false,
-            delivered,
-            HydrationTerminalWriteResult::NotAttempted
-        )
-        .is_none());
         return Ok(());
     }
     let after = store.authorized(demand, &fence).await?;
@@ -149,20 +141,10 @@ async fn commit_image_result(
     } else {
         ""
     };
-    let write = store.commit(row, &terminal, detail).await;
-    let actual = completed_image_selection(
-        selection,
-        before,
-        after,
-        delivered,
-        if write.is_ok() {
-            HydrationTerminalWriteResult::Committed
-        } else {
-            HydrationTerminalWriteResult::Failed
-        },
-    );
-    debug_assert_eq!(actual, write.as_ref().ok().map(|_| terminal));
-    write.context("commit file-image hydration receipt")
+    store
+        .commit(row, &terminal, detail)
+        .await
+        .context("commit file-image hydration receipt")
 }
 
 #[derive(Deserialize)]
