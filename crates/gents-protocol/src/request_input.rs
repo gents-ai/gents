@@ -65,6 +65,18 @@ impl RequestInput {
         !prose.trim().is_empty() || !self.captured_context.is_empty()
     }
 
+    /// A retry or queue edit is a new physical request in the same session.
+    /// Resolve an opening request's self reference before signing the successor.
+    pub fn reissued(&self, source_doc_id: &str) -> Self {
+        Self {
+            goal_assignment: self
+                .goal_assignment
+                .as_ref()
+                .map(|reference| reference.continuation(source_doc_id)),
+            ..self.clone()
+        }
+    }
+
     pub fn authored_message(&self, prose: &str) -> anyhow::Result<crate::message::Message> {
         use crate::message::{Message, UserContent};
         let mut content = Vec::with_capacity(self.captured_context.len() + 1);

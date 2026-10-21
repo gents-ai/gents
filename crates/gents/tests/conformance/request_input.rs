@@ -49,6 +49,13 @@ fn runtime_continuation_inputs_match_the_lean_owner() {
             expected,
             "{name}"
         );
+        let expected_reissued: RequestInput =
+            serde_json::from_value(case["expected_reissued_input"].clone()).unwrap();
+        assert_eq!(
+            parent.reissued(case["reissued_source_doc_id"].as_str().unwrap()),
+            expected_reissued,
+            "{name}: same-session reissuance"
+        );
     }
 }
 
