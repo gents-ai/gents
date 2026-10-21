@@ -2289,38 +2289,18 @@ pub(crate) async fn pause_goal_for_interrupt_in_txn(
         return Ok(());
     };
     let state = goal.state().context("Goal has an unknown status")?;
-    let Some(paused) = state.step(GoalAction::Pause) else {
-        return Ok(());
-    };
-    let now = Utc::now();
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let owner = escape_graphql_string(node_did);
-    let status = escape_graphql_string(
-        goal.parsed_status()
-            .context("Goal has an unknown status")?
-            .as_str(),
-    );
-    let sequence = goal.continuation_sequence();
-    let active_time = goal.current_active_time_seconds(now);
-    let updated_at = escape_graphql_string(&now.to_rfc3339());
-    let response = txn
-        .execute(&format!(
-            r#"mutation {{ update_Goal(filter: {{
-                _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{owner}" }},
-                status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }}
-            }}, input: {{ status: "{}", active_time_seconds: {active_time},
-                active_started_at: null, updated_at: "{updated_at}" }}) {{ _docID }} }}"#,
-            paused.status.as_str()
-        ))
+    if state.step(GoalAction::Pause).is_some() {
+        set_goal_in_txn(
+            txn,
+            node_did,
+            session_id,
+            None,
+            Some(GoalStatus::Paused),
+            None,
+            None,
+        )
         .await?;
-    let rows = response
-        .pointer("/data/update_Goal")
-        .and_then(serde_json::Value::as_array)
-        .context("Goal interrupt pause omitted affected rows")?;
-    anyhow::ensure!(
-        rows.len() == 1 && rows[0]["_docID"] == goal.doc_id,
-        "Goal changed while the interrupt pause was being committed"
-    );
+    }
     Ok(())
 }
 
