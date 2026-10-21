@@ -1030,6 +1030,7 @@ pub(crate) struct LeanPluginJobRecoveryCase {
     pub(crate) stale: bool,
     pub(crate) measure_before: u32,
     pub(crate) measure_after: u32,
+    pub(crate) step_commit_allowed: bool,
     pub(crate) expected_row: LeanPluginJobRecoveryRow,
 }
 
@@ -1037,6 +1038,7 @@ pub(crate) struct LeanPluginJobRecoveryCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobRecoveryRow {
     pub(crate) running: bool,
+    pub(crate) session_stopped: bool,
     pub(crate) terminal_children: u32,
     pub(crate) observed: u32,
     pub(crate) live: u32,
