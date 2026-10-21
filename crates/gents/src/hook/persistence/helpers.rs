@@ -36,17 +36,6 @@ fn decode_live_backgrounded_rows(value: serde_json::Value) -> anyhow::Result<usi
         || (row.lifecycle_state == "pending" && row.spawned_by_tool_call_doc_id.is_some())).count())
 }
 
-pub(super) async fn count_live_backgrounded_rows(
-    node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    request_doc_id: &str,
-) -> anyhow::Result<usize> {
-    count_live_backgrounded_rows_in(
-        &crate::config_client::ConfigAccess::local(node.clone()),
-        request_doc_id,
-    )
-    .await
-}
-
 /// The caller request's backgrounded tool rows that have not ended, read
 /// through `reader` so an adoption counts them inside its transaction.
 pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::ConfigRead>(

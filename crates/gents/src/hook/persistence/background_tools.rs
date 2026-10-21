@@ -122,21 +122,6 @@ impl DefraSessionHook {
             .await;
         };
 
-        let parent_request_doc_id = parent_lifecycle
-            .request_doc_id()
-            .context("spawn_process parent lacks physical request identity")?;
-        let live_count = count_live_backgrounded_rows(&self.node, parent_request_doc_id).await?;
-        if live_count >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return complete_spawn_process_failure(
-                self,
-                &mut parent_lifecycle,
-                FailureClass::ArgumentInvalid,
-                background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, live_count),
-                None,
-            )
-            .await;
-        }
-
         let target_tool_name = target_name.to_string();
         let target_args = serde_json::to_string(&parsed.args)?;
         if let Err(error) = target_tool.admit(&target_args) {
