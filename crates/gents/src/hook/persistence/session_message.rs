@@ -243,13 +243,13 @@ impl DefraSessionHook {
         if target.node_did == caller.node_did {
             let max_request_hop =
                 crate::request_admission::max_request_hop(&self.node, &caller.node_did).await?;
-            if let Some(max_request_hop) = max_request_hop.filter(|bound| {
-                !crate::lifecycle::request_hop_within_bound(Some(*bound), plan.hop())
-            }) {
-                refuse!(
-                    FailureClass::ArgumentInvalid,
-                    hop_exceeded_payload(tool_name, plan.hop(), max_request_hop)
-                );
+            if !crate::lifecycle::request_hop_within_bound(max_request_hop, plan.hop()) {
+                if let Some(max_request_hop) = max_request_hop {
+                    refuse!(
+                        FailureClass::ArgumentInvalid,
+                        hop_exceeded_payload(tool_name, plan.hop(), max_request_hop)
+                    );
+                }
             }
         }
         let receipt =
