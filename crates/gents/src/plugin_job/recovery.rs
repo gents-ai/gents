@@ -716,6 +716,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stall_kill_rereads_the_facts_before_it_kills() {
+        let step = stepper(json!({"effects": {}})).await;
+        fresh_spawn(&step, &step.row, "live-1").await;
+        let driver = driver_of(&step);
+        let pin = read_pin(&step.job.access, &step.row)
+            .await
+            .unwrap()
+            .unwrap();
+        let stored = step
+            .job
+            .access
+            .execute(&format!(
+                r#"{{ AgentToolCall(docID: "{}") {{ request_doc_id }} }}"#,
+                escape_graphql_string(&step.row)
+            ))
+            .await
+            .unwrap();
+        let request_doc_id = stored["data"]["AgentToolCall"][0]["request_doc_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let killed = kill_at_rest(&driver, &step.job.access, &step.row, &request_doc_id, &pin)
+            .await
+            .unwrap();
+        assert!(!killed, "the re-read shows a live child");
+        assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
+        step.close().await;
+    }
+
+    #[tokio::test]
     async fn one_tick_steps_each_row_at_most_once() {
         let mut step = stepper(json!({"effects": {}})).await;
         let other = pinned_row(&mut step, "call-2", now_ms(), None).await;
