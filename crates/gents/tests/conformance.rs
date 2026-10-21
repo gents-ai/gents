@@ -40,7 +40,7 @@ use lean_vocab_test::{
     lean_interrupt_disposition_cases, lean_mcp_health_cases, lean_queue_deadline_cases,
     lean_r4c_background_work_cases, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
-    lean_request_transition_cases, lean_restart_disposition_cases, lean_startup_readiness_cases,
+    lean_request_transition_cases, lean_restart_disposition_cases, lean_session_control_cases, lean_startup_readiness_cases,
     lean_tool_output_paging_cases, lean_transcript_cases, lean_vocabulary_values,
     LeanEventDeliveryAction, LeanLifecycleTransitionCase,
 };
