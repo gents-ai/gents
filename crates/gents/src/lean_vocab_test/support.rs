@@ -96,7 +96,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) trigger_delivery: serde_json::Value,
     pub(crate) operator_base_freeze_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
-    pub(crate) workspace_change_review_cases: Vec<serde_json::Value>,
     pub(crate) file_image_hydration_cases: Vec<serde_json::Value>,
     pub(crate) file_image_hydration_route_cases: Vec<serde_json::Value>,
     pub(crate) file_review_subscription_cases: Vec<serde_json::Value>,

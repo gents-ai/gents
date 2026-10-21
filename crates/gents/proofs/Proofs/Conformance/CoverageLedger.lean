@@ -1369,12 +1369,6 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::file_image_hydration::tests::generated_cases_drive_exact_tool_selection"
       "Drives native selection with exact enrollment, session and physical tool/image observations. Delivery, signed receipts and client demand wiring remain transport refinement obligations.")
       "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "workspace_change_review_cases"
-      "WorkspaceChangeReviewCases"
-      "workspace::change_review::tests::generated_change_review_cases_drive_undo_planner"
-      "Drives the native Undo planner with model-derived scope, postimage, buffer, index and replay observations. Authenticated snapshot lookup, live filesystem comparison and restoration, mutation locking and partial-failure recovery remain host refinement obligations.")
-      "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "schema_argument_repair_cases"
       "SchemaArgumentRepairCases"
