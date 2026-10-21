@@ -488,7 +488,7 @@ mod tests {
         use std::collections::BTreeMap;
         let (stored, blocks) = manifest_capture();
         let byte_len = blocks[0].2.len();
-        let version = gents_protocol::rendered_request::CAPTURE_VERSION;
+        let version = 3;
 
         let mut failing = ManifestStore::healthy(&blocks);
         failing.fail_queries = true;
@@ -623,7 +623,7 @@ mod tests {
         let turn_n = encode_turn(&misreferenced);
         let turn_m = encode_turn(&entries);
 
-        let version = gents_protocol::rendered_request::CAPTURE_VERSION;
+        let version = 3;
         let mut cache = CaptureReadCache::default();
         let error = decode_capture_json_from_cached(
             &store,

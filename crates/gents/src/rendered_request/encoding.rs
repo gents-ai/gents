@@ -1011,6 +1011,24 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn version_selects_manifest_format_before_any_reads() {
+        let entry = ManifestEntry {
+            doc_id: "block".into(), content_key: "hash".into(),
+            field_commit_cid: "commit".into(), byte_len: 2,
+        };
+        let flat = encode_manifest(&[entry.clone()]).unwrap();
+        let tree = encode_tree(ManifestTree { root: entry, height: 0, leaves: 1 }).unwrap();
+        let flat = encode_container(&flat, &flat).unwrap();
+        let tree = encode_container(&tree, &tree).unwrap();
+        for kind in [CapturePayloadKind::RequestBody, CapturePayloadKind::ProvenancePayload] {
+            assert!(decode_capture_record(3, &flat, kind).is_ok());
+            assert!(decode_capture_record(4, &tree, kind).is_ok());
+            assert!(decode_capture_record(3, &tree, kind).is_err());
+            assert!(decode_capture_record(4, &flat, kind).is_err());
+        }
+    }
+
+    #[test]
     fn compressed_records_preserve_full_delta_and_commit_witnesses() {
         let base = json!({"messages": (0..400).map(|i| format!("message {i}: {}", "payload ".repeat(20))).collect::<Vec<_>>()});
         let mut next = base.clone();
