@@ -57,6 +57,17 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
             item.content.length,
             item.lifecycleState ?? "",
           ];
+        case "requestContextReductionSummary":
+          return [
+            item.kind,
+            item.itemKey,
+            item.reductionCount,
+            item.compactedCount,
+            item.repairedCount,
+            item.latestTimestamp ?? "",
+          ];
+        case "sessionCompaction":
+          return [item.kind, item.itemKey, item.messagesCompacted ?? -1];
         case "toolGroup":
           return [
             item.kind,

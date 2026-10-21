@@ -393,19 +393,16 @@ pub enum RenderedTimelineItem {
         tools: Vec<RenderedToolCallView>,
     },
     #[serde(rename_all = "camelCase")]
-    ModelInputReduction {
+    RequestContextReductionSummary {
         item_key: String,
         sequence: i64,
+        request_doc_id: String,
         request_id: String,
-        call_id: String,
-        call_sequence: i64,
-        turn_index: i64,
-        attempt: i64,
-        reason: String,
-        estimated_input_tokens: i64,
-        pre_compaction_input_tokens: Option<i64>,
-        compaction_threshold_tokens: i64,
-        timestamp: Option<String>,
+        reduction_count: i64,
+        compacted_count: i64,
+        repaired_count: i64,
+        latest_estimated_input_tokens: Option<i64>,
+        latest_timestamp: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     SessionCompaction {
