@@ -1018,9 +1018,9 @@ pub(crate) struct LeanPluginJobLineageCase {
     pub(crate) queries: Vec<LeanPluginJobLineageQuery>,
 }
 
-/// `Conformance.PluginJob.recoveryCasesJson`: one running plugin-job row, the
-/// registered sweep's staleness verdict and measures, and the row after one
-/// tick (`pluginJobRecover ∘ pluginJobRecover`).
+/// `Conformance.PluginJob.recoveryCasesJson`: plugin-job rows, the registered
+/// sweep's staleness verdict and measures, and the row after one tick
+/// (`pluginJobRecover ∘ pluginJobRecover`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobRecoveryCase {
@@ -1032,6 +1032,7 @@ pub(crate) struct LeanPluginJobRecoveryCase {
     pub(crate) measure_before: u32,
     pub(crate) measure_after: u32,
     pub(crate) step_commit_allowed: bool,
+    pub(crate) step_invocation_allowed: bool,
     pub(crate) expected_row: LeanPluginJobRecoveryRow,
 }
 

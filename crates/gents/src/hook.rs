@@ -109,6 +109,7 @@ impl BackgroundToolRegistry {
 struct BackgroundExecution {
     cancellation_token: CancellationToken,
     completion_tx: watch::Sender<bool>,
+    tool_call_doc_id: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -205,26 +206,45 @@ impl BackgroundExecutionRegistry {
         self.process_records.list()
     }
 
+    pub(crate) fn try_process_record_list(
+        &self,
+    ) -> anyhow::Result<Vec<crate::managed_exec::ownership::ProcessRecord>> {
+        self.process_records.try_list()
+    }
+
     pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {
         if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
             let observed = record
                 .identity
                 .await_leader_exit(crate::managed_exec::ownership::KILL_GRACE)
                 .await;
-            if observed == crate::managed_exec::ownership::ProcessObservation::Running {
+            if observed.retain_process_record() {
                 tracing::warn!(
                     tool_call_id,
                     pid = record.identity.pid,
-                    "background process outlived its execution; keeping its record"
+                    observation = ?observed,
+                    "background process group is not proven exited; keeping its record"
                 );
                 return;
             }
+            self.process_records.remove(tool_call_id);
         }
-        self.process_records.remove(tool_call_id);
     }
 
     pub(crate) fn forget_process_record(&self, tool_call_id: &str) {
-        self.process_records.remove(tool_call_id);
+        if let Some(record) = self.process_records.read(tool_call_id) {
+            let observed = record.identity.observe();
+            if observed.retain_process_record() {
+                tracing::warn!(
+                    tool_call_id,
+                    pid = record.identity.pid,
+                    observation = ?observed,
+                    "background process group is not proven exited; keeping its record"
+                );
+                return;
+            }
+            self.process_records.remove(tool_call_id);
+        }
     }
 
     pub(crate) async fn stop_execution(
@@ -305,12 +325,22 @@ impl BackgroundExecutionRegistry {
         tool_call_id: String,
         cancellation_token: CancellationToken,
     ) -> BackgroundExecutionReservation {
+        self.reserve_scoped(tool_call_id, None, cancellation_token)
+    }
+
+    pub(crate) fn reserve_scoped(
+        &self,
+        tool_call_id: String,
+        tool_call_doc_id: Option<String>,
+        cancellation_token: CancellationToken,
+    ) -> BackgroundExecutionReservation {
         let (completion_tx, _) = watch::channel(false);
         self.lock_executions().insert(
             tool_call_id.clone(),
             BackgroundExecution {
                 cancellation_token,
                 completion_tx,
+                tool_call_doc_id,
             },
         );
         BackgroundExecutionReservation {
@@ -327,6 +357,13 @@ impl BackgroundExecutionRegistry {
 
     pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
         self.lock_executions().contains_key(tool_call_id)
+    }
+
+    pub(crate) fn active_tool_calls(&self) -> Vec<(String, Option<String>)> {
+        self.lock_executions()
+            .iter()
+            .map(|(id, execution)| (id.clone(), execution.tool_call_doc_id.clone()))
+            .collect()
     }
 
     pub async fn wait_for_completion(&self, tool_call_id: &str) {

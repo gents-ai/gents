@@ -65,6 +65,7 @@ def processStopCaseJson (witness : ProcessStopCase) : String :=
     ++ "\"before\":" ++ jsonString witness.before ++ ","
     ++ "\"after\":" ++ jsonString witness.after ++ ","
     ++ "\"may_terminate\":" ++ boolString witness.mayTerminate ++ ","
+    ++ "\"retain_record\":" ++ boolString witness.retainRecord ++ ","
     ++ "\"outcome\":" ++ jsonString witness.outcome ++ ","
     ++ "\"cancel_reply\":" ++ jsonString witness.cancelReply
     ++ "}"

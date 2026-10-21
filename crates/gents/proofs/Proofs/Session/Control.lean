@@ -12,6 +12,7 @@ structure State where
   request : Option RequestContext
   goal : Goals.State
   stopped : Bool
+  ownedBackgroundRunning : Bool
   deriving Repr
 
 inductive Action where
@@ -20,6 +21,7 @@ inductive Action where
   | resume
   | enqueue (entry : QueueEntry)
   | claim
+  | settleOwnedBackground
   deriving DecidableEq, Repr
 
 def pauseGoal (goal : Goals.State) : Goals.State :=
@@ -49,9 +51,13 @@ def step? (target : AgentSession.Scope) (state : State) : Action → Option Stat
       else none
   | .resume =>
       if state.queue.scope = target ∧
-          (state.request.all fun request =>
-            decide (request.state ≠ .claimed ∧ request.state ≠ .processing)) = true then
+          state.ownedBackgroundRunning = false ∧
+          ((state.request.isNone || state.request.all fun request =>
+            decide (request.state ≠ .claimed ∧ request.state ≠ .processing)) = true) then
         some { state with goal := resumeGoal state.goal, stopped := false }
+      else none
+  | .settleOwnedBackground =>
+      if state.queue.scope = target then some { state with ownedBackgroundRunning := false }
       else none
   | .enqueue entry =>
       if state.queue.scope = target ∧ state.stopped = false then
@@ -106,7 +112,8 @@ def initial : State :=
         blockedAudits := 1
         wrapupRequested := false
         wrapupCompleted := false }
-    stopped := false }
+    stopped := false
+    ownedBackgroundRunning := false }
 
 def idleInterruptInitial : State :=
   { initial with
@@ -137,6 +144,17 @@ example : (step? scope ((step? scope initial .stop).getD initial) (.enqueue wake
   native_decide
 
 example : (step? scope ((step? scope initial .stop).getD initial) .resume).isNone = true := by
+  native_decide
+
+def terminalParentWithRunningBackground : State :=
+  { queuedStopPost with
+    request := none
+    ownedBackgroundRunning := true }
+
+example : (step? scope terminalParentWithRunningBackground .resume).isNone = true ∧
+    ((step? scope
+      ((step? scope terminalParentWithRunningBackground .settleOwnedBackground).getD
+        terminalParentWithRunningBackground) .resume).getD terminalParentWithRunningBackground).stopped = false := by
   native_decide
 
 example : ((step? scope

@@ -35,11 +35,25 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-meter")).toHaveTextContent("0 compactions");
   });
 
+  it("keeps compact compaction status short and accessible", () => {
+    render(<SessionContext context={context()} compact />);
+    const meter = screen.getByTestId("context-meter-compact");
+    expect(meter).toHaveTextContent("?");
+    expect(meter).toHaveAccessibleName(/Session compactions unavailable/);
+  });
+
   it("shows the configured window the next request runs with, not the last request's", () => {
     render(
       <SessionContext
         context={context({
           lastRequest: {
+            requestId: "request-1",
+            callId: "call-1",
+            callSequence: 1,
+            turnIndex: 2,
+            attempt: 0,
+            estimator: "wire-estimate",
+            estimatedInputTokens: 420,
             contextWindow: 128_000,
             compactionThresholdTokens: 102_400,
           } as Context["lastRequest"],
@@ -106,6 +120,7 @@ describe("session context meter (#1618)", () => {
     render(
       <SessionContext
         context={context({
+          sessionCompactionCount: 1,
           compactions: [
             {
               compactionKey: "session:1",

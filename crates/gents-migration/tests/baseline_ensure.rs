@@ -103,6 +103,107 @@ async fn fresh_node_runtime_baseline_is_diagnostics_only() {
 }
 
 #[tokio::test]
+async fn existing_agent_session_schema_upgrades_in_place_and_preserves_rows() {
+    let node = fresh_node().await;
+    let legacy_sdl = gents_protocol::schemas::AGENT_SESSION
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("stopped_at:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    node.add_schema(&legacy_sdl)
+        .await
+        .expect("register pre-stop AgentSession schema");
+    let legacy = node
+        .get_collection(gents_protocol::schemas::AGENT_SESSION_NAME)
+        .expect("read legacy AgentSession schema")
+        .expect("legacy AgentSession exists");
+    assert_eq!(
+        legacy.version_id,
+        "bafyreietunsrqsijc3k6x3gf6y2nwkim74uf6j4lskv7p3pjrl44q4tthe"
+    );
+
+    let created = node
+        .execute(
+            r#"mutation {
+        add_AgentSession(input: {
+            session_id: "existing-session"
+            node_did: "node-before-stop"
+            agent_id: "agent-before-stop"
+            created_at: "2026-10-21T00:00:00Z"
+            title: "retained title"
+        }) {_docID}
+    }"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "seed existing session: {created:?}");
+    let old_doc_id = created.data.unwrap()["add_AgentSession"][0]["_docID"]
+        .as_str()
+        .expect("created session document ID")
+        .to_owned();
+    let old_field_ids = legacy
+        .fields
+        .iter()
+        .map(|field| (field.name.clone(), field.id.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let first = ensure_migrations(node.as_ref())
+        .await
+        .expect("append stopped_at to existing AgentSession schema");
+    assert!(first.steps_applied > 0);
+    let migrated = node
+        .get_collection(gents_protocol::schemas::AGENT_SESSION_NAME)
+        .expect("read upgraded AgentSession schema")
+        .expect("upgraded AgentSession exists");
+    assert_ne!(migrated.version_id, legacy.version_id);
+    for (name, id) in old_field_ids {
+        let current = migrated
+            .fields
+            .iter()
+            .find(|field| field.name == name)
+            .unwrap_or_else(|| panic!("existing field disappeared: {name}"));
+        assert_eq!(current.id, id, "AgentSession.{name} field ID changed");
+    }
+    assert!(migrated
+        .indexes
+        .iter()
+        .any(|index| index.name == "AgentSession_stopped_at_ASC"));
+
+    let read = node
+        .execute(
+            r#"{ AgentSession(filter: {session_id: {_eq: "existing-session"}}) {
+                _docID session_id node_did agent_id created_at title stopped_at
+            } }"#,
+        )
+        .await;
+    assert!(
+        !read.has_errors(),
+        "read upgraded session: {:?}",
+        read.errors
+    );
+    let row = read.data.as_ref().unwrap()["AgentSession"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .expect("preserved session row");
+    assert_eq!(row["session_id"], "existing-session");
+    assert_eq!(row["_docID"], old_doc_id);
+    assert_eq!(row["node_did"], "node-before-stop");
+    assert_eq!(row["agent_id"], "agent-before-stop");
+    assert_eq!(row["title"], "retained title");
+    assert!(row["stopped_at"].is_null());
+
+    let second = ensure_migrations(node.as_ref())
+        .await
+        .expect("recheck upgraded AgentSession schema");
+    assert_eq!(second.steps_applied, 0);
+    let repeated = node
+        .get_collection(gents_protocol::schemas::AGENT_SESSION_NAME)
+        .expect("read repeated AgentSession schema")
+        .expect("repeated AgentSession exists");
+    assert_eq!(repeated.version_id, migrated.version_id);
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn ensure_migrations_registers_baseline_and_is_idempotent() {
     let node = fresh_node().await;
     let report1 = ensure_migrations(node.as_ref())

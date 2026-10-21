@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use std::sync::Arc;
 
+use serde::Deserialize;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SessionStopReceipt {
     pub session_id: String,
@@ -101,11 +103,16 @@ pub async fn stop_session(
     .await
 }
 
+/// Resume uses the target node runtime's existing execution registry and job driver as quiescence
+/// witnesses; callers must not substitute fresh owners. This relies on the one-active-runtime-per-
+/// node operating convention while process and job ownership is checked with the session latch.
 pub async fn resume_session(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
+    background_executions: crate::hook::BackgroundExecutionRegistry,
+    job_driver: Arc<crate::plugin_job::driver::JobDriver>,
 ) -> Result<()> {
     anyhow::ensure!(
         !session_id.trim().is_empty() && !node_did.trim().is_empty(),
@@ -115,9 +122,15 @@ pub async fn resume_session(
         node.node_identity_did() == Some(node_did),
         "session resume is supported only on this node; remote control is unavailable"
     );
+    anyhow::ensure!(
+        Arc::ptr_eq(node, &job_driver.runtime().node),
+        "session resume requires the job driver owned by this node runtime"
+    );
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
+    let background_executions = background_executions.clone();
+    let job_driver = job_driver.clone();
     let identity = Arc::new(crate::identity::RegisteredIdentity::from_registered_did(
         &node_did, None,
     )?);
@@ -131,6 +144,8 @@ pub async fn resume_session(
             let node_did = node_did.clone();
             let session_id = session_id.clone();
             let requester_did = requester_did.clone();
+            let background_executions = background_executions.clone();
+            let job_driver = job_driver.clone();
             Box::pin(async move {
                 let owner = crate::session::load_agent_session_row_in_txn(
                     txn,
@@ -140,6 +155,15 @@ pub async fn resume_session(
                 )
                 .await?
                 .context("cannot resume a missing or differently scoped session")?;
+                ensure_session_executions_settled_in_txn(
+                    txn,
+                    &node_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                    &background_executions,
+                    &job_driver,
+                )
+                .await?;
                 let doc_id = crate::graphql::escape_graphql_string(&owner.doc_id);
                 let scope = crate::session::session_scope_filter(
                     &node_did,
@@ -169,4 +193,165 @@ pub async fn resume_session(
         },
     )
     .await
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionToolCallScope {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    tool_call_id: String,
+    session_id: String,
+    node_did: Option<String>,
+    requester_did: Option<String>,
+}
+
+async fn ensure_session_executions_settled_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    background_executions: &crate::hook::BackgroundExecutionRegistry,
+    job_driver: &crate::plugin_job::driver::JobDriver,
+) -> Result<()> {
+    let filter = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ {filter}, lifecycle_state: {{ _nin: ["completed", "failed", "timedOut", "cancelled"] }} }}, limit: 1) {{ _docID }} }}"#
+        ))
+        .await?;
+    let value = response
+        .pointer("/data/AgentToolCall")
+        .and_then(serde_json::Value::as_array)
+        .context("session execution query omitted AgentToolCall rows; retry resume")?;
+    anyhow::ensure!(value.is_empty(), "session-owned request or tool execution is still settling; retry agent_resume after agent_session_read reports completion");
+    let malformed = txn
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ {filter}, lifecycle_state: {{ _eq: null }} }}, limit: 1) {{ _docID }} }}"#
+        ))
+        .await?;
+    let malformed = malformed
+        .pointer("/data/AgentToolCall")
+        .and_then(serde_json::Value::as_array)
+        .context("session lifecycle validation query omitted AgentToolCall rows; retry resume")?;
+    anyhow::ensure!(
+        malformed.is_empty(),
+        "session tool call has missing lifecycle state; retry resume after lifecycle repair"
+    );
+
+    // Snapshot synchronous owners after the transaction's exact-scope read. No mutex is held
+    // over an await; the durable stopped latch prevents new session admissions during resume.
+    let active_tool_calls = background_executions.active_tool_calls();
+    let process_records = background_executions.try_process_record_list().context(
+        "cannot verify retained process ownership before resume; retry after runtime recovery",
+    )?;
+    let in_flight_job_ids = job_driver.in_flight_row_ids();
+    for (id, doc_id) in &active_tool_calls {
+        let row = resolve_tool_call_scope_in_txn(txn, id, doc_id.as_deref())
+            .await?
+            .context("active background execution has no resolvable physical row; retry after runtime recovery")?;
+        anyhow::ensure!(row.tool_call_id == *id, "active background execution identity disagrees with its physical row; retry after runtime recovery");
+        if row.matches(node_did, session_id, requester_did) {
+            anyhow::bail!("session-owned background execution is still active; retry agent_resume after it settles");
+        }
+    }
+    for record in &process_records {
+        let row = resolve_tool_call_scope_in_txn(
+            txn,
+            &record.tool_call_id,
+            Some(&record.tool_call_doc_id),
+        )
+        .await?
+        .context(
+            "retained process record has no resolvable physical row; retry after runtime recovery",
+        )?;
+        anyhow::ensure!(row.tool_call_id == record.tool_call_id, "retained process record identity disagrees with its physical row; retry after runtime recovery");
+        if row.matches(node_did, session_id, requester_did)
+            && record.identity.observe()
+                != crate::managed_exec::ownership::ProcessObservation::Exited
+        {
+            anyhow::bail!("session-owned process has not been observed exited; retry agent_resume after settlement");
+        }
+    }
+    for doc_id in &in_flight_job_ids {
+        let row = resolve_tool_call_scope_in_txn(txn, "", Some(doc_id))
+            .await?
+            .context("in-flight plugin step has no resolvable physical row; retry after runtime recovery")?;
+        if row.matches(node_did, session_id, requester_did) {
+            anyhow::bail!("session-owned plugin job is still executing; retry agent_resume after its step settles");
+        }
+    }
+    Ok(())
+}
+
+impl SessionToolCallScope {
+    fn matches(&self, node_did: &str, session_id: &str, requester_did: Option<&str>) -> bool {
+        self.node_did.as_deref() == Some(node_did)
+            && self.session_id == session_id
+            && self.requester_did.as_deref() == requester_did
+    }
+}
+
+async fn resolve_tool_call_scope_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    tool_call_id: &str,
+    doc_id: Option<&str>,
+) -> Result<Option<SessionToolCallScope>> {
+    let filter = if let Some(doc_id) = doc_id {
+        format!(
+            "_docID: {{ _eq: \"{}\" }}",
+            crate::graphql::escape_graphql_string(doc_id)
+        )
+    } else {
+        anyhow::ensure!(
+            !tool_call_id.trim().is_empty(),
+            "active execution omitted its tool-call identity; retry resume"
+        );
+        format!(
+            "tool_call_id: {{ _eq: \"{}\" }}",
+            crate::graphql::escape_graphql_string(tool_call_id)
+        )
+    };
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ {filter} }}, showDeleted: true, limit: 2) {{
+            _docID tool_call_id session_id node_did requester_did lifecycle_state await_mode
+        }} }}"#
+        ))
+        .await?;
+    let value = response
+        .pointer("/data/AgentToolCall")
+        .and_then(serde_json::Value::as_array)
+        .context("active execution scope query omitted AgentToolCall rows; retry resume")?;
+    anyhow::ensure!(
+        value.len() <= 1,
+        "active execution identity is ambiguous; retry resume after ownership repair"
+    );
+    let Some(value) = value.first().cloned() else {
+        return Ok(None);
+    };
+    for field in [
+        "_docID",
+        "tool_call_id",
+        "session_id",
+        "node_did",
+        "requester_did",
+    ] {
+        anyhow::ensure!(
+            value.get(field).is_some(),
+            "active execution scope omitted {field}; retry resume after ownership repair"
+        );
+    }
+    let row: SessionToolCallScope = serde_json::from_value(value)
+        .context("active execution scope is malformed; retry resume after ownership repair")?;
+    anyhow::ensure!(
+        !row.doc_id.trim().is_empty()
+            && !row.tool_call_id.trim().is_empty()
+            && !row.session_id.trim().is_empty()
+            && row
+                .node_did
+                .as_deref()
+                .is_some_and(|did| !did.trim().is_empty()),
+        "active execution scope has empty identity; retry resume after ownership repair"
+    );
+    Ok(Some(row))
 }

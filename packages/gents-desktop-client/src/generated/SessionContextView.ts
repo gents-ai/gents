@@ -16,4 +16,4 @@ transcriptTotalsExact?: boolean | null, estimatedDurableTokens: number, estimate
  * Why the configured window is not usable; `context_window` is the
  * runtime default only.
  */
-contextWindowError?: string | null, compactionThreshold: number, compactionThresholdTokens: number, compactionStrategy: string, durableMessageCount: number, providerMessageCount: number, totalCompactedMessages: number, compactions: Array<SessionCompactionView>, lastRequest: SessionRequestContextView | null, };
+contextWindowError?: string | null, compactionThreshold: number, compactionThresholdTokens: number, compactionStrategy: string, durableMessageCount: number, providerMessageCount: number, totalCompactedMessages: number, sessionCompactionCount: number | null, requestReductionHistoryLoaded: boolean | null, compactions: Array<SessionCompactionView>, lastRequest: SessionRequestContextView | null, };

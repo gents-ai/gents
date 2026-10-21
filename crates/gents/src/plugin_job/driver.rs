@@ -264,24 +264,29 @@ enum Stepped {
 /// the step in one revision-checked transaction.
 pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutcome> {
     let access = ConfigAccess::local(runtime.node.clone());
-    let pin = read_pin(&access, row_doc_id)
-        .await?
-        .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
     let mut lifecycle = load_lifecycle(&access, row_doc_id).await?;
+    let row_running = lifecycle.is_running();
     // The precheck avoids invoking a guest for an already-stopped session;
     // `step_transaction` repeats this exact-scope read at the write boundary.
-    if crate::session::session_is_stopped(
-        &runtime.node,
-        lifecycle.node_did(),
-        lifecycle.session_id(),
-        lifecycle.requester_did(),
-    )
-    .await?
-    {
+    let session_stopped = row_running
+        && crate::session::session_is_stopped(
+            &runtime.node,
+            lifecycle.node_did(),
+            lifecycle.session_id(),
+            lifecycle.requester_did(),
+        )
+        .await?;
+    if !super::recovery::step_invocation_allowed(row_running, session_stopped) {
+        if !row_running {
+            return Ok(StepOutcome::Refused(Refusal::Terminal));
+        }
         let row = read_step_row(&access, row_doc_id).await?;
         kill(&access, &mut lifecycle, &row, KillCause::Stop).await?;
         return Ok(StepOutcome::Settled);
     }
+    let pin = read_pin(&access, row_doc_id)
+        .await?
+        .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
     let (namespace, name) = parse_coordinate(&pin.plugin_ref)?;
     let installed = match read_record(&runtime.home, namespace, name) {
         Ok(record) if record.digest == pin.engine_digest => record,
@@ -943,6 +948,15 @@ impl JobDriver {
     /// The handles every step of this runtime runs on.
     pub fn runtime(&self) -> &JobRuntime {
         &self.runtime
+    }
+
+    pub(crate) fn in_flight_row_ids(&self) -> Vec<String> {
+        self.in_flight
+            .lock()
+            .expect("in-flight rows lock")
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Wakes the row: starts its step, or marks it dirty when one is in flight.
@@ -2507,7 +2521,16 @@ pub(crate) mod tests {
             .join(".gents/workflows/runs")
             .join(&input.caller.tool_call_id)
             .join("notes.md");
-        assert_eq!(std::fs::read_to_string(file).unwrap(), "hello");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello");
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(
+            step.run(&step.row).await,
+            StepOutcome::Refused(Refusal::Terminal)
+        );
+        assert!(
+            !file.exists(),
+            "a stale kick of a terminal row must not invoke the guest and recreate scratch"
+        );
         step.close().await;
     }
 

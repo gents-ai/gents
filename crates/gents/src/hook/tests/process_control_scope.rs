@@ -1,4 +1,49 @@
 use super::*;
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unowned_live_process_group_keeps_the_retained_owner_record() {
+    use crate::lean_vocab_test::lean_process_stop_cases;
+    use crate::managed_exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
+
+    // The current test process proves the group is live; the impossible pid
+    // models a recorded leader that exited or was reused. No signal is sent.
+    let pgid = unsafe { libc::getpgid(0) };
+    assert!(pgid > 0);
+    let identity = ProcessIdentity {
+        pid: i32::MAX,
+        pgid,
+        start: "gone-leader".to_owned(),
+    };
+    let observed = identity.observe();
+    let case = lean_process_stop_cases()
+        .iter()
+        .find(|case| case.after == observed.as_str())
+        .expect("Lean has a process observation case");
+    assert_eq!(observed, ProcessObservation::Unowned);
+    assert!(
+        case.retain_record,
+        "Lean requires unverified ownership to persist"
+    );
+    assert_eq!(observed.retain_process_record(), case.retain_record);
+
+    let registry = BackgroundExecutionRegistry::default();
+    registry
+        .process_records
+        .write(&ProcessRecord {
+            tool_call_id: "stale-call".to_owned(),
+            tool_call_doc_id: "stale-doc".to_owned(),
+            identity,
+        })
+        .unwrap();
+    registry
+        .release_process_record("stale-call", "stale-doc")
+        .await;
+    assert!(registry.process_record("stale-call", "stale-doc").is_some());
+    registry.forget_process_record("stale-call");
+    assert!(registry.process_record("stale-call", "stale-doc").is_some());
+    registry.process_records.remove("stale-call");
+}
 use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 

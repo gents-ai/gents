@@ -65,6 +65,28 @@ function timelineItemUnchanged(
         previous.reconstruction.deniedDependencyDocId ===
           next.reconstruction.deniedDependencyDocId
       );
+    case "requestContextReductionSummary":
+      return (
+        next.kind === "requestContextReductionSummary" &&
+        previous.sequence === next.sequence &&
+        previous.requestDocId === next.requestDocId &&
+        previous.requestId === next.requestId &&
+        previous.reductionCount === next.reductionCount &&
+        previous.compactedCount === next.compactedCount &&
+        previous.repairedCount === next.repairedCount &&
+        previous.latestEstimatedInputTokens ===
+          next.latestEstimatedInputTokens &&
+        previous.latestTimestamp === next.latestTimestamp
+      );
+    case "sessionCompaction":
+      return (
+        next.kind === "sessionCompaction" &&
+        previous.sequence === next.sequence &&
+        previous.messagesCompacted === next.messagesCompacted &&
+        previous.originalTokens === next.originalTokens &&
+        previous.compactedTokens === next.compactedTokens &&
+        previous.timestamp === next.timestamp
+      );
     case "pendingUserTurn":
       return (
         next.kind === "pendingUserTurn" &&
@@ -121,6 +143,8 @@ function hasDurableSequence(item: RenderedTimelineItem): boolean {
   switch (item.kind) {
     case "userMessage":
     case "assistantMessage":
+    case "requestContextReductionSummary":
+    case "sessionCompaction":
     case "automatedInput":
       return item.sequence != null;
     case "toolGroup":

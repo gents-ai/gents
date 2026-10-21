@@ -209,18 +209,20 @@ impl DefraSessionHook {
             "spawned admission returned an unexpected stable process handle"
         );
         let cancellation_token = tokio_util::sync::CancellationToken::new();
-        let execution_reservation = self
-            .background_executions
-            .reserve(background_tool_call_id.clone(), cancellation_token.clone());
+        let execution_tool_doc_id = lifecycle
+            .doc_id()
+            .ok_or_else(|| anyhow::anyhow!("spawned background lifecycle lacks physical identity"))?
+            .to_owned();
+        let execution_reservation = self.background_executions.reserve_scoped(
+            background_tool_call_id.clone(),
+            Some(execution_tool_doc_id.clone()),
+            cancellation_token.clone(),
+        );
         lifecycle.start_running().await?;
 
         let node = self.node.clone();
         let live_outputs = self.background_live_outputs.clone();
         let execution_call_id = background_tool_call_id.clone();
-        let execution_tool_doc_id = lifecycle
-            .doc_id()
-            .ok_or_else(|| anyhow::anyhow!("spawned background lifecycle lacks physical identity"))?
-            .to_owned();
         let execution_session_id = session_id.clone();
         let execution_request_id = request_id.clone();
         let live_output_writer = live_outputs

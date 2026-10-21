@@ -1490,7 +1490,7 @@ private def renderLineage (c : LineageCase) : Json :=
 
 def lineageCasesJson : String := (toJson (lineageCases.map renderLineage)).compress
 
-/-- One running plugin-job row before a sweep tick. -/
+/-- One plugin-job row before a sweep tick or a stale observer invocation. -/
 structure RecoveryCase where
   name : String
   row : Recovery.PluginJobRow
@@ -1509,7 +1509,9 @@ def recoveryCases : List RecoveryCase :=
   , ⟨"plugin_job_stalled_at_rest_fails_closed", jobRow 2 2 0 0⟩
   , ⟨"plugin_job_live_child_not_stale", jobRow 1 1 1 0⟩
   , ⟨"plugin_job_stopped_session_kills_row",
-      { jobRow 1 1 1 0 with sessionStopped := true }⟩ ]
+      { jobRow 1 1 1 0 with sessionStopped := true }⟩
+  , ⟨"plugin_job_terminal_stale_kick_does_not_invoke_guest",
+      { jobRow 0 0 0 0 with running := false }⟩ ]
 
 /-- One tick of the registered sweep. -/
 def recoveryTick (row : Recovery.PluginJobRow) : Recovery.PluginJobRow :=
@@ -1531,7 +1533,8 @@ theorem recovery_regressions :
     recoveryCases.map recoveryVerdict =
       [ (true, 1, 0, true, 2), (true, 1, 0, false, 2), (true, 1, 0, true, 2)
       , (true, 1, 0, false, 1), (true, 1, 0, false, 1), (true, 1, 0, false, 2)
-      , (false, 0, 0, true, 1), (true, 1, 0, false, 1) ] := by
+      , (false, 0, 0, true, 1), (true, 1, 0, false, 1)
+      , (false, 0, 0, false, 0) ] := by
   native_decide
 
 private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
@@ -1549,6 +1552,8 @@ private def renderRecovery (c : RecoveryCase) : Json :=
     ("measure_before", toJson (recoveryMeasure c.row)),
     ("measure_after", toJson (recoveryMeasure after)),
     ("step_commit_allowed", toJson (Recovery.pluginJobStepCommitAllowed c.row.sessionStopped)),
+    ("step_invocation_allowed", toJson (Recovery.pluginJobStepInvocationAllowed
+      c.row.running c.row.sessionStopped)),
     ("expected_row", jobRowJson after)]
 
 def recoveryCasesJson : String := (toJson (recoveryCases.map renderRecovery)).compress

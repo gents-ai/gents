@@ -28,6 +28,10 @@ impl ProcessObservation {
     pub(crate) const fn may_terminate(self) -> bool {
         matches!(self, Self::Running)
     }
+
+    pub(crate) const fn retain_process_record(self) -> bool {
+        !matches!(self, Self::Exited)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,6 +311,51 @@ impl<R: HostRecord> HostRecordStore<R> {
             .filter_map(|path| std::fs::read(path).ok())
             .filter_map(|bytes| serde_json::from_slice::<R>(&bytes).ok())
             .collect()
+    }
+
+    pub(crate) fn try_list(&self) -> anyhow::Result<Vec<R>> {
+        let dir = match self {
+            Self::Volatile(records) => {
+                return Ok(Self::volatile(records).values().cloned().collect())
+            }
+            Self::Durable(dir) => dir,
+        };
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "cannot inspect process ownership records: {error}"
+                ))
+            }
+        };
+        let mut records = Vec::new();
+        for entry in entries {
+            let path = entry
+                .map_err(|error| {
+                    anyhow::anyhow!("cannot enumerate process ownership records: {error}")
+                })?
+                .path();
+            if !path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                continue;
+            }
+            let bytes = std::fs::read(&path).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot read process ownership record {}: {error}",
+                    path.display()
+                )
+            })?;
+            records.push(serde_json::from_slice::<R>(&bytes).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot decode process ownership record {}: {error}",
+                    path.display()
+                )
+            })?);
+        }
+        Ok(records)
     }
 }
 

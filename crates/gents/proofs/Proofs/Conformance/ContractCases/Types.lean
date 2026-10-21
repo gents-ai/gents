@@ -408,6 +408,7 @@ structure ProcessStopCase where
   before : String
   after : String
   mayTerminate : Bool
+  retainRecord : Bool
   outcome : String
   cancelReply : String
   deriving Repr
