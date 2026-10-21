@@ -912,6 +912,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         "orphaned_background_tool_interrupted_parent_to_cancelled",
         "orphaned_background_tool_unowned_process_to_failed",
         "orphaned_background_tool_exited_process_to_failed",
+        "orphaned_background_tool_session_stopped_to_cancelled",
     ] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
         assert_eq!(case.execution_registered, Some(false), "{name}");
@@ -950,6 +951,12 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
                 r#"deadline_at: "2020-01-01T00:00:00Z""#,
             )
             .await;
+        }
+        if case.owner_session_stopped == Some(true) {
+            crate::session::stop_session(
+                &admission.node, &admission.node_did, admission.tool.session_id(),
+                admission.tool.requester_did(),
+            ).await.unwrap();
         }
         let records = tempfile::tempdir().unwrap();
         let registry = crate::BackgroundExecutionRegistry::default()
@@ -997,6 +1004,10 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             Some("deadlineExceeded" | "parentTerminal" | "processLost") => {
                 assert_eq!(row["tool_failure_class"], "external", "{name}");
             }
+            Some("sessionStopped") => {
+                assert_eq!(row["cancel_cause"], "userCancelled", "{name}");
+                assert!(row["tool_failure_class"].is_null(), "{name}");
+            }
             Some("TerminalizeBackgroundedAsInterrupted" | "parentInterrupted") => {
                 assert_eq!(row["cancel_cause"], "interrupted", "{name}");
                 assert!(row["tool_failure_class"].is_null(), "{name}");
@@ -1032,7 +1043,8 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn generated_registered_background_task_deletion_cases_use_live_worker() {
+async fn generated_registered_background_owner_stop_cases_use_live_worker() {
+    for session_stopped in [false, true] {
     let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
     let left = cases
         .iter()
@@ -1040,13 +1052,18 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
         .unwrap();
     let deleted = cases
         .iter()
-        .find(|case| case.name == "registered_background_tool_task_deleted_to_cancelled")
+        .find(|case| case.name == if session_stopped {
+            "registered_background_tool_session_stopped_to_cancelled"
+        } else {
+            "registered_background_tool_task_deleted_to_cancelled"
+        })
         .unwrap();
     assert_eq!(left.execution_registered, Some(true));
     assert_eq!(left.owner_task_deleted, Some(false));
-    assert_eq!(deleted.owner_task_deleted, Some(true));
+    assert_eq!(deleted.owner_task_deleted, Some(!session_stopped));
+    assert_eq!(deleted.owner_session_stopped, Some(session_stopped));
 
-    let name = "task-deleted";
+    let name = if session_stopped { "session-stopped" } else { "task-deleted" };
     let path =
         std::env::temp_dir().join(format!("recovery-closeout-{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();
@@ -1138,12 +1155,17 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
         left.name
     );
 
+    if session_stopped {
+        crate::session::stop_session(&node, &node_did, &session_id, tool.requester_did())
+            .await.unwrap();
+    } else {
     let response = node
         .execute(&format!(
             r#"mutation {{ delete_Task(filter: {{ task_id: {{ _eq: "task-1858" }}, node_did: {{ _eq: "{escaped_agent}" }} }}) {{ _docID }} }}"#
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
+    }
     let report =
         ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
             .await
@@ -1165,13 +1187,14 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
     assert!(!response.has_errors(), "{:?}", response.errors);
     let row = &response.data.unwrap()["AgentToolCall"][0];
     assert_eq!(row["lifecycle_state"], deleted.terminal_state.as_str());
-    assert_eq!(row["cancel_cause"], "interrupted");
+    assert_eq!(row["cancel_cause"], if session_stopped { "userCancelled" } else { "interrupted" });
     let (notifications, _) = completion_obligations(&node, &session_id, &node_did).await;
     let reason = deleted.notification_reason.as_deref().unwrap();
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
     node.shutdown().await;
     std::fs::remove_dir_all(path).unwrap();
+    }
 }
 
 #[tokio::test]
