@@ -32,12 +32,25 @@ pub async fn reconcile_coalesced_pending_request(
     source: QueueSource,
     key: &str,
 ) -> Result<Option<EnqueuedAgentRequest>> {
+    reconcile_coalesced_pending_request_for(node, session_id, node_did, source, key, None).await
+}
+
+pub(super) async fn reconcile_coalesced_pending_request_for(
+    node: &std::sync::Arc<EmbeddedNode>,
+    session_id: &str,
+    node_did: &str,
+    source: QueueSource,
+    key: &str,
+    anchor_doc: Option<&str>,
+) -> Result<Option<EnqueuedAgentRequest>> {
     let matching =
-        matching_coalesced_pending_requests(node, session_id, node_did, source, key).await?;
+        matching_coalesced_pending_requests(node, session_id, node_did, source, key, anchor_doc)
+            .await?;
     let Some(survivor) = matching.first().and_then(queue_row_to_enqueued_request) else {
         return Ok(None);
     };
 
+    let survivor_doc = survivor.doc_id.as_str();
     for duplicate in matching.iter().skip(1) {
         let mutation = supersede_pending_mutation(
             duplicate
@@ -57,6 +70,21 @@ pub async fn reconcile_coalesced_pending_request(
             |txn| {
                 let mutation = &mutation;
                 Box::pin(async move {
+                    if source == QueueSource::BackgroundCompletion {
+                        let assignments =
+                            crate::goal::load_request_assignments_in_txn(txn, node_did, session_id)
+                                .await?;
+                        if assignments.scope(survivor_doc)?
+                            != assignments.scope(
+                                duplicate
+                                    .doc_id
+                                    .as_deref()
+                                    .context("duplicate wake has no physical identity")?,
+                            )?
+                        {
+                            return Ok(());
+                        }
+                    }
                     let response = txn.execute_local_response(mutation).await?;
                     if response
                         .data
@@ -121,45 +149,71 @@ pub(crate) fn supersede_pending_mutation(
 }
 
 async fn matching_coalesced_pending_requests(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     node_did: &str,
     source: QueueSource,
     key: &str,
+    anchor_doc: Option<&str>,
 ) -> Result<Vec<AgentRequestRow>> {
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    node_did: {{ _eq: "{escaped_node_did}" }},
-                    lifecycle_state: {{ _eq: "pending" }}
-                }},
-                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
-            ) {{
-                _docID
-                request_id
-                session_id
-                input
-            }}
-        }}"#
+        r#"{{ AgentRequest(
+            filter: {{session_id: {{_eq: "{escaped_session_id}"}},
+                node_did: {{_eq: "{escaped_node_did}"}}, lifecycle_state: {{_eq: "pending"}}}},
+            order: [{{created_at: ASC}}, {{request_id: ASC}}]
+        ) {{{}}} }}"#,
+        crate::request_admission::SIGNED_REQUEST_FIELDS,
     );
-
-    let response = crate::graphql::graphql_with_transaction_retry(
+    crate::config_client::ConfigAccess::transact_local_readonly(
         node,
-        &query,
+        None,
         "matching_coalesced_pending_requests",
+        |txn| {
+            let query = &query;
+            Box::pin(async move {
+                let response = txn.execute(query).await?;
+                let rows: Vec<AgentRequestRow> =
+                    serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+                let rows = rows
+                    .into_iter()
+                    .filter(|row| row_matches_coalesced_source_and_key(row, source, key))
+                    .collect::<Vec<_>>();
+                if source != QueueSource::BackgroundCompletion {
+                    return Ok(rows);
+                }
+                let anchor = match anchor_doc {
+                    Some(doc) => rows.iter().find(|row| row.doc_id.as_deref() == Some(doc)),
+                    None => rows.first(),
+                };
+                let Some(anchor) = anchor else {
+                    return Ok(Vec::new());
+                };
+                let assignments =
+                    crate::goal::load_request_assignments_in_txn(txn, node_did, session_id).await?;
+                let selected_scope = assignments.scope(
+                    anchor
+                        .doc_id
+                        .as_deref()
+                        .context("coalescing anchor has no physical identity")?,
+                )?;
+                let mut matching = Vec::new();
+                for row in rows {
+                    if assignments.scope(
+                        row.doc_id
+                            .as_deref()
+                            .context("pending wake has no physical identity")?,
+                    )? == selected_scope
+                    {
+                        matching.push(row);
+                    }
+                }
+                Ok(matching)
+            })
+        },
     )
-    .await?;
-
-    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
-
-    Ok(rows
-        .into_iter()
-        .filter(|row| row_matches_coalesced_source_and_key(row, source, key))
-        .collect())
+    .await
 }
 
 pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<EnqueuedAgentRequest> {

@@ -16,6 +16,7 @@ use tempfile::TempDir;
 
 mod background_goal_repair;
 mod folding;
+mod goal_assignment_wakes;
 mod management;
 mod steering;
 
@@ -246,6 +247,41 @@ async fn insert_raw_queue_request(
         .expect("raw queue create returns _docID")
 }
 
+async fn insert_signed_queue_request(
+    db: &TestDb,
+    request_id: &str,
+    session_id: &str,
+    input: &RequestInput,
+) -> String {
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        request_id,
+        db.node_did(),
+        db.node_did(),
+        TEST_AGENT_ID,
+        session_id,
+        "work",
+        "interactive",
+        "2026-10-21T00:00:00Z",
+        AgentRequestAdmissionRecord::local_self(db.node_did()),
+    );
+    create.input = input.clone();
+    crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+        .await
+        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        &db.node,
+        "test.signed_queue_request",
+        &create.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
+    extract_single_doc_id(&response, "create_AgentRequest").unwrap()
+}
+
 struct CanonicalBackgroundFixture {
     node: Arc<EmbeddedNode>,
     parent: AgentRequest,
@@ -264,7 +300,7 @@ async fn canonical_background_fixture_with_input(
     input: &RequestInput,
 ) -> CanonicalBackgroundFixture {
     let request_id = format!("background-parent-{}", uuid::Uuid::new_v4());
-    insert_raw_queue_request(&db.node, db.node_did(), &request_id, session_id, input).await;
+    insert_signed_queue_request(db, &request_id, session_id, input).await;
     let request = crate::request_binding::load_agent_request(&db.node, &request_id)
         .await
         .expect("load canonical fixture parent")

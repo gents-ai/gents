@@ -234,15 +234,6 @@ pub(crate) async fn load_request_assignment_in_txn(
     Ok(snapshot.observation(request)?.1)
 }
 
-pub(crate) async fn load_request_assignment_scope_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    request: &AgentRequestRow,
-) -> anyhow::Result<RequestAssignmentScope> {
-    let snapshot = assignment_snapshot_for_request(txn, request).await?;
-    let (entry, observation) = snapshot.observation(request)?;
-    request_assignment_scope(entry, &observation)
-}
-
 async fn assignment_snapshot_for_request(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequestRow,
@@ -331,6 +322,18 @@ impl RequestAssignments {
         );
         let entry = self.entry(doc)?;
         Ok((entry, observe_request_assignment(&self.goals, entry)))
+    }
+
+    pub(crate) fn scope_for_request(
+        &self,
+        doc: &str,
+        request_id: &str,
+    ) -> anyhow::Result<RequestAssignmentScope> {
+        anyhow::ensure!(
+            self.request(doc)?.request_id == request_id,
+            "assignment request logical identity differs from its physical observation"
+        );
+        self.scope(doc)
     }
 
     pub(crate) fn scope(&self, request_doc_id: &str) -> anyhow::Result<RequestAssignmentScope> {

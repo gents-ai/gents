@@ -2,15 +2,11 @@ use super::*;
 
 async fn fixture(name: &str) -> (TestDb, AgentRequest) {
     let db = test_db(name).await;
-    let mut parent = parent_request(db.node_did(), name);
-    parent.doc_id = insert_raw_queue_request(
-        &db.node,
-        db.node_did(),
-        &parent.request_id,
-        name,
-        &RequestInput::default(),
-    )
-    .await;
+    insert_signed_queue_request(&db, "parent-request", name, &RequestInput::default()).await;
+    let parent = crate::request_binding::load_agent_request(&db.node, "parent-request")
+        .await
+        .unwrap()
+        .unwrap();
     (db, parent)
 }
 

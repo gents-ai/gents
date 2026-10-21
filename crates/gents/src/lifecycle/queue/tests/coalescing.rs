@@ -196,14 +196,26 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         .unwrap()
         .request
         .expect("non-Goal wake");
-    let duplicate_doc_id = insert_raw_queue_request(
-        &db.node,
-        db.node_did(),
+    let duplicate = session_request_create_mutation(
+        &parent,
+        TEST_AGENT_ID,
+        "raw duplicate",
+        ExecutionOrigin::Scheduled,
+        wake_queue_input(hints.clone()),
         "req-coalesce-race-duplicate",
-        session_id,
-        &wake_queue_input(hints.clone()),
+        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        None,
     )
-    .await;
+    .await
+    .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        &db.node,
+        "test.signed_duplicate_wake",
+        &duplicate,
+    )
+    .await
+    .unwrap();
+    let duplicate_doc_id = extract_single_doc_id(&response, "create_AgentRequest").unwrap();
 
     let reconciled = reconcile_coalesced_pending_request(
         &db.node,

@@ -2,6 +2,8 @@ import Proofs.Session.Properties.Executable
 import Proofs.AgentSession
 import Proofs.Request
 import Proofs.Goals
+import Proofs.GoalAutomation.RequestAssignment
+import Mathlib.Data.Nat.Pairing
 import Proofs.ToolExecution.State
 import Proofs.Transcript.State
 
@@ -27,6 +29,17 @@ on a terminal `ToolCallState`, so they share this continuation model.
 namespace BackgroundCompletion
 
 open ToolExecution
+
+/-- Native coalescing compares the original queue key together with the
+canonical retained assignment scope. Nat is the existing abstract key identity;
+this encoding introduces no persisted field or alternate authorization. -/
+def assignmentQueueKey (base : SessionQueue.QueueKey)
+    (scope : GoalAutomation.RequestAssignment.QueueScope) : SessionQueue.QueueKey :=
+  let association := match scope with
+    | .unassigned => 0
+    | .unresolved entry => 2 * entry + 1
+    | .referenced goal root => 2 * Nat.pair goal root + 2
+  Nat.pair base association
 
 /-- One parent-visible terminal completion and the wake row it owes. -/
 structure TerminalCompletion where
@@ -92,14 +105,15 @@ structure QueuedCompletion where
   preQueue : SessionQueue.SessionQueueState
   queue : SessionQueue.SessionQueueState
   sameSession : preQueue.sessionId = notified.transcript.sessionId
+  wakeKey : SessionQueue.QueueKey
   wakeWellFormed :
     notified.completion.wake.source = .backgroundCompletion ∧
-    notified.completion.wake.coalesceWellFormed preQueue.sessionId
+    notified.completion.wake.coalesceWellFormed wakeKey
   wakeKeyMissing :
     SessionQueue.containsCoalescedQueueKey
       preQueue.pending
       SessionQueue.QueueSource.backgroundCompletion
-      preQueue.sessionId = false
+      wakeKey = false
   enqueued : SessionQueue.step? preQueue
     (.coalescePending notified.completion.wake) = some queue
 
@@ -115,15 +129,16 @@ def enqueueWake?
     (notified : NotifiedCompletion)
     (pre : SessionQueue.SessionQueueState) :
     Option QueuedCompletion :=
+  let key := notified.completion.wake.queueKey.getD pre.sessionId
   if h_session : pre.sessionId = notified.transcript.sessionId then
     if h_well_formed :
         notified.completion.wake.source = .backgroundCompletion ∧
-        notified.completion.wake.coalesceWellFormed pre.sessionId then
+        notified.completion.wake.coalesceWellFormed key then
       if h_missing :
           SessionQueue.containsCoalescedQueueKey
             pre.pending
             SessionQueue.QueueSource.backgroundCompletion
-            pre.sessionId = false then
+            key = false then
         match
             h_step :
               SessionQueue.step? pre
@@ -135,6 +150,7 @@ def enqueueWake?
               , preQueue := pre
               , queue := post
               , sameSession := h_session
+              , wakeKey := key
               , wakeWellFormed := h_well_formed
               , wakeKeyMissing := h_missing
               , enqueued := h_step
@@ -151,7 +167,7 @@ Goal-owned requests; those retain their authenticated continuation owner. -/
 theorem goal_queue_cannot_be_background_wake
     (notified : NotifiedCompletion) (pre : SessionQueue.SessionQueueState)
     (h : notified.completion.wake.source = .goal) : enqueueWake? notified pre = none := by
-  simp [enqueueWake?, h]
+  cases notified.completion.wake.queueKey <;> simp [enqueueWake?, h]
 
 /-- A claimed continuation retains the notified transcript by construction. -/
 structure Continuation where
@@ -217,11 +233,11 @@ theorem claimed_continuation_retains_publication_enqueue_claim_chain
         continuation.queued.notified.transcript.sessionId ∧
       (continuation.queued.notified.completion.wake.source = .backgroundCompletion ∧
         continuation.queued.notified.completion.wake.coalesceWellFormed
-          continuation.queued.preQueue.sessionId) ∧
+          continuation.queued.wakeKey) ∧
       SessionQueue.containsCoalescedQueueKey
         continuation.queued.preQueue.pending
         SessionQueue.QueueSource.backgroundCompletion
-        continuation.queued.preQueue.sessionId = false ∧
+        continuation.queued.wakeKey = false ∧
       SessionQueue.step? continuation.queued.preQueue
         (.coalescePending continuation.queued.notified.completion.wake) =
           some continuation.queued.queue ∧

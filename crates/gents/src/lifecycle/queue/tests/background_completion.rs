@@ -468,14 +468,31 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
     assert_eq!(sessions["AgentSession"][0]["requester_did"], desktop.did());
 }
 
-fn root_parent(node_did: &str, session_id: &str) -> AgentRequest {
-    let mut parent = parent_request(node_did, session_id);
-    parent.request_hop = 0;
-    parent.caused_by_parent_request_id = None;
-    parent.caused_by_parent_request_doc_id = None;
-    parent.caused_by_parent_tool_call_id = None;
-    parent.caused_by_parent_tool_call_doc_id = None;
-    parent
+async fn root_parent(db: &TestDb, session_id: &str) -> AgentRequest {
+    insert_signed_queue_request(db, "parent-request", session_id, &RequestInput::default()).await;
+    let request = crate::request_binding::load_agent_request(&db.node, "parent-request")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
+        db.node.clone(),
+        TEST_AGENT_ID,
+        db.node_did(),
+        request,
+        60,
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    lifecycle
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
+        .await
+        .unwrap();
+    lifecycle.request().clone()
 }
 
 fn background_hints(parent: &AgentRequest) -> RequestQueue {
@@ -541,7 +558,7 @@ fn wake_agent_request(
 #[tokio::test]
 async fn notification_is_atomically_bound_to_coalesced_wake() {
     let db = test_db("atomic-background-notification").await;
-    let parent = root_parent(db.node_did(), "atomic-background-session");
+    let parent = root_parent(&db, "atomic-background-session").await;
     let first = persist_background_completion_with_message(
         &db.node,
         &parent,
@@ -632,10 +649,7 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
 #[tokio::test]
 async fn duplicate_notification_key_recovers_its_original_wake_binding() {
     let db = test_db("atomic-background-idempotent-notification").await;
-    let parent = root_parent(
-        db.node_did(),
-        "atomic-background-idempotent-notification-session",
-    );
+    let parent = root_parent(&db, "atomic-background-idempotent-notification-session").await;
     let message_key = "background-completion-notification:idempotent:tool";
     let first = persist_background_completion_with_message(
         &db.node,
@@ -697,7 +711,7 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
 #[tokio::test]
 async fn many_concurrent_notifications_publish_one_wake_identity() {
     let db = test_db("atomic-background-many-race").await;
-    let parent = root_parent(db.node_did(), "atomic-background-many-race-session");
+    let parent = root_parent(&db, "atomic-background-many-race-session").await;
     let enqueued = futures::future::join_all((0..16).map(|index| {
         let node = db.node.clone();
         let parent = parent.clone();
@@ -734,7 +748,7 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
 async fn restart_before_claim_preserves_pending_input_until_the_wake_completes() {
     let db = test_db("background-restart-before-claim").await;
     let node = db.node.clone();
-    let parent = root_parent(db.node_did(), "background-restart-before-claim-session");
+    let parent = root_parent(&db, "background-restart-before-claim-session").await;
     let hints = background_hints(&parent);
     let enqueued = persist_background_completion_with_message(
         &node,
@@ -811,7 +825,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
 async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     let db = test_db("background-response-repair-ack").await;
     let node = db.node.clone();
-    let parent = root_parent(db.node_did(), "background-response-repair-ack-session");
+    let parent = root_parent(&db, "background-response-repair-ack-session").await;
     let hints = background_hints(&parent);
     let enqueued = persist_background_completion_with_message(
         &node,
@@ -1218,7 +1232,7 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
 #[tokio::test]
 async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
     let db = test_db("wake-hop-raise").await;
-    let parent = root_parent(db.node_did(), "wake-hop-raise-session");
+    let parent = root_parent(&db, "wake-hop-raise-session").await;
     let native = persist_background_completion_with_message(
         &db.node,
         &parent,
@@ -1290,7 +1304,7 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
-    let parent = root_parent(db.node_did(), "wake-hop-refusal-session");
+    let parent = root_parent(&db, "wake-hop-refusal-session").await;
     let bound = crate::document_config::DEFAULT_MAX_REQUEST_HOP;
     let hop_of = |doc_id: String| {
         let node = db.node.clone();
