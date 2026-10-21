@@ -108,6 +108,7 @@ pub(crate) use shared::shell_join;
 #[cfg(test)]
 pub(crate) use shared::validate_command_policy;
 pub(crate) use shared::ToolContext;
+pub(crate) use shared::background_command_timeout;
 pub(crate) use shared::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,
     lsp_sandbox_for_effective, normalize_workspace_lifecycle_state, prepare_managed_command,
