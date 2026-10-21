@@ -6,9 +6,9 @@ namespace Background
 is runtime-local under the one-active-runtime-per-node convention. -/
 def maxBackgroundedPerParent : Nat := 8
 
-/-- Existing background admission gate; the caller supplies the count of live
-background rows observed by its owner. Pending calls do not occupy capacity;
-the owner serializes admission with the transition that makes a row running. -/
+/-- The native owner counts running background rows and reserved spawn children,
+excluding accepted calls that have not reserved capacity. It serializes that
+count with the reservation or transition to running in one transaction. -/
 def admitBackground (liveCount : Nat) : Option Nat :=
   if liveCount < maxBackgroundedPerParent then some (liveCount + 1) else none
 
