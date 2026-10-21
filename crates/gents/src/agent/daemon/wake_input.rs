@@ -47,23 +47,11 @@ fn rows<'a>(response: &'a Value, collection: &str) -> Result<&'a [Value]> {
 }
 
 fn receipt_keys(row: &Value) -> Result<Vec<String>> {
-    let keys: Vec<String> = serde_json::from_str(
+    crate::background_completion::notification_receipt_keys(
         row["background_completion_notification_keys_json"]
             .as_str()
             .context("wake claim lacks its notification receipt")?,
     )
-    .context("invalid wake notification receipt")?;
-    anyhow::ensure!(
-        keys.iter().all(|key| {
-            crate::background_completion::is_background_completion_notification_message_key(key)
-        }),
-        "wake receipt names a non-notification message"
-    );
-    anyhow::ensure!(
-        keys.iter().collect::<BTreeSet<_>>().len() == keys.len(),
-        "wake receipt contains duplicate notification keys"
-    );
-    Ok(keys)
 }
 
 pub(super) async fn load(

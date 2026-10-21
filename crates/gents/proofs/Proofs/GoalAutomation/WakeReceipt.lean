@@ -33,9 +33,21 @@ structure Receipt where
 def acknowledged (receipts : List Receipt) : List NotificationBinding :=
   receipts.flatMap fun receipt => receipt.snapshot.acknowledgedBindings receipt.state
 
+/-- A retry inherits only its verified physical failed predecessor's exact
+attempted publications. New publications still require the current assignment;
+a Goal opened during the failed attempt cannot discard its captured input. -/
+def captureWithRetry (claim : Claim) (notifications : List Notification)
+    (receipts : List Receipt) (retryParent : Option Nat) : WakeAttemptSnapshot :=
+  let retained := receipts.filter (fun receipt => receipt.state == .failed &&
+    retryParent == some receipt.snapshot.wakeRequestId) |>.flatMap (·.snapshot.attemptedBindings)
+  ⟨claim.wake, claim.cutoff, (notifications.filter fun row => row.sequence ≤ claim.cutoff &&
+    (row.scope == claim.scope || retained.any fun binding =>
+      binding.messageId == row.message && binding.sequence == row.sequence)).map fun row =>
+      ⟨row.message, row.sequence, claim.wake⟩⟩
+
 def current (claim : Claim) (notifications : List Notification)
-    (receipts : List Receipt) : List NotificationBinding :=
-  (capture claim notifications).attemptedBindings.filter fun binding =>
+    (receipts : List Receipt) (retryParent : Option Nat := none) : List NotificationBinding :=
+  (captureWithRetry claim notifications receipts retryParent).attemptedBindings.filter fun binding =>
     !(acknowledged receipts).any fun prior =>
       prior.messageId == binding.messageId && prior.sequence == binding.sequence
 

@@ -74,9 +74,12 @@ async fn wake(
     claim: &Value,
     roots: &BTreeMap<(u64, u64), AgentRequestRow>,
     unassigned_parent: &AgentRequestRow,
+    retry_parent: Option<&AgentRequestRow>,
 ) -> crate::AgentRequest {
     let scope = &claim["scope"];
-    let parent = if scope["kind"] == "referenced" {
+    let parent = if let Some(parent) = retry_parent {
+        parent
+    } else if scope["kind"] == "referenced" {
         &roots[&(
             scope["goal"].as_u64().unwrap(),
             scope["root"].as_u64().unwrap(),
@@ -96,7 +99,11 @@ async fn wake(
         "2026-10-21T00:00:00Z",
         AgentRequestAdmissionRecord::runtime_local_control(identity.did(), &parent.request_id),
     );
-    create.input.goal_assignment = reference(scope, roots);
+    create.input.goal_assignment = if retry_parent.is_some() {
+        None
+    } else {
+        reference(scope, roots)
+    };
     create.input.queue = Some(RequestQueue {
         delivery: Default::default(),
         position: None,
@@ -109,6 +116,19 @@ async fn wake(
     });
     create.caused_by_parent_request_id = Some(parent.request_id.clone());
     create.caused_by_parent_request_doc_id = parent.doc_id.clone();
+    if retry_parent.is_some() {
+        create.input = parent.input.clone().unwrap();
+        create.retry_parent_request = Some(parent.request_id.clone());
+        create.retry_parent_request_doc_id = parent.doc_id.clone();
+        create.retry_root_request = Some(
+            parent
+                .retry_root_request
+                .clone()
+                .unwrap_or_else(|| parent.request_id.clone()),
+        );
+        create.retry_count = parent.retry_count.unwrap_or_default() + 1;
+        create.max_retries = parent.max_retries.unwrap_or(3);
+    }
     write_request(access, identity, create)
         .await
         .try_into()
@@ -177,7 +197,7 @@ async fn claim(
 async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
     let snapshot = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
     let cases = snapshot["goal_wake_receipt_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 10);
+    assert_eq!(cases.len(), 11);
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -213,11 +233,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         terminal_source(&access, &parent, false).await;
         let notifications = case["notifications"].as_array().unwrap();
         let mut roots = BTreeMap::new();
-        for scope in notifications
-            .iter()
-            .map(|row| &row["scope"])
-            .chain(std::iter::once(&case["claim"]["scope"]))
-        {
+        for scope in notifications.iter().map(|row| &row["scope"]).chain(
+            case["retry_parent"]
+                .is_null()
+                .then_some(&case["claim"]["scope"])
+                .into_iter(),
+        ) {
             if scope["kind"] != "referenced" {
                 continue;
             }
@@ -247,6 +268,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             sources.insert(id, row);
         }
         let mut appended = 0;
+        let mut retry_parent = None;
         for prior in case["prior"].as_array().unwrap() {
             let prior_claim = &prior["claim"];
             append_through(
@@ -259,7 +281,16 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 prior_claim["cutoff"].as_u64().unwrap(),
             )
             .await;
-            let request = wake(&access, &identity, &session, prior_claim, &roots, &parent).await;
+            let request = wake(
+                &access,
+                &identity,
+                &session,
+                prior_claim,
+                &roots,
+                &parent,
+                None,
+            )
+            .await;
             let doc = request.doc_id.clone();
             let mut lifecycle = claim(&node, &identity, request).await;
             if prior["create_goal"] == true {
@@ -301,6 +332,22 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .await
                 .unwrap();
             drop(lifecycle);
+            if case["retry_parent"] == prior_claim["wake"] {
+                let response = access
+                    .execute(&format!(
+                        "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
+                        escape_graphql_string(&doc),
+                        crate::request_admission::SIGNED_REQUEST_FIELDS
+                    ))
+                    .await
+                    .unwrap();
+                retry_parent = Some(
+                    serde_json::from_value::<AgentRequestRow>(
+                        response["data"]["AgentRequest"][0].clone(),
+                    )
+                    .unwrap(),
+                );
+            }
         }
         let current_claim = &case["claim"];
         append_through(
@@ -313,7 +360,16 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             current_claim["cutoff"].as_u64().unwrap(),
         )
         .await;
-        let request = wake(&access, &identity, &session, current_claim, &roots, &parent).await;
+        let request = wake(
+            &access,
+            &identity,
+            &session,
+            current_claim,
+            &roots,
+            &parent,
+            retry_parent.as_ref(),
+        )
+        .await;
         let lifecycle = claim(&node, &identity, request.clone()).await;
         let response=access.execute(&format!("{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{background_completion_notification_keys_json}}}}",escape_graphql_string(&request.doc_id))).await.unwrap();
         let captured: Vec<String> = serde_json::from_str(

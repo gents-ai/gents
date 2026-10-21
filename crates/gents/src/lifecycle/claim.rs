@@ -126,6 +126,27 @@ where
                         .and_then(|row| row.get("sequence"))
                         .and_then(serde_json::Value::as_u64)
                         .and_then(|sequence| u32::try_from(sequence).ok());
+                    let current = assignments.request(&request.doc_id)?;
+                    let (retained_keys, retained_cutoff) = if let Some(parent_doc) = current.retry_parent_request_doc_id.as_deref() {
+                        let parent = assignments.request(parent_doc)?;
+                        anyhow::ensure!(parent.lifecycle_state == Some(RequestLifecycleState::Failed)
+                            && parent.input.as_ref().is_some_and(super::is_background_completion_request)
+                            && current.retry_parent_request.as_deref() == Some(parent.request_id.as_str())
+                            && current.caused_by_parent_request_doc_id.as_deref() == Some(parent_doc),
+                            "background retry does not name its physical failed wake");
+                        crate::request_admission::verify_runtime_local_control_receipt(current,
+                            &request.node_did, &parent.request_id,
+                            request.requester_did.as_deref().unwrap_or(&request.node_did))?;
+                        let receipt = txn.execute(&format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{background_completion_input_through_sequence background_completion_notification_keys_json}}}}"#,
+                            escape_graphql_string(parent_doc))).await?;
+                        let receipt = receipt.pointer("/data/AgentRequest/0").context("failed wake receipt disappeared")?;
+                        let retained = receipt["background_completion_notification_keys_json"].as_str()
+                            .map(crate::background_completion::notification_receipt_keys).transpose()?.unwrap_or_default();
+                        let cutoff = receipt["background_completion_input_through_sequence"].as_u64();
+                        anyhow::ensure!(retained.is_empty() || cutoff.zip(through_sequence.map(u64::from)).is_some_and(|(prior,current)| prior <= current),
+                            "failed wake receipt has no available revision cutoff");
+                        (retained, cutoff)
+                    } else { (Vec::new(), None) };
                     let notification_keys = response
                         .data
                         .as_ref()
@@ -146,16 +167,18 @@ where
                                 .context(
                                     "background notification has no physical request binding",
                                 )?;
-                            if assignments.scope(source)? == assignment {
-                                keys.push(
-                                    row.get("message_key")
-                                        .and_then(serde_json::Value::as_str)
-                                        .context("background notification has no key")?
-                                        .to_string(),
-                                );
+                            let key = row.get("message_key").and_then(serde_json::Value::as_str)
+                                .context("background notification has no key")?;
+                            let retained = retained_keys.iter().any(|prior| prior == key)
+                                && row.get("sequence").and_then(serde_json::Value::as_u64)
+                                    .zip(retained_cutoff).is_some_and(|(sequence,cutoff)| sequence <= cutoff);
+                            if assignments.scope(source)? == assignment || retained {
+                                keys.push(key.to_string());
                             }
                             Ok(keys)
                         })?;
+                    anyhow::ensure!(retained_keys.iter().all(|key| notification_keys.contains(key)),
+                        "failed wake retained notifications are missing from the current snapshot");
                     BackgroundCompletionClaimSnapshot {
                         through_sequence,
                         notification_keys,
@@ -1664,39 +1687,116 @@ mod tests {
         );
     }
 
+    async fn signed_background_claim_fixture(
+        node: &Arc<EmbeddedNode>,
+        identity: &crate::identity::KeyIdentity,
+        session: &str,
+    ) -> (AgentRequest, String) {
+        use crate::identity::NodeIdentity;
+        use gents_protocol::request_admission::{
+            AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+        };
+        use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
+        let access = crate::ConfigAccess::local(node.clone());
+        crate::session::ensure_session_with_agent_id_and_requester_did(
+            node,
+            session,
+            identity.did(),
+            TEST_AGENT_ID,
+            Some(identity.did()),
+        )
+        .await
+        .unwrap();
+        let mut parent = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "snapshot-parent",
+            identity.did(),
+            identity.did(),
+            TEST_AGENT_ID,
+            session,
+            "Prior work",
+            "interactive",
+            "2026-10-21T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self(identity.did()),
+        );
+        crate::sign_agent_request_create(identity, &mut parent)
+            .await
+            .unwrap();
+        let response = access
+            .write(
+                "test.snapshot_signed_parent",
+                &parent.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+        let parent_doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        access.write("test.snapshot_finished_parent", &format!("mutation {{update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"completed\"}}) {{_docID}}}}",escape_graphql_string(&parent_doc))).await.unwrap();
+        let mut wake = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "snapshot-wake",
+            identity.did(),
+            identity.did(),
+            TEST_AGENT_ID,
+            session,
+            "Review background results",
+            "scheduled",
+            "2026-10-21T00:00:01Z",
+            AgentRequestAdmissionRecord::runtime_local_control(identity.did(), &parent.request_id),
+        );
+        wake.input.queue = Some(RequestQueue {
+            delivery: Default::default(),
+            position: None,
+            source: QueueSource::BackgroundCompletion,
+            policy: QueuePolicy::Coalesce,
+            key: Some(format!("background_completion:{session}")),
+            queued_after_request_id: Some(parent.request_id.clone()),
+            interrupted_request_id: None,
+            background_completion_wake_version: Some(1),
+        });
+        wake.caused_by_parent_request_id = Some(parent.request_id);
+        wake.caused_by_parent_request_doc_id = Some(parent_doc.clone());
+        crate::sign_agent_request_create(identity, &mut wake)
+            .await
+            .unwrap();
+        let response = access
+            .write(
+                "test.snapshot_signed_wake",
+                &wake.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+        let doc = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let response = access
+            .execute(&format!(
+                "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
+                escape_graphql_string(&doc),
+                crate::request_admission::SIGNED_REQUEST_FIELDS
+            ))
+            .await
+            .unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        crate::verify_request_receipt_signature(&row).unwrap();
+        (row.try_into().unwrap(), parent_doc)
+    }
+
     #[tokio::test]
     async fn background_claim_snapshots_transcript_before_successor_input() {
         let node = test_node().await;
+        use crate::identity::NodeIdentity;
+        let dir = tempfile::tempdir().unwrap();
+        let identity =
+            crate::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
+                .unwrap();
         let session_id = "background-claim-snapshot";
-        use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
-        let input = RequestInput {
-            queue: Some(RequestQueue {
-                delivery: Default::default(),
-                position: None,
-                source: QueueSource::BackgroundCompletion,
-                policy: QueuePolicy::Coalesce,
-                key: Some(format!("background_completion:{session_id}")),
-                queued_after_request_id: Some("parent-request".to_string()),
-                interrupted_request_id: None,
-                background_completion_wake_version: Some(1),
-            }),
-            ..Default::default()
-        };
-        let request = insert_pending_request(
-            &node,
-            "background-wake-1",
-            session_id,
-            "2026-08-12T22:00:00Z",
-            Some(&input),
-            "scheduled",
-        )
-        .await;
+        let (request, source_doc) =
+            signed_background_claim_fixture(&node, &identity, session_id).await;
         session::import_history_observation(
             &node,
-            "prior-request-doc",
+            &source_doc,
             session_id,
-            TEST_NODE_DID,
-            None,
+            identity.did(),
+            Some(identity.did()),
             "first notification",
             "background-completion-notification:child-1:agent",
             1,
@@ -1705,10 +1805,10 @@ mod tests {
         .await;
         session::import_history_observation(
             &node,
-            "prior-request-doc",
+            &source_doc,
             session_id,
-            TEST_NODE_DID,
-            None,
+            identity.did(),
+            Some(identity.did()),
             "prior context",
             "prior-context",
             2,
@@ -1720,7 +1820,7 @@ mod tests {
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
             TEST_AGENT_ID,
-            TEST_NODE_DID,
+            identity.did(),
             request,
             60,
             ExecutionOrigin::Scheduled,
@@ -1765,10 +1865,10 @@ mod tests {
 
         session::import_history_observation(
             &node,
-            "successor-request-doc",
+            &source_doc,
             session_id,
-            TEST_NODE_DID,
-            None,
+            identity.did(),
+            Some(identity.did()),
             "successor notification",
             "background-completion-notification:child-2:agent",
             3,
@@ -1778,8 +1878,8 @@ mod tests {
         let history = session::load_history_through_sequence(
             node.as_ref(),
             session_id,
-            TEST_NODE_DID,
-            None,
+            identity.did(),
+            Some(identity.did()),
             lifecycle.background_completion_input_through_sequence(),
         )
         .await
@@ -1794,14 +1894,21 @@ mod tests {
     #[tokio::test]
     async fn background_claim_keeps_fork_imports_out_of_notification_input() {
         let node = test_node().await;
+        use crate::identity::NodeIdentity;
+        let dir = tempfile::tempdir().unwrap();
+        let identity =
+            crate::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
+                .unwrap();
         let session_id = "background-import-snapshot";
         let origin_key = "background-completion-notification:owned:tool";
+        let (request, source_doc) =
+            signed_background_claim_fixture(&node, &identity, session_id).await;
         session::import_history_observation(
             &node,
-            "origin-request-doc",
+            &source_doc,
             session_id,
-            TEST_NODE_DID,
-            None,
+            identity.did(),
+            Some(identity.did()),
             "notification",
             origin_key,
             1,
@@ -1843,21 +1950,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let input: gents_protocol::request_input::RequestInput = serde_json::from_value(serde_json::json!({"queue": {"source": "background_completion", "policy": "coalesce", "key": format!("background_completion:{session_id}"), "background_completion_wake_version": 1}})).unwrap();
-        let request = insert_pending_request(
-            &node,
-            "import-wake",
-            session_id,
-            "2026-10-14T00:00:00Z",
-            Some(&input),
-            "scheduled",
-        )
-        .await;
         let doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             node.clone(),
             TEST_AGENT_ID,
-            TEST_NODE_DID,
+            identity.did(),
             request,
             60,
             ExecutionOrigin::Scheduled,
