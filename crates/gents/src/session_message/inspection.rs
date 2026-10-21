@@ -439,7 +439,7 @@ pub(crate) async fn agent_session_read(
                 Some(observed) => Some(json!({"request_id": observed.request_id, "lifecycle_state": observed.lifecycle_state, "available": false})),
                 None => match doc_id { Some(id) => request_row(txn, &scope, id).await?.map(|row| request_summary(&row)), None => None },
             };
-            let mut result = json!({"ok": true, "session_id": target.session_id, "view": args.view, "request": request});
+            let mut result = json!({"ok": true, "session_id": target.session_id, "stopped_at": session.stopped_at, "view": args.view, "request": request});
             if args.view == ReadView::Status {
                 result["tools_in_flight"] = tools_in_flight(txn, &scope).await?;
                 result["queued_steering"] = queued_steering(txn, &scope).await?;

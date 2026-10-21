@@ -48,6 +48,7 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
         agent_id: "worker".into(),
         created_at: "2026-05-20T00:00:00Z".into(),
         closed_at: None,
+        stopped_at: None,
         title: None,
         tags: Vec::new(),
         provenance: None,

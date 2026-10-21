@@ -439,14 +439,23 @@ impl DefraSessionHook {
                     .await?,
             ));
         }
-        let parsed = match serde_json::from_str::<crate::session_message::AgentInterruptArgs>(args)
+        let control_tool = matches!(
+            tool_name,
+            crate::toolset::AGENT_INTERRUPT_TOOL_NAME
+                | crate::toolset::AGENT_STOP_TOOL_NAME
+                | crate::toolset::AGENT_RESUME_TOOL_NAME
+        );
+        if !control_tool {
+            return Ok(invalid_tool_arguments_payload(tool_name, "/", "unknown session tool"));
+        }
+        let parsed = match serde_json::from_str::<crate::session_message::AgentSessionControlArgs>(args)
         {
             Ok(parsed) => parsed,
             Err(error) => {
                 return Ok(invalid_tool_arguments_payload(
                     tool_name,
                     "/",
-                    format!("invalid agent_interrupt arguments: {error}"),
+                    format!("invalid {tool_name} arguments: {error}"),
                 ))
             }
         };
@@ -462,7 +471,7 @@ impl DefraSessionHook {
             return Ok(interrupt_refused_payload(
                 tool_name,
                 session,
-                "only the session that started this session may interrupt it",
+                "only the session that started this session may control it",
             ));
         };
         let target = crate::session_message::target_scope(&caller.node_did, &target);
@@ -475,13 +484,47 @@ impl DefraSessionHook {
         {
             return Ok(interrupt_refused_payload(tool_name, session, &reason));
         }
-        let interrupted = crate::session_message::interrupt_session(&self.node, &target).await?;
-        Ok(json_string(json!({
-            "ok": true,
-            "session_id": session,
-            "status": if interrupted.is_some() { "interrupting" } else { "idle" },
-            "request_id": interrupted
-        })))
+        if matches!(
+            tool_name,
+            crate::toolset::AGENT_STOP_TOOL_NAME | crate::toolset::AGENT_RESUME_TOOL_NAME
+        ) && target.node_did != caller.node_did
+        {
+            return Ok(interrupt_refused_payload(
+                tool_name,
+                session,
+                "stop and resume currently require a session on this node; use agent_message with interrupt=true for a remote session",
+            ));
+        }
+        match tool_name {
+            crate::toolset::AGENT_INTERRUPT_TOOL_NAME => {
+                let interrupted = crate::session_message::interrupt_session(&self.node, &target).await?;
+                Ok(json_string(json!({
+                    "ok": true,
+                    "session_id": session,
+                    "status": if interrupted.is_some() { "interrupting" } else { "idle" },
+                    "request_id": interrupted
+                })))
+            }
+            crate::toolset::AGENT_STOP_TOOL_NAME => {
+                let receipt = crate::session::stop_session(
+                    &self.node, &target.node_did, &target.session_id,
+                    target.requester_did.as_deref(),
+                ).await?;
+                Ok(json_string(json!({"ok": true, "session_id": session,
+                    "status": receipt.status,
+                    "interrupted_request_id": receipt.interrupted_request_id,
+                    "drained_request_ids": receipt.drained_request_ids,
+                    "next": "call agent_session_read with view=status to observe request and tool settlement"})))
+            }
+            crate::toolset::AGENT_RESUME_TOOL_NAME => {
+                crate::session::resume_session(
+                    &self.node, &target.node_did, &target.session_id,
+                    target.requester_did.as_deref(),
+                ).await?;
+                Ok(json_string(json!({"ok": true, "session_id": session, "status": "resumed"})))
+            }
+            _ => unreachable!(),
+        }
     }
 }
 

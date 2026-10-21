@@ -98,6 +98,24 @@ where
         "lifecycle.claim_request",
         move |txn| {
             Box::pin(async move {
+                if crate::session::session_stopped_in_txn(
+                    &txn,
+                    &request.node_did,
+                    &request.session_id,
+                    request.requester_did.as_deref(),
+                )
+                .await?
+                {
+                    super::queue::drain_all_pending_session_requests_in_txn(
+                        &txn,
+                        &request.session_id,
+                        &request.node_did,
+                        request.requester_did.as_deref(),
+                        "pending work drained because the session is stopped",
+                    )
+                    .await?;
+                    return Ok(None);
+                }
                 if !crate::goal::fence_goal_continuation_claim_in_txn(&txn, request, claimed_at)
                     .await?
                 {

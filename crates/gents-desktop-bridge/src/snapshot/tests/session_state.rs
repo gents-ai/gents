@@ -18,6 +18,7 @@ fn session(requester_did: Option<&str>) -> AgentSession {
         agent_id: "amy-default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
+        stopped_at: None,
         title: Some(SessionTitle {
             text: "conversation".into(),
             source: SessionTitleSource::Generated,
@@ -154,6 +155,7 @@ fn contract_session(
         agent_id: "contract-agent".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
+        stopped_at: None,
         title: None,
         tags: Vec::new(),
         provenance: None,

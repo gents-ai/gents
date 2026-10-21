@@ -60,6 +60,51 @@ pub use reset_resume::resume_at_reset;
 pub(crate) use tool_context::load_goal_tool_context;
 use tool_context::same_goal_assignment;
 
+/// Resume only a paused Goal, using the same signed continuation owner as
+/// operator resume. Queued pending requests resume the existing Goal; an
+/// interrupted/claimed execution must settle before a fresh continuation can
+/// be staged.
+pub(crate) async fn stage_session_resume_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    identity: &dyn crate::identity::NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+) -> Result<()> {
+    anyhow::ensure!(identity.did() == node_did, "session resume requires its node signing identity");
+    let requests = request_head::load_session_requests(txn, node_did, session_id).await?;
+    anyhow::ensure!(
+        !requests.iter().any(|row| row.lifecycle_state.is_some_and(|state|
+            matches!(state, RequestLifecycleState::Claimed | RequestLifecycleState::Processing))),
+        "session work is still settling; retry resume after the interrupted request terminates"
+    );
+    let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
+        return Ok(());
+    };
+    let status = goal.parsed_status().context("Goal has an unknown status")?;
+    if status != GoalStatus::Paused {
+        return Ok(());
+    }
+    if !goal_session_is_idle(&requests) {
+        operator_resume::stage_busy_resume(txn, identity, &goal).await?;
+        return Ok(());
+    }
+    let predecessor = latest_goal_request(&goal, &requests)
+        .context("paused Goal has no canonical continuation predecessor; resume was not applied")?;
+    anyhow::ensure!(
+        predecessor.lifecycle_state.is_some_and(RequestLifecycleState::is_terminal),
+        "paused Goal has no terminal continuation predecessor; resume was not applied"
+    );
+    operator_resume::stage_resume(
+        txn,
+        identity,
+        node_did,
+        session_id,
+        &predecessor.request_id,
+    )
+    .await?;
+    Ok(())
+}
+
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
 pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
@@ -331,7 +376,8 @@ impl GoalState {
 
     pub fn step(self, action: GoalAction) -> Option<Self> {
         match action {
-            GoalAction::Pause if self.status == GoalStatus::Active => Some(Self {
+            GoalAction::Pause
+                if matches!(self.status, GoalStatus::Active | GoalStatus::BudgetLimited) => Some(Self {
                 status: GoalStatus::Paused,
                 ..self
             }),
@@ -342,7 +388,11 @@ impl GoalState {
                 ) =>
             {
                 Some(Self {
-                    status: GoalStatus::Active,
+                    status: if self.wrapup_requested && !self.wrapup_completed {
+                        GoalStatus::BudgetLimited
+                    } else {
+                        GoalStatus::Active
+                    },
                     blocked_audits: 0,
                     ..self
                 })
@@ -491,10 +541,10 @@ pub fn decide_goal_continuation(
             } else {
                 match terminal {
                     GoalRequestTerminal::Completed => GoalDecision::None,
-                    GoalRequestTerminal::Failed
-                    | GoalRequestTerminal::Dead
-                    | GoalRequestTerminal::Interrupted
-                    | GoalRequestTerminal::Superseded => {
+                    GoalRequestTerminal::Interrupted | GoalRequestTerminal::Superseded => {
+                        GoalDecision::Pause
+                    }
+                    GoalRequestTerminal::Failed | GoalRequestTerminal::Dead => {
                         if infrastructure_retries.max(0) < MAX_INFRASTRUCTURE_RETRIES {
                             GoalDecision::Retry
                         } else {
@@ -2222,6 +2272,50 @@ pub async fn load_canonical_goal_in_txn(
     .context("decoding transactional Goal rows")?;
     sort_goals_canonical(&mut goals);
     Ok(goals.into_iter().next())
+}
+
+pub(crate) async fn pause_goal_for_interrupt_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<()> {
+    let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
+        return Ok(());
+    };
+    let state = goal.state().context("Goal has an unknown status")?;
+    let Some(paused) = state.step(GoalAction::Pause) else {
+        return Ok(());
+    };
+    let now = Utc::now();
+    let doc_id = escape_graphql_string(&goal.doc_id);
+    let owner = escape_graphql_string(node_did);
+    let status = escape_graphql_string(
+        goal.parsed_status()
+            .context("Goal has an unknown status")?
+            .as_str(),
+    );
+    let sequence = goal.continuation_sequence();
+    let active_time = goal.current_active_time_seconds(now);
+    let updated_at = escape_graphql_string(&now.to_rfc3339());
+    let response = txn
+        .execute(&format!(
+            r#"mutation {{ update_Goal(filter: {{
+                _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{owner}" }},
+                status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }}
+            }}, input: {{ status: "{}", active_time_seconds: {active_time},
+                active_started_at: null, updated_at: "{updated_at}" }}) {{ _docID }} }}"#,
+            paused.status.as_str()
+        ))
+        .await?;
+    let rows = response
+        .pointer("/data/update_Goal")
+        .and_then(serde_json::Value::as_array)
+        .context("Goal interrupt pause omitted affected rows")?;
+    anyhow::ensure!(
+        rows.len() == 1 && rows[0]["_docID"] == goal.doc_id,
+        "Goal changed while the interrupt pause was being committed"
+    );
+    Ok(())
 }
 
 pub(crate) async fn apply_claimed_task_goal_in_txn(

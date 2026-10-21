@@ -145,6 +145,7 @@ fn session_pointer_requires_the_observed_physical_request() {
                 agent_id: "default".to_string(),
                 created_at: "2026-04-21T12:00:00Z".into(),
                 closed_at: None,
+                stopped_at: None,
                 title: None,
                 tags: Vec::new(),
                 provenance: None,

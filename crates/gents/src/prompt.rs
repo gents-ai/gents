@@ -192,8 +192,10 @@ pub(crate) fn build_preamble_with_targets(
             "`agent_new` starts one of the following agents on a task in the background \
              (pass its name as the `agent` argument); its result arrives later as a \
              message in this conversation. `agent_message` sends a message to an agent \
-             session you can reach, `agent_interrupt` stops the current turn of a session \
-             you started, and `agent_session_list` finds the sessions you can reach:"
+             session you can reach, `agent_interrupt` stops its current turn and pauses its Goal, \
+             preserving queued messages. `agent_stop` also drains queued work and blocks new turns \
+             until `agent_resume`; `agent_resume` explicitly resumes a paused session. \
+             `agent_session_list` finds the sessions you can reach:"
                 .to_string(),
         );
         for (name, description) in allowed_targets {
