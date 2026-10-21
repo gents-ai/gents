@@ -199,6 +199,16 @@ def cases : List Case :=
       initial := retained completedSequence,
       inputs := [.acquire 1 .acquired, .load 1 .records, admit, .launch 1],
       expected := [.acquired, .refused, .refused, .refused]}
+  , {name := "cancelled_before_restore_selection_closes_known_untouched_operation",
+      inputs := reserveInputs ++ [.cancel 1, .advance 1 (.startRestore 0 false true),
+        .finishWrite 1 durable, .release 1, .acquire 2 .acquired, .load 2 .empty, admit 2 "new"],
+      expected := accepted ++ [.cancelled, .checkpoint, .acknowledged, .released, .acquired, .loaded, .checkpoint]}
+  , {name := "cancelled_after_pending_marker_before_launch_records_known_rejection",
+      inputs := reserveInputs ++ [.advance 1 (.startRestore 0 true true), .finishWrite 1 durable,
+        .cancel 1, .advance 1 (.observeRestore 0 .rejected false true), .finishWrite 1 durable,
+        .release 1, .acquire 2 .acquired, .load 2 .empty, admit 2 "new"],
+      expected := accepted ++ [.checkpoint, .acknowledged, .cancelled, .checkpoint,
+        .acknowledged, .released, .acquired, .loaded, .checkpoint]}
   ]
 
 def trace (world : World) : List Input → List (World × Output)
