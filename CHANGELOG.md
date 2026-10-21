@@ -21,6 +21,10 @@ source consistency checks, not a separate runtime compatibility version.
   authority and a peer's `/status` enrollment token, a node signs and delivers
   its own enrollment request, so the peer approves it with `enrollment approve`
   and pairs with `pairings apply` without the desktop app.
+- `gents init --engineer` turns on the `p2p` tool with mutations, so an
+  Engineer can request and approve enrollments and manage its pairings
+  without editing its Tools. Application collection grants
+  (`p2p_collections`) stay empty until an operator adds them.
 - `gents pack wire` (with `--targets-from` and `--remove`), `gents pack install
   --wire <agent>` and the desktop's Enable for agent action add a job plugin
   to an agent's Tools with a reviewed job block, without turning on direct
