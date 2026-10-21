@@ -39,7 +39,8 @@ pub use readiness_gate::{
     ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX,
 };
 pub(crate) use request_assignment::{
-    latest_assignment_goals, load_request_assignment, RequestAssignmentObservation,
+    latest_assignment_goals, load_request_assignment, load_request_assignment_in_txn,
+    RequestAssignmentObservation,
 };
 #[cfg(test)]
 pub(crate) use request_head::assignment_allows;

@@ -223,6 +223,18 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         "{}: retained native history",
         case["name"]
     );
+    let request = &rows[0];
+    let within_transaction = access
+        .transact_readonly("test.assignment_history_in_transaction", |txn| {
+            Box::pin(super::super::load_request_assignment_in_txn(txn, request))
+        })
+        .await;
+    assert_eq!(
+        observation(within_transaction, Some(&roots)),
+        case["expected"],
+        "{}: retained history in the caller's transaction",
+        case["name"]
+    );
     let handoff = crate::background_completion::turn_assignment_handoff(
         &node,
         &rows[0],

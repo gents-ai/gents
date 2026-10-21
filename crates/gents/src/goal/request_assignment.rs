@@ -170,6 +170,19 @@ pub(crate) async fn load_request_assignment(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request: &AgentRequestRow,
 ) -> anyhow::Result<RequestAssignmentObservation> {
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "goal.assignment_requests",
+        |txn| Box::pin(load_request_assignment_in_txn(txn, request)),
+    )
+    .await
+}
+
+pub(crate) async fn load_request_assignment_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequestRow,
+) -> anyhow::Result<RequestAssignmentObservation> {
     use anyhow::Context;
     let owner = request
         .node_did
@@ -183,14 +196,7 @@ pub(crate) async fn load_request_assignment(
         .doc_id
         .as_deref()
         .context("assignment request has no physical identity")?;
-    let access = crate::config_client::ConfigAccess::local(node.clone());
-    let rows = access
-        .transact_readonly("goal.assignment_requests", |txn| {
-            Box::pin(async move {
-                super::request_head::load_session_requests(txn, owner, session).await
-            })
-        })
-        .await?;
+    let rows = super::request_head::load_session_requests(txn, owner, session).await?;
     let by_doc = super::request_head::request_rows_by_doc(owner, session, &rows)?;
     let current = by_doc
         .get(doc)
@@ -202,7 +208,7 @@ pub(crate) async fn load_request_assignment(
     );
     let entry =
         super::request_head::authenticated_entry(owner, session, current, &by_doc, None)?.clone();
-    let versions = super::load_goal_versions_for_session(&access, owner, session).await?;
+    let versions = super::load_goal_versions_for_session(txn, owner, session).await?;
     observe_assignment_history(&versions, &entry)
 }
 
