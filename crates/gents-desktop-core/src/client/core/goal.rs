@@ -4,7 +4,7 @@ use gents_protocol::goal_control::{
     GoalOperation, GoalRevision, SessionGoalControl, SessionGoalControlReceipt,
     SessionGoalObservation, SESSION_GOAL_CONTROL_VERSION,
 };
-use gents_protocol::request_input::{QueueDelivery, RequestInput};
+use gents_protocol::request_input::{GoalAssignmentInput, QueueDelivery, RequestInput};
 
 use super::writes::ensure_peer_chat_ready_at;
 use super::ClientCore;
@@ -44,15 +44,16 @@ impl ClientCore {
         expected: Option<GoalRevision>,
         operation: GoalOperation,
         agent_id: Option<&str>,
-        input: RequestInput,
+        mut input: RequestInput,
     ) -> Result<SessionGoalControlReceipt> {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
-        if matches!(operation, GoalOperation::Stop {})
-            || (matches!(operation, GoalOperation::Create { .. }) && expected.is_some())
-        {
+        if matches!(
+            operation,
+            GoalOperation::Stop {} | GoalOperation::Create { .. }
+        ) {
             crate::local_runtime::ensure_goal_stop_supported(peer.as_ref()).await?;
         }
         crate::local_runtime::ensure_captured_input_supported(peer.as_ref(), &input).await?;
@@ -60,6 +61,15 @@ impl ClientCore {
             self.request_authority(node_did, peer.as_ref()).await?;
         let command_id = uuid::Uuid::new_v4().to_string();
         let initial_request = if let GoalOperation::Create { objective, .. } = &operation {
+            let goal_id = if expected.is_some() {
+                gents::goal::replacement_goal_identity(node_did, session_id, &command_id).goal_id
+            } else {
+                gents::goal::deterministic_goal_id(node_did, session_id)
+            };
+            input.goal_assignment = Some(GoalAssignmentInput {
+                goal_id,
+                root_request_doc_id: None,
+            });
             let input = self
                 .prepare_user_message_input_with_delivery(
                     node_did,

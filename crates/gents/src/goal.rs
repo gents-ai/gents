@@ -958,12 +958,16 @@ async fn fence_opened_graph_goal_in_txn(
     Ok(())
 }
 
-pub(crate) struct GoalCreationIdentity {
+#[doc(hidden)]
+pub struct GoalCreationIdentity {
     pub goal_id: String,
     pub creation_key: String,
 }
 
-pub(crate) fn replacement_goal_identity(
+/// IDs may contain separators; each component is framed by its UTF-8 byte
+/// length so the client and transaction owner name the same fresh assignment.
+#[doc(hidden)]
+pub fn replacement_goal_identity(
     node_did: &str,
     session_id: &str,
     command_id: &str,

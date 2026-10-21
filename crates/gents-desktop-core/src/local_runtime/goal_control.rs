@@ -30,7 +30,7 @@ fn decode(status: &Value, expected_did: &str) -> Result<()> {
             .get(STATUS_GOAL_STOP_CONTRACT_FIELD)
             .and_then(Value::as_u64)
             == Some(u64::from(GOAL_STOP_CONTRACT_VERSION)),
-        "Update this runtime to remove or replace goals. This chat is unchanged."
+        "The extension and runtime use different goal controls. Update them together, then reconnect."
     );
     Ok(())
 }

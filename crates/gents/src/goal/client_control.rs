@@ -163,12 +163,21 @@ pub(crate) async fn prepare_goal_control(
         if let Err(error) = request.graphql_input_fields() {
             return Ok(Err(error.into()));
         }
+        let expected_goal_id = replacement
+            .as_ref()
+            .map(|(_, identity)| identity.goal_id.clone())
+            .unwrap_or_else(|| deterministic_goal_id(&command.node_did, &command.session_id));
+        let first_assignment = gents_protocol::request_input::GoalAssignmentInput {
+            goal_id: expected_goal_id,
+            root_request_doc_id: None,
+        };
         if request.node_did != command.node_did
             || request.session_id != command.session_id
             || request.requester_did != command.requester_did
             || request.purpose != RequestPurpose::Normal
             || request.execution_origin != "interactive"
             || request.input.goal_continuation.is_some()
+            || request.input.goal_assignment.as_ref() != Some(&first_assignment)
             || !request.input.queue.as_ref().is_some_and(|queue| {
                 queue.source == gents_protocol::request_input::QueueSource::User
                     && queue.policy == gents_protocol::request_input::QueuePolicy::Append
