@@ -38,9 +38,11 @@ pub async fn ensure_migrations_with_registry(
 
     let started = Instant::now();
     reject_unknown_lineage(node, registry).await?;
-    register_file_image_policy(node, registry).await?;
+    let file_image_owner = register_file_image_policy(node, registry).await?;
     register_baseline(node, registry, &mut report).await?;
-    register_file_image_owner(node, registry).await?;
+    if let Some(owner) = file_image_owner.filter(|_| manages_file_images(registry)) {
+        register_file_image_owner(node, owner).await?;
+    }
     let baseline_ready = Instant::now();
     apply_steps(node, registry, &mut report).await?;
     let steps_ready = Instant::now();
@@ -96,13 +98,16 @@ fn manages_file_images(registry: &Registry<'_>) -> bool {
         .any(|name| name == gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
 }
 
-async fn register_file_image_policy(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+async fn register_file_image_policy<'n>(
+    node: &'n EmbeddedNode,
+    registry: &Registry<'_>,
+) -> Result<Option<&'n str>> {
     if !manages_file_images(registry)
         && !registry
             .managed_names()
             .any(|name| name == gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
     {
-        return Ok(());
+        return Ok(None);
     }
     if let Some(collection) = node
         .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
@@ -130,7 +135,7 @@ async fn register_file_image_policy(node: &EmbeddedNode, registry: &Registry<'_>
             "retained file image policy does not match its schema binding"
         )));
     }
-    Ok(())
+    Ok(Some(owner))
 }
 
 /// Policy bindings are outside the pinned schema version; lineage validation
@@ -151,13 +156,7 @@ fn validate_file_image_policy(collection: &CollectionVersion, branchable: bool) 
 
 /// DefraDB's branchable read guard falls back to the collection object when a
 /// document has no local ACP registration. That fallback must remain private.
-async fn register_file_image_owner(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
-    if !manages_file_images(registry) {
-        return Ok(());
-    }
-    let Some(owner) = node.node_identity_did() else {
-        return Ok(());
-    };
+async fn register_file_image_owner(node: &EmbeddedNode, owner: &str) -> Result<()> {
     let owner = owner
         .parse()
         .map_err(|error| Error::Node(anyhow::anyhow!("invalid image owner DID: {error}")))?;
