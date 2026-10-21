@@ -691,8 +691,24 @@ async fn durable_process_record_survives_a_fresh_store() {
 }
 
 #[cfg(unix)]
+/// Unrelated fork-based spawns can retain these pipe writers until exec. Isolate
+/// complete-output stress from writers that can outlast the bounded drain.
 #[test]
 fn concurrent_managed_commands_retain_complete_output() {
+    const FIXTURE: &str = "GENTS_MANAGED_EXEC_OUTPUT_FIXTURE";
+    if std::env::var_os(FIXTURE).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "managed_exec::tests::concurrent_managed_commands_retain_complete_output",
+                "--nocapture",
+            ])
+            .env(FIXTURE, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated command-output stress failed");
+        return;
+    }
     let workers: Vec<_> = (0..16)
         .map(|_| {
             std::thread::spawn(|| {
@@ -725,7 +741,10 @@ fn concurrent_managed_commands_retain_complete_output() {
                                     assert_eq!(code, Some(0));
                                     assert_eq!(stdout, b"captured");
                                     assert!(stderr.is_empty());
-                                    assert!(!stdout_truncated && !stderr_truncated);
+                                    assert!(
+                                        !stdout_truncated && !stderr_truncated,
+                                        "stdout_truncated={stdout_truncated}, stderr_truncated={stderr_truncated}"
+                                    );
                                 }
                                 other => panic!("expected complete capture, got {other:?}"),
                             }
