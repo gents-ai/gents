@@ -314,6 +314,65 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
     Ok(())
 }
 
+/// A documents pack whose Tools name a plugin that neither it nor the node
+/// provides is refused by `gents pack install` before any document is written.
+#[test]
+fn offline_pack_install_naming_an_unresolved_plugin_is_refused_before_writing() -> Result<()> {
+    let scratch = tempfile::tempdir().context("creating pack tempdir")?;
+    let pack = scratch.path().join("dependee_fixture");
+    copy_dir_all(&fixture_pack_dir("dependee_fixture"), &pack)?;
+    let config_path = pack.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    config["tools"][0]["integrations"] =
+        serde_json::json!({"plugins": [{"plugin": "acme/missing"}]});
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
+
+    let home = scratch.path().join("agent-home");
+    let home_arg = dir_arg(&home);
+    let initialized = run_init_json(
+        scratch.path(),
+        &["--node-name", "unresolved-plugin", "--home", home_arg],
+    )?;
+    let owner_did = node_did_from_init(&initialized)?;
+    let refusal = run_cli_failure_stderr(
+        scratch.path(),
+        &[
+            "pack",
+            "install",
+            dir_arg(&pack),
+            "--home",
+            home_arg,
+            "--registry",
+            UNROUTABLE_REGISTRY,
+            "--inference-slot",
+            &format!("worker={owner_did}:default-profile"),
+        ],
+    )?;
+    anyhow::ensure!(
+        refusal.contains("acme/missing") && refusal.contains("gents pack install"),
+        "the unresolved plugin was not named: {refusal}"
+    );
+
+    let export = scratch.path().join("export");
+    run_cli_text(
+        scratch.path(),
+        &[
+            "config",
+            "export",
+            "--root",
+            dir_arg(&export),
+            "--home",
+            home_arg,
+        ],
+    )?;
+    let exported = read_json_file(&export.join("pack_config.json"))?;
+    anyhow::ensure!(
+        !exported.to_string().contains("fixture-dependee-tools"),
+        "a Tools document was written by the refused install: {exported}"
+    );
+    Ok(())
+}
+
 /// A documents dependency that ships a plugin installs that plugin under the
 /// dependency's own coordinate, and removing the dependent releases it.
 #[test]
