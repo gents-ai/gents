@@ -421,7 +421,12 @@ mod tests {
     #[tokio::test]
     async fn shim_usage_rate_limits_come_from_the_session_account() {
         let tempdir = tempfile::tempdir().unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let provider = "chatgpt-codex";
         upsert_oauth_credential(
@@ -518,7 +523,12 @@ mod tests {
     #[tokio::test]
     async fn shim_usage_non_codex_account_sends_no_plan() {
         let tempdir = tempfile::tempdir().unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         upsert_oauth_credential(&node, &credential("xai-oauth", None))
             .await
@@ -567,7 +577,12 @@ mod tests {
     #[tokio::test]
     async fn shim_usage_failed_load_answers_empty() {
         let tempdir = tempfile::tempdir().unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let state = state(node, &tempdir);
         let (outbound, mut received) = mpsc::unbounded_channel();
@@ -589,7 +604,12 @@ mod tests {
     #[tokio::test]
     async fn account_read_comes_from_the_session_account() {
         let tempdir = tempfile::tempdir().unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         upsert_oauth_credential(&node, &credential("chatgpt-codex", Some("plus")))
             .await
@@ -627,7 +647,12 @@ mod tests {
     #[tokio::test]
     async fn shim_usage_non_codex_backend_answers_as_before() {
         let tempdir = tempfile::tempdir().unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         bind(
             &node,

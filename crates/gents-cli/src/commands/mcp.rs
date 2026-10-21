@@ -394,7 +394,7 @@ mod tests {
 
     async fn registry_with_an_offline_twin() -> (ConfigAccess, String) {
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .build()
                 .await
                 .unwrap(),

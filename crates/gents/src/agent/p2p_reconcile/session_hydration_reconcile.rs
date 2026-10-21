@@ -31,6 +31,24 @@ use crate::session::canonical_rows::{
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 
+mod file_images;
+
+#[derive(Clone, Copy)]
+enum DeliveryTarget<'a> {
+    Transcript(&'a BTreeSet<HydrationDocument>),
+    FileImage(&'a str),
+}
+
+#[cfg(test)]
+impl DeliveryTarget<'_> {
+    fn transcript(self) -> BTreeSet<HydrationDocument> {
+        match self {
+            Self::Transcript(documents) => documents.clone(),
+            Self::FileImage(_) => panic!("transcript delivery received file images"),
+        }
+    }
+}
+
 const HYDRATION_DELIVERY_MAX_ATTEMPTS: usize = 3;
 const HYDRATION_DELIVERY_RETRY_BASE: std::time::Duration = std::time::Duration::from_millis(250);
 
@@ -45,7 +63,7 @@ trait HydrationDelivery: Send + Sync {
     async fn push_documents_to_peer(
         &self,
         peer_id: &str,
-        documents: &BTreeSet<HydrationDocument>,
+        documents: DeliveryTarget<'_>,
     ) -> Result<()>;
 }
 
@@ -241,7 +259,9 @@ async fn serve_admitted_request(
         outcome.rejected.insert(request.request_key);
         return Ok(());
     }
-    let delivery_result = deliver_with_bounded_retry(delivery, &request, &documents).await;
+    let delivery_result =
+        deliver_with_bounded_retry(delivery, &request, DeliveryTarget::Transcript(&documents))
+            .await;
     if delivery_result == HydrationDeliveryResult::Indeterminate {
         let modeled = apply_hydration_delivery(
             HydrationVerdict::Admit(documents),
@@ -289,7 +309,7 @@ async fn serve_admitted_request(
 async fn deliver_with_bounded_retry(
     delivery: &dyn HydrationDelivery,
     request: &HydrationRequest,
-    documents: &BTreeSet<HydrationDocument>,
+    documents: DeliveryTarget<'_>,
 ) -> HydrationDeliveryResult {
     for attempt in 1..=HYDRATION_DELIVERY_MAX_ATTEMPTS {
         match delivery
@@ -327,21 +347,29 @@ pub async fn run_session_hydration_reconciler(
     };
     let delivery: Arc<dyn HydrationDelivery> =
         Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
-    let mut subscription = crate::subscribe_collections(&node, ["SessionHydrationRequest"])?;
+    let mut subscription = crate::subscribe_collections(
+        &node,
+        ["SessionHydrationRequest", "FileImageHydrationRequest"],
+    )?;
     let sweep_interval = super::intervals::sweep_interval();
     let mut interval =
         tokio::time::interval_at(tokio::time::Instant::now() + sweep_interval, sweep_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut subscription_open = true;
 
-    if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
+    if !sweep_hydration_requests_until_cancelled(
+        &cancel,
+        sweep_hydration_requests(&store, delivery.as_ref()),
+    )
+    .await
+    {
         return Ok(());
     }
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
+                if !sweep_hydration_requests_until_cancelled(&cancel, sweep_hydration_requests(&store, delivery.as_ref())).await {
                     return Ok(());
                 }
             },
@@ -357,7 +385,7 @@ pub async fn run_session_hydration_reconciler(
                         "session-hydration document-change capacity exceeded; performing authoritative sweep"
                     );
                 }
-                if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
+                if !sweep_hydration_requests_until_cancelled(&cancel, sweep_hydration_requests(&store, delivery.as_ref())).await {
                     return Ok(());
                 }
             }
@@ -366,18 +394,24 @@ pub async fn run_session_hydration_reconciler(
 }
 
 async fn sweep_hydration_requests_until_cancelled(
-    store: &dyn HydrationRequestStore,
-    delivery: &dyn HydrationDelivery,
     cancel: &CancellationToken,
+    sweep: impl std::future::Future<Output = ()>,
 ) -> bool {
     tokio::select! {
         biased;
         _ = cancel.cancelled() => false,
-        _ = sweep_hydration_requests(store, delivery) => true,
+        _ = sweep => true,
     }
 }
 
-async fn sweep_hydration_requests(
+async fn sweep_hydration_requests(store: &GraphqlHydrationStore, delivery: &dyn HydrationDelivery) {
+    sweep_transcript_requests(store, delivery).await;
+    if let Err(error) = file_images::reconcile_file_images(store, delivery).await {
+        tracing::warn!(%error, "file-image hydration sweep failed");
+    }
+}
+
+async fn sweep_transcript_requests(
     store: &dyn HydrationRequestStore,
     delivery: &dyn HydrationDelivery,
 ) {
@@ -412,9 +446,36 @@ impl HydrationDelivery for EmbeddedHydrationDelivery {
     async fn push_documents_to_peer(
         &self,
         peer_id: &str,
-        documents: &BTreeSet<HydrationDocument>,
+        target: DeliveryTarget<'_>,
     ) -> Result<()> {
-        super::embedded_impl::push_documents_to_peer(&self.node, peer_id, documents).await
+        let documents = match target {
+            DeliveryTarget::Transcript(documents) => documents
+                .iter()
+                .map(|document| defra_p2p_adapter::P2pDocumentRequest {
+                    collection: hydration_collection_name(document.collection).to_owned(),
+                    doc_id: document.doc_id.clone(),
+                })
+                .collect(),
+            DeliveryTarget::FileImage(document) => vec![defra_p2p_adapter::P2pDocumentRequest {
+                collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.to_owned(),
+                doc_id: document.to_owned(),
+            }],
+        };
+        super::embedded_impl::push_documents_to_peer(&self.node, peer_id, documents).await?;
+        if let DeliveryTarget::FileImage(document) = target {
+            let acknowledged = super::embedded_impl::EmbeddedRemoteP2pAdmin::new(self.node.clone())
+                .document_heads_acknowledged(
+                    peer_id,
+                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+                    &[document.to_owned()],
+                )
+                .await?;
+            anyhow::ensure!(
+                acknowledged == [true],
+                "selected file image has not been acknowledged by the peer"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -488,61 +549,8 @@ impl HydrationRequestStore for GraphqlHydrationStore {
     }
 
     async fn load_admission(&self, request: &HydrationRequest) -> Result<LoadedHydrationAdmission> {
-        let authorization = self
-            .enrollment
-            .fresh_authorization(&request.requester_did, &request.peer_id)
+        self.load_admission_for_collection(request, "SessionHydrationRequest")
             .await
-            .context("load fresh authenticated enrollment authority for hydration")?;
-        let session_id = escape_graphql_string(&request.session_id);
-        let peer_id = escape_graphql_string(&request.peer_id);
-        let query = hydration_admission_query(&session_id, &peer_id);
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query session hydration admission")
-                .await?;
-
-        let desired_agents = rows::<DesiredPairingRow>(&response, "PeerPairingDesired")?
-            .into_iter()
-            .filter_map(|row| {
-                Some((
-                    row.peer_id.filter(|value| !value.is_empty())?,
-                    row.node_did.filter(|value| !value.is_empty())?,
-                ))
-            })
-            .collect::<BTreeMap<_, _>>();
-        let applied_pairing_routes = rows::<AppliedPairingRow>(&response, "PeerPairingApplied")?
-            .into_iter()
-            .filter_map(|row| applied_pairing_route(row, &desired_agents))
-            .collect();
-        let sessions = rows::<SessionRow>(&response, "AgentSession")?
-            .into_iter()
-            .filter_map(|row| {
-                Some(SessionOwner {
-                    session_id: row.session_id.filter(|value| !value.is_empty())?,
-                    requester_did: row.requester_did.unwrap_or_default(),
-                    node_did: row.node_did.unwrap_or_default(),
-                })
-            })
-            .collect();
-        let (selected_network_id, verified_active_memberships) = match authorization.as_ref() {
-            Some(authorization) => (
-                authorization.network_id.clone(),
-                BTreeSet::from([VerifiedActiveMembership {
-                    network_id: authorization.network_id.clone(),
-                    member_did: authorization.member_did.clone(),
-                }]),
-            ),
-            None => (String::new(), BTreeSet::new()),
-        };
-        Ok(LoadedHydrationAdmission {
-            catalog: HydrationCatalog {
-                applied_pairing_routes,
-                selected_network_id,
-                verified_active_memberships,
-                sessions,
-                ..HydrationCatalog::default()
-            },
-            authorization,
-        })
     }
 
     async fn load_selection(&self, request: &HydrationRequest) -> Result<HydrationSelection> {
@@ -1069,6 +1077,68 @@ async fn load_effect_children(
 }
 
 impl GraphqlHydrationStore {
+    async fn load_admission_for_collection(
+        &self,
+        request: &HydrationRequest,
+        collection: &str,
+    ) -> Result<LoadedHydrationAdmission> {
+        let authorization = self
+            .enrollment
+            .fresh_authorization(&request.requester_did, &request.peer_id)
+            .await
+            .context("load fresh authenticated enrollment authority for hydration")?;
+        let session_id = escape_graphql_string(&request.session_id);
+        let peer_id = escape_graphql_string(&request.peer_id);
+        let query = hydration_admission_query(&session_id, &peer_id);
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query session hydration admission")
+                .await?;
+
+        let desired_agents = rows::<DesiredPairingRow>(&response, "PeerPairingDesired")?
+            .into_iter()
+            .filter_map(|row| {
+                Some((
+                    row.peer_id.filter(|value| !value.is_empty())?,
+                    row.node_did.filter(|value| !value.is_empty())?,
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let applied_pairing_routes = rows::<AppliedPairingRow>(&response, "PeerPairingApplied")?
+            .into_iter()
+            .filter_map(|row| applied_pairing_route(row, &desired_agents, collection))
+            .collect();
+        let sessions = rows::<SessionRow>(&response, "AgentSession")?
+            .into_iter()
+            .filter_map(|row| {
+                Some(SessionOwner {
+                    session_id: row.session_id.filter(|value| !value.is_empty())?,
+                    requester_did: row.requester_did.unwrap_or_default(),
+                    node_did: row.node_did.unwrap_or_default(),
+                })
+            })
+            .collect();
+        let (selected_network_id, verified_active_memberships) = match authorization.as_ref() {
+            Some(authorization) => (
+                authorization.network_id.clone(),
+                BTreeSet::from([VerifiedActiveMembership {
+                    network_id: authorization.network_id.clone(),
+                    member_did: authorization.member_did.clone(),
+                }]),
+            ),
+            None => (String::new(), BTreeSet::new()),
+        };
+        Ok(LoadedHydrationAdmission {
+            catalog: HydrationCatalog {
+                applied_pairing_routes,
+                selected_network_id,
+                verified_active_memberships,
+                sessions,
+                ..HydrationCatalog::default()
+            },
+            authorization,
+        })
+    }
+
     async fn signed_receipt(
         &self,
         request: &HydrationRequestRow,
@@ -1140,11 +1210,12 @@ fn hydration_selection_query(session_id: &str, node_did: &str, requester_did: &s
 fn applied_pairing_route(
     row: AppliedPairingRow,
     desired_agents: &BTreeMap<String, String>,
+    collection: &str,
 ) -> Option<AppliedPairingRoute> {
     let peer_id = row.peer_id.filter(|value| !value.is_empty())?;
     let desired_agent = desired_agents.get(&peer_id)?;
     let filters = decode_pairing_filters(row.replicator_filter.as_deref()?).ok()?;
-    let request_filter = filters.get("SessionHydrationRequest")?;
+    let request_filter = filters.get(collection)?;
     let requester_did = conjunctive_string_eq(request_filter, "requester_did")?;
     let applied_agent = conjunctive_string_eq(request_filter, "node_did")?;
     if applied_agent != desired_agent {
@@ -1330,12 +1401,12 @@ mod tests {
         async fn push_documents_to_peer(
             &self,
             peer_id: &str,
-            documents: &BTreeSet<HydrationDocument>,
+            documents: DeliveryTarget<'_>,
         ) -> Result<()> {
             self.pushed
                 .lock()
                 .expect("pushed lock")
-                .push((peer_id.to_string(), documents.clone()));
+                .push((peer_id.to_string(), documents.transcript()));
             Ok(())
         }
     }
@@ -1345,7 +1416,7 @@ mod tests {
         async fn push_documents_to_peer(
             &self,
             peer_id: &str,
-            documents: &BTreeSet<HydrationDocument>,
+            documents: DeliveryTarget<'_>,
         ) -> Result<()> {
             if self
                 .attempts
@@ -1357,7 +1428,7 @@ mod tests {
             self.pushed
                 .lock()
                 .expect("pushed lock")
-                .push((peer_id.to_string(), documents.clone()));
+                .push((peer_id.to_string(), documents.transcript()));
             Ok(())
         }
     }
@@ -1367,14 +1438,14 @@ mod tests {
         async fn push_documents_to_peer(
             &self,
             peer_id: &str,
-            documents: &BTreeSet<HydrationDocument>,
+            documents: DeliveryTarget<'_>,
         ) -> Result<()> {
             self.attempts
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.pushed
                 .lock()
                 .expect("pushed lock")
-                .push((peer_id.to_string(), documents.clone()));
+                .push((peer_id.to_string(), documents.transcript()));
             anyhow::bail!("transport outcome unknown after dispatch")
         }
     }
@@ -1384,7 +1455,7 @@ mod tests {
         async fn push_documents_to_peer(
             &self,
             _peer_id: &str,
-            _documents: &BTreeSet<HydrationDocument>,
+            _documents: DeliveryTarget<'_>,
         ) -> Result<()> {
             self.started.notify_one();
             std::future::pending().await
@@ -1590,7 +1661,7 @@ mod tests {
 
     #[tokio::test]
     async fn hydration_catalog_filter_is_accepted_by_real_schema() {
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = crate::test_support::node_builder().build().await.unwrap();
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let admission = hydration_admission_query("session-1", "peer-1");
         let response = node.execute(&admission).await;
@@ -1800,35 +1871,30 @@ mod tests {
 
     #[test]
     fn applied_pairing_requires_exact_requester_and_desired_agent() {
-        let filter = combine_filters(
-            equality_filter("requester_did", "did:key:requester-1"),
-            equality_filter("node_did", "did:key:agent-1"),
-        );
-        let raw = serde_json::to_string(&BTreeMap::from([(
-            "SessionHydrationRequest".to_string(),
-            filter,
-        )]))
-        .expect("serialize filter");
-        let desired = BTreeMap::from([("peer-1".to_string(), "did:key:agent-1".to_string())]);
-        let route = applied_pairing_route(
-            AppliedPairingRow {
+        for collection in ["SessionHydrationRequest", "FileImageHydrationRequest"] {
+            let filter = combine_filters(
+                equality_filter("requester_did", "did:key:requester-1"),
+                equality_filter("node_did", "did:key:agent-1"),
+            );
+            let raw =
+                serde_json::to_string(&BTreeMap::from([(collection.to_string(), filter)])).unwrap();
+            let row = || AppliedPairingRow {
                 peer_id: Some("peer-1".into()),
                 replicator_filter: Some(raw.clone()),
-            },
-            &desired,
-        )
-        .expect("exact route");
-        assert_eq!(route.requester_did, "did:key:requester-1");
-
-        let wrong_agent = BTreeMap::from([("peer-1".to_string(), "did:key:agent-2".to_string())]);
-        assert!(applied_pairing_route(
-            AppliedPairingRow {
-                peer_id: Some("peer-1".into()),
-                replicator_filter: Some(raw),
-            },
-            &wrong_agent,
-        )
-        .is_none());
+            };
+            let desired = BTreeMap::from([("peer-1".to_string(), "did:key:agent-1".to_string())]);
+            let route = applied_pairing_route(row(), &desired, collection).expect("exact route");
+            assert_eq!(route.requester_did, "did:key:requester-1");
+            let wrong_agent =
+                BTreeMap::from([("peer-1".to_string(), "did:key:agent-2".to_string())]);
+            assert!(applied_pairing_route(row(), &wrong_agent, collection).is_none());
+            let other = if collection == "SessionHydrationRequest" {
+                "FileImageHydrationRequest"
+            } else {
+                "SessionHydrationRequest"
+            };
+            assert!(applied_pairing_route(row(), &desired, other).is_none());
+        }
     }
 
     #[tokio::test]
@@ -1838,7 +1904,10 @@ mod tests {
             started: tokio::sync::Notify::new(),
         };
         let cancel = CancellationToken::new();
-        let sweep = sweep_hydration_requests_until_cancelled(&store, &delivery, &cancel);
+        let sweep = sweep_hydration_requests_until_cancelled(
+            &cancel,
+            sweep_transcript_requests(&store, &delivery),
+        );
         tokio::pin!(sweep);
 
         tokio::select! {

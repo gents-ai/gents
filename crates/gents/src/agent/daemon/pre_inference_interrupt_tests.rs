@@ -164,7 +164,7 @@ async fn request_terminal_row(
 
 #[tokio::test]
 async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let agent_config = pre_inference_agent();
     let node_did = agent_config.node_did().to_owned();
@@ -273,7 +273,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
 
 #[tokio::test]
 async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let agent_config = pre_inference_agent();
     let node_did = agent_config.node_did().to_owned();
@@ -449,7 +449,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
 
 #[tokio::test]
 async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_the_owner() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let agent_config = pre_inference_agent();
     let node_did = agent_config.node_did().to_owned();

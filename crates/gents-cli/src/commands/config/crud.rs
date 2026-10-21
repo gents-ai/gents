@@ -379,7 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
-        let node = Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["owner-a", "owner-b"] {

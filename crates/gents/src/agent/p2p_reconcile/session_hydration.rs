@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 pub use gents_protocol::session_hydration::{
-    SessionHydrationCollection, SessionHydrationDocumentKey,
+    HydrationRequest, SessionHydrationCollection, SessionHydrationDocumentKey,
 };
 
 pub const HYDRATION_COLLECTIONS: &[SessionHydrationCollection] = &[
@@ -21,39 +21,6 @@ pub fn hydration_collection_name(collection: SessionHydrationCollection) -> &'st
         SessionHydrationCollection::AgentToolCall => "AgentToolCall",
         SessionHydrationCollection::AgentOutputSegment => "AgentOutputSegment",
         SessionHydrationCollection::CompactionEntry => "CompactionEntry",
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HydrationRequest {
-    pub request_key: String,
-    pub peer_id: String,
-    pub requester_did: String,
-    pub node_did: String,
-    pub session_id: String,
-}
-
-impl HydrationRequest {
-    pub fn from_row(
-        request_key: String,
-        requester_did: String,
-        node_did: String,
-        session_id: String,
-    ) -> Result<Self, &'static str> {
-        let Some((peer_id, key_session_id)) = request_key.split_once(':') else {
-            return Err("request_key must be {peer_id}:{session_id}");
-        };
-        if peer_id.is_empty() || key_session_id != session_id {
-            return Err("request_key does not match peer/session columns");
-        }
-        let peer_id = peer_id.to_string();
-        Ok(Self {
-            request_key,
-            peer_id,
-            requester_did,
-            node_did,
-            session_id,
-        })
     }
 }
 

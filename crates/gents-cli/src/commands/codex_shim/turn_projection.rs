@@ -728,7 +728,7 @@ pub(in crate::commands::codex_shim) mod tests {
 
         let temp = tempfile::tempdir().expect("reasoning projection directory");
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(temp.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
@@ -1015,7 +1015,7 @@ pub(in crate::commands::codex_shim) mod tests {
         use std::time::Duration;
         use tokio::sync::Mutex;
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(directory.join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

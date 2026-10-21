@@ -1321,8 +1321,11 @@ mod tests {
 
     async fn config() -> (tempfile::TempDir, AcpServiceConfig) {
         let tempdir = tempfile::tempdir().expect("tempdir");
+        let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("actor.key"), None)
+            .expect("test signing identity");
         let node = Arc::new(
             EmbeddedNode::builder()
+                .with_node_identity_did(gents::NodeIdentity::did(&identity))
                 .data_path(tempdir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

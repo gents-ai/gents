@@ -194,7 +194,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
             gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
             gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
         ] {
-            let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
             let behavior = integration_test_agent("general");
             let owner = behavior.node_did().to_owned();
@@ -317,7 +317,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
     for case in contract()["admissions"].as_array().unwrap() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let pre: State = decode(&case["pre"]);
         for (index, request) in pre.requests.iter().enumerate() {
@@ -419,7 +419,7 @@ async fn persisted_outcome_requests(
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
     use crate::config_client::ConfigAccess;
     for trace in contract()["outcome_traces"].as_array().unwrap() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         let mut published = std::collections::BTreeMap::new();
@@ -672,7 +672,7 @@ async fn saved_arrival_cursor(access: &crate::config_client::ConfigAccess) -> St
 async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashes() {
     use crate::config_client::{event_source_cursor, ConfigAccess};
     for case in contract()["cursors"].as_array().unwrap() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         access
@@ -929,7 +929,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
     use crate::config_client::{event_source_cursor, ConfigAccess};
     for case in contract()["callback_cursors"].as_array().unwrap() {
         let name = &case["name"];
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         access

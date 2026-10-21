@@ -683,7 +683,7 @@ mod tests {
     ) {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(tempdir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
@@ -783,7 +783,7 @@ mod tests {
     async fn background_tool_watcher_exits_when_outbound_closes_while_tool_is_running() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(tempdir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

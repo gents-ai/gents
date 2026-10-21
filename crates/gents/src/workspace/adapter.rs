@@ -402,6 +402,73 @@ pub(crate) fn validate_tree_delta(
     Ok(())
 }
 
+pub(crate) fn inspect_snapshot_edits(
+    repo: &Path,
+    before: &str,
+    after: &str,
+    capability: &super::WorkspacePathCapability,
+) -> Result<Vec<super::change_review::RecordedEdit>> {
+    use super::change_review::{FileVersion, RecordedEdit};
+    validate_tree_delta(repo, before, after, capability)?;
+    let args = [
+        "diff",
+        "--raw",
+        "--no-abbrev",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        before,
+        after,
+        "--",
+    ];
+    let bytes = git_output_bytes_inner(git_command(repo, &args), repo, &args)?;
+    let fields = nul_paths(&bytes)?;
+    anyhow::ensure!(fields.len() % 2 == 0, "malformed Git review delta");
+    fields
+        .chunks_exact(2)
+        .map(|pair| {
+            let header: Vec<_> = pair[0].split_ascii_whitespace().collect();
+            anyhow::ensure!(header.len() == 5, "malformed Git review delta header");
+            let version = |mode: &str, blob: &str| -> Result<Option<FileVersion>> {
+                match mode {
+                    "000000" => {
+                        anyhow::ensure!(
+                            blob.bytes().all(|byte| byte == b'0'),
+                            "invalid missing-file object ID"
+                        );
+                        Ok(None)
+                    }
+                    "100644" | "100755" => Ok(Some(FileVersion {
+                        blob: blob.to_owned(),
+                        executable: mode == "100755",
+                    })),
+                    _ => bail!("unsupported workspace review entry mode: {mode}"),
+                }
+            };
+            Ok(RecordedEdit {
+                path: pair[1].clone(),
+                before: version(
+                    header[0]
+                        .strip_prefix(':')
+                        .context("missing Git review mode prefix")?,
+                    header[2],
+                )?,
+                after: version(header[1], header[3])?,
+                canonical: true,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn require_snapshot_tree(repo: &Path, revision: &str) -> Result<()> {
+    git_output(
+        repo,
+        &["rev-parse", "--verify", &format!("{revision}^{{tree}}")],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn capture_instruction_manifest(repo: &Path, base_sha: &str) -> Result<String> {
     let mut files = Vec::new();
     for path in DEFAULT_INSTRUCTION_PATHS {

@@ -112,7 +112,7 @@ mod tests {
         let address = probe.local_addr().unwrap();
         drop(probe);
         let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .with_http(crate::defra_node::HttpConfig::with_addr(address))
                 .build()
                 .await

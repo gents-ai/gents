@@ -2814,7 +2814,7 @@ mod tests {
         use super::super::canonical_rows::{
             output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
         };
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = crate::test_support::node_builder().build().await.unwrap();
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let request = "doc-scan-gap";
         let create_segment = |segment: gents_protocol::output::OutputSegment| {

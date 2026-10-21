@@ -794,7 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn access_reviewer_setup_preserves_policy_and_rejects_task_side_effects() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:access-review-setup";
         let config: gents::document_config::PackConfig = serde_json::from_value(json!({
@@ -863,8 +863,8 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_task_resolution_ignores_stale_desktop_revision() -> Result<()> {
-        let operator = Arc::new(EmbeddedNode::builder().build().await?);
-        let desktop = Arc::new(EmbeddedNode::builder().build().await?);
+        let operator = Arc::new(crate::test_support::node_builder().build().await?);
+        let desktop = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(operator.as_ref()).await?;
         gents::ensure_runtime_schemas(&desktop).await?;
         let owner = "did:test:canonical-task-run";
@@ -953,7 +953,12 @@ mod tests {
             None,
         )?;
         let local_node_did = identity.did();
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(local_node_did)
+                .build()
+                .await?,
+        );
         gents::ensure_runtime_schemas(&node).await?;
         ConfigAccess::write_local(
             &node,
@@ -1018,7 +1023,7 @@ mod tests {
     #[tokio::test]
     async fn automation_replacements_preserve_scoped_references_and_goal_hook_rules() -> Result<()>
     {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:automation-a", "did:test:automation-b"] {
             let config: gents::document_config::PackConfig = serde_json::from_value(json!({

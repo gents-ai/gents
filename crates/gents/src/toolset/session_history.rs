@@ -1619,7 +1619,7 @@ mod tests {
     }
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let identities = tempfile::tempdir().unwrap();
         let node_identity = pin_fixed_signing_identity(identities.path());
@@ -2218,7 +2218,7 @@ mod tests {
             scope_request_tool_execution_with_session, scope_tool_request_identity,
         };
 
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let identities = tempfile::tempdir().unwrap();
         let owner = pin_fixed_signing_identity(identities.path());

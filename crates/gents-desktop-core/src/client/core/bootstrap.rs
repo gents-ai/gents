@@ -603,8 +603,39 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&plain).await.unwrap();
+        let baseline = gents_migration::DEFAULT_BASELINE
+            .iter()
+            .copied()
+            .filter(|entry| {
+                ![
+                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+                    gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+                ]
+                .contains(&entry.name)
+            })
+            .collect::<Vec<_>>();
+        let registry = gents_migration::Registry {
+            baseline: &baseline,
+            ..gents_migration::DEFAULT_REGISTRY
+        };
+        gents_migration::ensure_migrations_with_registry(&plain, &registry)
+            .await
+            .unwrap();
         let access = ConfigAccess::local(Arc::clone(&plain));
+        assert!(access
+            .collection_version(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+            .await
+            .unwrap()
+            .is_none());
+        let mut expected_versions = Vec::new();
+        for entry in &baseline {
+            let collection = access
+                .collection_version(entry.name)
+                .await
+                .unwrap()
+                .unwrap();
+            expected_versions.push((entry.name, collection["VersionID"].clone()));
+        }
         access
             .write(
                 "test.client_upgrade.session",
@@ -680,6 +711,20 @@ mod tests {
                 identity_bytes
             );
             let access = ConfigAccess::local(core.node_arc());
+            for (name, version) in &expected_versions {
+                let collection = access.collection_version(name).await.unwrap().unwrap();
+                assert_eq!(&collection["VersionID"], version, "{name}");
+            }
+            assert!(access
+                .collection_version(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+                .await
+                .unwrap()
+                .is_some());
+            assert!(access
+                .collection_version(gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME)
+                .await
+                .unwrap()
+                .is_some());
             assert_eq!(access.execute(query).await.unwrap(), expected_document);
             assert_eq!(
                 access.execute(&history_query).await.unwrap(),

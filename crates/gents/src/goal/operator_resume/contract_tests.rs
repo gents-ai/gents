@@ -270,7 +270,7 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         .before;
     for resume_first in [false, true] {
         let f = Fixture::new(initial).await;
-        let remote = f.node.runner().begin_txn(false).await.unwrap();
+        let remote = f.node.begin_transaction(false).await.unwrap();
         let goal_id = escape_graphql_string(&f.goal.goal_id);
         let query = format!(
             r#"{{ Goal(filter: {{ goal_id: {{ _eq: "{goal_id}" }} }}) {{ _docID status continuation_sequence updated_at }} }}"#
@@ -301,17 +301,16 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         let conflict = if resume_first {
             local.commit().await.unwrap();
             f.node
-                .runner()
-                .commit_txn(&remote)
+                .commit_transaction(&remote)
                 .await
                 .unwrap_err()
                 .to_string()
         } else {
-            f.node.runner().commit_txn(&remote).await.unwrap();
+            f.node.commit_transaction(&remote).await.unwrap();
             local.commit().await.unwrap_err().to_string()
         };
         assert!(conflict.contains("transaction conflict"), "{conflict}");
-        let _ = f.node.runner().rollback_txn(&remote).await;
+        let _ = f.node.rollback_transaction(&remote).await;
         let observed = f.observe().await;
         assert_eq!(
             observed["status"],

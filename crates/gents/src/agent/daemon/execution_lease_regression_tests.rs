@@ -73,7 +73,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose, StreamPayload};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut agent_config = test_agent();
     {
@@ -486,7 +486,7 @@ impl crate::llm::tool::ToolDyn for LeaseBlockingTool {
 
 #[tokio::test]
 async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let agent_config = test_agent();
     let node_did = agent_config.node_did().to_owned();
@@ -666,7 +666,7 @@ impl CompletionModel for NonTerminalProvider {
 async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool) {
     let data = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(data.path())
             .build()
             .await
@@ -913,7 +913,7 @@ async fn eight_silent_provider_streams_renew_until_explicitly_interrupted_withou
 
 #[tokio::test]
 async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = crate::config_client::ConfigAccess::local(node.clone());
     let agent_config = test_agent();
@@ -1099,7 +1099,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     assert!(ACTIVE_STREAM_INTERVAL * ACTIVE_CHUNKS as u32 > lease * 2);
     let data = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(data.path())
             .build()
             .await
@@ -1236,7 +1236,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut agent_config = test_agent();
     {

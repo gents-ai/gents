@@ -5,7 +5,7 @@ use super::*;
 const OWNER: &str = "did:key:zPackInstallOwner";
 
 async fn access() -> ConfigAccess {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     ConfigAccess::local(node)
 }
@@ -536,7 +536,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
 }
 
 async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::document_config::ensure_node(&node, OWNER)
         .await
@@ -1424,7 +1424,7 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
     let mut config = config(&[]);
     config.tools = vec![job_tools(json!({"agent_targets": ["wf-run"]}))];
     config.agent_targets = shipping(&["wf-run"]).agent_targets;
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::document_config::ensure_node(&node, OWNER)
         .await

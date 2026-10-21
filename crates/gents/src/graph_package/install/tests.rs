@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 async fn fixture() -> (Arc<EmbeddedNode>, ConfigAccess, GraphPackageInstallBindings) {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let owner = "did:key:package-owner";
     crate::document_config::ensure_node(&node, owner)

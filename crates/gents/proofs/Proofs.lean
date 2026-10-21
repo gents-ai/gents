@@ -63,6 +63,8 @@ import Proofs.P2PBackpressure
 import Proofs.StreamingResponse
 import Proofs.Background
 import Proofs.Workspace
+import Proofs.Conformance.ChangeReview
+import Proofs.Conformance.FileImageHydration
 import Proofs.Callback
 import Proofs.Migration
 import Proofs.CodexShim

@@ -90,6 +90,16 @@ pub mod xai_oauth_refresh;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    /// Fixtures that reopen a store must retain its original signing identity.
+    pub(crate) fn node_builder() -> defra_node::NodeBuilder {
+        use crate::NodeIdentity as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let identity =
+            crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+    }
+
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
         crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
         crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,

@@ -25,13 +25,22 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let home = tempfile::tempdir().unwrap();
+        let identity =
+            crate::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+                .unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
         node.add_schema("type BoardTask { title: String lane: String }")
             .await
             .unwrap();
         let access = ConfigAccess::local(node.clone());
-        let home = tempfile::tempdir().unwrap();
         install_board(
             home.path(),
             vec![

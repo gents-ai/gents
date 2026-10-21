@@ -758,7 +758,7 @@ mod observation_refresh_tests {
     async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
         let temp = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(temp.path())
                 .build()
                 .await
@@ -797,7 +797,7 @@ mod observation_refresh_tests {
     async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
         let temp = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(temp.path())
                 .build()
                 .await
@@ -898,7 +898,7 @@ mod observation_refresh_tests {
     async fn refresh_accepts_null_requester_and_rejects_changed_session_scope() {
         let temp = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(temp.path())
                 .build()
                 .await

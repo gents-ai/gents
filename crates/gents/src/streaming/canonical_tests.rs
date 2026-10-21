@@ -34,7 +34,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
 async fn authored_publication_replays_and_reconstructs_exact_message() {
     let path = std::env::temp_dir().join(format!("canonical-authored-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&path)
             .build()
             .await
@@ -76,7 +76,7 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation,
         PayloadRef, PresentedPayload, TranscriptMessage,
     };
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
     let mut lifecycle = claimed(&node, "incomplete-request", "incomplete-session").await;
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
@@ -216,7 +216,7 @@ async fn fixture(
 ) {
     let path = std::env::temp_dir().join(format!("canonical-{name}-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&path)
             .build()
             .await
@@ -1701,7 +1701,7 @@ async fn modeled_capture_documents_survive_publication_replay_and_forks() {
     use gents_protocol::request_input::RequestInput;
     const OWNER: &str = "did:test:test";
     const SESSION: &str = "captured-documents";
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, OWNER, "general").await;
     let mut lifecycle = claimed(&node, "captured-documents", SESSION).await;

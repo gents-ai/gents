@@ -1126,7 +1126,7 @@ mod tests {
 
     #[tokio::test]
     async fn durable_chain_is_idempotent_conflict_visible_and_restartable() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let prefix = vec![Message::user("old")];
         let suffix = vec![Message::assistant("current")];
@@ -1503,7 +1503,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_rejects_a_split_through_a_tool_pair() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let call = Message::Assistant {
             id: None,
@@ -1627,7 +1627,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_boundary_pins_bounded_canonical_high_water() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for sequence in [2, 1] {
             let mutation = format!(

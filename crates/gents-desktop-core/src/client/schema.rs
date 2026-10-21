@@ -35,6 +35,7 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
         .filter(|name| !gents_protocol::schemas::is_local_audit_collection(name))
         .filter(|name| !gents_protocol::schemas::is_local_only_collection(name))
         .filter(|name| !gents_protocol::schemas::is_credential_collection(name))
+        .filter(|name| !gents_protocol::schemas::requires_explicit_delivery(name))
         .copied()
         .collect()
 }
@@ -103,5 +104,38 @@ mod tests {
             .contains(&"NetworkEnrollmentRouteReceipt"));
         assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
             .contains(&"NetworkEnrollmentRouteReceipt"));
+    }
+
+    #[test]
+    fn generated_file_review_rules_exclude_whole_collection_delivery() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            collection: String,
+            explicit_delivery: bool,
+        }
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        let cases: Vec<Case> =
+            serde_json::from_value(snapshot["file_review_subscription_cases"].clone()).unwrap();
+        assert!(!cases.is_empty());
+        let subscriptions = subscribed_collection_names();
+        for case in cases {
+            let name = case.collection.as_str();
+            assert_eq!(
+                gents_protocol::schemas::requires_explicit_delivery(name),
+                case.explicit_delivery,
+                "{name}"
+            );
+            assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&name));
+            assert_eq!(
+                subscriptions.contains(&name),
+                !case.explicit_delivery,
+                "{name}"
+            );
+            assert_eq!(
+                gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&name),
+                !case.explicit_delivery,
+                "{name}"
+            );
+        }
     }
 }

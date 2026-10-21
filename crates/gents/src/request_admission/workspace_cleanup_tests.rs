@@ -28,7 +28,13 @@ impl Fixture {
     pub(crate) async fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(home.path().join("identity.key"), None).unwrap();
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,

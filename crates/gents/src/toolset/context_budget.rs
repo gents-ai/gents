@@ -507,7 +507,7 @@ mod tests {
     use super::*;
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         for mutation in [

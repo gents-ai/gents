@@ -1085,7 +1085,7 @@ mod tests {
     use crate::plugin_job::admit::RootCall;
     use crate::plugin_job::driver::read_step_row;
     use crate::plugin_job::input::tests::{
-        live_settings, new_job, resume_block, set_lifecycle, Job, NODE_DID,
+        live_settings, new_job, node_did, resume_block, set_lifecycle, Job,
     };
     use crate::tool_call_lifecycle::admission_fixture::fixture_job_pin;
     use gents_protocol::job::{JobOrigin, JobPolicy};
@@ -1124,7 +1124,7 @@ mod tests {
         ProcessControlScope {
             request_id: "request-1".to_owned(),
             session_id: "session-1".to_owned(),
-            node_did: NODE_DID.to_owned(),
+            node_did: node_did().to_owned(),
             requester_did: None,
         }
     }

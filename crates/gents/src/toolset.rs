@@ -11,6 +11,7 @@ mod cli_tool;
 mod context_budget;
 pub mod edit_match;
 mod file_tools;
+pub(crate) use file_tools::change_capture::FileChanges;
 mod goal;
 pub(crate) mod lsp;
 #[cfg(feature = "agent-memory")]
@@ -58,6 +59,13 @@ pub(crate) fn write_capable_bash_for_test(
     Box::new(UnrestrictedBashTool::new(
         ToolContext::new(root.to_path_buf(), false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    ))
+}
+
+#[cfg(test)]
+pub(crate) fn write_file_for_test(root: &std::path::Path) -> Box<dyn ToolDyn> {
+    Box::new(WriteFileTool::new(
+        ToolContext::new(root.to_path_buf(), false).unwrap(),
     ))
 }
 

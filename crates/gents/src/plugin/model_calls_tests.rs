@@ -440,7 +440,7 @@ fn malformed_model_calls_are_named() {
 #[tokio::test]
 async fn a_profile_resolves_to_its_chat_completions_endpoint() {
     let owner = "did:key:model-owner";
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, owner, "chandra").await;
     let models = AccessModels(ConfigAccess::local(node.clone()));

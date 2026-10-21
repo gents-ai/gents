@@ -79,7 +79,16 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
     assert!(!cases.is_empty(), "Lean emitted no durable-reduction cases");
 
     for case in cases {
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let directory = tempfile::tempdir().unwrap();
+        let identity =
+            gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(gents::NodeIdentity::did(&identity))
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let request_doc_id = format!("request-doc-{}", case.request_doc_id);
         let key = reduction_key(

@@ -1207,7 +1207,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity =
             KeyIdentity::load_or_create(temp.path().join("rejection.key"), None).unwrap();
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -1270,7 +1276,13 @@ mod tests {
     async fn signed_input_cannot_expand_context_or_spoof_runtime_queue() {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("input.key"), None).unwrap();
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
         let owner = crate::graphql::escape_graphql_string(identity.did());
         for mutation in [
@@ -1345,7 +1357,13 @@ mod tests {
         let identity =
             KeyIdentity::load_or_create(temp.path().join("projection.key"), None).unwrap();
         let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
         let owner = crate::graphql::escape_graphql_string(identity.did());
         for mutation in [
@@ -1502,7 +1520,13 @@ mod tests {
             KeyIdentity::load_or_create(temp.path().join("corrupt-session.key"), None).unwrap();
         let foreign =
             KeyIdentity::load_or_create(temp.path().join("corrupt-foreign.key"), None).unwrap();
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
         let node_did = crate::graphql::escape_graphql_string(identity.did());
         for (session_id, requester_did) in [
@@ -1583,7 +1607,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity =
             KeyIdentity::load_or_create(temp.path().join("corrupt-facts.key"), None).unwrap();
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
         let node_did = crate::graphql::escape_graphql_string(identity.did());
         for (session_id, sibling_request_id, sibling_created_at) in [
@@ -1714,7 +1744,7 @@ mod tests {
                 let temp = tempfile::tempdir().unwrap();
                 let identity = KeyIdentity::load_or_create(temp.path().join("skew.key"), None)
                     .unwrap();
-                let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+                let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did()).build().await.unwrap());
                 ensure_runtime_schemas(&node).await.unwrap();
                 let node_did = crate::graphql::escape_graphql_string(identity.did());
                 let created = node
@@ -1774,7 +1804,13 @@ mod tests {
     async fn runtime_receipt_authenticates_terminal_expired_child_and_rejects_forgery() {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -1860,7 +1896,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         let owner = crate::graphql::escape_graphql_string(identity.did());
@@ -1948,7 +1990,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_trigger_source_requires_current_trigger_and_target_policy() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let response = node
             .execute(

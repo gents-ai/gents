@@ -145,7 +145,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
     let data_path =
         std::env::temp_dir().join(format!("processor-cadence-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -269,7 +269,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -369,7 +369,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     let data_path =
         std::env::temp_dir().join(format!("agent-stream-processor-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -853,7 +853,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1050,7 +1050,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1255,7 +1255,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1415,7 +1415,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1584,7 +1584,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1774,7 +1774,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await

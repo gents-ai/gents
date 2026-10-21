@@ -14,7 +14,7 @@ async fn insert(node: &Arc<EmbeddedNode>, collection: &str, value: Value) -> Str
 
 #[tokio::test]
 async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_requests() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"same-session","agent_id":"configured","lifecycle_state":"processing"})).await;
     let foreign = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"foreign","requester_did":null,"session_id":"same-session","agent_id":"configured","lifecycle_state":"processing"})).await;
@@ -72,7 +72,7 @@ async fn physical_interrupt_preserves_exact_scope_and_never_reaches_caused_reque
 
 #[tokio::test]
 async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_physical() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let owner = insert(
         &node,

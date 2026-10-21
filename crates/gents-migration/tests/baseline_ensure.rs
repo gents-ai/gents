@@ -546,3 +546,191 @@ async fn empty_registry_injectable_for_tests() {
     assert_eq!(report.baseline_registered, 0);
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn retained_file_images_require_a_native_owner_before_schema_install() {
+    let directory = tempfile::tempdir().unwrap();
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(directory.path())
+        .build()
+        .await
+        .unwrap();
+    let error = ensure_migrations(&node).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires the configured node identity"),
+        "{error}"
+    );
+    assert!(node.get_collection("ToolFileChange").unwrap().is_none());
+    assert!(node.get_collection("AgentToolCall").unwrap().is_none());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn unprotected_file_images_are_rejected_without_changing_retained_data() {
+    let node = common::fresh_node().await;
+    let directive = format!(
+        "@policy(id: \"{}\", resource: \"{}\")",
+        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
+    );
+    let unprotected = gents_protocol::schemas::TOOL_FILE_CHANGE.replace(&directive, "");
+    node.add_schema(&unprotected).await.unwrap();
+    let created = node.execute("mutation { create_ToolFileChange(input: { tool_call_doc_id: \"retained-tool\" }) { _docID } }").await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let before = node
+        .execute("{ ToolFileChange { _docID tool_call_doc_id } }")
+        .await;
+    let error = ensure_migrations(&node).await.unwrap_err();
+    assert!(
+        error.to_string().contains("incompatible document policy"),
+        "{error}"
+    );
+    let after = node
+        .execute("{ ToolFileChange { _docID tool_call_doc_id } }")
+        .await;
+    assert!(!after.has_errors(), "{:?}", after.errors);
+    assert_eq!(after.data, before.data);
+    assert!(node.get_collection("AgentToolCall").unwrap().is_none());
+    assert!(node
+        .get_collection("ToolFileChange")
+        .unwrap()
+        .unwrap()
+        .policy
+        .is_none());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn file_observation_install_preserves_retained_collection_lineages_and_documents() {
+    let directory = tempfile::tempdir().unwrap();
+    let identity = common::node_identity();
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(directory.path())
+        .with_node_identity_did(&identity)
+        .build()
+        .await
+        .unwrap();
+    let baseline = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .copied()
+        .filter(|entry| {
+            ![
+                gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+                gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+                gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME,
+            ]
+            .contains(&entry.name)
+        })
+        .collect::<Vec<_>>();
+    let registry = Registry {
+        baseline: &baseline,
+        steps: gents_migration::DEFAULT_STEPS,
+        ordinary_indexes: gents_migration::DEFAULT_REGISTRY.ordinary_indexes,
+    };
+    ensure_migrations_with_registry(&node, &registry)
+        .await
+        .unwrap();
+    let created = node
+        .execute(
+            r#"mutation { create_AgentToolCall(input: {
+        tool_call_key: "retained-session:retained-tool", request_id: "retained-request",
+        request_doc_id: "retained-physical-request", session_id: "retained-session",
+        node_did: "did:key:retained-node", requester_did: "did:key:retained-requester",
+        tool_call_id: "retained-tool", lifecycle_state: "completed"
+    }) { _docID } }"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let query = "{ AgentToolCall { _docID tool_call_key request_id request_doc_id session_id node_did requester_did tool_call_id lifecycle_state } }";
+    let before = node.execute(query).await;
+    assert!(!before.has_errors(), "{:?}", before.errors);
+    assert_eq!(
+        before.data.as_ref().unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let versions = baseline
+        .iter()
+        .map(|entry| {
+            (
+                entry.name,
+                node.get_collection(entry.name).unwrap().unwrap().version_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    node.shutdown().await;
+    drop(node);
+
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(directory.path())
+        .with_node_identity_did(&identity)
+        .build()
+        .await
+        .unwrap();
+    let report = ensure_migrations(&node).await.unwrap();
+    assert_eq!(report.baseline_registered, 3);
+    assert!(node
+        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .unwrap()
+        .is_some());
+    assert!(node
+        .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME)
+        .unwrap()
+        .is_some());
+    assert!(
+        !node
+            .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+            .unwrap()
+            .unwrap()
+            .is_branchable
+    );
+    for (name, version) in versions {
+        assert_eq!(
+            node.get_collection(name).unwrap().unwrap().version_id,
+            version,
+            "{name}"
+        );
+    }
+    let after = node.execute(query).await;
+    assert!(!after.has_errors(), "{:?}", after.errors);
+    assert_eq!(after.data, before.data);
+    assert_eq!(
+        ensure_migrations(&node).await.unwrap().baseline_registered,
+        0
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn file_image_receipt_is_local_and_matches_its_pinned_root() {
+    use gents_protocol::schemas::{
+        FILE_IMAGE_HYDRATION_RECEIPT, FILE_IMAGE_HYDRATION_RECEIPT_NAME,
+        TOOL_FILE_CHANGE_POLICY_ID, TOOL_FILE_CHANGE_POLICY_RESOURCE,
+    };
+    let node = fresh_node().await;
+    node.add_schema(FILE_IMAGE_HYDRATION_RECEIPT).await.unwrap();
+    let collection = node
+        .get_collection(FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+        .unwrap()
+        .unwrap();
+    assert!(!collection.is_branchable);
+    let policy = collection.policy.as_ref().unwrap();
+    assert_eq!(policy.id, TOOL_FILE_CHANGE_POLICY_ID);
+    assert_eq!(policy.resource_name, TOOL_FILE_CHANGE_POLICY_RESOURCE);
+    assert!(gents_protocol::schemas::is_local_only_collection(
+        FILE_IMAGE_HYDRATION_RECEIPT_NAME
+    ));
+    let baseline = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+        .unwrap();
+    assert_eq!(
+        Some(collection.version_id.as_str()),
+        baseline.expected_version
+    );
+    node.shutdown().await;
+}

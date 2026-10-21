@@ -1,7 +1,7 @@
 use super::*;
 
 async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionMaterializer) {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
         snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
@@ -12,7 +12,7 @@ async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionM
 
 #[tokio::test]
 async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let node_did = behavior.node_did().to_string();
@@ -207,7 +207,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
 
 #[tokio::test]
 async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let first_behavior = integration_test_agent("general");
     let first_did = first_behavior.node_did().to_string();
@@ -287,7 +287,7 @@ async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
 
 #[tokio::test]
 async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let node_did = behavior.node_did().to_string();
@@ -454,7 +454,7 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
 
 #[tokio::test]
 async fn materializer_rejects_workspace_from_different_explicit_owner() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_agent("general");
     insert_ready_workspace(
@@ -685,7 +685,7 @@ async fn workspace_requests(
 
 #[tokio::test]
 async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();
@@ -723,7 +723,7 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
 
 #[tokio::test]
 async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();
@@ -768,7 +768,7 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
 
 #[tokio::test]
 async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let executor = behavior.node_did().to_owned();
@@ -815,7 +815,7 @@ async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor(
 
 #[tokio::test]
 async fn goal_task_workspace_activation_retry_is_idempotent() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     insert_ready_workspace(
@@ -881,7 +881,7 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
 
 #[tokio::test]
 async fn unique_read_write_denial_does_not_leave_claimable_request() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     insert_ready_workspace(
@@ -1129,7 +1129,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
 
 #[tokio::test]
 async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
         snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
@@ -1207,7 +1207,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
 
 #[tokio::test]
 async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
         snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
@@ -1285,7 +1285,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
 
 #[tokio::test]
 async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();

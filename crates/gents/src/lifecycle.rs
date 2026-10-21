@@ -860,7 +860,7 @@ mod tests {
     async fn error_response_terminalizes_an_existing_streaming_response() {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(tempdir.path())
                 .build()
                 .await

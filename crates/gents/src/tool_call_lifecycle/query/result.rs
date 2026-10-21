@@ -105,6 +105,113 @@ pub(crate) struct CanonicalToolCallRead {
     pub(crate) raw_result: Option<String>,
 }
 
+#[derive(Debug)]
+pub enum ToolFileChangeRead {
+    Pending,
+    Unsupported,
+    Missing,
+    Retained {
+        document_id: String,
+        changes: gents_protocol::file_changes::ToolFileChanges,
+    },
+}
+
+/// Resolves the physical admission and exact request scope before fetching
+/// retained file bytes. Ordinary tool-result reads do not load these images.
+pub async fn load_tool_call_file_changes(
+    access: &ConfigAccess,
+    tool_call_doc_id: &str,
+    request_doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<gents_protocol::file_changes::ToolFileChanges>> {
+    Ok(
+        match load_tool_file_change_observation(
+            access,
+            tool_call_doc_id,
+            request_doc_id,
+            node_did,
+            session_id,
+            requester_did,
+        )
+        .await?
+        {
+            ToolFileChangeRead::Retained { changes, .. } => Some(changes),
+            ToolFileChangeRead::Pending
+            | ToolFileChangeRead::Unsupported
+            | ToolFileChangeRead::Missing => None,
+        },
+    )
+}
+
+/// Returns the identity of the same immutable record whose bytes and accepted
+/// tool binding were verified. Delivery must not rediscover another record
+/// after validation.
+pub async fn load_tool_file_change_observation(
+    access: &ConfigAccess,
+    tool_call_doc_id: &str,
+    request_doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<ToolFileChangeRead> {
+    let (call, _, _, _) = load_accepted_tool_call(
+        ReadSource::Access(access),
+        tool_call_doc_id,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await?;
+    anyhow::ensure!(
+        call.request_doc_id.as_deref() == Some(request_doc_id),
+        "file changes crossed the selected request scope"
+    );
+    let state = ToolCallState::from_persisted(&call.lifecycle_state)
+        .context("file changes have an invalid tool lifecycle state")?;
+    if !state.is_terminal() {
+        return Ok(ToolFileChangeRead::Pending);
+    }
+    if access
+        .collection_version(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .await?
+        .is_none()
+    {
+        return Ok(ToolFileChangeRead::Unsupported);
+    }
+    let response = access.execute(&format!(
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id node_did session_id requester_did file_changes }} }}"#,
+        escape_graphql_string(tool_call_doc_id),
+    )).await?;
+    let rows = response["data"]["ToolFileChange"]
+        .as_array()
+        .context("file change lookup omitted observations")?;
+    if rows.is_empty() {
+        return Ok(ToolFileChangeRead::Missing);
+    }
+    anyhow::ensure!(rows.len() == 1, "file changes have ambiguous observations");
+    let row = &rows[0];
+    anyhow::ensure!(
+        row["request_doc_id"].as_str() == Some(request_doc_id)
+            && row["node_did"].as_str() == Some(node_did)
+            && row["session_id"].as_str() == Some(session_id)
+            && row["requester_did"].as_str() == requester_did,
+        "file changes crossed their physical tool scope"
+    );
+    let document_id = row["_docID"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .context("file image observation has no physical identity")?
+        .to_owned();
+    let changes =
+        crate::toolset::FileChanges::decode(tool_call_doc_id, row["file_changes"].clone())?;
+    Ok(ToolFileChangeRead::Retained {
+        document_id,
+        changes,
+    })
+}
+
 pub async fn load_tool_call_result(
     access: &ConfigAccess,
     tool_call_doc_id: &str,

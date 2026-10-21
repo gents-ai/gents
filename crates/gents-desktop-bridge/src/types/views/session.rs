@@ -92,6 +92,9 @@ pub struct ToolCallView {
     #[ts(optional = nullable)]
     pub background_available: Option<bool>,
     pub tool_call_key: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub tool_call_doc_id: Option<String>,
     pub request_id: Option<String>,
     pub message_sequence: Option<i64>,
     pub tool_name: Option<String>,
@@ -153,6 +156,10 @@ pub struct CommandDenialView {
 pub struct ToolDiffLineView {
     pub kind: ToolDiffLineKind,
     pub text: String,
+    /// Line in the tool's reported excerpt, not a location inferred from arguments.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub line_number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -194,6 +201,10 @@ pub enum ToolPresentationView {
     FileEdit {
         operation: String,
         path: Option<String>,
+        /// Only a successful, non-preview native file result confirms a mutation.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        applied: Option<bool>,
         /// Execution-node path; reveal only when that node is local.
         #[ts(optional = nullable)]
         reveal_path: Option<String>,
@@ -239,6 +250,9 @@ pub struct RenderedToolCallView {
     #[ts(optional = nullable)]
     pub background_available: Option<bool>,
     pub item_key: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub tool_call_doc_id: Option<String>,
     pub tool_name: String,
     pub status_kind: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]

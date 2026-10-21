@@ -5,7 +5,7 @@ use crate::test_support::first_content;
 
 #[tokio::test]
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = "session-steering-provider-history";
     import_history_observation(
@@ -77,7 +77,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
 
 #[tokio::test]
 async fn history_reconstruction_scans_a_shared_request_once() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = "session-shared-request-scan";
     for sequence in 1..=3 {
@@ -116,7 +116,7 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 
 #[tokio::test]
 async fn history_reconstruction_batches_distinct_requests() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = "session-many-request-scans";
     let count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
@@ -160,7 +160,7 @@ async fn history_reconstruction_batches_distinct_requests() {
 async fn compaction_entries_track_files_cumulatively() {
     let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -296,7 +296,7 @@ async fn compaction_entries_track_files_cumulatively() {
 
 #[tokio::test]
 async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = "session-legacy-file-activity";
     let key = escape_graphql_string(&compaction_key("did:test:test", session_id, None, 1));
@@ -387,7 +387,7 @@ async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
 
 #[tokio::test]
 async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let generation =
         load_prompt_compaction_state(&node, "session-race", "did:test:test", None, None)
@@ -469,7 +469,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
 
 #[tokio::test]
 async fn exact_compaction_redelivery_is_idempotent() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let generation =
         load_prompt_compaction_state(&node, "session-redelivery", "did:test:test", None, None)
@@ -534,7 +534,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
 
 #[tokio::test]
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let turns = [
         ("request-cursor-old", None, "sparse-old"),
@@ -596,7 +596,7 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
 async fn close_session_preserves_creation_time() {
     let data_path = std::env::temp_dir().join(format!("gents-session-{}", uuid::Uuid::new_v4()));
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -668,7 +668,7 @@ async fn create_session_with_id_is_idempotent() {
     let data_path =
         std::env::temp_dir().join(format!("gents-session-upsert-{}", uuid::Uuid::new_v4()));
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -752,7 +752,7 @@ async fn create_session_with_agent_id_rejects_mismatched_existing_binding() {
     let data_path =
         std::env::temp_dir().join(format!("gents-session-binding-{}", uuid::Uuid::new_v4()));
     let node = std::sync::Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -807,7 +807,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
         .iter()
         .find(|case| case["name"] == "three_user_turns")
         .unwrap();
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, AGENT, "edit-fork").await;
     create_session_with_agent_id(&node, SOURCE, AGENT, "edit-fork")
@@ -860,7 +860,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
 async fn fork_rolls_back_at_every_mutation_position() {
     const AGENT: &str = "did:test:fork-rollback";
     const SOURCE: &str = "fork-rollback-source";
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, AGENT, "fork-rollback").await;
     create_session_with_agent_id(&node, SOURCE, AGENT, "fork-rollback")
@@ -944,7 +944,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
 async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     const AGENT: &str = "did:test:compaction-rollback";
     const SESSION: &str = "compaction-rollback";
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     save_compaction_entry(
         &node,
@@ -1143,7 +1143,7 @@ pub(crate) async fn import_history_observation(
 
 #[tokio::test]
 async fn history_reads_exact_node_and_requester_scope() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let rows = [
         ("did:key:owner", None, "local"),
@@ -1195,7 +1195,7 @@ async fn history_reads_exact_node_and_requester_scope() {
 
 #[tokio::test]
 async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     for (owner, text) in [("did:key:owner", "local"), ("did:key:other", "foreign")] {
         let mut lifecycle = claimed_authored_request(&node, owner, owner, "same").await;
@@ -1253,7 +1253,7 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
 
 #[tokio::test]
 async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     for (owner, summary) in [
         ("did:key:owner", "local summary"),
@@ -1344,7 +1344,7 @@ async fn claimed_authored_request(
 async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates() {
     use crate::streaming::DefraStreamWriter;
     use std::{sync::Arc, time::Duration};
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let mut lifecycle =
         claimed_authored_request(&node, "append-race-request", "did:test:test", "append-race")
@@ -1413,7 +1413,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         "requester",
         "fork",
     ] {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         import_history_observation(
             &node,
@@ -1513,7 +1513,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 
 #[tokio::test]
 async fn retry_frontier_matches_lean_admission() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     async fn write_doc(
         node: &std::sync::Arc<defra_node::EmbeddedNode>,

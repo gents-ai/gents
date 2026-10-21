@@ -553,7 +553,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
     with_tool: bool,
 ) -> ReplayFixture {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let now = chrono::Utc::now().to_rfc3339();
     let created = node

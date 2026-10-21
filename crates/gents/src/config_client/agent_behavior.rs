@@ -50,13 +50,13 @@ mod tests {
     use super::*;
     use crate::config_client::write_inference_profile_document;
     use crate::document_config::InferenceProfile;
-    use defra_node::EmbeddedNode;
+
     use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn replacement_is_scoped_clears_context_and_rolls_back_dangling_links() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["did:key:owner", "did:key:other"] {

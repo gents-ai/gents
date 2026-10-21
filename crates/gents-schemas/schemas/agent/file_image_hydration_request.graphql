@@ -1,0 +1,19 @@
+# A demand for one accepted physical tool's immutable image observation.
+# Enrollment, current membership, session ownership and document access remain
+# with the session-hydration owners; this document grants no access itself.
+type FileImageHydrationRequest @branchable {
+    request_key: String @index(unique: true) @immutable
+    peer_id: String @immutable
+    requester_did: String @index @immutable
+    node_did: String @index @immutable
+    session_id: String @immutable
+    request_doc_id: String @immutable
+    tool_call_doc_id: String @immutable
+    created_at: DateTime @immutable
+    status: String @index
+    status_detail: String
+    observation_doc_id: String
+    processed_at: DateTime
+    outcome_signer_did: String
+    outcome_signature: String
+}

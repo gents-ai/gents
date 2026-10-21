@@ -114,6 +114,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         .expect("foreign identity");
     let node = Arc::new(
         EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .expect("embedded node"),

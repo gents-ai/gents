@@ -2056,7 +2056,7 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
 
 pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let node = defra_node::EmbeddedNode::builder()
+    let node = crate::test_support::node_builder()
         .data_path(tempdir.path().join("data"))
         .build()
         .await

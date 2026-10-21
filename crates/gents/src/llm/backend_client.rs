@@ -326,7 +326,7 @@ mod tests {
     use crate::oauth_credential::BearerSource;
 
     async fn test_node() -> Arc<EmbeddedNode> {
-        Arc::new(EmbeddedNode::builder().build().await.unwrap())
+        Arc::new(crate::test_support::node_builder().build().await.unwrap())
     }
 
     pub(super) fn test_agent(

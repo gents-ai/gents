@@ -1939,6 +1939,13 @@ mod tool_writes {
         let doc_id = call.doc_id().unwrap().to_owned();
         let registry = gents_loop::live_output::LiveToolOutputRegistry::default();
         let writer = registry.writer_for(doc_id.clone()).await;
+        writer
+            .record_deferred_writes(gents_loop::live_output::DeferredToolWrites::new(
+                "independent host observation",
+            ))
+            .await
+            .unwrap();
+
         let dispatched = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
             None,
             Some(NODE.into()),
@@ -1966,7 +1973,12 @@ mod tool_writes {
                 .unwrap();
         }
         let result = dispatched.result.map_err(|error| error.to_string());
-        call.stage_plugin_writes(registry.deferred_writes(&doc_id).await);
+        let pending = registry.deferred_writes(&doc_id).await.unwrap();
+        assert_eq!(
+            pending.downcast_ref::<&'static str>(),
+            Some(&"independent host observation"),
+        );
+        call.stage_deferred_writes(Some(pending));
         if transient_terminal {
             crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
         }

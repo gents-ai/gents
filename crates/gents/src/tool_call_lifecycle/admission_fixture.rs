@@ -215,7 +215,7 @@ pub(crate) async fn complete_child(
     assert_eq!(terminal, crate::lifecycle::TerminalizeResult::Won);
 }
 
-async fn ensure_fixture_session(
+pub(crate) async fn ensure_fixture_session(
     node: &EmbeddedNode,
     session_id: &str,
     node_did: &str,
@@ -433,16 +433,16 @@ pub async fn published_admission_with_owner(
     let name = options.name;
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(EmbeddedNode::builder().data_path(&path).build().await?);
+    let physical_identity = crate::KeyIdentity::load_or_create(path.join("test-agent.key"), None)?;
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(&path)
+            .with_node_identity_did(physical_identity.did())
+            .build()
+            .await?,
+    );
     crate::schema::ensure_runtime_schemas(&node).await?;
-    let identity = if options.real_identity {
-        Some(crate::KeyIdentity::load_or_create(
-            path.join("test-agent.key"),
-            None,
-        )?)
-    } else {
-        None
-    };
+    let identity = options.real_identity.then_some(physical_identity);
     let node_did = identity.as_ref().map_or_else(
         || "did:test:test".to_owned(),
         |identity| identity.did().to_owned(),

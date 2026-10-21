@@ -1,12 +1,16 @@
 use super::super::*;
 use crate::client::schema::ensure_runtime_schemas;
-use defra_node::NodeBuilder;
 use gents_protocol::schemas::AGENT_MESSAGE_NAME;
 use std::sync::Arc;
 
 #[tokio::test]
 async fn pending_edit_request_patch_reads_only_selected_and_replacement_documents() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -115,7 +119,12 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
 
 #[tokio::test]
 async fn fetch_doc_patch_returns_only_matching_rows() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -180,7 +189,12 @@ async fn fetch_doc_patch_returns_only_matching_rows() {
 
 #[tokio::test]
 async fn observer_snapshot_excludes_transcript_while_context_read_stays_authoritative() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -249,7 +263,12 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
 
 #[tokio::test]
 async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -306,7 +325,12 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
 
 #[tokio::test]
 async fn load_chat_patch_reads_only_the_selected_local_session() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -553,7 +577,12 @@ fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
 
 #[tokio::test]
 async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -602,7 +631,12 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
 
 #[tokio::test]
 async fn title_request_patch_preserves_existence_without_public_projection() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");

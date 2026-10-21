@@ -126,7 +126,7 @@ mod tests {
             };
             let directory = tempfile::tempdir().unwrap();
             let node = std::sync::Arc::new(
-                EmbeddedNode::builder()
+                crate::test_support::node_builder()
                     .data_path(directory.path())
                     .build()
                     .await

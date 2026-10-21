@@ -69,7 +69,7 @@ fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> Stri
 async fn client_output_snapshot_reads_full_retained_window_without_widening_model_budget() {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -223,7 +223,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-create-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -438,7 +438,7 @@ fn hook_counters_for_test() -> HookCounters {
 #[tokio::test]
 async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .build()
             .await
             .expect("embedded node"),
@@ -502,7 +502,7 @@ async fn active_request_binding_rejects_a_half_bound_pair() {
 #[tokio::test]
 async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .build()
             .await
             .expect("embedded node"),
@@ -565,7 +565,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
         .filter(|case| case.inputs.iter().all(|input| input.policy_allows))
     {
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
             let hook =
                 DefraSessionHook::with_identity(node.clone(), "did:test:dispatch-receipt", policy);
@@ -762,7 +762,7 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
     for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
         let mut completion_mutation = None;
         for inject in [false, true] {
-            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
             let hook =
                 DefraSessionHook::with_identity(node.clone(), "did:test:control-receipt", policy)
@@ -1396,7 +1396,7 @@ async fn fetch_tool_call_row(
 async fn list_processes_skip_publishes_canonical_tool_result() {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -1453,7 +1453,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
 async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -1576,7 +1576,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
 
 #[tokio::test]
 async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -1697,7 +1697,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
 async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
     use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
@@ -1768,7 +1768,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-deadline-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1821,7 +1821,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-guard-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1905,7 +1905,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2105,7 +2105,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2165,7 +2165,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
 async fn context_and_prompt_deduped_across_retry_attempts() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2257,7 +2257,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2329,7 +2329,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-timeout-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2390,7 +2390,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-unknown-tool-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2458,7 +2458,7 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-full-spill-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2522,7 +2522,7 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-cancel-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2589,7 +2589,7 @@ async fn interruption_leaves_background_workers_running() {
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -2715,7 +2715,7 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     assert!(!cases.is_empty());
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -2788,7 +2788,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-mixed-cancel-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2917,7 +2917,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
 async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-fail-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2974,7 +2974,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
 async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let data_path = std::env::temp_dir().join(format!("gents-hook-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3109,7 +3109,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3179,7 +3179,7 @@ async fn read_file_result_persists_raw_output() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3278,7 +3278,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3439,7 +3439,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3512,7 +3512,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-tool-turn-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3600,7 +3600,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
     use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
     let temp = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(temp.path().join("data"))
             .build()
             .await
@@ -3735,7 +3735,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-forgery-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3811,7 +3811,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3882,7 +3882,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
     use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
@@ -4065,7 +4065,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-cancelled-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -4139,7 +4139,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-real-denial-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -4235,7 +4235,7 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-hook-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -4312,7 +4312,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-timeout-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -4406,7 +4406,7 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-job-tool-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await

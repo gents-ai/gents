@@ -675,6 +675,46 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.workspace_path_capability_cases,
         ),
         (
+            "workspace_change_review_cases",
+            "WorkspaceChangeReviewCases",
+            &snapshot.workspace_change_review_cases,
+        ),
+        (
+            "file_image_hydration_cases",
+            "FileImageHydrationCases",
+            &snapshot.file_image_hydration_cases,
+        ),
+        (
+            "file_image_hydration_route_cases",
+            "FileImageHydrationRouteCases",
+            &snapshot.file_image_hydration_route_cases,
+        ),
+        (
+            "file_review_subscription_cases",
+            "FileReviewSubscriptionCases",
+            &snapshot.file_review_subscription_cases,
+        ),
+        (
+            "file_image_hydration_completion_cases",
+            "FileImageHydrationCompletionCases",
+            &snapshot.file_image_hydration_completion_cases,
+        ),
+        (
+            "file_image_attempt_cases",
+            "FileImageAttemptCases",
+            &snapshot.file_image_attempt_cases,
+        ),
+        (
+            "stored_file_image_access_cases",
+            "StoredFileImageAccessCases",
+            &snapshot.stored_file_image_access_cases,
+        ),
+        (
+            "file_image_read_grant_cases",
+            "FileImageReadGrantCases",
+            &snapshot.file_image_read_grant_cases,
+        ),
+        (
             "logical_output_obligation_cases",
             "LogicalOutputObligationCases",
             &snapshot.logical_output_obligation_cases,

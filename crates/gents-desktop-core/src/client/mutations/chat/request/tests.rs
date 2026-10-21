@@ -137,7 +137,7 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
 
 #[tokio::test]
 async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
-    let node = defra_node::EmbeddedNode::builder().build().await?;
+    let node = crate::test_support::node_builder().build().await?;
     gents::ensure_runtime_schemas(&node).await?;
     let response = node
         .execute(

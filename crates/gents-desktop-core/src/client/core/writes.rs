@@ -230,7 +230,7 @@ async fn merge_accepted_edit_projection(
     receipt
 }
 
-fn find_request_in_scope(
+pub(super) fn find_request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
     node_did: Option<&str>,
@@ -3206,7 +3206,7 @@ mod accepted_edit_projection_tests {
     #[tokio::test]
     async fn incomplete_or_foreign_edit_projection_keeps_store_and_receipt() {
         let node = Arc::new(
-            defra_node::NodeBuilder::default()
+            crate::test_support::node_builder()
                 .build()
                 .await
                 .expect("local projection node"),

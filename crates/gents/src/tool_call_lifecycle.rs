@@ -137,10 +137,13 @@ use defra_node::EmbeddedNode;
 
 pub(crate) mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
+mod file_review_access;
 pub(crate) mod query;
+pub use file_review_access::VerifiedFileImageReceipt;
 pub use query::{
-    load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
-    render_tool_result, CanonicalToolCallPresentation,
+    load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
+    load_tool_call_result, load_tool_file_change_observation, render_tool_result,
+    CanonicalToolCallPresentation, ToolFileChangeRead,
 };
 pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
@@ -249,6 +252,7 @@ pub struct ToolCallLifecycle {
     /// Data writes a plugin tool returned beside its output; committed with a
     /// Completed terminal and discarded by any other.
     plugin_writes: Option<delivery::PluginToolWrites>,
+    file_changes: Option<crate::toolset::FileChanges>,
     /// Immutable physical provenance for dispatch, recovery, and completion routing.
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_effect: Option<PluginEffectBinding>,
@@ -345,6 +349,7 @@ impl ToolCallLifecycle {
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
             plugin_writes: None,
+            file_changes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: Some(accepted.tool_call_doc_id),
@@ -367,15 +372,17 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn stage_plugin_writes(
+    pub(crate) fn stage_deferred_writes(
         &mut self,
         writes: Option<gents_loop::live_output::DeferredToolWrites>,
     ) {
-        if let Some(writes) = writes
-            .as_ref()
-            .and_then(|writes| writes.downcast_ref::<delivery::PluginToolWrites>())
-        {
-            self.plugin_writes = Some(writes.clone());
+        if let Some(writes) = writes.as_ref() {
+            if let Some(pending) = writes.downcast_ref::<delivery::PluginToolWrites>() {
+                self.plugin_writes = Some(pending.clone());
+            }
+            if let Some(changes) = writes.downcast_ref::<crate::toolset::FileChanges>() {
+                self.file_changes = Some(changes.clone());
+            }
         }
     }
 
@@ -412,6 +419,7 @@ impl ToolCallLifecycle {
             execution_generation: None,
             plugin_receipt: None,
             plugin_writes: None,
+            file_changes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: None,
@@ -480,6 +488,7 @@ impl ToolCallLifecycle {
             execution_generation: None,
             plugin_receipt: None,
             plugin_writes: None,
+            file_changes: None,
             spawned_by_tool_call_doc_id: None,
             plugin_effect: None,
             doc_id: None,

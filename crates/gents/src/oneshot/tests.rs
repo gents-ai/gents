@@ -91,17 +91,18 @@ impl CompletionModel for PartialThenEmptyProvider {
 #[tokio::test]
 async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     let dir = tempfile::tempdir().unwrap();
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
+            .unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()
             .await
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
-            .unwrap();
     let mut behavior =
         crate::agent::PendingAgent::new("oneshot-lease").build_with_identity_for_test(identity);
     crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_id).await;
@@ -313,8 +314,12 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
 
     for request_scoped in [true, false] {
         let dir = tempfile::tempdir().unwrap();
+        let identity =
+            crate::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
+                .unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
                 .data_path(dir.path())
                 .build()
                 .await
@@ -324,9 +329,6 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         node.add_schema("type OneshotOutput { message: String }")
             .await
             .unwrap();
-        let identity =
-            crate::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
-                .unwrap();
         let mut behavior = crate::agent::PendingAgent::new("oneshot-output")
             .build_with_identity_for_test(identity);
         crate::test_support::install_test_agent(&node, behavior.node_did(), &behavior.agent_id)

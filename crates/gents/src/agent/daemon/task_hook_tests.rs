@@ -91,7 +91,7 @@ impl Harness {
     async fn with_deadline(deadline: Duration) -> Self {
         let data = tempfile::tempdir().expect("node data directory");
         let node = Arc::new(
-            defra_node::EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(data.path())
                 .build()
                 .await

@@ -52,7 +52,13 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap());
         let foreign = KeyIdentity::load_or_create(temp.path().join("other.key"), None).unwrap();
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         crate::test_support::install_test_agent(&node, identity.did(), &agent(&case.requested))
             .await;

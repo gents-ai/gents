@@ -4028,7 +4028,7 @@ mod tests {
         }
 
         let node = std::sync::Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .build()
                 .await
                 .unwrap(),

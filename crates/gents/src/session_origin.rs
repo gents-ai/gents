@@ -649,7 +649,7 @@ mod tests {
     async fn caused_requests_projection_omits_a_call_with_two_requests() {
         let dir = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .build()
                 .await
@@ -696,7 +696,7 @@ mod tests {
     async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_distinct() {
         let dir = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .build()
                 .await
@@ -738,7 +738,7 @@ mod tests {
     async fn a_message_into_an_existing_session_does_not_make_it_started() {
         let dir = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .build()
                 .await
@@ -797,7 +797,7 @@ mod tests {
     async fn recorded_opening_reads_the_exact_session_scope() {
         let dir = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .build()
                 .await

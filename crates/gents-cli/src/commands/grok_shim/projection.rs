@@ -1435,7 +1435,7 @@ mod tests {
     async fn chunk_level_identity_recovers_a_partial_row_retry() {
         let dir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()
@@ -1504,7 +1504,7 @@ mod tests {
     async fn embedded_engine() -> (tempfile::TempDir, Arc<ProjectionEngine>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

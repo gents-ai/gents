@@ -783,6 +783,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                         ),
                 ),
                 tool_call_key: row.tool_call_key.clone(),
+                tool_call_doc_id: row.doc_id.clone(),
                 request_id: normalize_optional(row.request_id.as_deref()),
                 message_sequence: row.message_sequence,
                 tool_name: normalize_optional(row.tool_name.as_deref()),

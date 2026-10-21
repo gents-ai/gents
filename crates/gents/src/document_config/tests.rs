@@ -459,7 +459,7 @@ fn write_tools_deserialize_trims_whitespace() {
 
 #[tokio::test]
 async fn tools_document_round_trips_defra_query_fields() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let doc = Tools {
@@ -527,7 +527,7 @@ async fn tools_document_round_trips_defra_query_fields() {
 
 #[tokio::test]
 async fn tools_update_can_clear_lsp_config() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = crate::test_support::node_builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
@@ -596,7 +596,7 @@ async fn tools_update_can_clear_lsp_config() {
 
 #[tokio::test]
 async fn tools_document_round_trips_read_only_commands() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = crate::test_support::node_builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let doc = Tools {
@@ -651,7 +651,7 @@ async fn tools_document_round_trips_read_only_commands() {
 
 #[tokio::test]
 async fn tools_document_round_trips_write_tools() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = crate::test_support::node_builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let decls = vec![WriteToolDecl {
@@ -729,7 +729,7 @@ async fn tools_document_round_trips_write_tools() {
 
 #[tokio::test]
 async fn tools_document_round_trips_session_message_enablement() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = crate::test_support::node_builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let doc = Tools {
@@ -771,7 +771,7 @@ async fn tools_document_round_trips_session_message_enablement() {
 
 #[tokio::test]
 async fn agent_description_round_trip_with_explicit_owner_fixture() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let node_did = "did:key:z-test-desc";
@@ -843,7 +843,7 @@ fn access_node(
 
 #[tokio::test]
 async fn inference_retry_policy_fields_round_trip() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = crate::test_support::node_builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let retry = InferenceRetryPolicy {
@@ -1300,7 +1300,7 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
 
 #[tokio::test]
 async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_corruption() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     for (owner, id, auth) in [
         ("owner", "good", "unauthenticated"),

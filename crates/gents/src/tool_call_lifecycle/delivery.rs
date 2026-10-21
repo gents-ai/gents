@@ -32,6 +32,63 @@ pub(crate) struct PluginToolWrites {
     pub(crate) writes: Vec<gents_protocol::job::DataWrite>,
 }
 
+/// Retained images share the accepted tool's DID and request binding and commit
+/// only after its terminal compare wins. They are not part of provider output.
+async fn retain_file_changes(
+    txn: &ConfigApplyTxn<'_>,
+    tool_call_doc_id: &str,
+    request_doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    changes: &crate::toolset::FileChanges,
+) -> Result<()> {
+    anyhow::ensure!(
+        changes.belongs_to(tool_call_doc_id),
+        "file changes belong to another physical tool"
+    );
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let binding = txn.execute(&format!(
+        r#"{{ AgentToolCall(docID: "{}", filter: {{ request_doc_id: {{ _eq: "{}" }}, {scope} }}) {{ _docID }} }}"#,
+        escape_graphql_string(tool_call_doc_id), escape_graphql_string(request_doc_id),
+    )).await?;
+    anyhow::ensure!(
+        binding["data"]["AgentToolCall"].as_array().is_some_and(
+            |rows| rows.len() == 1 && rows[0]["_docID"].as_str() == Some(tool_call_doc_id)
+        ),
+        "file changes lost their physical tool binding"
+    );
+    let input = serde_json::json!({
+        "tool_call_doc_id": tool_call_doc_id, "request_doc_id": request_doc_id,
+        "node_did": node_did, "session_id": session_id,
+        "requester_did": requester_did, "file_changes": changes,
+    });
+    let existing = txn.execute(&format!(
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
+        escape_graphql_string(tool_call_doc_id),
+    )).await?;
+    let rows = existing["data"]["ToolFileChange"]
+        .as_array()
+        .context("file change lookup omitted observations")?;
+    if !rows.is_empty() {
+        anyhow::ensure!(
+            rows.len() == 1 && rows[0] == input,
+            "file changes conflict with an existing observation"
+        );
+        return Ok(());
+    }
+    let result = txn.execute_with_variables(
+        "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+        &serde_json::json!({"input": input}),
+    ).await?;
+    anyhow::ensure!(
+        crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
+            .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some()),
+        "file change observation was not retained"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 static FAIL_NEXT_TERMINAL: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
@@ -943,6 +1000,12 @@ impl ToolCallLifecycle {
         operation: &'static str,
         fixture_now: Option<DateTime<Utc>>,
     ) -> Result<bool> {
+        if self.file_changes.is_some() {
+            anyhow::ensure!(
+                self.node.node_identity_did() == Some(self.node_did.as_str()),
+                "retaining file images requires the configured node identity"
+            );
+        }
         let doc_id = self
             .doc_id
             .clone()
@@ -990,6 +1053,7 @@ impl ToolCallLifecycle {
             .clone()
             .filter(|_| fields.state == ToolCallState::Completed);
 
+        let file_changes = self.file_changes.clone();
         let published = ConfigAccess::transact_local_idempotent(
             &self.node,
             None,
@@ -1012,6 +1076,7 @@ impl ToolCallLifecycle {
                 let plugin_effect = plugin_effect.clone();
                 let presentation = presentation.clone();
                 let plugin_writes = plugin_writes.clone();
+                let file_changes = file_changes.clone();
                 Box::pin(async move {
                     let now = fixture_now.unwrap_or_else(Utc::now);
                     let published = terminalize_transaction(
@@ -1065,6 +1130,18 @@ impl ToolCallLifecycle {
                         )
                         .await
                         .map_err(plugin_writes_failed)?;
+                    }
+                    if let (true, Some(changes)) = (published, &file_changes) {
+                        retain_file_changes(
+                            txn,
+                            &doc_id,
+                            &request_doc_id,
+                            &node_did,
+                            &session_id,
+                            requester_did.as_deref(),
+                            changes,
+                        )
+                        .await?;
                     }
                     Ok(published)
                 })

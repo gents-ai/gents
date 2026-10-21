@@ -11,7 +11,13 @@ use gents_protocol::request_input::RequestInput;
 async fn generated_captures_use_signed_storage_and_fresh_admission() {
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("capture.key"), None).unwrap();
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
     let owner = crate::graphql::escape_graphql_string(identity.did());
     for mutation in [

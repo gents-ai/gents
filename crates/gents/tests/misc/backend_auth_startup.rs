@@ -107,13 +107,18 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
 async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     use gents::BackendProviderKind;
 
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let mut behavior = test_agent("openrouter-oneshot", "backend-openrouter", None);
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(behavior.node_did())
+            .build()
+            .await?,
+    );
     ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint = MockModelEndpoint::start_with_required_bearer(
         "openai/gpt-4o-mini",
         Some("openrouter-key"),
     )?;
-    let mut behavior = test_agent("openrouter-oneshot", "backend-openrouter", None);
     behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
     behavior.backend_auth = gents::document_config::BackendAuth::ApiKey {

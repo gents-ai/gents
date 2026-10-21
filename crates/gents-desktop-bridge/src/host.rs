@@ -97,24 +97,20 @@ impl ClientHost {
                 encode(())
             }
             ClientCommand::RuntimeIsLocal { node_did } => {
-                self.require_configured_runtime(&node_did).await?;
-                encode(
-                    self.core
-                        .peer_records()
-                        .await
-                        .iter()
-                        .any(|peer| peer.node_did == node_did && peer.is_managed_runtime()),
-                )
+                let record = self.require_connected_runtime(&node_did).await?;
+                encode(record.is_managed_runtime())
             }
             ClientCommand::InferenceCatalog {} => {
                 encode(gents::inference_setup::inference_setup_catalog())
             }
             ClientCommand::InferenceSetupState { node_did } => {
-                self.require_configured_runtime(&node_did).await?;
-                if matches!(
-                    self.core.options().operator_identity_interaction,
-                    gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent
-                ) {
+                let record = self.require_connected_runtime(&node_did).await?;
+                if record.operator_graphql().is_none()
+                    || matches!(
+                        self.core.options().operator_identity_interaction,
+                        gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent
+                    )
+                {
                     return encode(
                         self.core
                             .read_inference_setup_state(&node_did)
@@ -135,8 +131,10 @@ impl ClientHost {
                     .as_ref()
                     .is_some_and(|nodes| nodes.contains(&node_did))
                 {
-                    return Err(BridgeError::new(BridgeErrorCode::EndpointUnreachable,
-                        "Runtime configuration is not available. Check the runtime connection and try again."));
+                    return Err(BridgeError::new(
+                        BridgeErrorCode::EndpointUnreachable,
+                        "Runtime configuration is not available. Check the runtime connection and try again.",
+                    ));
                 }
                 let deployment = snapshot
                     .deployments
@@ -398,6 +396,24 @@ impl ClientHost {
                     .map_err(backend_error)?;
                 encode(crate::types::ChatSendResult::from(submitted))
             }
+            ClientCommand::ToolFileChanges {
+                node_did,
+                session_id,
+                request_id,
+                tool_call_doc_id,
+                retry_id,
+            } => encode(
+                crate::commands::tool_file_changes(
+                    &self.core,
+                    node_did,
+                    session_id,
+                    request_id,
+                    tool_call_doc_id,
+                    retry_id,
+                )
+                .await
+                .map_err(backend_error)?,
+            ),
             ClientCommand::RequestOutput {
                 node_did,
                 session_id,
@@ -594,13 +610,35 @@ impl ClientHost {
         }
     }
 
-    async fn require_configured_runtime(&self, node_did: &str) -> Result<(), BridgeError> {
+    async fn require_connected_runtime(
+        &self,
+        node_did: &str,
+    ) -> Result<gents_desktop_core::client::PeerRecord, BridgeError> {
         let records = self.core.peer_records().await;
         let mut matches = records.iter().filter(|record| record.node_did == node_did);
-        let record = matches.next().filter(|_| matches.next().is_none());
-        if record.is_none_or(|record| record.operator_graphql().is_none()) {
-            return Err(BridgeError::new(BridgeErrorCode::InvalidArgument,
-                "Choose a configured runtime. Use Gents: Connect Local Runtime to connect a runtime on this machine."));
+        matches
+            .next()
+            .filter(|_| matches.next().is_none())
+            .cloned()
+            .ok_or_else(|| {
+                BridgeError::new(
+                    BridgeErrorCode::InvalidArgument,
+                    "The runtime connection is missing or ambiguous. Select a connected runtime.",
+                )
+            })
+    }
+
+    async fn require_configured_runtime(&self, node_did: &str) -> Result<(), BridgeError> {
+        if self
+            .require_connected_runtime(node_did)
+            .await?
+            .operator_graphql()
+            .is_none()
+        {
+            return Err(BridgeError::new(
+                BridgeErrorCode::InvalidArgument,
+                "Choose a configured runtime. Use Gents: Connect Local Runtime to connect a runtime on this machine.",
+            ));
         }
         Ok(())
     }

@@ -1,6 +1,5 @@
 use super::super::*;
 use crate::client::schema::ensure_runtime_schemas;
-use defra_node::NodeBuilder;
 use std::sync::Arc;
 
 fn canonical_header(
@@ -27,7 +26,12 @@ fn canonical_header(
 
 #[tokio::test]
 async fn transcript_pages_bound_canonical_headers_and_keep_stable_cursors() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -83,7 +87,12 @@ async fn transcript_pages_bound_canonical_headers_and_keep_stable_cursors() {
 
 #[tokio::test]
 async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -179,7 +188,12 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
 
 #[tokio::test]
 async fn storage_rejects_same_session_sequence_twins() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -205,7 +219,12 @@ async fn storage_rejects_same_session_sequence_twins() {
 
 #[tokio::test]
 async fn transcript_pages_bound_tool_groups_without_reintroducing_response_rows() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -251,7 +270,12 @@ fn session_row(session_id: &str, node_did: &str, requester: Option<&str>) -> Age
 
 #[tokio::test]
 async fn operator_reads_a_local_child_session_under_its_own_scope() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -362,7 +386,12 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
     use crate::client::canonical_output::{project_canonical_message, CanonicalMessageProjection};
     use gents::config_client::ConfigAccess;
 
-    let node = std::sync::Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = std::sync::Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(&node).await.expect("schemas");
     for sequence in 1..=40 {
         let response = ConfigAccess::write_local(&node, "test.payload_page", &format!(r#"mutation {{

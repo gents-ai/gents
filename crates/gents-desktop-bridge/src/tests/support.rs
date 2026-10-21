@@ -6,6 +6,15 @@ use gents_protocol::job::JobProgress;
 use gents_protocol::row::AgentRequestRow;
 use tempfile::TempDir;
 
+pub fn node_builder() -> gents::defra_node::NodeBuilder {
+    use gents::NodeIdentity as _;
+
+    let directory = tempfile::tempdir().unwrap();
+    let identity =
+        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    gents::defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+}
+
 pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let paths = DesktopPaths::from_root(tempdir.path());
@@ -338,6 +347,27 @@ pub async fn seed_job_row(
     progress: &JobProgress,
     coded_output: Option<(&str, &str)>,
 ) -> String {
+    seed_job_row_for_node(
+        core,
+        OPERATOR,
+        session_id,
+        tool_call_id,
+        lifecycle_state,
+        progress,
+        coded_output,
+    )
+    .await
+}
+
+pub async fn seed_job_row_for_node(
+    core: &Arc<ClientCore>,
+    node_did: &str,
+    session_id: &str,
+    tool_call_id: &str,
+    lifecycle_state: &str,
+    progress: &JobProgress,
+    coded_output: Option<(&str, &str)>,
+) -> String {
     use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -352,7 +382,7 @@ pub async fn seed_job_row(
     let request_doc_id = create_request(
         core,
         &format!("req-{tool_call_id}"),
-        OPERATOR,
+        node_did,
         session_id,
         "completed",
         "2026-05-20T00:00:00Z",
@@ -390,12 +420,13 @@ pub async fn seed_job_row(
     let mutation = format!(
         r#"mutation($job_pin: JSON, $job_progress: JSON) {{ create_AgentToolCall(input: {{
             tool_call_key: "{key}", request_id: "req-{call}", request_doc_id: "{request_doc_id}",
-            session_id: "{session}", node_did: "{OPERATOR}", requester_did: "{OPERATOR}",
+            session_id: "{session}", node_did: "{node}", requester_did: "{OPERATOR}",
             tool_name: "workflow", tool_call_id: "{call}", message_sequence: 1,
             await_mode: "background", status: "{lifecycle}", lifecycle_state: "{lifecycle}",
             started_at: "2026-05-20T00:00:00Z", {completed_at}
             job_pin: $job_pin, job_progress: $job_progress
         }}) {{ _docID }} }}"#,
+        node = escape_graphql_string(node_did),
         key = escape_graphql_string(&format!("{session_id}:{tool_call_id}")),
         request_doc_id = escape_graphql_string(&request_doc_id),
         session = escape_graphql_string(session_id),
@@ -429,7 +460,7 @@ pub async fn seed_job_row(
     if let Some((code, message)) = coded_output {
         let payload = serde_json::json!({ "code": code, "message": message }).to_string();
         let segment = OutputSegment {
-            node_did: OPERATOR.into(),
+            node_did: node_did.into(),
             requester_did: Some(OPERATOR.into()),
             session_id: session_id.into(),
             request_doc_id,

@@ -1858,7 +1858,7 @@ pub(crate) mod tests {
     use crate::plugin::store;
     use crate::plugin::tests::constant_output_wat;
     use crate::plugin::tests::executor::installed_plugin;
-    use crate::plugin_job::input::tests::{insert, Job, NODE_DID};
+    use crate::plugin_job::input::tests::{insert, node_did, Job};
     use gents_protocol::job::{
         DynamicMode, JobChildState, JobOrigin, PluginJobDeclaration, PluginJobSettings,
     };
@@ -1890,12 +1890,12 @@ pub(crate) mod tests {
         let documents = [
             (
                 crate::Collection::InferenceProfile,
-                json!({"node_did": NODE_DID, "profile_id": "inference", "backend_id": "backend",
+                json!({"node_did": node_did(), "profile_id": "inference", "backend_id": "backend",
                        "model_name": "test-model"}),
             ),
             (
                 crate::Collection::InferenceBackend,
-                json!({"node_did": NODE_DID, "backend_id": "backend", "name": "Test inference",
+                json!({"node_did": node_did(), "backend_id": "backend", "name": "Test inference",
                        "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
                        "auth": {"kind": "unauthenticated"}}),
             ),
@@ -1919,7 +1919,7 @@ pub(crate) mod tests {
     pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSettings>) {
         let tools: crate::document_config::Tools = serde_json::from_value(json!({
             "tools_id": "tools",
-            "node_did": NODE_DID,
+            "node_did": node_did(),
             "agents": {"enabled": true, "target_ids": ["t-a", "t-b"]},
             "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
@@ -1972,7 +1972,7 @@ pub(crate) mod tests {
 
     pub(crate) async fn start_running(job: &Job, row: &str) {
         let mut lifecycle =
-            ToolCallLifecycle::load_by_doc_id(job.node.clone(), row, NODE_DID, "session-1", None)
+            ToolCallLifecycle::load_by_doc_id(job.node.clone(), row, node_did(), "session-1", None)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2069,15 +2069,15 @@ pub(crate) mod tests {
             insert(
                 &job.node,
                 "Agent",
-                json!({"agent_id": agent, "node_did": NODE_DID, "context_id": "context",
+                json!({"agent_id": agent, "node_did": node_did(), "context_id": "context",
                        "inference_profile_id": "inference", "enabled": true}),
             )
             .await;
             insert(
                 &job.node,
                 "AgentTarget",
-                json!({"target_id": format!("t-{agent}"), "node_did": NODE_DID,
-                       "target_node_did": NODE_DID, "agent_id": agent, "name": agent}),
+                json!({"target_id": format!("t-{agent}"), "node_did": node_did(),
+                       "target_node_did": node_did(), "agent_id": agent, "name": agent}),
             )
             .await;
         }
@@ -2746,10 +2746,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn step_failures_without_a_remembered_row_read_it_and_settle_on_the_third() {
         let step = stepper(json!({"effects": {}})).await;
-        let child = live_child(&step, NODE_DID).await;
+        let child = live_child(&step, node_did()).await;
         let driver = JobDriver::new(step.job.runtime.clone());
         let before = read_step_row(&step.job.access, &step.row).await.unwrap();
-        let observed = observe_live_children(&step.job.access, &before, NODE_DID)
+        let observed = observe_live_children(&step.job.access, &before, node_did())
             .await
             .unwrap();
         let expected = kill_decision(&before, KillCause::Stop, &|key: &str| observed[key]).killed;

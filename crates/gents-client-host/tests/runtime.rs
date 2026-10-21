@@ -30,11 +30,15 @@ mod editor_goal_recovery;
 mod editor_history;
 #[path = "support/editor_retry.rs"]
 mod editor_retry;
+#[path = "support/editor_review.rs"]
+mod editor_review;
 #[path = "support/editor_workspace.rs"]
 mod editor_workspace;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/mocks/fake_llm.rs"]
 mod fake_llm;
+#[path = "support/initialization.rs"]
+mod initialization;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
@@ -59,6 +63,10 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRetry,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorReview,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorReviewPermissions,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
     Goal,
 }
@@ -71,6 +79,8 @@ impl Journey {
             Self::EditorHistory => Some("history"),
             Self::EditorGoalRecovery => Some("goals"),
             Self::EditorRetry => Some("retry"),
+            Self::EditorReview => Some("review"),
+            Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorWorkspace => Some("workspace"),
             _ => None,
         }
@@ -214,6 +224,54 @@ async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> Re
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_reviews_retained_file_images_without_reading_the_working_copy() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorReview)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-review-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_retries_recorded_file_review_after_reenrollment() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorReviewPermissions)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-review-permissions-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRecovery)
@@ -266,13 +324,13 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let (emitted, _) = tokio::sync::watch::channel(None);
     let provider_gate = gate.clone();
+    let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let goal_provider_gate = editor_goal_gate.clone();
+    let goal_provider_hold = root.join("hold-goal-provider");
     let retry_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let provider_retry_attempts = Arc::clone(&retry_attempts);
     let goal_recovery = Arc::new(editor_goal_recovery::Provider::default());
     let provider_goal_recovery = Arc::clone(&goal_recovery);
-    let editor_goal_gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let goal_provider_gate = editor_goal_gate.clone();
-    let goal_provider_hold = root.join("hold-goal-provider");
     let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let history_provider_gate = editor_history_gate.clone();
     let history_provider_hold = root.join("hold-history-provider");
@@ -289,13 +347,21 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     return action;
                 }
             }
+            if matches!(
+                journey,
+                Journey::EditorReview | Journey::EditorReviewPermissions
+            ) {
+                if let Some(action) = editor_review::reply(request) {
+                    return action;
+                }
+            }
             if matches!(journey, Journey::EditorRetry) {
                 if let Some(action) = editor_retry::reply(request, &provider_retry_attempts) {
                     return action;
                 }
             }
             if let Some(options) = history {
-                if let Some(reply) = editor_history::reply(&request, options) {
+                if let Some(reply) = editor_history::reply(request, options) {
                     return reply;
                 }
             }
@@ -344,9 +410,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }),
     )?;
     let node_home = root.join("runtime");
-    let init = Command::new(&cli)
+    let mut init = Command::new(&cli);
+    init.current_dir(root)
         .env_remove("GENTS_SYSTEM_LOG")
-        .current_dir(root)
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
         .args([
@@ -366,18 +432,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "editor-fixture",
             "--inference-url",
         ])
-        .arg(provider.endpoint())
-        .kill_on_drop(true)
-        .output();
-    let init = tokio::time::timeout(Duration::from_secs(30), init)
-        .await
-        .context("initializing the fixture runtime timed out")??;
-    ensure!(
-        init.status.success(),
-        "runtime initialization failed: {}",
-        String::from_utf8_lossy(&init.stderr)
-    );
-    let init: Value = serde_json::from_slice(&init.stdout)?;
+        .arg(provider.endpoint());
+    let output = initialization::Initialization::spawn(&mut init, root)?
+        .wait(Duration::from_secs(30))
+        .await?;
+    let init: Value = serde_json::from_slice(&output)?;
     let node_did = init["node_did"].as_str().context("initialized node DID")?;
     let identity = gents::KeyIdentity::load_or_create(
         init["key_path"]
@@ -1240,6 +1299,70 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-workspace-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
+    }
+    if matches!(
+        journey,
+        Journey::EditorReview | Journey::EditorReviewPermissions
+    ) {
+        editor_review::prepare(root)?;
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        ensure!(
+            client
+                .call(id, "client_runtime_is_local", json!({"nodeDid": node_did}))
+                .await
+                == false,
+            "review must use the paired runtime without local operator access"
+        );
+        id += 1;
+        let result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            journey
+                .editor_scenario()
+                .context("recorded review journey")?,
+        )
+        .await;
+        std::fs::write(
+            root.join("editor-review-provider.json"),
+            serde_json::to_vec_pretty(&provider.captured_chat_requests())?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        copy_editor_evidence(root, "editor-review-provider.json")?;
+        result?;
+        let evidence = editor_review::verify(
+            &mut client,
+            &mut id,
+            &access,
+            root,
+            node_did,
+            session,
+            &client_did,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-review-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+        if matches!(journey, Journey::EditorReviewPermissions) {
+            let permissions = editor_review::verify_permission_recovery(
+                &mut client,
+                &mut id,
+                &access,
+                root,
+                &node_home,
+                &client_did,
+                &evidence,
+                &identity,
+            )
+            .await?;
+            std::fs::write(
+                root.join("editor-review-permissions-canonical.json"),
+                serde_json::to_vec_pretty(&permissions)?,
+            )?;
+        }
     }
     if matches!(journey, Journey::EditorGoalRecovery) {
         std::fs::write(

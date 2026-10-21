@@ -1330,6 +1330,51 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases"
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "stored_file_image_access_cases"
+      "StoredFileImageAccessCases"
+      "agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_keeps_unselected_images_and_collection_interest_local"
+      "Drives native document ACP on the source and recipient, and attempts a direct pull from an unrelated transport peer. Fresh enrollment remains the delivery owner's obligation.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_image_read_grant_cases"
+      "FileImageReadGrantCases"
+      "tool_call_lifecycle::file_review_access::tests::file_image_read_grant_matches_signed_receipt_contract")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_hydration_completion_cases"
+      "FileImageHydrationCompletionCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_completion_cases_gate_delivery_and_receipts"
+      "Checks the native delivery target and durable terminal decision. Physical transport, live enrollment fences and receipt publication retain their existing owners and need integrated qualification.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_attempt_cases"
+      "FileImageAttemptCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_attempt_cases_preserve_terminal_outcomes_and_prevent_redelivery"
+      "Drives recorded-outcome selection and replay delivery suppression. Source-signed immutable storage, transaction rollback and actual peer replay remain native refinement obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_review_subscription_cases"
+      "FileReviewSubscriptionCases"
+      "client::schema::tests::generated_file_review_rules_exclude_whole_collection_delivery")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_image_hydration_route_cases"
+      "FileImageHydrationRouteCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_hydration_cases"
+      "FileImageHydrationCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_cases_drive_exact_tool_selection"
+      "Drives native selection with exact enrollment, session and physical tool/image observations. Delivery, signed receipts and client demand wiring remain transport refinement obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "workspace_change_review_cases"
+      "WorkspaceChangeReviewCases"
+      "workspace::change_review::tests::generated_change_review_cases_drive_undo_planner"
+      "Drives the native Undo planner with model-derived scope, postimage, buffer, index and replay observations. Authenticated snapshot lookup, live filesystem comparison and restoration, mutation locking and partial-failure recovery remain host refinement obligations.")
+      "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "schema_argument_repair_cases"
       "SchemaArgumentRepairCases"

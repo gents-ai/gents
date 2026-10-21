@@ -1231,7 +1231,7 @@ mod tests {
         };
         let (identity, other) = (key("runtime.key"), key("other.key"));
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .build()
                 .await
                 .unwrap(),
