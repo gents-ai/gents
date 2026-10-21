@@ -12,6 +12,21 @@ function formatTokens(value: number) {
   return `${amount >= 10 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, "")}k`;
 }
 
+function compactionReason(reason: string) {
+  switch (reason) {
+    case "compacted":
+      return "Reduced before dispatch";
+    case "provider_view_repaired":
+      return "Provider history repaired";
+    case "below_threshold":
+      return "Below the reduction threshold";
+    case "compactor_unavailable":
+      return "Reducer unavailable";
+    default:
+      return "Context reduction status unavailable";
+  }
+}
+
 function ContextRing({
   used,
   window,
@@ -69,6 +84,7 @@ export function SessionContext({
   const windowError = context.contextWindowError ?? null;
   const window = Math.max(1, context.contextWindow);
   const threshold = Math.max(0, context.compactionThresholdTokens);
+  const sessionCompactionCount = context.compactions.length;
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {
@@ -124,6 +140,9 @@ export function SessionContext({
               : `~${formatTokens(used)} / ${formatTokens(window)}`}
           </span>
         )}
+        <span className="text-xs text-muted-foreground" title="Durable session compactions">
+          {sessionCompactionCount} {sessionCompactionCount === 1 ? "compaction" : "compactions"}
+        </span>
       </PopoverTrigger>
       <PopoverContent
         ref={popover.popupRef}
@@ -172,6 +191,45 @@ export function SessionContext({
             {context.estimatedDurableTokens.toLocaleString()}
           </dd>
         </dl>
+        {context.lastRequest && (
+          <section className="mt-4 border-t border-border pt-3" data-testid="last-context-dispatch">
+            <p className="text-sm font-medium text-heading">Latest model input</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {compactionReason(context.lastRequest.compactionReason)}
+            </p>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1 text-sm">
+              <dt className="text-muted-foreground">Input estimate</dt>
+              <dd className="text-right font-mono text-xs">
+                {context.lastRequest.preCompactionInputTokens == null
+                  ? `${context.lastRequest.estimatedInputTokens.toLocaleString()} tokens`
+                  : `${context.lastRequest.preCompactionInputTokens.toLocaleString()} → ${context.lastRequest.estimatedInputTokens.toLocaleString()} tokens`}
+              </dd>
+              <dt className="text-muted-foreground">Dispatch threshold</dt>
+              <dd className="text-right font-mono text-xs">
+                {context.lastRequest.compactionThresholdTokens.toLocaleString()} tokens
+              </dd>
+            </dl>
+          </section>
+        )}
+        {context.compactions.length > 0 && (
+          <section className="mt-4 border-t border-border pt-3" data-testid="session-compactions">
+            <p className="text-sm font-medium text-heading">Session compactions</p>
+            <ul className="mt-2 space-y-2 text-sm">
+              {context.compactions.slice(-5).reverse().map((entry) => (
+                <li key={entry.compactionKey} className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">
+                    {entry.createdAt ? `${entry.createdAt} · ` : ""}{entry.messagesCompacted == null ? "Message count unavailable" : `${entry.messagesCompacted.toLocaleString()} messages`}
+                  </span>
+                  <span className="text-right font-mono text-xs">
+                    {entry.originalTokens == null || entry.compactedTokens == null
+                      ? "Token estimates unavailable"
+                      : `${entry.originalTokens.toLocaleString()} → ${entry.compactedTokens.toLocaleString()}`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </PopoverContent>
     </Popover>
   );
