@@ -260,7 +260,8 @@ impl super::ToolCallLifecycle {
             let task_deleted = owner_task_deleted(node, node_did, &parent).await?;
             let session_stopped = crate::ConfigAccess::transact_local_readonly(
                 node, None, "background_recovery.session_stop", |txn| {
-                    Box::pin(async {
+                    let row = &row;
+                    Box::pin(async move {
                         crate::session::session_stopped_in_txn(
                             txn, node_did, &row.session_id, row.requester_did.as_deref(),
                         ).await
