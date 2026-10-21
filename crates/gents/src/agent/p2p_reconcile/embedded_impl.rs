@@ -566,26 +566,32 @@ pub(super) mod tests {
             .add_schema(TEST_SCHEMA)
             .await
             .expect("test schema");
-        test
-    }
-
-    #[tokio::test]
-    async fn collection_name_resolution_accepts_names_and_ids() {
-        let test = test_node().await;
-        let definition = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if let Some(definition) = test
+                if test
                     .node
                     .get_collection("P2pReconcileThing")
                     .expect("collection lookup")
+                    .is_some()
                 {
-                    break definition;
+                    break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
         .expect("committed schema reaches the collection observation");
+        test
+    }
+
+    #[tokio::test]
+    async fn collection_name_resolution_accepts_names_and_ids() {
+        let test = test_node().await;
+        let definition = test
+            .node
+            .get_collection("P2pReconcileThing")
+            .expect("collection lookup")
+            .expect("observed fixture schema");
         let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&test.node));
 
         assert_eq!(
