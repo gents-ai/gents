@@ -89,6 +89,33 @@ async fn supplied_path_retains_native_permission_search() {
 }
 
 #[tokio::test]
+async fn supplied_path_preserves_native_spawn_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let denied = root.path().join("denied");
+    std::fs::create_dir(&denied).unwrap();
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o600)).unwrap();
+    for (program, cwd, path) in [
+        ("missing", root.path().to_path_buf(), "."),
+        ("sh", root.path().join("missing"), "/bin"),
+        ("sh", PathBuf::new(), "/bin"),
+        ("sh", denied.clone(), "/bin"),
+        ("sh\0", root.path().to_path_buf(), "/bin"),
+    ] {
+        use std::os::unix::process::CommandExt;
+        let mut reference = tokio::process::Command::new(program);
+        reference.current_dir(&cwd).env_clear().env("PATH", path);
+        reference.as_std_mut().arg0(program);
+        let expected = reference.spawn().expect_err("invalid native spawn").kind();
+        let environment = HashMap::from([("PATH".into(), path.into())]);
+        let actual = super::spawn_child(program, &[], &cwd, Some(&environment), false)
+            .expect_err("invalid managed spawn")
+            .kind();
+        assert_eq!(actual, expected, "program {program:?}, cwd {cwd:?}");
+    }
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[tokio::test]
 async fn supplied_path_retains_native_script_fallback() {
     let directory = tempfile::tempdir().unwrap();
     let script = directory.path().join("fixture-command");
@@ -111,9 +138,20 @@ async fn supplied_path_retains_native_script_fallback() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn concurrent_spawns_release_unrelated_output_writers() {
+    concurrent_spawn_fixture(false).await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn permission_search_releases_unrelated_output_writers() {
+    concurrent_spawn_fixture(true).await;
+}
+
+#[cfg(target_os = "macos")]
+async fn concurrent_spawn_fixture(permission_search: bool) {
     const FIXTURE: &str = "GENTS_CAPTURE_SPAWN_FIXTURE";
     if let Some(root) = std::env::var_os(FIXTURE) {
-        exercise_concurrent_spawns(Path::new(&root));
+        exercise_concurrent_spawns(Path::new(&root), permission_search);
         std::fs::write(Path::new(&root).join("verified"), b"complete").unwrap();
         return;
     }
@@ -142,8 +180,11 @@ async fn concurrent_spawns_release_unrelated_output_writers() {
         argv: vec![
             std::env::current_exe().unwrap().to_str().unwrap().into(),
             "--exact".into(),
-            "managed_exec::process::spawn::tests::concurrent_spawns_release_unrelated_output_writers"
-                .into(),
+            if permission_search {
+                "managed_exec::process::spawn::tests::permission_search_releases_unrelated_output_writers"
+            } else {
+                "managed_exec::process::spawn::tests::concurrent_spawns_release_unrelated_output_writers"
+            }.into(),
             "--nocapture".into(),
         ],
         cwd: root.path().to_path_buf(),
@@ -161,10 +202,20 @@ async fn concurrent_spawns_release_unrelated_output_writers() {
 }
 
 #[cfg(target_os = "macos")]
-fn exercise_concurrent_spawns(root: &Path) {
+fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
     use super::super::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
     use std::time::{Duration, Instant};
 
+    let search_path = if permission_search {
+        let denied = root.join("denied");
+        std::fs::create_dir(&denied).unwrap();
+        std::fs::write(denied.join("sh"), b"not executable").unwrap();
+        std::fs::set_permissions(denied.join("sh"), std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+        format!("{}:/usr/bin:/bin", denied.display())
+    } else {
+        "/usr/bin:/bin".to_string()
+    };
     let first = std::thread::spawn(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -182,7 +233,7 @@ fn exercise_concurrent_spawns(root: &Path) {
         assert!(start.elapsed() < Duration::from_secs(10));
         std::thread::sleep(Duration::from_millis(1));
     }
-    let second = std::thread::spawn(|| {
+    let second = std::thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -191,7 +242,7 @@ fn exercise_concurrent_spawns(root: &Path) {
                 let mut child = spawn_managed_process(SpawnManagedProcessRequest {
                     argv: vec!["sh".into(), "-c".into(), ":".into()],
                     cwd: PathBuf::from("/"),
-                    environment: Some(HashMap::from([("PATH".into(), "/usr/bin:/bin".into())])),
+                    environment: Some(HashMap::from([("PATH".into(), search_path)])),
                     tool_name: None,
                     kind: ManagedExecKind::PersistentService,
                 })
