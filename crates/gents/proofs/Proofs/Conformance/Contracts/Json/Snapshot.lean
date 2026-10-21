@@ -81,6 +81,7 @@ import Proofs.Conformance.GoalResetResume
 import Proofs.Conformance.GoalWakeAncestry
 import Proofs.Conformance.GoalRequestAncestry
 import Proofs.Conformance.GoalQueueAssignment
+import Proofs.Conformance.GoalFirstRequestBinding
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GoalRequestAssignment
 import Proofs.Conformance.GoalEdit
@@ -130,6 +131,8 @@ def snapshotJson : String :=
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
     ++ "\"session_message_goal_input_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
+    ++ "\"goal_first_request_binding_cases\":"
+      ++ Conformance.GoalFirstRequestBinding.json ++ ","
     ++ "\"goal_input_binding_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.inputCasesJson ++ ","
     ++ "\"goal_assignment_history_cases\":"

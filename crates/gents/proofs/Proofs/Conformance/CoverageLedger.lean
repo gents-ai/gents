@@ -1534,6 +1534,11 @@ def caseCoverage : List CoverageEntry :=
       "goal::claimed_publication::contract_tests::generated_goal_claimed_publication_cases_drive_real_transactions")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_first_request_binding_cases"
+      "GoalFirstRequestBindingCases"
+      "goal::first_request_binding::contract_tests::generated_first_request_bindings_commit_exact_physical_roots")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_assignment_history_cases"
       "GoalAssignmentHistoryCases"
       "goal::request_assignment::history_tests::generated_assignment_histories_drive_goal_version_selection")
