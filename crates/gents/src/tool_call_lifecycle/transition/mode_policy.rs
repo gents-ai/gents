@@ -37,7 +37,6 @@ impl ToolCallLifecycle {
         let binding = adopted.background_receipt_binding()?;
         let original = self.clone();
         let receipt = receipt.to_owned();
-        let request_id = self.request_id.clone();
         let receipt_key = escape_graphql_string(&format!(
             "{}:background-receipt:{}",
             self.session_id,
@@ -47,7 +46,6 @@ impl ToolCallLifecycle {
             &self.node, None, crate::config_client::IdempotentTransactionRetry::Standard,
             "tool.background_handoff", move |txn| {
                 let binding = binding.clone();
-                let request_id = request_id.clone();
                 let receipt_key = receipt_key.clone();
                 let original = original.clone();
                 let receipt = receipt.clone();
@@ -59,9 +57,6 @@ impl ToolCallLifecycle {
                         crate::tool_call_lifecycle::delivery::publish_background_receipt_in_txn(txn, &binding, &receipt).await?;
                         return Ok(());
                     }
-                    anyhow::ensure!(crate::hook::persistence::count_live_backgrounded_rows_in(txn, &request_id).await?
-                        <= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
-                        "background process limit reached");
                     crate::tool_call_lifecycle::delivery::publish_background_receipt_in_txn(txn, &binding, &receipt).await?;
                     Ok(())
                 })
@@ -146,6 +141,11 @@ impl ToolCallLifecycle {
         {
             return Ok(None);
         }
+        let request_doc_id = self.request_doc_id.as_deref()
+            .ok_or_else(|| anyhow!("background called without parent request document"))?;
+        let live = crate::hook::persistence::count_live_backgrounded_rows_in(txn, request_doc_id).await?;
+        anyhow::ensure!(live <= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
+            "background process limit reached; wait for background work to finish");
         let mut adopted = self.clone();
         adopted.await_mode = AwaitMode::Background;
         adopted.deadline_at = deadline_at;

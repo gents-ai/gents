@@ -737,7 +737,7 @@ pub async fn request_foreground_backgrounding(
     let response = access
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{{scope}}}, limit: 2) {{
-        _docID tool_name lifecycle_state await_mode plugin_parent_tool_call_doc_id
+        _docID request_doc_id tool_name lifecycle_state await_mode plugin_parent_tool_call_doc_id
         background_requested_at started_at deadline_at
     }} }}"#
         ))
@@ -766,7 +766,12 @@ pub async fn request_foreground_backgrounding(
         return Ok(true);
     }
     anyhow::ensure!(
-        crate::hook::persistence::count_live_backgrounded_rows_in(access, request_id).await?
+        crate::hook::persistence::count_live_backgrounded_rows_in(
+            access,
+            row["request_doc_id"]
+                .as_str()
+                .context("background request missing request document identity")?,
+        ).await?
             < crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
         "background process limit reached; wait for a background process to finish"
     );

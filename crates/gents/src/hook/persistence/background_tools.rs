@@ -94,7 +94,7 @@ impl DefraSessionHook {
             return complete_spawn_process_failure(
                 self,
                 &mut parent_lifecycle,
-                FailureClass::ArgumentInvalid,
+                FailureClass::ServiceUnavailable,
                 background_invalid_tool_arguments_payload(
                     SPAWN_PROCESS_TOOL_NAME,
                     "/tool_name",
@@ -122,13 +122,16 @@ impl DefraSessionHook {
             .await;
         };
 
-        let live_count = count_live_backgrounded_rows(&self.node, &request_id).await?;
+        let parent_request_doc_id = parent_lifecycle
+            .request_doc_id()
+            .context("spawn_process parent lacks physical request identity")?;
+        let live_count = count_live_backgrounded_rows(&self.node, parent_request_doc_id).await?;
         if live_count >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
             return complete_spawn_process_failure(
                 self,
                 &mut parent_lifecycle,
                 FailureClass::ArgumentInvalid,
-                background_budget_exceeded_payload(live_count),
+                background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, live_count),
                 None,
             )
             .await;
@@ -183,7 +186,7 @@ impl DefraSessionHook {
             "await_mode": "background",
             "status": "running"
         }));
-        let mut lifecycle = parent_lifecycle
+        let admission = parent_lifecycle
             .admit_spawned_background(
                 crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
                     tool_name: target_tool_name.clone(),
@@ -192,7 +195,23 @@ impl DefraSessionHook {
                 },
                 &receipt,
             )
-            .await?;
+            .await;
+        let mut lifecycle = match admission {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
+                    return complete_spawn_process_failure(
+                        self,
+                        &mut parent_lifecycle,
+                        FailureClass::ServiceUnavailable,
+                        background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, capacity.0),
+                        None,
+                    )
+                    .await;
+                }
+                return Err(error);
+            }
+        };
         anyhow::ensure!(
             lifecycle.tool_call_id() == background_tool_call_id,
             "spawned admission returned an unexpected stable process handle"

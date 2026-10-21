@@ -611,7 +611,7 @@ pub async fn adopt_step0(
                     ctx.started_by_job = caller.started_by_job;
                     if effects.is_some() {
                         ctx.live_background = u32::try_from(
-                            count_live_backgrounded_rows_in(txn, &caller.request_id).await?,
+                            count_live_backgrounded_rows_in(txn, &caller.request_doc_id).await?,
                         )
                         .unwrap_or(u32::MAX);
                     }

@@ -1,17 +1,37 @@
 use super::*;
 
+#[derive(Debug, thiserror::Error)]
+#[error("background tool budget exceeded ({0} admitted)")]
+pub(crate) struct BackgroundCapacityExceeded(pub(crate) usize);
+
 #[derive(Debug, Deserialize)]
 struct BackgroundedRow {
-    lifecycle_state: Option<String>,
+    lifecycle_state: String,
+    await_mode: String,
+    spawned_by_tool_call_doc_id: Option<String>,
+}
+
+/// A pending spawned child is a durable admission reservation created in the
+/// same transaction as its slot check; pending provider calls are not admitted.
+fn decode_live_backgrounded_rows(value: serde_json::Value) -> anyhow::Result<usize> {
+    let rows: Vec<BackgroundedRow> = serde_json::from_value(value)
+        .context("decode background row count")?;
+    for row in &rows {
+        anyhow::ensure!(row.await_mode == "background"
+            && matches!(row.lifecycle_state.as_str(), "running" | "pending"),
+            "background row count returned a row outside its requested state");
+    }
+    Ok(rows.into_iter().filter(|row| row.lifecycle_state == "running"
+        || (row.lifecycle_state == "pending" && row.spawned_by_tool_call_doc_id.is_some())).count())
 }
 
 pub(super) async fn count_live_backgrounded_rows(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    request_id: &str,
+    request_doc_id: &str,
 ) -> anyhow::Result<usize> {
     count_live_backgrounded_rows_in(
         &crate::config_client::ConfigAccess::local(node.clone()),
-        request_id,
+        request_doc_id,
     )
     .await
 }
@@ -20,39 +40,57 @@ pub(super) async fn count_live_backgrounded_rows(
 /// through `reader` so an adoption counts them inside its transaction.
 pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::ConfigRead>(
     reader: &R,
-    request_id: &str,
+    request_doc_id: &str,
 ) -> anyhow::Result<usize> {
-    let escaped_request_id = crate::graphql::escape_graphql_string(request_id);
+    let escaped_request_doc_id = crate::graphql::escape_graphql_string(request_doc_id);
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
-                    request_id: {{ _eq: "{escaped_request_id}" }},
-                    await_mode: {{ _eq: "background" }}
+                    request_doc_id: {{ _eq: "{escaped_request_doc_id}" }},
+                    await_mode: {{ _eq: "background" }},
+                    lifecycle_state: {{ _in: ["running", "pending"] }}
                 }}
             ) {{
-                lifecycle_state
+                lifecycle_state await_mode spawned_by_tool_call_doc_id
             }}
         }}"#
     );
     let response = reader.execute_read(&query).await.map_err(|error| {
-        error.context(format!(
-            "query live backgrounded tool count for request {request_id} failed"
+            error.context(format!(
+            "query live backgrounded tool count for request document {request_doc_id} failed"
         ))
     })?;
-    let rows: Vec<BackgroundedRow> = response
+    let value = response
         .pointer("/data/AgentToolCall")
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    Ok(rows
-        .into_iter()
-        .filter(|row| {
-            !matches!(
-                row.lifecycle_state.as_deref(),
-                Some("completed" | "failed" | "timedOut" | "cancelled")
-            )
-        })
-        .count())
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("background row count omitted AgentToolCall rows"))?;
+    decode_live_backgrounded_rows(value)
+}
+
+#[cfg(test)]
+mod background_count_tests {
+    use super::decode_live_backgrounded_rows;
+    use serde_json::json;
+
+    #[test]
+    fn pending_spawn_reservations_count_but_pending_accepted_calls_do_not() {
+        let rows = json!([
+            {"lifecycle_state":"running","await_mode":"background","spawned_by_tool_call_doc_id":null},
+            {"lifecycle_state":"pending","await_mode":"background","spawned_by_tool_call_doc_id":"parent"},
+            {"lifecycle_state":"pending","await_mode":"background","spawned_by_tool_call_doc_id":null}
+        ]);
+        assert_eq!(decode_live_backgrounded_rows(rows).unwrap(), 2);
+    }
+
+    #[test]
+    fn malformed_or_unknown_background_rows_fail_closed() {
+        assert!(decode_live_backgrounded_rows(json!([{"await_mode":"background"}])).is_err());
+        assert!(decode_live_backgrounded_rows(json!([{
+            "lifecycle_state":"mystery","await_mode":"background",
+            "spawned_by_tool_call_doc_id":null
+        }])).is_err());
+    }
 }
 
 pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {
@@ -292,18 +330,21 @@ pub(super) fn background_tool_not_allowed_payload(
     }))
 }
 
-pub(super) fn background_budget_exceeded_payload(current_backgrounded: usize) -> String {
+pub(super) fn background_budget_exceeded_payload(
+    tool_name: &str,
+    current_backgrounded: usize,
+) -> String {
     json_string(json!({
         "ok": false,
-        "failure_class": "argument_invalid",
+        "failure_class": "service_unavailable",
         "code": "background_tool_budget_exceeded",
         "path": "/",
         "message": format!(
-            "parent request has reached the concurrent backgrounded tool ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT})"
+            "parent request has reached the concurrent backgrounded tool ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT}); wait for a completion notification, then retry"
         ),
-        "retryable": false,
+        "retryable": true,
         "service_id": "process",
-        "tool_name": SPAWN_PROCESS_TOOL_NAME,
+        "tool_name": tool_name,
         "current_backgrounded": current_backgrounded,
         "max_backgrounded": MAX_BACKGROUNDED_TOOLS_PER_PARENT
     }))
