@@ -73,13 +73,19 @@ private def capturedNativeMessageJson (c : RequestInputCase) : String :=
   let message := PromptAssembly.CapturedContext.authoredMessage c.authoredText c.input.capturedContext
   "{\"role\":\"user\",\"content\":" ++ jsonArray (message.blocks.map capturedNativeBlockJson) ++ "}"
 
+private def assignmentJson : Option GoalAssignmentInput → String
+  | none => "null"
+  | some reference => "{\"goal_id\":" ++ jsonString reference.goalId ++
+      ",\"root_request_doc_id\":" ++ optionalString reference.rootRequestDocId ++ "}"
+
 private def requestInputJson (input : RequestInput) : String :=
   "{\"selected_skill_ids\":" ++ jsonStringArray input.selectedSkillIds ++
   ",\"cwd\":" ++ optionalString input.cwd ++
   ",\"initial_title\":" ++ titleJson input.initialTitle ++
   ",\"queue\":" ++ queueJson input.queue ++
   ",\"goal_continuation\":" ++ goalJson input.goalContinuation ++
-  ",\"captured_context\":" ++ jsonArray (input.capturedContext.map capturedContextJson) ++ "}"
+  ",\"captured_context\":" ++ jsonArray (input.capturedContext.map capturedContextJson) ++
+  ",\"goal_assignment\":" ++ assignmentJson input.goalAssignment ++ "}"
 
 private def requestInputCaseJson (c : RequestInputCase) : String :=
   let queue := c.input.queue.getD { source := .backgroundCompletion, policy := .coalesce }
@@ -87,13 +93,18 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"input\":" ++ requestInputJson c.input ++
   ",\"authored_text\":" ++ jsonString c.authoredText ++
   ",\"runtime_input_version\":" ++ jsonOptionalNat c.runtimeInputVersion ++
+  ",\"runtime_goal_version\":" ++ jsonOptionalNat c.runtimeGoalVersion ++
+  ",\"expected_goal_assignment_compatible\":" ++ boolString (goalAssignmentCompatible c.input c.runtimeGoalVersion) ++
   ",\"expected_captured_input_compatible\":" ++ boolString (capturedInputCompatible c.input c.runtimeInputVersion) ++
   ",\"expected_has_authored_input\":" ++ boolString (hasAuthoredInput c.input c.authoredText) ++
   ",\"expected_native_input\":" ++ capturedNativeMessageJson c ++
   ",\"expected_provider_parts\":" ++ jsonOptionalStringArray (PromptAssembly.CapturedContext.providerParts? c.authoredText c.input.capturedContext) ++
+  ",\"continuation_parent_doc_id\":" ++ jsonString "physical:parent" ++
   ",\"continuation_queue\":" ++ queueJson (some queue) ++
   ",\"continuation_goal\":" ++ goalJson c.input.goalContinuation ++
-  ",\"expected_continuation\":" ++ requestInputJson (continuationInput c.input queue c.input.goalContinuation) ++
+  ",\"expected_continuation\":" ++ requestInputJson (continuationInput c.input queue c.input.goalContinuation "physical:parent") ++
+  ",\"reissued_source_doc_id\":" ++ jsonString "physical:parent" ++
+  ",\"expected_reissued_input\":" ++ requestInputJson (reissuedInput c.input "physical:parent") ++
   ",\"workspace\":" ++ workspaceJson c.workspace ++
   ",\"workspace_source\":" ++ workspaceJson c.workspaceSource ++
   ",\"workspace_source_authenticated\":" ++ boolString c.workspaceSourceAuthenticated ++

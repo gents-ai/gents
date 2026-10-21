@@ -28,6 +28,7 @@ def facts (status : Goals.Status) (authorized busy : Bool) : Facts :=
 def operations : List (String × Operation) :=
   [ ("pause", .pause)
   , ("resume", .resume)
+  , ("stop", .stop)
   , ("objective", .edit ⟨some "  verify  ", none⟩)
   , ("budget", .edit ⟨none, some 2000⟩)
   , ("blank_objective", .edit ⟨some "\u3000\u00A0", none⟩)
@@ -43,7 +44,7 @@ def revisions : List (String × Revision) :=
   ]
 
 def cases : List Case :=
-  [Goals.Status.active, .paused, .blocked, .usageLimited, .budgetLimited, .complete].flatMap fun status =>
+  [Goals.Status.active, .paused, .blocked, .usageLimited, .budgetLimited, .complete, .stopped].flatMap fun status =>
   [true, false].flatMap fun authorized =>
   [true, false].flatMap fun busy =>
   revisions.flatMap fun (revisionName, revision) =>
@@ -59,7 +60,7 @@ def cases : List Case :=
 def Case.after (c : Case) : Option Snapshot :=
   apply? c.before c.expectedRevision c.nextComposite c.operation c.facts
 
-example : cases.length = 576 := by native_decide
+example : cases.length = 756 := by native_decide
 
 theorem busy_resume_retains_the_request :
     ((apply? (initial .paused) (initial .paused).revision "revision-after" .resume
@@ -87,6 +88,7 @@ def snapshotJson (s : Snapshot) : String :=
 def operationJson : Operation → String
   | .pause => "{\"kind\":\"pause\"}"
   | .resume => "{\"kind\":\"resume\"}"
+  | .stop => "{\"kind\":\"stop\"}"
   | .edit fields =>
       "{\"kind\":\"edit\",\"objective\":" ++
         (match fields.objective with | none => "null" | some value => jsonString value) ++

@@ -17,6 +17,21 @@ fn captured_input_compatibility_matches_the_executable_owner() {
 }
 
 #[test]
+fn goal_assignment_compatibility_matches_the_executable_owner() {
+    for case in &lean_contract_snapshot().request_input_cases {
+        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        assert_eq!(
+            input.goal_assignment_compatible(case["runtime_goal_version"].as_u64()),
+            case["expected_goal_assignment_compatible"]
+                .as_bool()
+                .unwrap(),
+            "{}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
 fn runtime_continuation_inputs_match_the_lean_owner() {
     for case in &lean_contract_snapshot().request_input_cases {
         let name = case["name"].as_str().unwrap();
@@ -25,7 +40,22 @@ fn runtime_continuation_inputs_match_the_lean_owner() {
         let goal = serde_json::from_value(case["continuation_goal"].clone()).unwrap();
         let expected: RequestInput =
             serde_json::from_value(case["expected_continuation"].clone()).unwrap();
-        assert_eq!(parent.continuation(queue, goal), expected, "{name}");
+        assert_eq!(
+            parent.continuation(
+                queue,
+                goal,
+                case["continuation_parent_doc_id"].as_str().unwrap()
+            ),
+            expected,
+            "{name}"
+        );
+        let expected_reissued: RequestInput =
+            serde_json::from_value(case["expected_reissued_input"].clone()).unwrap();
+        assert_eq!(
+            parent.reissued(case["reissued_source_doc_id"].as_str().unwrap()),
+            expected_reissued,
+            "{name}: same-session reissuance"
+        );
     }
 }
 

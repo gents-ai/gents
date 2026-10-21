@@ -68,6 +68,7 @@ pub async fn control_goal(
         },
         GoalControlAction::Pause {} => GoalOperation::Pause {},
         GoalControlAction::Resume {} => GoalOperation::Resume {},
+        GoalControlAction::Stop {} => GoalOperation::Stop {},
     };
     ensure!(!request.node_did.trim().is_empty(), "node_did is required");
     let session_id = match request.session_id {

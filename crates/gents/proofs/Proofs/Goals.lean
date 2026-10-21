@@ -9,6 +9,7 @@ inductive Status where
   | usageLimited
   | budgetLimited
   | complete
+  | stopped
   deriving DecidableEq, Repr
 
 namespace Status
@@ -20,6 +21,7 @@ def toDefraDB : Status → String
   | .usageLimited => "usage_limited"
   | .budgetLimited => "budget_limited"
   | .complete => "complete"
+  | .stopped => "stopped"
 
 def fromDefraDB? : String → Option Status
   | "active" => some .active
@@ -28,6 +30,7 @@ def fromDefraDB? : String → Option Status
   | "usage_limited" => some .usageLimited
   | "budget_limited" => some .budgetLimited
   | "complete" => some .complete
+  | "stopped" => some .stopped
   | _ => none
 
 theorem fromDefraDB_toDefraDB (status : Status) :
@@ -52,6 +55,10 @@ inductive AuditObservation where
 inductive Action where
   | pause
   | resume
+  /-- Explicit removal ends autonomous continuation without asserting success.
+  It preserves the current request and user queue; their existing owners retain
+  cancellation authority. Historical goal state and accounting remain durable. -/
+  | stop
   | complete
   | blockedAudit (observation : AuditObservation)
   | operatorBlock
@@ -78,8 +85,11 @@ def step? (state : State) : Action → Option State
         some { state with status := .active, blockedAudits := 0 }
       else none
   | .complete =>
-      if state.status = .complete then none
+      if state.status = .complete ∨ state.status = .stopped then none
       else some { state with status := .complete, wrapupCompleted := true }
+  | .stop =>
+      if state.status = .complete ∨ state.status = .stopped then none
+      else some { state with status := .stopped }
   | .blockedAudit observation =>
       if state.status = .active then
         let audits := nextBlockedAudits state.blockedAudits observation
@@ -113,6 +123,21 @@ def step? (state : State) : Action → Option State
       if state.status = .active then
         some { state with blockedAudits := 0 }
       else none
+
+theorem stop_preserves_history (state post : State)
+    (h : step? state .stop = some post) :
+    post.status = .stopped ∧ post.blockedAudits = state.blockedAudits ∧
+      post.wrapupRequested = state.wrapupRequested ∧
+      post.wrapupCompleted = state.wrapupCompleted := by
+  simp only [step?] at h
+  split at h
+  · contradiction
+  · cases h
+    exact ⟨rfl, rfl, rfl, rfl⟩
+
+theorem stopped_rejects_later_transitions (state : State) (action : Action)
+    (h : state.status = .stopped) : step? state action = none := by
+  cases action <;> simp [step?, h]
 
 theorem blocked_requires_three_audits
     (state post : State) (observation : AuditObservation)
@@ -224,7 +249,13 @@ def decide
       | .completed => .none
       | .failed | .dead | .interrupted | .superseded =>
           if infrastructureRetries < 2 then .retry else .abandonWrapup
-  | .paused | .blocked | .usageLimited | .complete => .none
+  | .paused | .blocked | .usageLimited | .complete | .stopped => .none
+
+theorem stopped_never_continues
+    (terminal : RequestTerminal) (idle child budget activity wrapup : Bool)
+    (retries : Nat) (requested completed : Bool) :
+    decide .stopped terminal idle child budget activity wrapup retries requested completed = .none := by
+  cases idle <;> cases child <;> simp [decide]
 
 theorem exhausted_active_never_retries
     (terminal : RequestTerminal) (idle child activity wrapup : Bool)

@@ -772,6 +772,60 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalObjectiveWhitespace".to_string(),
         ));
     }
+    if !snapshot.session_message_goal_input_cases.is_empty() {
+        emitted.insert((
+            "session_message_goal_input_cases".to_string(),
+            "SessionMessageGoalInputCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_first_request_binding_cases.is_empty() {
+        emitted.insert((
+            "goal_first_request_binding_cases".to_string(),
+            "GoalFirstRequestBindingCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_input_binding_cases.is_empty() {
+        emitted.insert((
+            "goal_input_binding_cases".to_string(),
+            "GoalInputBindingCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_assignment_history_cases.is_empty() {
+        emitted.insert((
+            "goal_assignment_history_cases".to_string(),
+            "GoalAssignmentHistoryCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_request_assignment_cases.is_empty() {
+        emitted.insert((
+            "goal_request_assignment_cases".to_string(),
+            "GoalRequestAssignmentCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_wake_ancestry_cases.is_empty() {
+        emitted.insert((
+            "goal_wake_ancestry_cases".into(),
+            "GoalWakeAncestryCases".into(),
+        ));
+    }
+    if !snapshot.goal_tool_context_cases.is_empty() {
+        emitted.insert((
+            "goal_tool_context_cases".into(),
+            "GoalToolContextCases".into(),
+        ));
+    }
+    if !snapshot.goal_request_ancestry_cases.is_empty() {
+        emitted.insert((
+            "goal_request_ancestry_cases".into(),
+            "GoalRequestAncestryCases".into(),
+        ));
+    }
+    if !snapshot.goal_queue_assignment_cases.is_empty() {
+        emitted.insert((
+            "goal_queue_assignment_cases".into(),
+            "GoalQueueAssignmentCases".into(),
+        ));
+    }
     if !snapshot.goal_request_head_cases.is_empty() {
         emitted.insert((
             "goal_request_head_cases".to_string(),

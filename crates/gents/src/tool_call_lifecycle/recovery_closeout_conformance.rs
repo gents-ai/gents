@@ -202,6 +202,7 @@ fn handoff_reason_for_case(name: &str) -> Option<&'static str> {
         "session_message_request_completed_unknown_goal_to_completed" => Some("assignment_unknown"),
         "session_message_request_completed_live_goal_to_completed" => Some("assignment_active"),
         "session_message_request_completed_blocked_goal_to_completed" => Some("assignment_blocked"),
+        "session_message_request_completed_stopped_goal_to_completed" => Some("assignment_stopped"),
         other => panic!("{other}: unhandled session-message case"),
     }
 }
@@ -363,7 +364,8 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .await
                         .expect("persist an active Goal in the caused session");
                     }
-                    "session_message_request_completed_blocked_goal_to_completed" => {
+                    "session_message_request_completed_blocked_goal_to_completed"
+                    | "session_message_request_completed_stopped_goal_to_completed" => {
                         crate::test_support::install_test_agent(
                             &admission.node,
                             &admission.node_did,
@@ -375,7 +377,15 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                             &admission.node_did,
                             &caused_session_id,
                             Some("hold"),
-                            Some(crate::goal::GoalStatus::Blocked),
+                            Some(
+                                if name
+                                    == "session_message_request_completed_stopped_goal_to_completed"
+                                {
+                                    crate::goal::GoalStatus::Stopped
+                                } else {
+                                    crate::goal::GoalStatus::Blocked
+                                },
+                            ),
                             None,
                         )
                         .await

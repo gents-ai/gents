@@ -244,7 +244,12 @@ fn replacement_spec(
         .iter()
         .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
         .unwrap();
-    let mut input = source.input.clone().unwrap_or_default();
+    let mut input = source.input.clone().unwrap_or_default().reissued(
+        source
+            .doc_id
+            .as_deref()
+            .context("selected message has no physical identity")?,
+    );
     input.initial_title = None;
     let slot_id = slot
         .doc_id
@@ -381,6 +386,87 @@ pub(crate) struct ValidatedPendingEdit {
     node_did: String,
     selected: Vec<AgentRequestRow>,
     creates: Vec<AgentRequestCreate>,
+}
+
+#[cfg(test)]
+mod input_reissuance_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn generated_reissued_inputs_keep_reordered_messages_goal_and_captures() {
+        let temp = tempfile::tempdir().unwrap();
+        let signer =
+            crate::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
+                .unwrap();
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases;
+        let mut exercised = 0;
+        for case in cases
+            .iter()
+            .filter(|case| !case["input"]["goal_assignment"].is_null())
+        {
+            let mut input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+            input.queue = Some(RequestQueue {
+                source: QueueSource::User,
+                policy: QueuePolicy::Append,
+                delivery: QueueDelivery::Queue,
+                position: None,
+                key: None,
+                queued_after_request_id: Some("active".into()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            });
+            let source = AgentRequestRow {
+                doc_id: Some(case["reissued_source_doc_id"].as_str().unwrap().into()),
+                request_id: "source-message".into(),
+                agent_id: Some("coding".into()),
+                input: Some(input.clone()),
+                ..Default::default()
+            };
+            let slot = AgentRequestRow {
+                doc_id: Some("physical:different-slot".into()),
+                request_id: "slot-message".into(),
+                ..source.clone()
+            };
+            let selected = [slot.clone(), source.clone()];
+            let spec = replacement_spec(
+                &selected,
+                &slot,
+                &PendingMessageEdit {
+                    request_doc_id: source.doc_id.clone().unwrap(),
+                    content: "Edited text in the other slot".into(),
+                },
+                AgentRequestAdmissionRecord::local_self(signer.did()),
+                signer.did(),
+                "session",
+                signer.did(),
+                "replacement".into(),
+                "2026-10-21T00:00:00Z".into(),
+                QueueDelivery::Steer,
+            )
+            .unwrap();
+            let create =
+                crate::lifecycle::build_signed_request(spec, RequestSigner::Identity(&signer))
+                    .await
+                    .unwrap();
+            assert!(crate::identity::verify_did_signature(
+                signer.did(),
+                &create.signing_payload(),
+                &create.admission.signature,
+            )
+            .unwrap());
+            let mut expected: RequestInput =
+                serde_json::from_value(case["expected_reissued_input"].clone()).unwrap();
+            expected.initial_title = None;
+            expected.queue = create.input.queue.clone();
+            assert_eq!(create.input, expected, "{}", case["name"]);
+            let position = create.input.queue.unwrap().position.unwrap();
+            assert_eq!(position.slot_request_doc_id, slot.doc_id.clone().unwrap());
+            assert_eq!(position.replaces_request_doc_id, slot.doc_id.unwrap());
+            assert_eq!(source.input, Some(input), "source input remains immutable");
+            exercised += 1;
+        }
+        assert_eq!(exercised, 6);
+    }
 }
 
 pub(crate) async fn validate_pending_user_edit_in_txn(

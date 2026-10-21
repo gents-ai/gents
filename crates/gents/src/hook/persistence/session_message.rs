@@ -230,12 +230,21 @@ impl DefraSessionHook {
             title.as_deref(),
             interrupt,
         )
-        .await?
+        .await
         {
-            Ok(plan) => plan,
-            Err(message) => refuse!(
+            Ok(Ok(plan)) => plan,
+            Ok(Err(message)) => refuse!(
                 FailureClass::ArgumentInvalid,
                 invalid_tool_arguments_payload(tool_name, "/task", message)
+            ),
+            Err(error) => refuse!(
+                FailureClass::ServiceUnavailable,
+                service_unavailable_payload(
+                    tool_name,
+                    "/session_id",
+                    format!("the target chat could not be read: {error:#}"),
+                    true,
+                )
             ),
         };
         if target.node_did == caller.node_did {

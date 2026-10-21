@@ -8,6 +8,7 @@ structure RequestInputCase where
   input : RequestInput
   authoredText : String := "Check this context."
   runtimeInputVersion : Option Nat := some 1
+  runtimeGoalVersion : Option Nat := some 3
   contextSkillIds : List String
   cwdAllowed : Bool := true
   queueSourceAllowed : Bool := true
@@ -143,6 +144,20 @@ def capturedCompatibilityCases : List RequestInputCase :=
       runtimeInputVersion := none }
   ]
 
+def goalAssignmentCases : List RequestInputCase :=
+  [ { name := "goal-assignment-opening-self", input := { goalAssignment := some ⟨"goal:résumé", none⟩ }, contextSkillIds := [] }
+  , { name := "goal-assignment-physical-root", input := { goalAssignment := some ⟨"goal:résumé", some "request:工具"⟩ }, contextSkillIds := [] }
+  , { name := "goal-assignment-requires-new-contract", input := { goalAssignment := some ⟨"goal", some "root"⟩ }, contextSkillIds := [], runtimeGoalVersion := some 2 }
+  , { name := "goal-assignment-without-contract", input := { goalAssignment := some ⟨"goal", none⟩ }, contextSkillIds := [], runtimeGoalVersion := none }
+  , { name := "goal-assignment-opening-with-capture", input := {
+        goalAssignment := some ⟨"goal:résumé", none⟩, capturedContext := [capturedSelection],
+        cwd := some "/tmp/工具", selectedSkillIds := ["review"] }, contextSkillIds := ["review"] }
+  , { name := "goal-assignment-followup-with-capture", input := {
+        goalAssignment := some ⟨"goal:résumé", some "physical:opening"⟩,
+        capturedContext := [capturedSelection], cwd := some "/tmp/工具",
+        selectedSkillIds := ["review"] }, contextSkillIds := ["review"] }
+  ]
+
 def requestInputCases : List RequestInputCase :=
   [ { name := "empty-input-inherits-context", input := {}, contextSkillIds := ["rust"] }
   , { name := "explicit-skill-within-whitelist", input := { selectedSkillIds := ["rust"] },
@@ -224,13 +239,13 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases
+  ] ++ workspaceCases ++ queueExtensionCases ++ capturedContextCases ++ capturedPresentationCases ++ capturedCompatibilityCases ++ goalAssignmentCases
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 9 true := by native_decide
+      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 15 true := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map

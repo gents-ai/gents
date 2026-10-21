@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
@@ -15,6 +16,9 @@ use super::*;
 
 #[path = "tests/transcript_native.rs"]
 mod transcript_native;
+
+#[path = "tests/goal_context.rs"]
+mod goal_context;
 
 #[path = "tests/background_panic.rs"]
 mod background_panic;
@@ -217,6 +221,9 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
 
 #[tokio::test]
 async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifecycle() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-create-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -228,7 +235,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:owner", FailurePolicy::default())
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, true);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start"), &[])
@@ -236,14 +243,8 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        node.as_ref(),
-        &hook,
-        "goal-request",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    goal_context::bind_signed_request(&node, &hook, &identity, "goal-request", &session_id, None)
+        .await;
 
     accept_hook_tool_call(
         &hook,
@@ -266,7 +267,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         "unexpected forged create action: {forged:?}"
     );
     assert!(
-        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .unwrap()
             .is_none()
@@ -289,11 +290,11 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         )
         .await;
     assert!(matches!(created, ToolCallHookAction::Skip { .. }));
-    let goal = crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+    let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(goal.node_did, "did:test:owner");
+    assert_eq!(goal.node_did, identity.did());
     assert_eq!(goal.session_id, session_id);
     assert_eq!(goal.objective, "ship");
     assert_eq!(goal.token_budget, Some(1000));
@@ -316,7 +317,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         .await;
     assert!(matches!(forged_update, ToolCallHookAction::Skip { .. }));
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .unwrap()
             .unwrap()
@@ -349,7 +350,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
                 .await,
             ToolCallHookAction::Skip { .. }
         ));
-        let updated = crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        let updated = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .unwrap()
             .unwrap();
@@ -400,7 +401,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         ToolCallHookAction::Skip { .. }
     ));
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .unwrap()
             .unwrap()
@@ -747,6 +748,9 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
 
 #[tokio::test]
 async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let goal_case = crate::lean_vocab_test::lean_goal_create_cases()
         .iter()
         .find(|case| case.expected == "fresh" && case.token_budget.is_none())
@@ -761,21 +765,21 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
         for inject in [false, true] {
             let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
-            let hook =
-                DefraSessionHook::with_identity(node.clone(), "did:test:control-receipt", policy)
-                    .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
+            let hook = DefraSessionHook::with_identity(node.clone(), identity.did(), policy)
+                .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Create a goal"), &[])
                     .await,
                 HookAction::Continue
             ));
             let session = hook.session_id().await.unwrap();
-            bind_interruptible_request(
+            goal_context::bind_signed_request(
                 &node,
                 &hook,
+                &identity,
                 "control-receipt",
                 &session,
-                chrono::Utc::now() + chrono::Duration::minutes(5),
+                None,
             )
             .await;
             accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
@@ -785,11 +789,10 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     hook.on_tool_call("create_goal", None, "control-call", &args),
                 )
                 .await;
-            let goal =
-                crate::goal::load_canonical_goal(&node, "did:test:control-receipt", &session)
-                    .await
-                    .unwrap()
-                    .expect("the control effect committed before completion");
+            let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session)
+                .await
+                .unwrap()
+                .expect("the control effect committed before completion");
             assert_eq!(goal.objective, goal_case.objective);
             if inject {
                 assert_eq!(Some(mutations), completion_mutation, "fault must fire");
@@ -809,11 +812,10 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     matches!(again, ToolCallHookAction::Continue),
                     replay.expected[1].may_invoke
                 );
-                let after =
-                    crate::goal::load_canonical_goal(&node, "did:test:control-receipt", &session)
-                        .await
-                        .unwrap()
-                        .unwrap();
+                let after = crate::goal::load_canonical_goal(&node, identity.did(), &session)
+                    .await
+                    .unwrap()
+                    .unwrap();
                 assert_eq!(
                     serde_json::to_value(after).unwrap(),
                     serde_json::to_value(goal).unwrap(),
@@ -1815,6 +1817,9 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
 
 #[tokio::test]
 async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-guard-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -1827,7 +1832,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     ensure_runtime_schemas(&node).await.unwrap();
 
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start goal"), &[])
@@ -1837,7 +1842,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     let session_id = hook.session_id().await.expect("session id");
     crate::goal::set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         &session_id,
         Some("Do not resurrect after budget exhaustion"),
         Some(crate::goal::GoalStatus::Active),
@@ -1847,7 +1852,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     .expect("create active goal");
     crate::goal::set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         &session_id,
         None,
         Some(crate::goal::GoalStatus::BudgetLimited),
@@ -1855,12 +1860,13 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     )
     .await
     .expect("latch budget-limited goal");
-    bind_interruptible_request(
-        node.as_ref(),
+    goal_context::bind_signed_request(
+        &node,
         &hook,
+        &identity,
         "goal-wrapup-request",
         &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
+        None,
     )
     .await;
 
@@ -1881,7 +1887,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         )
         .await;
     assert!(matches!(action, ToolCallHookAction::Skip { .. }));
-    let goal = crate::goal::load_canonical_goal(node.as_ref(), "did:test:general", &session_id)
+    let goal = crate::goal::load_canonical_goal(node.as_ref(), identity.did(), &session_id)
         .await
         .expect("load goal")
         .expect("goal exists");
@@ -1899,6 +1905,9 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
 
 #[tokio::test]
 async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -1910,7 +1919,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start goal"), &[])
@@ -1918,14 +1927,6 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        node.as_ref(),
-        &hook,
-        "goal-update-request",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
 
     // Accepted active edit through the hook path: no status, objective updated,
     // stale-race message absent. Complements the edit_active_goal contract tests
@@ -1934,7 +1935,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     {
         crate::goal::set_goal(
             &node,
-            "did:test:general",
+            identity.did(),
             &session_id,
             Some("blocked-edit semantics"),
             Some(crate::goal::GoalStatus::Active),
@@ -1942,6 +1943,15 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         )
         .await
         .expect("create active goal");
+        goal_context::bind_signed_request(
+            &node,
+            &hook,
+            &identity,
+            &format!("goal-update-{}", uuid::Uuid::new_v4()),
+            &session_id,
+            None,
+        )
+        .await;
         let call_id = "active-edit-accepted";
         let args = r#"{"objective":"revised while active"}"#;
         accept_hook_tool_call(
@@ -1966,12 +1976,12 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
                 == true,
             "active edit must be accepted: {tool_result}"
         );
-        let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+        let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .expect("load goal")
             .expect("goal exists");
         assert_eq!(goal.objective, "revised while active");
-        crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
+        crate::goal::delete_goals_for_session(&node, identity.did(), &session_id)
             .await
             .expect("clear goal");
     }
@@ -2000,7 +2010,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     ] {
         crate::goal::set_goal(
             &node,
-            "did:test:general",
+            identity.did(),
             &session_id,
             Some("blocked-edit semantics"),
             Some(crate::goal::GoalStatus::Active),
@@ -2008,9 +2018,10 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         )
         .await
         .expect("create active goal");
+        goal_context::bind_signed_request(&node, &hook, &identity, &format!("goal-update-{}", uuid::Uuid::new_v4()), &session_id, None).await;
         crate::goal::set_goal(
             &node,
-            "did:test:general",
+            identity.did(),
             &session_id,
             None,
             Some(status),
@@ -2018,7 +2029,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         )
         .await
         .expect("latch status");
-        let before = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+        let before = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .expect("load before")
             .expect("goal exists");
@@ -2068,7 +2079,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
                 !tool_result.contains("no longer active or its continuation changed"),
                 "{call_id}: stale-race message must not appear for a fresh non-active goal: {tool_result}"
             );
-            let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+            let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
                 .await
                 .expect("load goal")
                 .expect("goal exists");
@@ -2088,7 +2099,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         }
         // Rebuild from a fresh active goal for the next case; complete and
         // budget_limited cannot be reset to active via set_goal.
-        crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
+        crate::goal::delete_goals_for_session(&node, identity.did(), &session_id)
             .await
             .expect("clear goal for next case");
     }
@@ -3875,6 +3886,9 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
 
 #[tokio::test]
 async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     use crate::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
     use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
     use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
@@ -3882,7 +3896,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("publish required review output"), &[])
@@ -3892,7 +3906,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let session = hook.session_id().await.unwrap();
     set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         &session,
         Some("publish review output"),
         Some(GoalStatus::Active),
@@ -3900,8 +3914,15 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     )
     .await
     .unwrap();
-    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&node, &hook, "goal-output-request", &session, deadline).await;
+    goal_context::bind_signed_request(
+        &node,
+        &hook,
+        &identity,
+        "goal-output-request",
+        &session,
+        None,
+    )
+    .await;
     let request_doc = hook.active_request_doc_id().await.unwrap();
     let gate = OutputObligationGate::new(
         node.clone(),
@@ -3917,7 +3938,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     );
     let hook = hook.with_output_obligation_gate(Some(gate.clone()));
     let persistence_hook = hook.clone();
-    let before = load_canonical_goal(&node, "did:test:general", &session)
+    let before = load_canonical_goal(&node, identity.did(), &session)
         .await
         .unwrap()
         .unwrap();
@@ -3949,7 +3970,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         .as_str()
         .unwrap()
         .contains("write_scan_result"));
-    let after = load_canonical_goal(&node, "did:test:general", &session)
+    let after = load_canonical_goal(&node, identity.did(), &session)
         .await
         .unwrap()
         .unwrap();
@@ -4007,7 +4028,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let result: serde_json::Value =
         serde_json::from_str(accepted["result"].as_str().unwrap()).unwrap();
     assert_eq!(result["accepted"], true);
-    let complete = load_canonical_goal(&node, "did:test:general", &session)
+    let complete = load_canonical_goal(&node, identity.did(), &session)
         .await
         .unwrap()
         .unwrap();
@@ -4015,7 +4036,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
 
     set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         "operator-output-session",
         Some("operator decision"),
         Some(GoalStatus::Active),
@@ -4038,7 +4059,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     assert_eq!(empty_gate.unmet().await.unwrap().len(), 1);
     set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         "operator-output-session",
         None,
         Some(GoalStatus::Complete),
@@ -4046,7 +4067,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     )
     .await
     .unwrap();
-    let operator = load_canonical_goal(&node, "did:test:general", "operator-output-session")
+    let operator = load_canonical_goal(&node, identity.did(), "operator-output-session")
         .await
         .unwrap()
         .unwrap();

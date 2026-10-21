@@ -41,7 +41,7 @@ async fn durable_rows(node: &EmbeddedNode) -> Value {
 #[tokio::test]
 async fn generated_goal_edit_cases_drive_real_transactions() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_edit_cases.len(), 62);
+    assert_eq!(contracts.goal_edit_cases.len(), 66);
     for case in contracts.goal_edit_cases {
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();

@@ -169,6 +169,39 @@ pub async fn load_session_goal_observation(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<SessionGoalObservation>> {
+    Ok(
+        match load_session_goal_observation_state(
+            access,
+            verifier,
+            node_did,
+            session_id,
+            requester_did,
+        )
+        .await?
+        {
+            SessionGoalObservationState::Observed(observation) => Some(*observation),
+            SessionGoalObservationState::NoReadableSession
+            | SessionGoalObservationState::Unknown => None,
+        },
+    )
+}
+
+/// A missing projection for an existing readable session must not be treated
+/// as a verified absence when capturing signed request intent.
+#[derive(Debug)]
+pub enum SessionGoalObservationState {
+    NoReadableSession,
+    Unknown,
+    Observed(Box<SessionGoalObservation>),
+}
+
+pub async fn load_session_goal_observation_state(
+    access: &ConfigAccess,
+    verifier: &dyn NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<SessionGoalObservationState> {
     access
         .transact_readonly("goal.read_observation", |txn| {
             Box::pin(async move {
@@ -180,11 +213,16 @@ pub async fn load_session_goal_observation(
                 )
                 .await?
                 else {
-                    return Ok(None);
+                    return Ok(SessionGoalObservationState::NoReadableSession);
                 };
                 match rows_in_txn(txn, &session).await?.first() {
-                    Some(row) => verified(verifier, &session, row).await,
-                    None => Ok(None),
+                    Some(row) => Ok(match verified(verifier, &session, row).await? {
+                        Some(observation) => {
+                            SessionGoalObservationState::Observed(Box::new(observation))
+                        }
+                        None => SessionGoalObservationState::Unknown,
+                    }),
+                    None => Ok(SessionGoalObservationState::Unknown),
                 }
             })
         })
@@ -211,6 +249,7 @@ pub(crate) async fn project_session_goal(
                     txn, &goal.doc_id, "goal.project_observation",
                 ).await?.context("goal has no unambiguous composite revision")?;
                 Some(ObservedGoal {
+                    assignment_root_request_doc_id: goal.assignment_root_request_doc_id.clone(),
                     revision: GoalRevision { document: goal.doc_id.clone(), composite: commit.cid },
                     snapshot: snapshot(&goal, Utc::now()),
                 })
@@ -223,7 +262,9 @@ pub(crate) async fn project_session_goal(
                 "goal observation immutable scope differs from canonical session");
             if let Some(previous) = verified(identity.as_ref(), &session, row).await? {
                 if previous.goal.as_ref().map(|goal| &goal.revision)
-                    == goal.as_ref().map(|goal| &goal.revision) {
+                    == goal.as_ref().map(|goal| &goal.revision)
+                    && previous.goal.as_ref().and_then(|goal| goal.assignment_root_request_doc_id.as_ref())
+                        == goal.as_ref().and_then(|goal| goal.assignment_root_request_doc_id.as_ref()) {
                     return Ok(());
                 }
             }

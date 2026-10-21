@@ -10,6 +10,9 @@ use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
 use crate::session_origin::SessionScope;
 use crate::tool_surface::AgentToolConfig;
 
+#[cfg(test)]
+mod goal_input_tests;
+
 mod discovery;
 pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
 mod inspection;
@@ -311,6 +314,80 @@ impl Plan {
     }
 }
 
+async fn target_goal_assignment(
+    node: &Arc<EmbeddedNode>,
+    cause: &SessionMessageCause,
+    target: &SessionMessageTarget,
+) -> Result<Option<gents_protocol::request_input::GoalAssignmentInput>> {
+    use gents_protocol::request_input::GoalAssignmentInput;
+    if target.node_did == cause.caller_node_did {
+        return ConfigAccess::transact_local_readonly(
+            node,
+            None,
+            "session_message.target_goal",
+            |txn| {
+                Box::pin(async move {
+                    let Some(session) = crate::session::load_agent_session_row_in_txn(
+                        txn,
+                        &target.node_did,
+                        &target.session_id,
+                        Some(&cause.caller_node_did),
+                    )
+                    .await?
+                    else {
+                        return Ok(None);
+                    };
+                    anyhow::ensure!(
+                        session.session.agent_id == target.agent_id,
+                        "session-message target Agent differs from its canonical session"
+                    );
+                    let goal = crate::goal::load_canonical_goal_in_txn(
+                        txn,
+                        &target.node_did,
+                        &target.session_id,
+                    )
+                    .await?;
+                    Ok(goal.and_then(|goal| {
+                        goal.assignment_root_request_doc_id
+                            .map(|root| GoalAssignmentInput {
+                                goal_id: goal.goal_id,
+                                root_request_doc_id: Some(root),
+                            })
+                    }))
+                })
+            },
+        )
+        .await;
+    }
+    let verifier = crate::identity::RegisteredIdentity::from_registered_did(
+        cause.caller_node_did.clone(),
+        None,
+    )?;
+    let state = crate::goal::load_session_goal_observation_state(
+        &ConfigAccess::local(node.clone()),
+        &verifier,
+        &target.node_did,
+        &target.session_id,
+        Some(&cause.caller_node_did),
+    )
+    .await?;
+    match state {
+        crate::goal::SessionGoalObservationState::NoReadableSession => Ok(None),
+        crate::goal::SessionGoalObservationState::Unknown => {
+            anyhow::bail!("The target chat's Goal state is still syncing. Read the chat and retry the message.")
+        }
+        crate::goal::SessionGoalObservationState::Observed(observation) => {
+            Ok(observation.goal.and_then(|goal| {
+                goal.assignment_root_request_doc_id
+                    .map(|root| GoalAssignmentInput {
+                        goal_id: goal.snapshot.goal_id,
+                        root_request_doc_id: Some(root),
+                    })
+            }))
+        }
+    }
+}
+
 pub(crate) async fn plan(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -406,7 +483,7 @@ pub(crate) async fn plan(
                 background_completion_wake_version: None,
             });
         PlannedWrite::Request {
-            create: crate::lifecycle::build_session_message_request(
+            create: crate::lifecycle::materialize::build_session_message_request_with_input(
                 cause,
                 target,
                 &rendered.content,
@@ -414,8 +491,11 @@ pub(crate) async fn plan(
                 &request_id,
                 None,
                 hop,
-                queue,
-                None,
+                gents_protocol::request_input::RequestInput {
+                    queue,
+                    goal_assignment: target_goal_assignment(node, cause, target).await?,
+                    ..Default::default()
+                },
             )
             .await?,
             delivery: if steering.is_some() {

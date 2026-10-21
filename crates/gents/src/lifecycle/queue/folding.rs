@@ -1,6 +1,10 @@
 use super::*;
 use gents_protocol::request_admission::RequestPurpose;
 
+#[cfg(test)]
+#[path = "folding/assignment_tests.rs"]
+mod assignment_tests;
+
 pub const FOLDED_REASON: &str = "folded into claimed request";
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +35,23 @@ impl FoldedInput {
 
 fn blank(value: Option<&str>) -> bool {
     value.is_none_or(|value| value.trim().is_empty())
+}
+
+pub(super) fn same_goal_assignment(head: &AgentRequest, row: &AgentRequestRow) -> bool {
+    match (
+        head.input.goal_assignment.as_ref(),
+        row.input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.as_ref()),
+    ) {
+        (None, None) => true,
+        (Some(head_reference), Some(candidate_reference)) => {
+            row.doc_id.as_deref().is_some_and(|doc| {
+                head_reference.continuation(&head.doc_id) == candidate_reference.continuation(doc)
+            })
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn heads_user_turn(head: &AgentRequest) -> bool {
@@ -109,6 +130,7 @@ fn folds_into(
         && input.selected_skill_ids == head.input.selected_skill_ids
         && input.initial_title.is_none()
         && input.goal_continuation.is_none()
+        && same_goal_assignment(head, row)
         && row.workspace_id == head.workspace_id
         && row.workspace_owner_node_did == head.workspace_owner_node_did
         && row.workspace_authority == head.workspace_authority

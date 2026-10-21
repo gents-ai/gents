@@ -2,10 +2,10 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::goal::{
-    create_goal_for_session, edit_active_goal, load_canonical_goal, next_blocked_audit,
+    create_goal_for_request, edit_active_goal, load_goal_tool_context, next_blocked_audit,
     refresh_goal_usage, update_goal_fields_if_status, CreateGoalForSessionError, GoalAction,
-    GoalEdit, GoalStatus, BLOCKED_AUDIT_THRESHOLD, CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME,
-    UPDATE_GOAL_TOOL_NAME,
+    GoalEdit, GoalStatus, RequestAssignmentObservation, BLOCKED_AUDIT_THRESHOLD,
+    CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
 };
 use crate::graphql::escape_graphql_string;
 use crate::llm::ToolCallHookAction;
@@ -48,10 +48,28 @@ impl DefraSessionHook {
                     .await;
             }
         };
-        let outcome = match create_goal_for_session(
+        let context = match load_goal_tool_context(
             &self.node,
             &self.node_did,
             &session_id,
+            &request_id,
+            lifecycle.request_doc_id(),
+        )
+        .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                let result = super::helpers::json_string(
+                    json!({"accepted": false, "error": format!("Goal caller attribution unavailable: {error}")}),
+                );
+                return self
+                    .complete_control_tool_call(&mut lifecycle, CREATE_GOAL_TOOL_NAME, result)
+                    .await;
+            }
+        };
+        let outcome = match create_goal_for_request(
+            &self.node,
+            &context.request,
             &parsed.objective,
             parsed.token_budget,
         )
@@ -110,25 +128,79 @@ impl DefraSessionHook {
         lifecycle.start_running().await?;
         let result = if serde_json::from_str::<GetGoalArgs>(args).is_err() {
             super::helpers::json_string(json!({"error": "get_goal expects an empty object"}))
-        } else if let Some(mut goal) =
-            load_canonical_goal(&self.node, &self.node_did, &session_id).await?
-        {
-            refresh_goal_usage(&self.node, &goal).await?;
-            goal = load_canonical_goal(&self.node, &self.node_did, &session_id)
-                .await?
-                .unwrap_or(goal);
-            crate::tool_output::render(
-                &crate::goal::snapshot(&goal, Utc::now()),
-                &[
-                    "objective",
-                    "status",
-                    "tokens_used",
-                    "token_budget",
-                    "active_time_seconds",
-                ],
-            )?
         } else {
-            super::helpers::json_string(json!({"goal": null}))
+            let context = async {
+                let mut context = load_goal_tool_context(
+                    &self.node,
+                    &self.node_did,
+                    &session_id,
+                    &request_id,
+                    lifecycle.request_doc_id(),
+                )
+                .await?;
+                if context.can_write() {
+                    if let RequestAssignmentObservation::Assigned(goal) = &context.assignment {
+                        refresh_goal_usage(&self.node, goal).await?;
+                    }
+                    context = load_goal_tool_context(
+                        &self.node,
+                        &self.node_did,
+                        &session_id,
+                        &request_id,
+                        lifecycle.request_doc_id(),
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(context)
+            }
+            .await;
+            match context {
+                Err(error) => super::helpers::json_string(
+                    json!({"error": format!("Goal caller attribution unavailable: {error}")}),
+                ),
+                Ok(context) => {
+                    let read_only = !context.can_write();
+                    match context.assignment {
+                        RequestAssignmentObservation::None => {
+                            super::helpers::json_string(json!({"goal": null}))
+                        }
+                        RequestAssignmentObservation::Unknown => super::helpers::json_string(
+                            json!({"error": "Goal caller attribution is unknown; continue from a verified request"}),
+                        ),
+                        RequestAssignmentObservation::Assigned(goal) => {
+                            let mut observed = crate::goal::snapshot(&goal, Utc::now());
+                            if read_only {
+                                observed.active_time_seconds =
+                                    goal.active_time_seconds.unwrap_or_default().max(0);
+                            }
+                            let mut value = serde_json::to_value(observed)?;
+                            value["read_only"] = json!(read_only);
+                            if read_only {
+                                value["assignment_context"] =
+                                    json!(if goal.parsed_status() == Some(GoalStatus::Active) {
+                                        "superseded"
+                                    } else {
+                                        "retired"
+                                    });
+                                value["notice"] = json!("This is the calling request's retained assignment. It is read-only; a new request is required to work on the current Goal.");
+                            }
+                            crate::tool_output::render(
+                                &value,
+                                &[
+                                    "objective",
+                                    "status",
+                                    "read_only",
+                                    "assignment_context",
+                                    "notice",
+                                    "tokens_used",
+                                    "token_budget",
+                                    "active_time_seconds",
+                                ],
+                            )?
+                        }
+                    }
+                }
+            }
         };
         self.complete_control_tool_call(&mut lifecycle, GET_GOAL_TOOL_NAME, result)
             .await
@@ -166,13 +238,38 @@ impl DefraSessionHook {
                     .await;
             }
         };
-        let Some(goal) = load_canonical_goal(&self.node, &self.node_did, &session_id).await? else {
-            let result = super::helpers::json_string(
-                json!({"error": "the current session has no durable goal"}),
-            );
+        let context = match load_goal_tool_context(
+            &self.node,
+            &self.node_did,
+            &session_id,
+            &request_id,
+            lifecycle.request_doc_id(),
+        )
+        .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                let result = super::helpers::json_string(
+                    json!({"accepted": false, "error": format!("Goal caller attribution unavailable: {error}")}),
+                );
+                return self
+                    .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+                    .await;
+            }
+        };
+        if !context.can_write() {
+            let error = match context.assignment {
+                RequestAssignmentObservation::None => "the calling request has no Goal assignment",
+                RequestAssignmentObservation::Unknown => "Goal caller attribution is unknown; continue from a verified request",
+                RequestAssignmentObservation::Assigned(_) => "the calling request's retained Goal assignment is read-only; a new request is required to work on the current Goal",
+            };
+            let result = super::helpers::json_string(json!({"accepted": false, "error": error}));
             return self
                 .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                 .await;
+        }
+        let RequestAssignmentObservation::Assigned(goal) = context.assignment else {
+            unreachable!("only a current assigned caller can update a Goal");
         };
 
         let now = Utc::now();
@@ -201,6 +298,9 @@ impl DefraSessionHook {
                         }
                         GoalStatus::Complete => {
                             "a complete goal is terminal and has no resume path"
+                        }
+                        GoalStatus::Stopped => {
+                            "the goal was removed by its operator and cannot be resumed"
                         }
                         GoalStatus::BudgetLimited => {
                             "a budget_limited goal cannot be reactivated and has no resume path"

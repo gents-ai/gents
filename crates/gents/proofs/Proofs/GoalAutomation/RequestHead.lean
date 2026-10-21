@@ -38,7 +38,8 @@ def verifiedEdge (s : Scope) (parent child : Row) : Bool :=
   child.goal == some s.goal && child.parentDoc == some parent.doc &&
   child.parentRequest == some parent.request && child.doc != parent.doc &&
   inScope s parent && inScope s child && child.sequence > 0 &&
-  child.receiptValid && child.deterministicIdentity
+  child.receiptValid && child.deterministicIdentity &&
+  (parent.goal.isNone || parent.goal == child.goal)
 
 def superseded (s : Scope) (rows : List Row) (parent : Row) : Bool :=
   rows.any (verifiedEdge s parent)
