@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 
 use crate::agent::p2p_reconcile::{
     templates::admit_app_collections, ActiveEnrollment, EmbeddedRemoteP2pAdmin,
-    GraphqlEnrollmentStore, RemoteP2pAdmin,
+    EnrollmentOfferIssuer, GraphqlEnrollmentStore, RemoteP2pAdmin,
 };
 use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
@@ -241,7 +241,7 @@ impl P2pTool {
         let options = &args.options;
         let allowed: &[&str] = match words.as_slice() {
             ["status"] | ["pairings", "list"] => &["details"],
-            ["network", "list"] | ["enrollment", "pending"] => &[],
+            ["network", "list"] | ["enrollment", "pending" | "offer" | "history"] => &[],
             ["pairings", "get"] => &["peer_id", "details"],
             ["network", "get"] => &["peer_id"],
             ["pairings", "preview" | "apply"] => &["peer_id", "peer_did", "collections"],
@@ -412,6 +412,55 @@ impl P2pTool {
                     json!({"conflict":projection.conflict,"limit":50}),
                 ))
             }
+            ["enrollment", "offer"] => {
+                ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
+                let projection = GraphqlEnrollmentStore::new(self.node.clone(), actor.clone())
+                    .load_projection()
+                    .await?;
+                ensure!(
+                    projection.conflict.is_none(),
+                    "enrollment authority is conflicted"
+                );
+                let network_id = projection.network_id.context(
+                    "this node has no enrollment Network; the running server creates it at startup",
+                )?;
+                let p2p = crate::identity::node_p2p(&self.node)
+                    .context("P2P is not running on this node")?;
+                let did = actor.did().to_owned();
+                let offer =
+                    EnrollmentOfferIssuer::new(actor, p2p, network_id, did, "client".into())
+                        .mint()
+                        .await?;
+                Ok(reply(
+                    json!({"offer_token":offer.token,"expires_at":offer.offer.expires_at,"peer_id":offer.offer.server_peer,"peer_did":offer.offer.admin_did}),
+                    Some(json!({"argv":["enrollment","pending"]})),
+                    json!({"joining_node_call":{"argv":["enrollment","request"],"options":{"offer_token":"OFFER_TOKEN"}}}),
+                ))
+            }
+            ["enrollment", "history"] => {
+                let projection = GraphqlEnrollmentStore::new(self.node.clone(), actor)
+                    .load_projection()
+                    .await?;
+                let mut history: Vec<_> = projection.pending.iter().map(|e| json!({"request_id":e.request.request_id,"state":"pending","peer_id":e.request.candidate_peer,"peer_did":e.request.candidate_did,"requested_at":e.request.issued_at,"request_expires_at":e.request.expires_at}))
+                    .chain(projection.active.iter().map(|e| json!({"request_id":e.request.request_id,"state":"approved","peer_id":e.request.candidate_peer,"peer_did":e.request.candidate_did,"requested_at":e.request.issued_at,"decided_at":e.decision.decided_at,"decided_by":e.decision.signer_did,"authorization_expires_at":e.revision.authorization_expires_at})))
+                    .chain(projection.denied.iter().map(|e| json!({"request_id":e.request.request_id,"state":"denied","peer_id":e.request.candidate_peer,"peer_did":e.request.candidate_did,"requested_at":e.request.issued_at,"decided_at":e.decision.decided_at,"decided_by":e.decision.signer_did})))
+                    .chain(projection.revoked.iter().map(|e| json!({"request_id":e.request.request_id,"state":"revoked","peer_id":e.request.candidate_peer,"peer_did":e.request.candidate_did,"requested_at":e.request.issued_at,"decided_at":e.decision.decided_at,"decided_by":e.decision.signer_did,"revoked_at":e.revision.issued_at,"revoked_by":e.revision.signer_did})))
+                    .collect();
+                let latest = |entry: &Value| {
+                    ["revoked_at", "decided_at", "requested_at"]
+                        .iter()
+                        .find_map(|key| entry[*key].as_str().map(str::to_owned))
+                        .unwrap_or_default()
+                };
+                history.sort_by_key(|entry| std::cmp::Reverse(latest(entry)));
+                let observed_count = history.len();
+                history.truncate(50);
+                Ok(reply(
+                    json!({"history":history}),
+                    None,
+                    json!({"observed_count":observed_count,"limit":50,"request_conflicts":projection.request_conflicts,"conflict":projection.conflict,"omitted":"requests that expired undecided or that a later request from the same peer superseded"}),
+                ))
+            }
             ["enrollment", "request"] => {
                 ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
                 let request =
@@ -556,10 +605,10 @@ fn reply(outcome: Value, next_call: Option<Value>, observations: Value) -> Reply
 
 fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
-        None => "Native P2P commands in argv: status; network list/get; pairings list/get/preview/apply/revoke; enrollment pending/approve/revoke/request; sync documents. Read [help,RESOURCE] for parameters or [help,scope] for grants and capability boundaries. Identity comes from the running node. Mutation and collection grants are explicit.",
+        None => "Native P2P commands in argv: status; network list/get; pairings list/get/preview/apply/revoke; enrollment offer/request/pending/approve/revoke/history; sync documents. Read [help,RESOURCE] for parameters or [help,scope] for grants and capability boundaries. Identity comes from the running node. Mutation and collection grants are explicit.",
         Some("status" | "network") => "[status] returns native connected peer references (raw IDs or transport addresses) and native sync facts. [network,list] lists up to 50 registered peers with exact DIDs and addresses. [network,get] takes options.peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; use network get connected for the observed transport connection. status defaults to backlog facts; options.details:true returns native diagnostic counters.",
         Some("pairings") => "[pairings,get] with options.peer_id inspects one peer; [pairings,list] shows desired, applied, enrolled and connected observations separately. Defaults show compact replicator counts; options.details:true includes native collection IDs and filters. [pairings,preview] and [pairings,apply] require options.peer_id, peer_did and collections (1-16 application names). The peer must have current signed enrollment; its DID/address come from that owner. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. [pairings,revoke] requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Replacing or revoking requires collection authority over the entire existing overlay. Inspect list after apply/revoke; submitted desired state is not proof of a live route.",
-        Some("enrollment") => "[enrollment,request] requires options.offer_token (enrollment.token from the peer's /status; valid 5 minutes) and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. [enrollment,pending] discovers signed request IDs. [enrollment,approve] or [enrollment,revoke] requires options.request_id and mutation authority. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval uses its bounded default authorization lease. Do not invent a DID or substitute an unsigned pairing document.",
+        Some("enrollment") => "Joining: the approving node runs [enrollment,offer] and hands offer_token to the joining node, which runs [enrollment,request]; the approver then finds it with [enrollment,pending], approves it and applies pairings. [enrollment,offer] requires mutation authority and returns this node's signed offer_token (valid 5 minutes), peer_id and DID; the token only lets its holder ask to join, approval stays here. [enrollment,request] requires options.offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. [enrollment,pending] discovers signed request IDs. [enrollment,approve] or [enrollment,revoke] requires options.request_id and mutation authority. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for the default authorization lease and materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Do not invent a DID or substitute an unsigned pairing document. [enrollment,history] lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted.",
         Some("sync") => "[sync,documents] requires options.peer_id, collection and doc_ids (1-16 physical document IDs). The peer needs current enrollment; only application collections in the tool grant are supported. Protocol collections, including credentials, are always excluded; neither broader grants nor ACP changes enable them. See [help,scope]. The native adapter makes a bounded 10-second sync request, then this node observes actual document IDs. Missing IDs and request errors are explicit. DefraDB chooses providers; this does not certify which peer supplied a document. Use query for authorized document content.",
         Some("scope") => "Pairing overlays and document sync support application collections only. Gents protocol/configuration and credential collections are permanently excluded from these commands, even with broader tool grants or document ACP. Keep credentials with their existing operator owner. For an application collection, an authorized configuration owner may grant the exact P2P collection; native ACP still controls document access. Enrollment is a separate signed authority. Sync accepts 1-16 known document IDs, not collection-wide discovery, and cannot certify the supplying peer.",
         Some(resource) => { let next = if resource == "pairing" { "pairings" } else if resource == "documents" { "sync" } else { "scope" }; bail!("unknown P2P help resource {resource:?}; resources: status, network, pairings, enrollment, sync, scope; next call: p2p {{\"argv\":[\"help\",\"{next}\"]}}") },
