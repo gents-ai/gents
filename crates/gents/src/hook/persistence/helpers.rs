@@ -8,7 +8,15 @@ pub(crate) struct BackgroundCapacityExceeded(pub(crate) usize);
 struct BackgroundedRow {
     lifecycle_state: String,
     await_mode: String,
+    #[serde(deserialize_with = "deserialize_present_option")]
     spawned_by_tool_call_doc_id: Option<String>,
+}
+
+fn deserialize_present_option<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }
 
 /// A pending spawned child is a durable admission reservation created in the
@@ -20,6 +28,9 @@ fn decode_live_backgrounded_rows(value: serde_json::Value) -> anyhow::Result<usi
         anyhow::ensure!(row.await_mode == "background"
             && matches!(row.lifecycle_state.as_str(), "running" | "pending"),
             "background row count returned a row outside its requested state");
+        anyhow::ensure!(row.spawned_by_tool_call_doc_id.as_deref()
+            .is_none_or(|parent| !parent.trim().is_empty()),
+            "background row count returned a blank parent identity");
     }
     Ok(rows.into_iter().filter(|row| row.lifecycle_state == "running"
         || (row.lifecycle_state == "pending" && row.spawned_by_tool_call_doc_id.is_some())).count())
@@ -90,6 +101,35 @@ mod background_count_tests {
             "lifecycle_state":"mystery","await_mode":"background",
             "spawned_by_tool_call_doc_id":null
         }])).is_err());
+        assert!(decode_live_backgrounded_rows(json!([{
+            "lifecycle_state":"pending","await_mode":"background"
+        }])).is_err());
+        assert!(decode_live_backgrounded_rows(json!([{
+            "lifecycle_state":"pending","await_mode":"background",
+            "spawned_by_tool_call_doc_id":" "
+        }])).is_err());
+    }
+
+    struct ParentScopedReader;
+
+    #[async_trait::async_trait]
+    impl crate::config_client::ConfigRead for ParentScopedReader {
+        async fn execute_read(&self, query: &str) -> anyhow::Result<serde_json::Value> {
+            anyhow::ensure!(query.contains("request_doc_id: { _eq:"), "query must scope by physical request document");
+            let parent = if query.contains("physical-parent-a") { "a" } else { "b" };
+            let count = if parent == "a" { 8 } else { 1 };
+            Ok(json!({"data":{"AgentToolCall":(0..count).map(|_| json!({
+                "lifecycle_state":"running", "await_mode":"background",
+                "spawned_by_tool_call_doc_id":null
+            })).collect::<Vec<_>>()}}))
+        }
+    }
+
+    #[tokio::test]
+    async fn background_budget_is_scoped_to_physical_parent_request() {
+        let reader = ParentScopedReader;
+        assert_eq!(super::count_live_backgrounded_rows_in(&reader, "physical-parent-a").await.unwrap(), 8);
+        assert_eq!(super::count_live_backgrounded_rows_in(&reader, "physical-parent-b").await.unwrap(), 1);
     }
 }
 

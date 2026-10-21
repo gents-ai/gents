@@ -118,6 +118,7 @@ pub enum Refusal {
     DepthExceeded,
     TimedOut,
     StepFailed,
+    BackgroundBudgetExceeded,
 }
 
 impl Refusal {
@@ -132,6 +133,7 @@ impl Refusal {
             Self::DepthExceeded => Some("plugin_job_depth_exceeded"),
             Self::TimedOut => Some("plugin_job_timed_out"),
             Self::StepFailed => Some("plugin_job_step_failed"),
+            Self::BackgroundBudgetExceeded => Some("background_tool_budget_exceeded"),
         }
     }
 }
@@ -291,7 +293,7 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
             return Err(Refusal::NotAvailable);
         }
         if ctx.live_background as usize >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return Err(Refusal::PolicyDenied);
+            return Err(Refusal::BackgroundBudgetExceeded);
         }
         if ctx.started_by_job {
             return Err(Refusal::DepthExceeded);
@@ -1384,7 +1386,7 @@ mod tests {
             live_background: 8,
             ..base_context()
         };
-        assert_eq!(code(&busy, &job, &out), DENIED);
+        assert_eq!(code(&busy, &job, &out), Some("background_tool_budget_exceeded"));
 
         let nested = StepContext {
             started_by_job: true,

@@ -124,6 +124,21 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         panic!("expected background receipt");
     };
     replay.background_with_receipt(&receipt).await.unwrap();
+    for index in 0..7 {
+        let id = format!("handoff-capacity-{index}");
+        let mut admitted = accepted_hook_tool_lifecycle(
+            &hook,
+            &id,
+            "held_background_tool",
+            "{}",
+            deadline,
+            crate::tool_call_lifecycle::AwaitMode::Background,
+        )
+        .await;
+        admitted.start_running().await.unwrap();
+    }
+    // The already-published handoff is idempotent at the full ceiling.
+    replay.background_with_receipt(&receipt).await.unwrap();
     let receipt_rows = access.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}:background-receipt:{}" }} }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(&session), crate::graphql::escape_graphql_string(&tool_doc))).await.unwrap();
     assert_eq!(
         receipt_rows["data"]["AgentMessage"]

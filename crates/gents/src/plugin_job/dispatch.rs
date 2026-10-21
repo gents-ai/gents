@@ -38,7 +38,9 @@ use super::JobBinding;
 use crate::background_tools::ProcessControlScope;
 use crate::config_client::ConfigAccess;
 use crate::graphql::graphql_string_list_literal;
-use crate::hook::persistence::count_live_backgrounded_rows_in;
+use crate::hook::persistence::{
+    count_live_backgrounded_rows_in, MAX_BACKGROUNDED_TOOLS_PER_PARENT,
+};
 use crate::hook::DefraSessionHook;
 use crate::lifecycle::SessionMessageCause;
 use crate::pack::InstalledVia;
@@ -881,6 +883,11 @@ fn step0_refusal(
             FailureClass::PolicyDenied,
             "a job cannot start another job".to_owned(),
             format!("Next: run `{tool}` from a session that no job started"),
+        ),
+        Refusal::BackgroundBudgetExceeded => (
+            FailureClass::ServiceUnavailable,
+            format!("{tool} cannot be admitted because the parent request has reached the concurrent background capacity ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT})"),
+            format!("Next: wait for a background completion notification, then retry `{tool}`"),
         ),
         Refusal::PolicyDenied if effects => (
             FailureClass::PolicyDenied,
