@@ -33,7 +33,7 @@ structure StepContext where
   (`originOf`): a file of a pack-tier mount whose pack has `operator` install
   provenance and is trusted. Read on every step. -/
   installedTrusted : String → Bool
-  maxHop : Nat
+  maxHop : Option Nat
   /-- The target session's current hop. -/
   targetHop : Target → Nat
   cwdAllowed : String → Bool
@@ -886,11 +886,13 @@ theorem child_hop_outward (job : Job) (own : Nat) :
   ⟨CausalHop.cross_session_exceeds_cause _ _, rfl⟩
 
 /-- An admitted child's hop is within the target node's bound. -/
-theorem child_admissible_hop {ctx : StepContext} {job job' : Job} {e : Effects} {p : Pin}
+theorem child_admissible_hop_within_configured_bound {ctx : StepContext} {job job' : Job}
+    {e : Effects} {p : Pin} {bound : Nat}
+    (hbound : ctx.maxHop = some bound)
     (h : admitStep ctx job (.effects e) = .ok job') (hp : stepPin ctx job (.effects e) = some p)
     {s : Spawn} (hs : s ∈ freshSpawns (stepRow ctx job (.effects e)) e.spawns) :
-    CausalHop.nextHop (.crossSession job.callerHop) (ctx.targetHop s.target) ≤ ctx.maxHop := by
-  simpa [CausalHop.admitHop] using (admitted_spawn_checks h hp hs).2.1
+    CausalHop.nextHop (.crossSession job.callerHop) (ctx.targetHop s.target) ≤ bound := by
+  simpa [CausalHop.admitHop, hbound] using (admitted_spawn_checks h hp hs).2.1
 
 /-- The child write is the `agent_new` session-message request naming the job
 row's tool call, so the child's completion settles that call.

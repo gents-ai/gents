@@ -2,7 +2,8 @@ import Proofs.Basic
 
 namespace CausalHop
 
-def defaultMaxRequestHop : Nat := 8
+/-- No default loop cap. A configured cap still bounds admitted causal hops. -/
+def defaultMaxRequestHop : Option Nat := none
 
 inductive Cause where
   | root
@@ -27,7 +28,10 @@ def nextHop : Cause → Nat → Nat
 
 /-- Admission reads only the signed hop; it does not require predecessor
 replication or sender cooperation. -/
-def admitHop (maxHop hop : Nat) : Bool := decide (hop ≤ maxHop)
+def admitHop (maxHop : Option Nat) (hop : Nat) : Bool :=
+  match maxHop with
+  | none => true
+  | some bound => decide (hop ≤ bound)
 
 def sendTargetAllowed (callerSession targetSession : String) : Bool :=
   callerSession != targetSession
@@ -46,7 +50,7 @@ theorem job_completion_wake_is_continuation (own : Nat) :
 theorem return_keeps_caller_hop (own : Nat) : nextHop .returnEdge own = own := rfl
 
 theorem return_into_refused_session_is_refused (maxHop own : Nat) (h : maxHop < own) :
-    admitHop maxHop (nextHop .returnEdge own) = false := by
+    admitHop (some maxHop) (nextHop .returnEdge own) = false := by
   simp [nextHop, admitHop]; omega
 
 theorem cross_session_exceeds_cause (causeHop own : Nat) :
@@ -56,6 +60,16 @@ theorem cross_session_exceeds_cause (causeHop own : Nat) :
 theorem cross_session_keeps_own (causeHop own : Nat) :
     own ≤ nextHop (.crossSession causeHop) own := by
   simp only [nextHop]; omega
+
+theorem no_cap_admits_any_hop (hop : Nat) : admitHop none hop = true := rfl
+
+theorem configured_cap_admits_at_bound (bound : Nat) :
+    admitHop (some bound) bound = true := by
+  simp [admitHop]
+
+theorem configured_cap_refuses_above_bound (bound hop : Nat) (h : bound < hop) :
+    admitHop (some bound) hop = false := by
+  simp [admitHop]; omega
 
 theorem send_to_own_session_refused (session : String) :
     sendTargetAllowed session session = false := by
@@ -95,7 +109,7 @@ theorem hopAlong_ge (start : Nat) (steps : List Step) :
       simpa [hopAlong, sends, Step.apply, nextHop] using ih start
 
 theorem admitted_chain_sends_le_max (maxHop start : Nat) (steps : List Step)
-    (h_admit : admitHop maxHop (hopAlong start steps) = true) :
+    (h_admit : admitHop (some maxHop) (hopAlong start steps) = true) :
     sends steps ≤ maxHop := by
   have h := hopAlong_ge start steps
   simp [admitHop] at h_admit
@@ -103,12 +117,12 @@ theorem admitted_chain_sends_le_max (maxHop start : Nat) (steps : List Step)
 
 theorem send_beyond_max_is_refused (maxHop start : Nat) (steps : List Step)
     (h_sends : maxHop < sends steps) :
-    admitHop maxHop (hopAlong start steps) = false := by
+    admitHop (some maxHop) (hopAlong start steps) = false := by
   have h := hopAlong_ge start steps
   simp [admitHop]
   omega
 
-theorem continuation_preserves_admission (maxHop hop : Nat) :
+theorem continuation_preserves_admission (maxHop : Option Nat) (hop : Nat) :
     admitHop maxHop (nextHop .continuation hop) = admitHop maxHop hop := rfl
 
 def pingPongHops (n : Nat) : List Nat :=
@@ -211,10 +225,9 @@ theorem latest_second_hop_le_current (rows : List RequestStamp) (r : RequestStam
   hop_le_maxStampHop (List.mem_filter.2 ⟨h_mem, by simp [h_latest]⟩)
 
 theorem same_second_tie_takes_the_highest_hop :
-    let rows := [⟨4, 0⟩, ⟨5, defaultMaxRequestHop + 1⟩, ⟨5, 3⟩]
-    sessionCurrentHop rows = defaultMaxRequestHop + 1 ∧
-      admitHop defaultMaxRequestHop (nextHop .continuation (sessionCurrentHop rows)) =
-        false := by
+    let rows := [⟨4, 0⟩, ⟨5, 9⟩, ⟨5, 3⟩]
+    sessionCurrentHop rows = 9 ∧
+      admitHop (some 8) (nextHop .continuation (sessionCurrentHop rows)) = false := by
   native_decide
 
 end CausalHop

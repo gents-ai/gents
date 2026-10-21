@@ -21,7 +21,7 @@ structure RequestRowEvidence where
   physicalBindingCurrent : Bool
   branchFieldsExact : Bool
   pendingDeadlineAbsent : Bool
-  maxRequestHop : Nat
+  maxRequestHop : Option Nat
 
 def rowBound (row : RequestRowEvidence) (request : Enrollment.AgentRequestSemantics)
     (admission : Enrollment.AgentRequestAdmission) : Prop :=
