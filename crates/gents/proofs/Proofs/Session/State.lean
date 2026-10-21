@@ -353,6 +353,13 @@ def drainObservedAutomatedWakeups
     terminal := s.terminal ∪ drainedRequestIdsMatching source queueKey allowed s.pending
   }
 
+def drainAllPending (s : SessionQueueState) : SessionQueueState :=
+  { s with
+    pending := []
+    terminal := (s.pending ++ s.folding).foldl
+      (fun terminal entry => insert entry.requestId terminal) s.terminal
+    folding := [] }
+
 end SessionQueueState
 
 end SessionQueue
