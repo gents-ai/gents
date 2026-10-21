@@ -93,6 +93,7 @@ async fn deliver(
                         retry_key,
                         1,
                         None,
+                        case["existing"] == true,
                     )
                     .await
                 })
