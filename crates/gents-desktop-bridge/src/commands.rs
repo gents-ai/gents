@@ -1,5 +1,7 @@
 #[path = "commands/chat.rs"]
 mod chat;
+#[path = "commands/chat_resolve.rs"]
+mod chat_resolve;
 #[path = "commands/goal.rs"]
 mod goal;
 pub use goal::{control_goal, session_goal};

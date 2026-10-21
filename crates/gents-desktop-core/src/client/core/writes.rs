@@ -29,6 +29,8 @@ use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
 use super::ClientCore;
+mod pending_submissions;
+
 #[cfg(test)]
 use super::ClientPeerStatus;
 use crate::client::peer_directory::RemovalCause;
@@ -475,7 +477,7 @@ impl ClientCore {
                 );
                 Ok(result)
             }
-            Err(error) => Err(self.record_mutation_error("submit request", error)),
+            Err(error) => Err(self.submit_failure(error)),
         }
     }
 
@@ -846,6 +848,8 @@ impl ClientCore {
         }
     }
 
+    /// Terminal reads refresh operator configuration omitted by the client P2P route.
+    /// Catalog replacement must precede the final request publication to retain page rows.
     pub async fn refresh_local_request(
         &self,
         node_did: &str,
@@ -864,7 +868,7 @@ impl ClientCore {
             return Ok(None);
         }
 
-        let captured = self.store.capture_read();
+        let mut captured = self.store.capture_read();
         let (access, source) = match self.operator_observation_graphql(node_did) {
             Some(graphql) => (ConfigAccess::Graphql(graphql), "operator"),
             None => (
@@ -877,7 +881,7 @@ impl ClientCore {
                 "local",
             ),
         };
-        let patch = load_chat_patch(
+        let mut patch = load_chat_patch(
             &access,
             node_did,
             session_id,
@@ -890,31 +894,43 @@ impl ClientCore {
         if rows == 0 {
             return Ok(None);
         }
-        let signature = chat_patch_signature(&patch);
-        let request_projection = patch.requests.clone();
-        let requester_did = patch
-            .sessions
-            .first()
-            .and_then(|session| session.requester_did.clone());
-        let latest_request_id = patch
-            .sessions
-            .first()
-            .and_then(|session| session.observation.as_ref())
-            .and_then(|observation| observation.latest_request.as_ref())
-            .map(|latest| latest.request_id.clone());
-        let legacy_fallback_request_id = patch
-            .sessions
-            .first()
-            .filter(|session| session.observation.is_none())
-            .and_then(|_| fallback_request_id.map(str::to_owned));
-        let resolved_request_id = request_id
-            .map(str::to_owned)
-            .or_else(|| latest_request_id.clone())
-            .or(legacy_fallback_request_id);
-        let requester_key = requester_did.as_deref().unwrap_or("<null>");
-        let request_key = resolved_request_id.as_deref().unwrap_or("<none>");
-        let cache_key =
-            format!("{source}\0{node_did}\0{session_id}\0{requester_key}\0{request_key}");
+        let mut signature = chat_patch_signature(&patch);
+        let project = |patch: &ClientStore| {
+            let requester_did = patch
+                .sessions
+                .first()
+                .and_then(|session| session.requester_did.clone());
+            let latest_request_id = patch
+                .sessions
+                .first()
+                .and_then(|session| session.observation.as_ref())
+                .and_then(|observation| observation.latest_request.as_ref())
+                .map(|latest| latest.request_id.clone());
+            let legacy_fallback = patch
+                .sessions
+                .first()
+                .filter(|session| session.observation.is_none())
+                .and_then(|_| fallback_request_id.map(str::to_owned));
+            RefreshedRequestProjection {
+                requests: patch.requests.clone(),
+                requester_did,
+                selected_request_id: request_id
+                    .map(str::to_owned)
+                    .or(latest_request_id)
+                    .or(legacy_fallback),
+                published_version: None,
+            }
+        };
+        let cache_key_for = |projection: &RefreshedRequestProjection| {
+            let requester = projection.requester_did.as_deref().unwrap_or("<null>");
+            let request = projection
+                .selected_request_id
+                .as_deref()
+                .unwrap_or("<none>");
+            format!("{source}\0{node_did}\0{session_id}\0{requester}\0{request}")
+        };
+        let mut projection = project(&patch);
+        let mut cache_key = cache_key_for(&projection);
         {
             let mut signatures = self.request_patch_signatures.lock().await;
             let cached_signature = signatures.get(&cache_key) == Some(&signature);
@@ -928,12 +944,7 @@ impl ClientCore {
                     fence_accepted,
                     rows_current,
                 ) {
-                    return Ok(Some(RefreshedRequestProjection {
-                        requests: request_projection,
-                        requester_did,
-                        selected_request_id: resolved_request_id,
-                        published_version: None,
-                    }));
+                    return Ok(Some(projection));
                 }
                 signatures.remove(&cache_key);
                 if !fence_accepted {
@@ -943,11 +954,31 @@ impl ClientCore {
             }
         }
 
-        let (_rows, bytes, _hash) = signature;
-        let terminal = resolved_request_id
+        let terminal = projection
+            .selected_request_id
             .as_deref()
             .and_then(|request_id| patch.request_row(request_id))
             .is_some_and(|row| row.is_terminal());
+        if terminal {
+            self.refresh_node(node_did).await?;
+            captured = self.store.capture_read();
+            patch = load_chat_patch(
+                &access,
+                node_did,
+                session_id,
+                request_id,
+                fallback_request_id,
+                page_request_doc_ids,
+            )
+            .await?;
+            if patch.row_count() == 0 {
+                return Ok(None);
+            }
+            projection = project(&patch);
+            cache_key = cache_key_for(&projection);
+            signature = chat_patch_signature(&patch);
+        }
+        let (rows, bytes, _hash) = signature;
         let Some(version) = self.store.merge_chat_patch_at_read(&captured, patch) else {
             self.store.request_resync(Some(node_did));
             return Ok(None);
@@ -958,15 +989,9 @@ impl ClientCore {
         }
         signatures.insert(cache_key, signature);
         drop(signatures);
-        // Terminal requests refresh operator configuration because the client P2P route omits it.
-        let version = if terminal {
-            self.refresh_node(node_did).await?.unwrap_or(version)
-        } else {
-            version
-        };
         tracing::debug!(
             target: "gents_desktop_core::replication",
-            request_id = resolved_request_id.as_deref().unwrap_or_default(),
+            request_id = projection.selected_request_id.as_deref().unwrap_or_default(),
             node_did,
             version,
             rows,
@@ -976,10 +1001,8 @@ impl ClientCore {
             "desktop selected request patch merged"
         );
         Ok(Some(RefreshedRequestProjection {
-            requests: request_projection,
-            requester_did,
-            selected_request_id: resolved_request_id,
             published_version: Some(version),
+            ..projection
         }))
     }
 

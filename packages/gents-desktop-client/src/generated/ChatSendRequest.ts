@@ -3,4 +3,9 @@ import type { CapturedContext } from "./CapturedContext.js";
 import type { MailboxQuestionAnswer } from "./MailboxQuestionAnswer.js";
 import type { QueueDelivery } from "./QueueDelivery.js";
 
-export type ChatSendRequest = { nodeDid: string, agentId?: string | null, sessionId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, delivery?: QueueDelivery | null, causedBySourceDocId?: string | null, answer?: MailboxQuestionAnswer | null, cwd?: string | null, };
+export type ChatSendRequest = { nodeDid: string, agentId?: string | null, sessionId?: string | null, content: string, capturedContext?: Array<CapturedContext> | null, delivery?: QueueDelivery | null, causedBySourceDocId?: string | null, answer?: MailboxQuestionAnswer | null, cwd?: string | null,
+/**
+ * Reconcile this earlier send whose delivery is unknown instead of sending
+ * a new request; the original signed request is replayed or confirmed.
+ */
+resolveRequestId?: string | null, };

@@ -20,6 +20,12 @@ import { firstNode, nodeOf } from "./fleetStore";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { heldFor, readSession } from "./sessionStore";
+import {
+  contentKey,
+  forgetUnresolvedSubmission,
+  rememberUnresolvedSubmission,
+  unresolvedSubmissionFor,
+} from "./unresolvedSubmissions";
 import type { ShellProjection, ShellStores } from "./shellProjection";
 
 type ChatActionParams = {
@@ -32,6 +38,30 @@ type ChatActionParams = {
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
 };
+
+export const DELIVERY_UNKNOWN_HINT =
+  "Your message may have been delivered. Check the session before resending; sending the same message again checks delivery instead of creating a duplicate.";
+export const EARLIER_SEND_NOT_DELIVERED_HINT =
+  "Your earlier message was not delivered. Send it again.";
+
+export function sessionShowsRequest(
+  session: DesktopSessionSnapshot | null,
+  requestId: string,
+): boolean {
+  if (!session) return false;
+  return (
+    session.latestRequestId === requestId ||
+    session.pendingTurn?.requestId === requestId ||
+    session.queuedTurns.some((turn) => turn.requestId === requestId) ||
+    session.foldedInputs.some((input) => input.requestId === requestId) ||
+    (session.pendingQueue ?? []).some((entry) => entry.requestId === requestId) ||
+    session.timelineItems.some(
+      (item) =>
+        item.kind === "userMessage" &&
+        (item.requestId === requestId || item.inputRequestId === requestId),
+    )
+  );
+}
 
 function queueEditFailure(
   after: DesktopSessionSnapshot | null,
@@ -98,16 +128,54 @@ export function createChatActions({
       nodeDid: node.nodeDid,
       sessionId: selectedSessionId,
     };
+    // A send whose delivery is unknown is reconciled, never re-sent under a
+    // fresh identity: the owner may already hold the original request.
+    let earlier = unresolvedSubmissionFor(node.nodeDid, selectedSessionId, content);
+    if (
+      earlier &&
+      sessionShowsRequest(
+        heldFor(readSession(stores.session), earlier.sessionId, node.nodeDid),
+        earlier.requestId,
+      )
+    ) {
+      // The session already shows the earlier request, so it was delivered and
+      // this identical message is a deliberate new send.
+      forgetUnresolvedSubmission(earlier.requestId);
+      earlier = undefined;
+    }
     chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
       const result = await api.sendChatMessage({
         nodeDid: node.nodeDid,
         agentId: admission.agentId,
-        sessionId: selectedSessionId,
+        sessionId: earlier?.sessionId ?? selectedSessionId,
         content,
         causedBySourceDocId: mailboxRoute?.itemId ?? null,
         cwd: folderOf(stores.chat.getState().folders, selectedSessionId),
+        resolveRequestId: earlier?.requestId ?? null,
       });
+      if (earlier) forgetUnresolvedSubmission(earlier.requestId);
+      if (result.outcome === "notDelivered") {
+        // The owner definitely rejected the retained, byte-identical signed
+        // request, so it was not delivered.
+        if (!selection.acceptsIntent(store, intentGeneration)) return null;
+        chat.resetWorkflow(stores.chat);
+        reportFailure(EARLIER_SEND_NOT_DELIVERED_HINT);
+        return null;
+      }
+      if (result.outcome === "deliveryUnknown") {
+        rememberUnresolvedSubmission({
+          nodeDid: result.nodeDid,
+          requestId: result.requestId,
+          sessionId: result.sessionId,
+          selectedSessionId,
+          contentKey: contentKey(content),
+        });
+        reportFailure(DELIVERY_UNKNOWN_HINT);
+        if (selection.acceptsIntent(store, intentGeneration))
+          chat.resetWorkflow(stores.chat);
+        return null;
+      }
       if (selectedSessionId === null)
         writeChatFolders(stores.chat, (folders) =>
           adoptNewChatFolder(folders, result.sessionId),

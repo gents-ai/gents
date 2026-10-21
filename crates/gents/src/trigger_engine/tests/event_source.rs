@@ -1958,22 +1958,18 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
-    let node_for_mutation = node.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let mutation = r#"mutation {
+    let mutation = r#"mutation {
             create_WebhookEvent(input: {
                 external_id: "wh-fanout",
                 payload: "{}"
             }) { _docID }
         }"#;
-        let resp = node_for_mutation.execute(mutation).await;
-        assert!(
-            !resp.has_errors(),
-            "create_WebhookEvent failed: {:?}",
-            resp.errors,
-        );
-    });
+    let resp = node.execute(mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create_WebhookEvent failed: {:?}",
+        resp.errors,
+    );
     let first = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("next_fire timed out on the first fan-out intent")

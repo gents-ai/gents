@@ -37,6 +37,20 @@ pub struct ChatSendResult {
     pub request_id: String,
     pub node_did: String,
     pub agent_id: Option<String>,
+    /// Absent when the owner accepted the request.
+    #[ts(optional = nullable)]
+    pub outcome: Option<ChatSendOutcome>,
+}
+
+/// A send the owner has not confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatSendOutcome {
+    /// The owner may hold the request; resend must reconcile this identity.
+    DeliveryUnknown,
+    /// The owner definitely rejected the retained, byte-identical signed
+    /// request, so it was not delivered.
+    NotDelivered,
 }
 
 impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
@@ -46,6 +60,19 @@ impl From<gents_desktop_core::client::SubmittedRequest> for ChatSendResult {
             request_id: receipt.request_id,
             node_did: receipt.node_did,
             agent_id: receipt.agent_id,
+            outcome: None,
+        }
+    }
+}
+
+impl ChatSendResult {
+    pub(crate) fn with_outcome(
+        receipt: gents_desktop_core::client::SubmittedRequest,
+        outcome: ChatSendOutcome,
+    ) -> Self {
+        Self {
+            outcome: Some(outcome),
+            ..receipt.into()
         }
     }
 }

@@ -103,19 +103,46 @@ test.describe("a sent turn kept near the top", () => {
     await expect(turn).toContainText("again");
     /* the view goes to the turn once the session makes it the latest
        request, which the bridge's next read does */
-    await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.userTurn("pending"));
+    /* Driver round trips can outlast the glide; geometry must be sampled
+       inside the page before the source update, including across row replacement. */
+    const seen = await page.evaluate(
+      () =>
+        new Promise<{ from: number; offsets: number[] }>((resolve) => {
+          const scroller = document.querySelector<HTMLElement>(
+            '[data-slot="scroll-area-viewport"][data-following]',
+          )!;
+          const offset = () =>
+            Math.round(
+              Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn]"))
+                .at(-1)!
+                .getBoundingClientRect().top - scroller.getBoundingClientRect().top,
+            );
+          const from = offset();
+          const offsets: number[] = [];
+          const deadline = performance.now() + 2000;
+          const sample = () => {
+            const at = offset();
+            offsets.push(at);
+            if (
+              (scroller.dataset.following === "false" && at <= 89) ||
+              performance.now() >= deadline
+            ) {
+              resolve({ from, offsets });
+            } else requestAnimationFrame(sample);
+          };
+          requestAnimationFrame(sample);
+          window.__GENTS_MOBILE_PERFORMANCE__!.userTurn("pending");
+        }),
+    );
     await expect(viewport).toHaveAttribute("data-following", "false");
     const offset = async () =>
       Math.round((await turn.boundingBox())!.y - (await viewport.boundingBox())!.y);
-    /* it glides: seen part of the way before it rests at the inset plus the peek */
-    const seen: number[] = [];
-    for (let i = 0; i < 10; i += 1) {
-      seen.push(await offset());
-      await page.waitForTimeout(25);
-    }
     await expect.poll(offset).toBeLessThanOrEqual(89);
     expect(await offset()).toBeGreaterThanOrEqual(87);
-    expect(seen.some((y) => y > 100)).toBe(true);
+    expect(
+      seen.offsets.filter((y) => y > 100 && y < seen.from - 1),
+      JSON.stringify(seen),
+    ).not.toHaveLength(0);
     /* the last turn's block has room for the reply: a minimum height
        the owner set once, from the view, not from the reply */
     const room = () =>

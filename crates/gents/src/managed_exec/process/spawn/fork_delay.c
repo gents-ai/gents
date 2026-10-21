@@ -64,9 +64,8 @@ static int observed_spawn(pid_t *pid, const char *file,
                           const posix_spawn_file_actions_t *actions,
                           const posix_spawnattr_t *attributes,
                           char *const argv[], char *const environment[]) {
-    unsigned int ordinal = atomic_fetch_add(&spawns, 1) + 1;
     int result = posix_spawnp(pid, file, actions, attributes, argv, environment);
-    if (result == 0) record_spawn(ordinal);
+    if (result == 0) record_spawn(atomic_fetch_add(&spawns, 1) + 1);
     return result;
 }
 
