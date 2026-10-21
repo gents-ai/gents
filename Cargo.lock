@@ -10287,7 +10287,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "regolith"
 version = "0.2.1"
-source = "git+https://github.com/sourcenetwork/regolith?rev=cba89a23a40ace24605489d98d9cef6b5a4770ff#cba89a23a40ace24605489d98d9cef6b5a4770ff"
+source = "git+https://github.com/sourcenetwork/regolith?rev=ee060fee56c6d716c7e2700fb6d32a3cf2ad150b#ee060fee56c6d716c7e2700fb6d32a3cf2ad150b"
 dependencies = [
  "aes-gcm-siv",
  "getrandom 0.4.2",

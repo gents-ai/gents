@@ -194,4 +194,4 @@ rig-core = { git = "https://github.com/jackzampolin/rig", rev = "e12f875ea5b28ec
 # See third_party/README.md, defradb.rs#1090, and gents#634.
 noq = { path = "third_party/noq" }
 
-regolith = { git = "https://github.com/sourcenetwork/regolith", rev = "cba89a23a40ace24605489d98d9cef6b5a4770ff" }
+regolith = { git = "https://github.com/sourcenetwork/regolith", rev = "ee060fee56c6d716c7e2700fb6d32a3cf2ad150b" }
