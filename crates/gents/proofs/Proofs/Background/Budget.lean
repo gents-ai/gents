@@ -24,7 +24,7 @@ def admittedBackgroundRows (rows : List BackgroundRowState) : Nat :=
   rows.filter (· == .admitted) |>.length
 
 /-- Admit the first pending row against the already-admitted rows. A rejected
-pending row becomes terminal in the same owning transaction. -/
+pending row becomes terminal. -/
 def admitFirstPendingFrom (rows : List BackgroundRowState) (liveCount : Nat) :
     Option (List BackgroundRowState × Bool) :=
   match rows with
