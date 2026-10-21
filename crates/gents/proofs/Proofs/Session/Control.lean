@@ -12,7 +12,7 @@ structure State where
   request : Option RequestContext
   goal : Goals.State
   stopped : Bool
-  deriving DecidableEq, Repr
+  deriving Repr
 
 inductive Action where
   | interrupt
@@ -43,8 +43,10 @@ def step? (target : AgentSession.Scope) (state : State) : Action → Option Stat
   | .stop =>
       if state.queue.scope = target then
         let latched := interruptCurrent target state |>.getD state
-        some { latched with queue := latched.queue.drainAllPending,
-          goal := pauseGoal latched.goal, stopped := true }
+        some { latched with
+          queue := latched.queue.drainAllPending
+          goal := pauseGoal latched.goal
+          stopped := true }
       else none
   | .resume =>
       if state.queue.scope = target ∧
@@ -83,14 +85,29 @@ def wake : QueueEntry :=
     origin := .scheduled }
 
 def initial : State :=
-  { queue := { scope := scope, active := some 300, pending := [ordinary, wake],
-      terminal := ∅ },
-    request := some { state := .processing, origin := .interactive,
-      backend := ⟨"stop-test"⟩, admission := .executing, deadline := 100,
-      claimTime := 0, currentTime := 10, retryCount := 0, maxRetries := 3,
-      messageSeq := 0, persistence := .uncommitted },
-    goal := { status := .active, blockedAudits := 1, wrapupRequested := false,
-      wrapupCompleted := false }, stopped := false }
+  { queue :=
+      { scope := scope
+        active := some 300
+        pending := [ordinary, wake]
+        terminal := ∅ }
+    request := some
+      { state := .processing
+        origin := .interactive
+        backend := ⟨"stop-test"⟩
+        admission := .executing
+        deadline := 100
+        claimTime := 0
+        currentTime := 10
+        retryCount := 0
+        maxRetries := 3
+        messageSeq := 0
+        persistence := .uncommitted }
+    goal :=
+      { status := .active
+        blockedAudits := 1
+        wrapupRequested := false
+        wrapupCompleted := false }
+    stopped := false }
 
 def idleInterruptInitial : State :=
   { initial with
@@ -117,21 +134,23 @@ example : queuedStopPost.stopped = true ∧
     queuedStopPost.queue.active = none := by
   native_decide
 
-example : step? scope ((step? scope initial .stop).getD initial) (.enqueue wake) = none := by
+example : (step? scope ((step? scope initial .stop).getD initial) (.enqueue wake)).isNone = true := by
   native_decide
 
-example : step? scope ((step? scope initial .stop).getD initial) .resume = none := by
+example : (step? scope ((step? scope initial .stop).getD initial) .resume).isNone = true := by
   native_decide
 
 example : ((step? scope
-    { initial with stopped := true, goal := { initial.goal with status := .complete },
+    { initial with
+      stopped := true
+      goal := { initial.goal with status := .complete }
       request := none } .resume).getD initial).stopped = false := by
   native_decide
 
-example : step? scope ((step? scope initial .stop).getD initial) (.enqueue ordinary) = none := by
+example : (step? scope ((step? scope initial .stop).getD initial) (.enqueue ordinary)).isNone = true := by
   native_decide
 
-example : step? ⟨2, 900, some 1⟩ initial .stop = none := by
+example : (step? ⟨2, 900, some 1⟩ initial .stop).isNone = true := by
   native_decide
 
 end SessionQueue.Control
