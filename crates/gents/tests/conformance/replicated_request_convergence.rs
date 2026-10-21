@@ -620,46 +620,93 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
 }
 
 pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
+    use gents::NodeIdentity;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
     let db = test_db("convergence-coalesce-foreign").await;
+    let owner = db.node_identity.as_ref();
+    let foreign_identity =
+        gents::KeyIdentity::load_or_create(db.data_path().join("foreign.key"), None).unwrap();
     let session_id = "convergence-coalesce-foreign-session";
     let input = coalesce_wakeup_input(session_id);
     let key = format!("background_completion:{session_id}");
+    let owner_parent_id = "convergence-coalesce-owner-parent";
+    let owner_parent_doc = support::interrupt::create_runtime_request(
+        &db.node,
+        owner.did(),
+        AGENT_NAME,
+        owner_parent_id,
+        session_id,
+        "work",
+    )
+    .await;
+    let foreign_parent_id = "convergence-coalesce-foreign-parent";
+    let foreign_parent_doc = support::interrupt::create_runtime_request(
+        &db.node,
+        foreign_identity.did(),
+        AGENT_NAME,
+        foreign_parent_id,
+        session_id,
+        "work",
+    )
+    .await;
 
-    create_queue_request(
-        &db.node,
-        "convergence-coalesce-owner-survivor",
-        session_id,
-        OWNER_DID,
-        "scheduled",
-        &input,
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    create_queue_request(
-        &db.node,
-        "convergence-coalesce-owner-duplicate",
-        session_id,
-        OWNER_DID,
-        "scheduled",
-        &input,
-        "2026-03-23T00:00:01Z",
-    )
-    .await;
-    create_queue_request(
-        &db.node,
-        "convergence-coalesce-foreign",
-        session_id,
-        FOREIGN_DID,
-        "scheduled",
-        &input,
-        "2026-03-23T00:00:02Z",
-    )
-    .await;
+    for (identity, parent_id, parent_doc, request_id, created_at) in [
+        (
+            owner,
+            owner_parent_id,
+            owner_parent_doc.as_str(),
+            "convergence-coalesce-owner-survivor",
+            "2026-03-23T00:00:00Z",
+        ),
+        (
+            owner,
+            owner_parent_id,
+            owner_parent_doc.as_str(),
+            "convergence-coalesce-owner-duplicate",
+            "2026-03-23T00:00:01Z",
+        ),
+        (
+            &foreign_identity as &dyn gents::NodeIdentity,
+            foreign_parent_id,
+            foreign_parent_doc.as_str(),
+            "convergence-coalesce-foreign",
+            "2026-03-23T00:00:02Z",
+        ),
+    ] {
+        let mut create = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            request_id,
+            identity.did(),
+            identity.did(),
+            AGENT_NAME,
+            session_id,
+            "wake up",
+            "scheduled",
+            created_at,
+            AgentRequestAdmissionRecord::runtime_local_control(identity.did(), parent_id),
+        );
+        create.input = serde_json::from_str(&input).unwrap();
+        create.input.queue.as_mut().unwrap().queued_after_request_id = Some(parent_id.into());
+        create.caused_by_parent_request_doc_id = Some(parent_doc.into());
+        gents::sign_agent_request_create(identity, &mut create)
+            .await
+            .unwrap();
+        gents::config_client::ConfigAccess::write_local(
+            &db.node,
+            "conformance.signed_completion_wake",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    }
 
     let survivor = reconcile_coalesced_pending_request(
         &db.node,
         session_id,
-        OWNER_DID,
+        owner.did(),
         QueueSource::BackgroundCompletion,
         &key,
     )
@@ -691,7 +738,8 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 
     let foreign = fetch_queue_convergence_row(&db.node, "convergence-coalesce-foreign").await;
     assert_eq!(
-        foreign.node_did, FOREIGN_DID,
+        foreign.node_did,
+        foreign_identity.did(),
         "foreign replica ownership unchanged"
     );
     assert_eq!(
