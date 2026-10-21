@@ -103,6 +103,8 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"continuation_queue\":" ++ queueJson (some queue) ++
   ",\"continuation_goal\":" ++ goalJson c.input.goalContinuation ++
   ",\"expected_continuation\":" ++ requestInputJson (continuationInput c.input queue c.input.goalContinuation "physical:parent") ++
+  ",\"reissued_source_doc_id\":" ++ jsonString "physical:parent" ++
+  ",\"expected_reissued_input\":" ++ requestInputJson (reissuedInput c.input "physical:parent") ++
   ",\"workspace\":" ++ workspaceJson c.workspace ++
   ",\"workspace_source\":" ++ workspaceJson c.workspaceSource ++
   ",\"workspace_source_authenticated\":" ++ boolString c.workspaceSourceAuthenticated ++

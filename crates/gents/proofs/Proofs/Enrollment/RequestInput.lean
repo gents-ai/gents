@@ -61,6 +61,36 @@ def capturedInputCompatible (input : RequestInput) (runtimeVersion : Option Nat)
 def goalAssignmentCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
   input.goalAssignment.isNone || runtimeVersion == some 3
 
+/-- Retry and queue replacement publish a fresh physical request in the same
+session. The opening request's self sentinel must still name its original
+physical document; all other captured invocation facts retain their owner. -/
+def reissuedInput (source : RequestInput) (sourceDocId : String) : RequestInput :=
+  { source with goalAssignment := source.goalAssignment.map fun reference =>
+      { reference with rootRequestDocId := some (reference.rootRequestDocId.getD sourceDocId) } }
+
+theorem reissued_input_preserves_captures (source : RequestInput) (sourceDocId : String) :
+    (reissuedInput source sourceDocId).capturedContext = source.capturedContext := rfl
+
+theorem reissued_input_preserves_known_root (source : RequestInput) (sourceDocId root : String)
+    (reference : GoalAssignmentInput) (hasReference : source.goalAssignment = some reference)
+    (hasRoot : reference.rootRequestDocId = some root) :
+    (reissuedInput source sourceDocId).goalAssignment = some reference := by
+  simp [reissuedInput, hasReference, hasRoot]
+  cases reference
+  simp_all
+
+theorem reissued_input_preserves_opening_request (source : RequestInput) (sourceDocId : String)
+    (reference : GoalAssignmentInput) (hasReference : source.goalAssignment = some reference)
+    (selfRoot : reference.rootRequestDocId = none) :
+    (reissuedInput source sourceDocId).goalAssignment =
+      some { reference with rootRequestDocId := some sourceDocId } := by
+  simp [reissuedInput, hasReference, selfRoot]
+
+theorem reissued_input_does_not_join_an_assignment (source : RequestInput) (sourceDocId : String)
+    (unassigned : source.goalAssignment = none) :
+    (reissuedInput source sourceDocId).goalAssignment = none := by
+  simp [reissuedInput, unassigned]
+
 /-- Runtime continuations remain in their parent's invocation directory. They
 do not replay the parent's title intent, queue position, captured context, or goal issuance facts.
 The executing host still validates the inherited directory against its policy. -/
