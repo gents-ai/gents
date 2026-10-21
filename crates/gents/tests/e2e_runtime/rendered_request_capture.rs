@@ -2782,4 +2782,3 @@ async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint:
         .await
         .unwrap();
 }
-
