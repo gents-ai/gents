@@ -201,17 +201,22 @@ def OrphanedBackgroundToolRow.parentResolvable
   row.parentLive || row.parentInterrupted || row.parentTerminal
 
 /-! The periodic orphan sweep uses the same precedence as startup recovery.
-A live registered worker is proven ownership: its terminal cause is persisted
-before the worker is signalled, so the worker cannot replace it. A stopped
-process is never attributed to its parent's interrupt or terminal state: that
-state does not stop background work. -/
+Session-stop recovery signals a registered process first and only records a
+terminal cause after observing it stopped or no longer owned. Task deletion
+retains its existing registered-worker ordering. Parent interruption and
+terminal state do not stop background work. -/
 
 def orphanedBackgroundToolCause
     (row : OrphanedBackgroundToolRow) : Option ToolRecoveryCause :=
   if !row.parentResolvable then
     none
   else if row.executionRegistered then
-    if row.ownerSessionStopped then some .sessionStopped
+    if row.ownerSessionStopped then
+      match row.process with
+      | .stillRunning => none
+      | .notOwned => some .processLost
+      | .alreadyExited => some .processLost
+      | .stopped => some .sessionStopped
     else if row.ownerTaskDeleted then some .taskDeleted else none
   else
     match row.process with

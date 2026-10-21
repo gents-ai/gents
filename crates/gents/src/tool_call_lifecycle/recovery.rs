@@ -273,12 +273,54 @@ impl super::ToolCallLifecycle {
             }
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
 
-            if registered {
-                let cause = if session_stopped {
-                    RecoveryOutcome::SessionStopped
-                } else {
-                    RecoveryOutcome::TaskDeleted
+            if registered && session_stopped {
+                let process = executions
+                    .stop_execution(&row.tool_call_id, &row.doc_id)
+                    .await;
+                let Some(cause) = classify_registered_session_stop(process) else {
+                    tracing::info!(
+                        doc_id = %row.doc_id,
+                        tool_call_id = %row.tool_call_id,
+                        "background process is still running after session stop; leaving tool call running"
+                    );
+                    continue;
                 };
+                let updated = match recover_tool_call_row(
+                    node,
+                    &row,
+                    deadline_at,
+                    cause,
+                    true,
+                )
+                .await
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            tool_call_id = %row.tool_call_id,
+                            error = %error,
+                            "failed to recover stopped-session background tool"
+                        );
+                        continue;
+                    }
+                };
+                // The worker may have won the terminal CAS while stop was in
+                // flight. Its own completion owns the durable outcome.
+                if updated {
+                    append_recovered_background_tool_completion(
+                        node,
+                        &row,
+                        cause,
+                    )
+                    .await;
+                    report.tool_calls_terminalized += 1;
+                }
+                continue;
+            }
+
+            if registered {
+                let cause = RecoveryOutcome::TaskDeleted;
                 let updated = match recover_tool_call_row(
                     node,
                     &row,
@@ -694,6 +736,26 @@ mod tests {
             );
             checked += 1;
         }
+        let mut registered_session_stop_cases = 0;
+        for case in crate::lean_vocab_test::lean_recovery_sweep_cases() {
+            if case.execution_registered != Some(true)
+                || case.owner_session_stopped != Some(true)
+            {
+                continue;
+            }
+            let Some(process) = case.process_outcome.as_deref() else {
+                continue;
+            };
+            let outcome = classify_registered_session_stop(verdict(process));
+            assert_eq!(
+                outcome.map(lean_cause),
+                case.recovery_cause.as_deref(),
+                "{}",
+                case.name
+            );
+            registered_session_stop_cases += 1;
+        }
+        assert_eq!(registered_session_stop_cases, 2);
         assert!(checked >= 12, "only {checked} generated native witnesses");
     }
 
@@ -1260,6 +1322,19 @@ fn classify_orphaned_background_tool(
                 Some(RecoveryOutcome::BackgroundInterrupted)
             }
         }
+    }
+}
+
+fn classify_registered_session_stop(
+    process: crate::managed_exec::ProcessStopOutcome,
+) -> Option<RecoveryOutcome> {
+    use crate::managed_exec::ProcessStopOutcome;
+    match process {
+        ProcessStopOutcome::StillRunning => None,
+        ProcessStopOutcome::NotOwned | ProcessStopOutcome::AlreadyExited => {
+            Some(RecoveryOutcome::ProcessLost)
+        }
+        ProcessStopOutcome::Stopped => Some(RecoveryOutcome::SessionStopped),
     }
 }
 
