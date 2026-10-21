@@ -59,23 +59,40 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         "failed materialization must not leave a Goal"
     );
 
-    let first = materializer
-        .materialize(
-            &task,
-            Some("release-trigger"),
-            TriggerKind::Event,
-            Some("release-trigger-doc"),
-            Some("release-42"),
-            Some("batch-7"),
-            Some(r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#),
-            "implement release",
-            Some("ship release"),
-            fire_key,
-            None,
-            None,
+    let (first, mutation_count) =
+        crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
+            || async {
+                materializer
+                    .materialize(
+                        &task,
+                        Some("release-trigger"),
+                        TriggerKind::Event,
+                        Some("release-trigger-doc"),
+                        Some("release-42"),
+                        Some("batch-7"),
+                        Some(r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#),
+                        "implement release",
+                        Some("ship release"),
+                        fire_key,
+                        None,
+                        None,
+                    )
+                    .await
+            },
+            || async {
+                crate::config_client::ConfigAccess::local(node.clone())
+                    .execute(
+                        "{ Goal {_docID assignment_root_request_doc_id} GoalCreationClaim {_docID} AgentRequest {_docID input} }",
+                    )
+                    .await
+                    .unwrap()
+            },
         )
-        .await
-        .expect("goal-backed Task fire");
+        .await;
+    assert!(
+        mutation_count >= 4,
+        "Goal, creation claim, signed request, and physical root share one commit"
+    );
     let retry = materializer
         .materialize(
             &task,

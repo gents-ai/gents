@@ -2,12 +2,22 @@ use super::*;
 use crate::config_client::ConfigApplyTxn;
 use gents_protocol::request_input::GoalAssignmentInput;
 
+/// Reading the canonical row here puts its binding in the storage transaction's
+/// conflict set, including a Goal created earlier in this same transaction.
 pub(crate) async fn bind_goal_first_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     goal: &GoalDocument,
     request_doc_id: &str,
     reference: Option<&GoalAssignmentInput>,
 ) -> Result<()> {
+    let observed = load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id)
+        .await?
+        .context("Goal opening disappeared during publication")?;
+    anyhow::ensure!(
+        observed.doc_id == goal.doc_id && observed.goal_id == goal.goal_id,
+        "Goal opening identity changed during publication"
+    );
+    let goal = &observed;
     anyhow::ensure!(
         !goal.goal_id.is_empty()
             && !request_doc_id.is_empty()
@@ -23,12 +33,15 @@ pub(crate) async fn bind_goal_first_request_in_txn(
     if goal.assignment_root_request_doc_id.is_some() {
         return Ok(());
     }
-    let response = txn.execute(&format!(
-        r#"mutation {{ update_Goal(filter: {{ _docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}},
-        assignment_root_request_doc_id: {{_eq: null}} }}, input: {{ assignment_root_request_doc_id: "{}" }}) {{_docID}} }}"#,
-        escape_graphql_string(&goal.doc_id), escape_graphql_string(&goal.node_did),
-        escape_graphql_string(request_doc_id),
-    )).await?;
+    let response = txn
+        .execute(&format!(
+            r#"mutation {{ update_Goal(filter: {{ _docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, assignment_root_request_doc_id: {{_eq: null}} }},
+        input: {{ assignment_root_request_doc_id: "{}" }}) {{_docID}} }}"#,
+            escape_graphql_string(&goal.doc_id),
+            escape_graphql_string(&goal.node_did),
+            escape_graphql_string(request_doc_id),
+        ))
+        .await?;
     anyhow::ensure!(
         response["data"]["update_Goal"]
             .as_array()

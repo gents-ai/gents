@@ -1122,7 +1122,7 @@ async fn stage_goal_and_claim(
         "active_started_at",
         status.accrues_active_time().then_some(now),
     );
-    txn.execute(&format!(
+    let created = txn.execute(&format!(
         r#"mutation {{ create_Goal(input: {{
             goal_id: "{}", creation_key: "{}",
             session_id: "{escaped_session}", node_did: "{escaped_did}",
@@ -1144,10 +1144,11 @@ async fn stage_goal_and_claim(
         escape_graphql_string(now),
     ))
     .await?;
+    let doc_id = crate::graphql::created_doc_id(&created, "Goal")?;
     let staged = StagedGoal {
         disposition: StagedGoalDisposition::Created,
         goal: GoalDocument {
-            doc_id: String::new(),
+            doc_id,
             goal_id,
             session_id: session_id.to_string(),
             node_did: node_did.to_string(),
