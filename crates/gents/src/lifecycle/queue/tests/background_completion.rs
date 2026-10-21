@@ -1304,8 +1304,25 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
+    crate::document_config::upsert_node(
+        &db.node,
+        db.node_did(),
+        None,
+        Some(TEST_AGENT_ID),
+        true,
+    )
+    .await
+    .unwrap();
+    let node_update = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 8 }}) {{ _docID }} }}"#,
+            escape_graphql_string(db.node_did())
+        ))
+        .await;
+    assert!(!node_update.has_errors(), "{:?}", node_update.errors);
     let parent = root_parent(&db, "wake-hop-refusal-session").await;
-    let bound = crate::document_config::DEFAULT_MAX_REQUEST_HOP;
+    let bound = 8;
     let hop_of = |doc_id: String| {
         let node = db.node.clone();
         async move {
@@ -1363,7 +1380,7 @@ async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() 
     let refused_row = hop_of(refused_wake.clone()).await;
     assert_eq!(refused_row["request_hop"], bound + 1);
     assert!(!crate::lifecycle::request_hop_within_bound(
-        bound,
+        Some(bound),
         bound + 1
     ));
     assert_eq!(hop_of(native_wake).await["lifecycle_state"], "superseded");

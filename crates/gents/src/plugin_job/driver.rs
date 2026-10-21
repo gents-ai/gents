@@ -722,19 +722,36 @@ pub(super) async fn step_context_for(
     Ok((ctx, installed))
 }
 
-/// The target node's `max_request_hop`, defaulted when unset, read through `txn`.
-async fn max_request_hop_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<u32> {
+/// The target node's optional `max_request_hop`, read through `txn`.
+async fn max_request_hop_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+) -> Result<Option<u32>> {
     let response = txn
         .execute(&format!(
-            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ max_request_hop }} }}"#,
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ max_request_hop }} }}"#,
             escape_graphql_string(node_did)
         ))
         .await?;
-    Ok(response
-        .pointer("/data/Node/0/max_request_hop")
-        .and_then(Value::as_u64)
+    let rows = response
+        .pointer("/data/Node")
+        .and_then(Value::as_array)
+        .context("Node hop-cap query returned no row array")?;
+    anyhow::ensure!(rows.len() <= 1, "multiple Node rows matched a DID");
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let value = row
+        .get("max_request_hop")
+        .context("Node hop-cap query omitted max_request_hop")?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_u64()
         .and_then(|hop| u32::try_from(hop).ok())
-        .unwrap_or(crate::document_config::DEFAULT_MAX_REQUEST_HOP))
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("Node.max_request_hop must be a nonnegative u32"))
 }
 
 async fn read_lifecycle_state(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<String> {

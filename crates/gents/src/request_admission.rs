@@ -712,11 +712,13 @@ async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> Adm
     ))
 }
 
-pub(crate) async fn max_request_hop(node: &EmbeddedNode, node_did: &str) -> anyhow::Result<u32> {
+pub(crate) async fn max_request_hop(
+    node: &EmbeddedNode,
+    node_did: &str,
+) -> anyhow::Result<Option<u32>> {
     Ok(crate::document_config::load_node(node, node_did)
         .await?
-        .and_then(|node_doc| node_doc.max_request_hop)
-        .unwrap_or(crate::document_config::DEFAULT_MAX_REQUEST_HOP))
+        .and_then(|node_doc| node_doc.max_request_hop))
 }
 
 fn request_workspace(row: &AgentRequestRow) -> crate::lifecycle::WorkspaceLineage {
