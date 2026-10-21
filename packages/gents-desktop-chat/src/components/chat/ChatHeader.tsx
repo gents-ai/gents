@@ -231,7 +231,9 @@ function ContextMeter({
                 {compaction.compactedTokens?.toLocaleString() ?? "?"} tokens
               </span>
               <span>
-                {compaction.messagesCompacted.toLocaleString()} messages
+                {compaction.messagesCompacted == null
+                  ? "Message count unavailable"
+                  : `${compaction.messagesCompacted.toLocaleString()} messages`}
               </span>
             </div>
           ))}
