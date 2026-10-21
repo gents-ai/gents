@@ -92,6 +92,8 @@ describe("durable goal transcript card", () => {
         durableMessageCount: 0,
         providerMessageCount: 0,
         totalCompactedMessages: 0,
+        sessionCompactionCount: null,
+        requestReductionHistoryLoaded: null,
         compactions: [],
         lastRequest: null,
       },
