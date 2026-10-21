@@ -1089,8 +1089,7 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
 
 #[test]
 fn context_events_page_with_their_durable_message_anchor() {
-    let mut snapshot = empty_timeline_snapshot();
-    snapshot.timeline_items = vec![
+    let items = vec![
         assistant_item("message-1", 1),
         RenderedTimelineItem::RequestContextReductionSummary {
             item_key: "request-context-reduction:physical-req-1".into(),
@@ -1113,40 +1112,20 @@ fn context_events_page_with_their_durable_message_anchor() {
         },
         assistant_item("message-2", 2),
     ];
+    let mut snapshot = empty_timeline_snapshot();
+    snapshot.timeline_items = items.clone();
 
     apply_session_timeline_page(&mut snapshot, None, Some(3)).unwrap();
     assert_eq!(timeline_keys(&snapshot), ["message-2"]);
     let cursor = snapshot.timeline_page.unwrap().oldest_item_key.unwrap();
     let mut older = empty_timeline_snapshot();
-    older.timeline_items = vec![
-        assistant_item("message-1", 1),
-        RenderedTimelineItem::RequestContextReductionSummary {
-            item_key: "request-context-reduction:physical-req-1".into(),
-            sequence: 1,
-            request_doc_id: "physical-req-1".into(),
-            request_id: "req-1".into(),
-            reduction_count: 81,
-            compacted_count: 80,
-            repaired_count: 1,
-            latest_estimated_input_tokens: Some(120),
-            latest_timestamp: Some("2026-10-20T12:00:00Z".into()),
-        },
-        RenderedTimelineItem::SessionCompaction {
-            item_key: "session-compaction:checkpoint-1".into(),
-            sequence: 1,
-            messages_compacted: Some(4),
-            original_tokens: Some(300),
-            compacted_tokens: Some(90),
-            timestamp: Some("2026-10-20T11:00:00Z".into()),
-        },
-        assistant_item("message-2", 2),
-    ];
+    older.timeline_items = items;
     apply_session_timeline_page(&mut older, Some(&cursor), Some(3)).unwrap();
     assert_eq!(
         timeline_keys(&older),
         [
             "message-1",
-            "model-input:req-1:call-2:1:0",
+            "request-context-reduction:physical-req-1",
             "session-compaction:checkpoint-1"
         ]
     );
