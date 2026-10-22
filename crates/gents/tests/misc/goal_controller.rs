@@ -3960,7 +3960,7 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(false));
     let child = operator_resume_child_row(&db, &receipt.doc_id).await;
