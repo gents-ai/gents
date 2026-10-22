@@ -686,9 +686,9 @@ async fn ninth_adoption_on_one_request_is_refused() {
         assert_eq!(answer["status"], "running", "call {n}: {answer}");
     }
     let ninth = step.call_as("call-9", ARGS).await;
-    assert_eq!(ninth["code"], "plugin_job_policy_denied", "{ninth}");
+    assert_eq!(ninth["code"], "background_tool_budget_exceeded", "{ninth}");
     let row = step.row_of("call-9").await;
-    failed(&row, "policyDenied");
+    failed(&row, "serviceUnavailable");
     assert_eq!(row["await_mode"], "foreground", "{row}");
     step.finish().await;
 }

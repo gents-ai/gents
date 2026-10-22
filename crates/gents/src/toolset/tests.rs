@@ -175,6 +175,8 @@ fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
         [
             "agent_message",
             "agent_interrupt",
+            "agent_stop",
+            "agent_resume",
             "agent_list",
             "agent_session_list",
             "agent_session_read"
@@ -320,7 +322,7 @@ async fn session_message_tool_definitions_register_expected_surface() {
         interrupt.parameters["required"],
         serde_json::json!(["session_id"])
     );
-    let list = tools[3].definition(String::new()).await;
+    let list = tools[5].definition(String::new()).await;
     assert_eq!(list.parameters["properties"], serde_json::json!({}));
 }
 

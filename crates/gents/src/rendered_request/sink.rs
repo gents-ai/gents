@@ -1180,7 +1180,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleted_blocks_never_publish_dangling_references() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let body = json!({"messages":[{"role":"user","content":capture_text(89, 24 * 1024)}]});
@@ -1231,7 +1231,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let mut sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let mut messages = vec![json!({"role": "user", "content": capture_text(71, 256 * 1024)})];

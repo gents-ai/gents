@@ -478,23 +478,6 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/rendered_request/sink.rs",
-      "collection": "$GENTS_collection$",
-      "arguments": "filter: { node_did: {_eq: \"$GENTS_node_did$\"}, requester_did: {_eq: \"$GENTS_requester_did$\"}, session_id: {_eq: \"$GENTS_session_id$\"}, source: {_eq: \"$GENTS_source$\"}, capture_scope: {_eq: \"$GENTS_capture_scope$\"} }, order: [{node_did: DESC}, {requester_did: DESC}, {session_id: DESC}, {source: DESC}, {capture_scope: DESC}, {created_at: DESC}], limit: 1"
-    },
-    "bindings": [
-      {
-        "collection": "RenderedRequest",
-        "node_did": "probe",
-        "requester_did": "probe",
-        "session_id": "probe",
-        "source": "probe",
-        "capture_scope": "probe"
-      }
-    ]
-  },
-  {
-    "read": {
       "path": "crates/gents/src/run_timeline_fetch.rs",
       "collection": "AgentToolCall",
       "arguments": "filter: { request_id: { _in: [$GENTS_request_list$] } }, order: { started_at: ASC }, limit: $GENTS_limit$"

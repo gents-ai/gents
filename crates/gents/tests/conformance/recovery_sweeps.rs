@@ -15,7 +15,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        48,
+        49,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -58,6 +58,9 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
 /// rule over that step's output (`is_stalled`, the admission owner) is the
 /// second. Returns the owner action and the row after it.
 fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecoveryRow) {
+    if !row.running {
+        return (TickAction::Untouched, row);
+    }
     let facts = RecoveryFacts {
         session_stopped: row.session_stopped,
         terminal_children: row.terminal_children,

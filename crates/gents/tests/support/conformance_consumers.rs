@@ -1554,6 +1554,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "plugin_job_protocol_field_names_are_secret_free",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::session_control::generated_session_control_cases_drive_native_interrupt_stop_and_resume",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/session_control.rs",
+            module_path: "conformance::session_control",
+            function: "generated_session_control_cases_drive_native_interrupt_stop_and_resume",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::recovery_sweeps::generated_plugin_job_recovery_cases_drive_redrive_owner",
             package: "gents",
             source_path: "crates/gents/tests/conformance/recovery_sweeps.rs",

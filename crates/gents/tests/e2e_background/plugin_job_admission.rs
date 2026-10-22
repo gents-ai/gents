@@ -19,7 +19,8 @@ use crate::support::accepted_turn::{boot_accepted_turn_with_backend_capacity, Ac
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse, StreamScript};
 use crate::support::{test_db, TestDb};
 
-const REFUSED: &str = "plugin_job_policy_denied";
+const POLICY_DENIED: &str = "plugin_job_policy_denied";
+const CAPACITY_EXCEEDED: &str = "background_tool_budget_exceeded";
 
 fn entry(when: Value, output: JobStepOutput) -> PlanEntry {
     PlanEntry {
@@ -159,7 +160,7 @@ async fn terminal_code(h: &JobHarness, tool_call_id: &str) -> Option<String> {
 }
 
 /// A call is settled once it is a running job holding one live child, or a
-/// failed row refused with [`REFUSED`]. A refused step 0 leaves no `job_pin`,
+/// failed row refused with `refusal`. A refused step 0 leaves no `job_pin`,
 /// so its view is `NotAJob` and the refusal is read from the row's
 /// lifecycle state and canonical terminal output (71.1).
 enum Settled {
@@ -167,7 +168,7 @@ enum Settled {
     Refused(String),
 }
 
-async fn settle(h: &JobHarness, tool_call_id: &str) -> Settled {
+async fn settle(h: &JobHarness, tool_call_id: &str, refusal: &str) -> Settled {
     let access = ConfigAccess::local(h.db.node.clone());
     let key = || JobKey::Address {
         session_id: h.session_id.clone(),
@@ -180,7 +181,7 @@ async fn settle(h: &JobHarness, tool_call_id: &str) -> Settled {
             Ok(view) if view.state == JobState::Failed => {
                 assert_eq!(
                     view.outcome.as_ref().map(|o| o.code.as_str()),
-                    Some(REFUSED)
+                    Some(refusal)
                 );
                 return Settled::Refused(view.row_doc_id.clone());
             }
@@ -195,7 +196,7 @@ async fn settle(h: &JobHarness, tool_call_id: &str) -> Settled {
             Err(JobReadError::NotAJob) => {
                 if let Some(row) = failed_row(h, tool_call_id).await {
                     let code = terminal_code(h, tool_call_id).await;
-                    assert_eq!(code.as_deref(), Some(REFUSED), "{tool_call_id}");
+                    assert_eq!(code.as_deref(), Some(refusal), "{tool_call_id}");
                     return Settled::Refused(row);
                 }
             }
@@ -210,7 +211,7 @@ async fn settle(h: &JobHarness, tool_call_id: &str) -> Settled {
 }
 
 async fn refused(h: &JobHarness, tool_call_id: &str) -> String {
-    match settle(h, tool_call_id).await {
+    match settle(h, tool_call_id, POLICY_DENIED).await {
         Settled::Refused(row) => row,
         Settled::Running(view) => panic!("{tool_call_id} was not refused: {view:?}"),
     }
@@ -400,7 +401,7 @@ async fn nine_concurrent_adoptions_on_one_request_leave_exactly_eight() {
     let mut running = 0;
     let mut refused_rows = Vec::new();
     for id in &ids {
-        match settle(&h, id).await {
+        match settle(&h, id, CAPACITY_EXCEEDED).await {
             Settled::Running(_) => running += 1,
             Settled::Refused(row) => refused_rows.push(row),
         }

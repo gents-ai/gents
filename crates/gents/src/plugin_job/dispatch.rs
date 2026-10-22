@@ -1144,7 +1144,7 @@ mod tests {
             ..context()
         };
         let refusal = adopt(&full, &view(), &step0_row(), &pinned_effects()).unwrap_err();
-        assert_eq!(refusal.code(), Some("plugin_job_policy_denied"));
+        assert_eq!(refusal.code(), Some("background_tool_budget_exceeded"));
     }
 
     #[test]
