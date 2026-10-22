@@ -29,6 +29,10 @@ source consistency checks, not a separate runtime compatibility version.
   jobs and background processes, and resume waits until they have settled.
 - `Node.max_request_hop` no longer defaults to 8; when it is absent the
   causal-hop cap is disabled.
+- `gents config export` writes `$` as `$$` in every `pack_config.json`
+  string, so `gents config apply` reads the exported text back unchanged.
+  Text containing `${VAR}` or `$$`, such as a hook's shell script, previously
+  came back substituted after a round trip. Sidecar prompt files stay verbatim.
 - `gents service install` takes `--http-addr`, `--http-port`,
   `--p2p-bind-addr`, `--p2p-port`, `--p2p-relay-mode` and `--p2p-discovery`
   (plus `--reset-network`), so a node running as the native service can listen

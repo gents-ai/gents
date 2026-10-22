@@ -12,7 +12,7 @@ use gents::pack::{
     interpolate, is_valid_pack_name, load_pack_config, PackInstallOptions, PackManifest,
 };
 use gents::{Collection, ConfigAccess};
-use serde_json::{json, Value};
+use serde_json::json;
 use tempfile::TempDir;
 
 use super::dossier::{read_pack, Dossier};
@@ -495,7 +495,7 @@ fn write_files(
     if let Some(title) = &definition.title {
         entry["title"] = json!(title);
     }
-    escape_strings(&mut entry);
+    interpolate::escape_values(&mut entry);
     entry["cases"] = json!(references);
     let config = json!({"node": {}, "eval_definitions": [entry]});
     let mut bytes = serde_json::to_vec_pretty(&config)?;
@@ -540,15 +540,6 @@ fn write_files(
         std::fs::write(&file, bytes).with_context(|| format!("writing {path}"))?;
     }
     Ok(())
-}
-
-fn escape_strings(value: &mut Value) {
-    match value {
-        Value::String(text) => *text = interpolate::escape(text),
-        Value::Array(values) => values.iter_mut().for_each(escape_strings),
-        Value::Object(values) => values.values_mut().for_each(escape_strings),
-        _ => {}
-    }
 }
 
 async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinition> {
