@@ -1,6 +1,8 @@
 import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
+  SessionRowsView,
+  SessionRowsWindow,
 } from "@source-inc/gents-desktop-client";
 import {
   BridgeInvokeError,
@@ -225,6 +227,31 @@ export function createSessionReads({
     }
   }
 
+  /* a stretch of the open session's rows by message number; a result that
+     arrives after the reader moved to another session or node is dropped */
+  async function loadSessionRows(
+    window: SessionRowsWindow,
+    limit = SESSION_TIMELINE_PAGE_SIZE,
+  ): Promise<SessionRowsView | null> {
+    const capturedRun = runEpoch;
+    const current = readSession(sessionStore);
+    if (!current) return null;
+    const nodeDid = current.nodeDid ?? store.getState().nodeDid;
+    const rows = await api.fetchSessionRows({
+      sessionId: current.sessionId,
+      nodeDid,
+      window,
+      limit,
+    });
+    if (
+      capturedRun !== runEpoch ||
+      store.getState().sessionId !== current.sessionId ||
+      (store.getState().nodeDid ?? nodeDid) !== nodeDid
+    )
+      return null;
+    return rows;
+  }
+
   return {
     invalidateSessionReads() {
       runEpoch += 1;
@@ -235,5 +262,6 @@ export function createSessionReads({
     retrySessionHydration,
     refreshSessionLiveDelta,
     loadOlderSessionTimeline,
+    loadSessionRows,
   };
 }

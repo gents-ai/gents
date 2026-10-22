@@ -4,6 +4,7 @@ import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
+  SessionRowsView,
 } from "@source-inc/gents-desktop-client";
 import { projectSessionLoadingStatus } from "../src/lib/loadingStatus";
 import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
@@ -58,6 +59,21 @@ function session(
       reconstruction: { state: "ready" as const },
     })),
     timelinePage: page,
+  };
+}
+
+function rowsRead(sessionId: string): SessionRowsView {
+  return {
+    sessionId,
+    nodeDid: "did:key:test",
+    rows: [],
+    coveredFrom: 0,
+    coveredThrough: null,
+    hasOlder: false,
+    hasNewer: false,
+    complete: true,
+    unreadable: null,
+    queryCount: 1,
   };
 }
 
@@ -603,6 +619,38 @@ describe("createSessionReads", () => {
       setTimingForTests(null);
       clock.mockRestore();
     }
+  });
+
+  it("drops a rows read that lands after the reader opened another session", async () => {
+    let finishRows!: (value: SessionRowsView) => void;
+    const store = createSelectionStore({
+      nodeDid: "did:key:test",
+      sessionId: "session-1",
+    });
+    const reads = readsFor(
+      {
+        fetchSessionSnapshot: vi.fn().mockResolvedValue(
+          session(["k1"], {
+            totalItems: 1,
+            pageItems: 1,
+            hasOlder: false,
+            hasNewer: false,
+            oldestItemKey: "k1",
+            newestItemKey: "k1",
+          }),
+        ),
+        fetchSessionRows: () =>
+          new Promise<SessionRowsView>((resolve) => {
+            finishRows = resolve;
+          }),
+      } as unknown as DesktopApiAdapter,
+      store,
+    );
+    await reads.refreshSession("session-1");
+    const rows = reads.loadSessionRows({ kind: "around", sequence: 40 });
+    store.setState({ sessionId: "session-2" });
+    finishRows(rowsRead("session-1"));
+    expect(await rows).toBeNull();
   });
 
   it("drops a delayed snapshot after the selected session changes", async () => {
