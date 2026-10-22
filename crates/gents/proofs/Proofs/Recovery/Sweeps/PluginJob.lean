@@ -9,7 +9,11 @@ namespace Recovery
     of the step that receives the terminals up to `terminalChildren` (the
     stall rule reads them). `deadlineExpired` holds once `max_wall_secs` has passed;
     `available` fails when the tool, plugin, job block or install record is
-    gone, or the engine was not installed by an operator.
+    gone, or the engine was not installed by an operator. `stepped` holds
+    once a step has committed since the row's adoption: a resumed row is
+    adopted with its chain's children observed and none live, and adoption
+    kicks its first step, so until that step commits the row has not stalled
+    and the sweep re-drives the step instead.
 
     Accepted premise: a peer that never replicates a child's terminal leaves
     the job waiting; `max_wall_secs` bounds that wait. -/
@@ -22,33 +26,44 @@ structure PluginJobRow where
   stepNew : Nat
   deadlineExpired : Bool
   available : Bool
+  stepped : Bool
   deriving DecidableEq, Repr
+
+/-- No live child, no unobserved terminal and nothing new from the step that
+    received them, after a step since adoption (`plugin_job_stalled`). -/
+def pluginJobStalled (r : PluginJobRow) : Prop :=
+  r.stepped = true ∧ r.live = 0 ∧ r.observed = r.terminalChildren ∧ r.stepNew = 0
+
+instance (r : PluginJobRow) : Decidable (pluginJobStalled r) := by
+  unfold pluginJobStalled
+  infer_instance
 
 /-- The normal plugin-job recovery transition: a running job needs the sweep
     when a child's terminal is unobserved, its deadline passed, it is no longer
-    available, or it stalled. Session stop is joined by the registered sweep
-    below and owns a distinct cancellation transition. -/
+    available, it stalled, or it rests without a live child before its first
+    step since adoption. Session stop is joined by the registered sweep below
+    and owns a distinct cancellation transition. -/
 def pluginJobStale (r : PluginJobRow) : Prop :=
   r.running ∧ (r.observed < r.terminalChildren ∨ r.deadlineExpired ∨ !r.available
-    ∨ (r.live = 0 ∧ r.observed = r.terminalChildren ∧ r.stepNew = 0))
+    ∨ (r.live = 0 ∧ r.observed = r.terminalChildren ∧ (r.stepped = false ∨ r.stepNew = 0)))
 
 instance (r : PluginJobRow) : Decidable (pluginJobStale r) := by
   unfold pluginJobStale
   infer_instance
 
 /-- A job past its deadline, unavailable or stalled is killed and fails
-    closed; otherwise one step receives its unobserved terminals. -/
+    closed; otherwise one step receives its unobserved terminals, or is the
+    first step since adoption. -/
 def pluginJobRecover (r : PluginJobRow) : PluginJobRow :=
   if pluginJobStale r then
-    if r.deadlineExpired ∨ !r.available ∨ (r.live = 0 ∧ r.observed = r.terminalChildren ∧ r.stepNew = 0)
+    if r.deadlineExpired ∨ !r.available ∨ pluginJobStalled r
     then { r with running := false }
-    else { r with observed := r.terminalChildren }
+    else { r with observed := r.terminalChildren, stepped := true }
   else r
 
 theorem pluginJobRow_stale_recover_changes (row : PluginJobRow)
     (h : pluginJobStale row) : pluginJobRecover row ≠ row := by
   have h_stale := h
-  unfold pluginJobStale at h
   obtain ⟨h_running, h_reason⟩ := h
   unfold pluginJobRecover
   rw [if_pos h_stale]
@@ -58,53 +73,70 @@ theorem pluginJobRow_stale_recover_changes (row : PluginJobRow)
     simp [h_running] at h_field
   · rename_i h_continue
     intro h_eq
-    have h_field := congrArg PluginJobRow.observed h_eq
-    simp at h_field
-    rcases h_reason with h_lt | h_deadline | h_unavailable | h_stalled
+    have h_observed := congrArg PluginJobRow.observed h_eq
+    have h_stepped := congrArg PluginJobRow.stepped h_eq
+    simp at h_observed h_stepped
+    rcases h_reason with h_lt | h_deadline | h_unavailable | ⟨h_live, h_obs, h_quiet⟩
     · omega
     · exact (h_continue (Or.inl h_deadline)).elim
     · exact (h_continue (Or.inr (Or.inl h_unavailable))).elim
-    · exact (h_continue (Or.inr (Or.inr h_stalled))).elim
+    · rcases h_quiet with h_unstepped | h_none
+      · simp [h_unstepped] at h_stepped
+      · exact (h_continue (Or.inr (Or.inr ⟨h_stepped, h_live, h_obs, h_none⟩))).elim
 
-/-- A running job with no live child, no unobserved terminal and nothing new
-    from its last step fails closed (`plugin_job_stalled`). -/
+/-- A running job that stepped since adoption, with no live child, no
+    unobserved terminal and nothing new from its last step, fails closed
+    (`plugin_job_stalled`). -/
 theorem pluginJobRow_stalled_recover_not_running (row : PluginJobRow)
-    (h_running : row.running = true)
-    (h_stalled : row.live = 0 ∧ row.observed = row.terminalChildren ∧ row.stepNew = 0) :
+    (h_running : row.running = true) (h_stalled : pluginJobStalled row) :
     (pluginJobRecover row).running = false := by
-  have h_stale : pluginJobStale row := by
-    unfold pluginJobStale
-    exact ⟨h_running, Or.inr (Or.inr (Or.inr h_stalled))⟩
+  obtain ⟨h_stepped, h_live, h_obs, h_none⟩ := h_stalled
+  have h_stale : pluginJobStale row :=
+    ⟨h_running, Or.inr (Or.inr (Or.inr ⟨h_live, h_obs, Or.inr h_none⟩))⟩
   unfold pluginJobRecover
-  rw [if_pos h_stale]
-  split
-  · rfl
-  · rename_i h_continue
-    exact (h_continue (Or.inr (Or.inr h_stalled))).elim
+  rw [if_pos h_stale, if_pos (Or.inr (Or.inr ⟨h_stepped, h_live, h_obs, h_none⟩))]
 
-/-- A row recover leaves running had only unobserved terminals, and has now
-    received them; it was not past its deadline, unavailable or stalled. It
-    is stale again only when receiving them left it stalled. -/
+/-- A row with no live child and every terminal observed that has not
+    stepped since adoption (a freshly resumed row) is not killed: the tick
+    runs its first step, and only that step's output can stall it. -/
+theorem pluginJobRow_unstepped_row_steps (row : PluginJobRow)
+    (h_running : row.running = true) (h_deadline : row.deadlineExpired = false)
+    (h_available : row.available = true) (h_live : row.live = 0)
+    (h_obs : row.observed = row.terminalChildren) (h_unstepped : row.stepped = false) :
+    (pluginJobRecover row).running = true ∧ (pluginJobRecover row).stepped = true := by
+  have h_stale : pluginJobStale row :=
+    ⟨h_running, Or.inr (Or.inr (Or.inr ⟨h_live, h_obs, Or.inl h_unstepped⟩))⟩
+  unfold pluginJobRecover
+  rw [if_pos h_stale, if_neg]
+  · exact ⟨h_running, rfl⟩
+  · intro h_kill
+    rcases h_kill with h_dl | h_av | ⟨h_st, -⟩
+    · simp [h_deadline] at h_dl
+    · simp [h_available] at h_av
+    · simp [h_unstepped] at h_st
+
+/-- A row recover leaves running was neither past its deadline, unavailable
+    nor stalled, and has now received its terminals in a step. It is stale
+    again only when that step left it stalled. -/
 theorem pluginJobRow_recover_not_stale_same_reason (row : PluginJobRow)
     (h : pluginJobStale row) (h_running : (pluginJobRecover row).running = true) :
     ¬ (pluginJobRecover row).observed < (pluginJobRecover row).terminalChildren ∧
       (pluginJobRecover row).deadlineExpired = false ∧
       (pluginJobRecover row).available = true ∧
-      ¬ (row.live = 0 ∧ row.observed = row.terminalChildren ∧ row.stepNew = 0) := by
+      (pluginJobRecover row).stepped = true := by
   unfold pluginJobRecover at h_running ⊢
   rw [if_pos h] at h_running ⊢
   split at h_running
   · simp at h_running
   · rename_i h_continue
     rw [if_neg h_continue]
-    show ¬ row.terminalChildren < row.terminalChildren ∧ row.deadlineExpired = false ∧
-      row.available = true ∧
-      ¬ (row.live = 0 ∧ row.observed = row.terminalChildren ∧ row.stepNew = 0)
-    refine ⟨Nat.lt_irrefl _, ?_, ?_, fun h_stalled => h_continue (Or.inr (Or.inr h_stalled))⟩
-    · cases h_deadline : row.deadlineExpired
+    refine ⟨Nat.lt_irrefl _, ?_, ?_, rfl⟩
+    · show row.deadlineExpired = false
+      cases h_deadline : row.deadlineExpired
       · rfl
       · exact (h_continue (Or.inl h_deadline)).elim
-    · cases h_available : row.available
+    · show row.available = true
+      cases h_available : row.available
       · exact (h_continue (Or.inr (Or.inl (by rw [h_available]; rfl)))).elim
       · rfl
 
@@ -120,22 +152,21 @@ theorem pluginJobRow_tick_not_stale (row : PluginJobRow) (h : pluginJobStale row
     ¬ pluginJobStale (pluginJobRecover (pluginJobRecover row)) := by
   by_cases h_again : pluginJobStale (pluginJobRecover row)
   · have h_next := h_again
-    unfold pluginJobStale at h_next
     obtain ⟨h_running, h_reason⟩ := h_next
-    obtain ⟨h_observed, h_deadline, h_available, -⟩ :=
+    obtain ⟨h_observed, h_deadline, h_available, h_stepped⟩ :=
       pluginJobRow_recover_not_stale_same_reason row h h_running
-    have h_stalled : (pluginJobRecover row).live = 0 ∧
-        (pluginJobRecover row).observed = (pluginJobRecover row).terminalChildren ∧
-        (pluginJobRecover row).stepNew = 0 := by
-      rcases h_reason with h_lt | h_dl | h_av | h_st
+    have h_stalled : pluginJobStalled (pluginJobRecover row) := by
+      rcases h_reason with h_lt | h_dl | h_av | ⟨h_live, h_obs, h_quiet⟩
       · exact absurd h_lt h_observed
       · simp [h_deadline] at h_dl
       · simp [h_available] at h_av
-      · exact h_st
+      · rcases h_quiet with h_unstepped | h_none
+        · simp [h_stepped] at h_unstepped
+        · exact ⟨h_stepped, h_live, h_obs, h_none⟩
     intro h_stale
-    unfold pluginJobStale at h_stale
-    rw [pluginJobRow_stalled_recover_not_running _ h_running h_stalled] at h_stale
-    simp at h_stale
+    obtain ⟨h_run, -⟩ := h_stale
+    rw [pluginJobRow_stalled_recover_not_running _ h_running h_stalled] at h_run
+    simp at h_run
   · rw [pluginJobRow_not_stale_unchanged _ h_again]
     exact h_again
 
@@ -146,22 +177,26 @@ theorem pluginJobRow_tick_keeps_job_with_new_effects (row : PluginJobRow)
     (h_deadline : row.deadlineExpired = false) (h_available : row.available = true)
     (h_new : 0 < row.stepNew) :
     (pluginJobRecover (pluginJobRecover row)).running = true := by
-  have h_stale : pluginJobStale row := by
-    unfold pluginJobStale
-    exact ⟨h_running, Or.inl h_unobserved⟩
-  have h_first : pluginJobRecover row = { row with observed := row.terminalChildren } := by
+  have h_stale : pluginJobStale row := ⟨h_running, Or.inl h_unobserved⟩
+  have h_first : pluginJobRecover row =
+      { row with observed := row.terminalChildren, stepped := true } := by
     unfold pluginJobRecover
     rw [if_pos h_stale, if_neg]
     intro h_kill
-    rcases h_kill with h_dl | h_av | h_st
+    rcases h_kill with h_dl | h_av | ⟨-, -, h_obs, -⟩
     · simp [h_deadline] at h_dl
     · simp [h_available] at h_av
     · omega
   have h_not_stale : ¬ pluginJobStale (pluginJobRecover row) := by
     rw [h_first]
-    unfold pluginJobStale
-    simp [h_deadline, h_available]
-    omega
+    rintro ⟨-, h_reason⟩
+    rcases h_reason with h_lt | h_dl | h_av | ⟨-, -, h_quiet⟩
+    · exact Nat.lt_irrefl _ h_lt
+    · simp [h_deadline] at h_dl
+    · simp [h_available] at h_av
+    · rcases h_quiet with h_unstepped | h_none
+      · simp at h_unstepped
+      · simp at h_none; omega
   rw [pluginJobRow_not_stale_unchanged _ h_not_stale, h_first]
   exact h_running
 

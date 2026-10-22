@@ -92,6 +92,20 @@ structure AdmissionCase where
   job : Job
   out : StepOutput
 
+/-- A completed, pinned prior row `row-0` of the caller's session, the chain
+head only when `head`. -/
+private def resumeContext (head : Bool) : StepContext :=
+  let prior : Job := { pinned [] 0 0 with root := "row-0", rowDoc := "row-0", state := .completed }
+  { context with
+    resumeTarget := fun d =>
+      if d == "row-0" then some (context.callerScope, true, prior, prior) else none
+  , resumeIsHead := fun d => head && d == "row-0"
+  , resumeFacts := { facts with resumeOf := some "row-0" } }
+
+private def resumeOf (row : DocId) : StepOutput :=
+  .suspend .pause none noExtras (some guestPin)
+    (some { rowDoc := row, engineCurrent := false, answer := none, budget := none })
+
 def admissionCases : List AdmissionCase :=
   [ ⟨"panel_one_refused_target_admits_none", context, pinned [] 0 0,
       effects [spawn "1:a" targetA, spawn "2:c" targetC]⟩
@@ -125,7 +139,11 @@ def admissionCases : List AdmissionCase :=
       stepZero, effects [spawn "1:a" targetA] (some guestPin)⟩
   , ⟨"scratch_then_complete_admitted", context, pinned [] 0 0,
       .result { writes := 1, scratch := ["runs/call-1/report.md"], progress := false } [] none
-        none⟩ ]
+        none⟩
+  , ⟨"resume_of_chain_head_admitted", resumeContext true, stepZero, resumeOf "row-0"⟩
+  , ⟨"resume_of_unknown_row_refused", resumeContext true, stepZero, resumeOf "row-9"⟩
+  , ⟨"resume_of_continued_row_refused", resumeContext false, stepZero, resumeOf "row-0"⟩ ]
+
 
 private def observation : SpawnKey → Recovery.KillObservation := fun _ => .causedLiveLocal
 
@@ -153,7 +171,10 @@ theorem admission_regressions :
       , (some "plugin_job_stalled", none, 0)
       , (some "background_tool_budget_exceeded", none, 0)
       , (none, some (.running, 1, 1), 0)
-      , (none, some (.completed, 0, 0), 0) ] := by native_decide
+      , (none, some (.completed, 0, 0), 0)
+      , (none, some (.completed, 0, 0), 0)
+      , (some "plugin_job_resume_unknown", none, 0)
+      , (some "plugin_job_resume_not_head", none, 0) ] := by native_decide
 
 private def targetJson (t : Target) : Json :=
   Json.mkObj [("node", toJson t.1), ("agent", toJson t.2)]
@@ -1259,11 +1280,14 @@ private def wireOutputJson (s : OutputSample) : Json :=
       listField "interrupt" (e.interrupts.map fun slot => Json.mkObj [("slot", toJson slot)]) ++
       ridersJson s e.extras))]
 
-/-- One `jobs[]` row: its persisted state and terminal note. -/
+/-- One `jobs[]` row: its persisted state and terminal note, its pin's
+adoption time, and the row its pin resumes. -/
 structure RowSample where
   (rowDoc toolCall handle : String)
   state : RowState
   note : TerminalNote
+  adoptedAt : Nat
+  resumeOf : Option DocId
 
 structure InputSample where
   name : String
@@ -1292,9 +1316,9 @@ def inputSamples : List InputSample :=
   , ⟨"paused_row_jobs_and_child_states",
       pinned [child "1:a" .live, child "2:b" .completed, child "3:c" .failed,
         child "4:d" .interrupted, child "5:e" .other] 5 4,
-      2, [], [⟨"row-p", "call-p", "flow-p", .completed, .paused (some .user)⟩,
-        ⟨"row-w", "call-w", "flow-w", .completed, .awaitingUser⟩,
-        ⟨"row-c", "call-c", "flow-c", .completed, .none⟩], []⟩ ]
+      2, [], [⟨"row-p", "call-p", "flow-p", .completed, .paused (some .user), 1000, none⟩,
+        ⟨"row-w", "call-w", "flow-w", .completed, .awaitingUser, 2000, none⟩,
+        ⟨"row-c", "call-c", "flow-p", .completed, .none, 3000, some "row-p"⟩], []⟩ ]
 
 private def verified (s : InputSample) : Option VerifiedScript :=
   s.job.pin.bind fun p => verifiedScript p s.step verifiedSource
@@ -1332,9 +1356,10 @@ private def wireInputJson (s : InputSample) : Json :=
      ("children", Json.mkObj (j.children.map fun ch => (ch.key.slot, childViewJson ch))),
      ("control", toJson (echo.control.map wireEchoJson)),
      ("scratch", Json.mkObj (s.scratch.map fun (n, v) => (n, toJson v))),
-     ("jobs", toJson (s.jobs.map fun r => Json.mkObj [("row_doc_id", toJson r.rowDoc),
+     ("jobs", toJson (s.jobs.map fun r => Json.mkObj ([("row_doc_id", toJson r.rowDoc),
         ("tool_call_id", toJson r.toolCall), ("handle", toJson r.handle),
-        ("state", jobStateJson (JobState.of r.state r.note))]))])
+        ("state", jobStateJson (JobState.of r.state r.note)),
+        ("adopted_at", toJson r.adoptedAt)] ++ optField "resume_of" (r.resumeOf.map toJson))))])
 
 /-- A row driven from a child session, whose id contains `:`. -/
 private def viewJob : Job :=
@@ -1368,10 +1393,10 @@ private def viewJson : Json :=
     ("created_at", toJson (1000 : Nat)), ("adopted_at", toJson p.adoptedAt),
     ("completed_at", toJson (2000 : Nat))]
 
-/-- The seven host terminal codes; `.terminal` has none. -/
+/-- The nine host terminal codes; `.terminal` has none. -/
 def hostCodes : List String :=
   ([.terminal, .notAvailable, .engineChanged, .policyDenied, .stalled, .depthExceeded, .timedOut,
-    .stepFailed] : List Refusal).filterMap Refusal.code
+    .stepFailed, .resumeUnknown, .resumeNotHead] : List Refusal).filterMap Refusal.code
 
 /-- The origin, the verified script's digest, the echoed control kind, whether
 `root_call` is echoed, the `jobs[]` states and the mount trust hints. -/
@@ -1393,7 +1418,7 @@ theorem wire_regressions :
     hostCodes =
       [ "plugin_job_not_available", "plugin_job_engine_changed", "plugin_job_policy_denied"
       , "plugin_job_stalled", "plugin_job_depth_exceeded", "plugin_job_timed_out"
-      , "plugin_job_step_failed" ] ∧
+      , "plugin_job_step_failed", "plugin_job_resume_unknown", "plugin_job_resume_not_head" ] ∧
     inputSamples.map inputVerdict =
       [ ⟨some .installed, some "source-1", none, false, [], [true, false]⟩
       , ⟨none, none, some "answer", true, [], []⟩
@@ -1496,9 +1521,9 @@ structure RecoveryCase where
   row : Recovery.PluginJobRow
 
 private def jobRow (terminalChildren observed live stepNew : Nat)
-    (deadlineExpired := false) (available := true) : Recovery.PluginJobRow :=
+    (deadlineExpired := false) (available := true) (stepped := true) : Recovery.PluginJobRow :=
   { running := true, sessionStopped := false, terminalChildren, observed, live, stepNew,
-    deadlineExpired, available }
+    deadlineExpired, available, stepped }
 
 def recoveryCases : List RecoveryCase :=
   [ ⟨"plugin_job_unobserved_terminal_step_with_new_effects_keeps_running", jobRow 2 1 0 1⟩
@@ -1511,7 +1536,11 @@ def recoveryCases : List RecoveryCase :=
   , ⟨"plugin_job_stopped_session_kills_row",
       { jobRow 1 1 1 0 with sessionStopped := true }⟩
   , ⟨"plugin_job_terminal_stale_kick_does_not_invoke_guest",
-      { jobRow 0 0 0 0 with running := false }⟩ ]
+      { jobRow 0 0 0 0 with running := false }⟩
+  , ⟨"plugin_job_resumed_row_first_step_with_new_effects_keeps_running",
+      jobRow 1 1 0 1 (stepped := false)⟩
+  , ⟨"plugin_job_resumed_row_first_step_without_new_effects_stalls",
+      jobRow 1 1 0 0 (stepped := false)⟩ ]
 
 /-- One tick of the registered sweep. -/
 def recoveryTick (row : Recovery.PluginJobRow) : Recovery.PluginJobRow :=
@@ -1534,14 +1563,16 @@ theorem recovery_regressions :
       [ (true, 1, 0, true, 2), (true, 1, 0, false, 2), (true, 1, 0, true, 2)
       , (true, 1, 0, false, 1), (true, 1, 0, false, 1), (true, 1, 0, false, 2)
       , (false, 0, 0, true, 1), (true, 1, 0, false, 1)
-      , (false, 0, 0, false, 0) ] := by
+      , (false, 0, 0, false, 0)
+      , (true, 1, 0, true, 1), (true, 1, 0, false, 1) ] := by
   native_decide
 
 private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
   Json.mkObj [("running", toJson r.running), ("session_stopped", toJson r.sessionStopped),
     ("terminal_children", toJson r.terminalChildren),
     ("observed", toJson r.observed), ("live", toJson r.live), ("step_new", toJson r.stepNew),
-    ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available)]
+    ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available),
+    ("stepped", toJson r.stepped)]
 
 private def renderRecovery (c : RecoveryCase) : Json :=
   let after := recoveryTick c.row
