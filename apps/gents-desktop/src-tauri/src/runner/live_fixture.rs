@@ -242,6 +242,7 @@ impl LiveBridgeFixture {
             &node_home,
             DEFAULT_NODE_NAME,
             &running_node.node_did,
+            &operator_graphql,
             remote_core.local_peer_id(),
             &remote_addr,
         )?;
