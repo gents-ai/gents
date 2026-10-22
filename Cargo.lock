@@ -4186,7 +4186,7 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "fixture-domain-plugin"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4594,7 +4594,7 @@ dependencies = [
 
 [[package]]
 name = "gents"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "acp",
  "afterburner",
@@ -4700,7 +4700,7 @@ dependencies = [
 
 [[package]]
 name = "gents-chatgpt-login"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "base64 0.22.1",
  "gents-login-ui",
@@ -4720,7 +4720,7 @@ dependencies = [
 
 [[package]]
 name = "gents-claude-login"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "base64 0.22.1",
  "gents-login-ui",
@@ -4738,7 +4738,7 @@ dependencies = [
 
 [[package]]
 name = "gents-cli"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "acp",
  "afterburner",
@@ -4808,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "gents-client-host"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4835,7 +4835,7 @@ dependencies = [
 
 [[package]]
 name = "gents-codex-protocol"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4846,7 +4846,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4860,7 +4860,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-bridge"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4902,7 +4902,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-core"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4935,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-tauri"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "axum",
@@ -4969,7 +4969,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fixture-host"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "dirs 5.0.1",
  "fixture-domain-plugin",
@@ -4982,7 +4982,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fs-runner"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "globset",
@@ -4994,7 +4994,7 @@ dependencies = [
 
 [[package]]
 name = "gents-lean-contract"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5016,7 +5016,7 @@ dependencies = [
 
 [[package]]
 name = "gents-login-ui"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "base64 0.22.1",
  "tiny_http",
@@ -5024,7 +5024,7 @@ dependencies = [
 
 [[package]]
 name = "gents-loop"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5051,7 +5051,7 @@ dependencies = [
 
 [[package]]
 name = "gents-media-host"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5067,7 +5067,7 @@ dependencies = [
 
 [[package]]
 name = "gents-migration"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "crypto",
@@ -5089,7 +5089,7 @@ dependencies = [
 
 [[package]]
 name = "gents-protocol"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 dependencies = [
  "anyhow",
  "axum",
@@ -5112,7 +5112,7 @@ dependencies = [
 
 [[package]]
 name = "gents-schemas"
-version = "0.21.0-rc2"
+version = "0.21.0-rc3"
 
 [[package]]
 name = "getrandom"
