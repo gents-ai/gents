@@ -33,8 +33,7 @@ use gents::plugin_job::admit::{
 use gents::plugin_job::control::{self, KillAction, KillCause, KillObservation};
 use gents::plugin_job::dispatch::{host_pin, split_address, unique_handle, Delivery, ToolCallView};
 use gents::plugin_job::driver;
-use gents::plugin_job::origin::classify_origin;
-use gents::plugin_job::origin::trusted_hint;
+use gents::plugin_job::origin::{call_origin, scriptless, trusted_hint};
 use gents::plugin_job::settings::{job_block_admissible, policy_valid, wire_targets_from};
 use gents::tool_call_lifecycle::{AwaitMode, ToolCallState, ToolRowKind};
 use gents::tool_surface::EndpointScope;
@@ -1045,6 +1044,7 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
                 digest,
                 mounts,
                 trusted_packs,
+                call,
                 expected,
             } => {
                 *kinds.entry("origin").or_default() += 1;
@@ -1061,7 +1061,13 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
                     .map(|m| (m.pack.as_str(), spelled(&m.via)))
                     .collect();
                 assert_eq!(
-                    classify_origin(digest, &index, &installed_via, trusted_packs.as_slice()),
+                    call_origin(
+                        scriptless(&call.argv, call.script.as_deref(), call.path.as_deref()),
+                        digest,
+                        &index,
+                        &installed_via,
+                        trusted_packs.as_slice()
+                    ),
                     spelled::<JobOrigin>(&expected.origin),
                     "{name}: origin"
                 );
@@ -1139,7 +1145,7 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
         kinds,
         BTreeMap::from([
             ("install", 6),
-            ("origin", 5),
+            ("origin", 8),
             ("pack_job_block", 6),
             ("policy_valid", 4),
             ("provenance", 12),

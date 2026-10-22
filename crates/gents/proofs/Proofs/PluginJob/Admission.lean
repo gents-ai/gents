@@ -380,6 +380,12 @@ def CallArgs.runsDynamicScript (c : CallArgs) : Bool :=
   c.argv.head?.any scriptVerbs.contains &&
     (c.script.any (!·.isEmpty) || c.path.any (!·.isEmpty))
 
+/-- A script-less call names nothing to run: no `argv`, and no non-empty
+`script` or `path`. Its code is the plugin artifact the engine guard and
+`engineChanged` check, so the host keeps no file digest for it (`callOrigin`). -/
+def CallArgs.scriptless (c : CallArgs) : Bool :=
+  c.argv.isEmpty && c.script.all String.isEmpty && c.path.all String.isEmpty
+
 /-- A pinless call runs dynamic code when it carries a dynamic source
 (`CallArgs.runsDynamicScript`) or when a script verb names a script whose
 resolved origin is dynamic (`StepContext.namedOrigin`). -/
@@ -415,7 +421,9 @@ here, before `admitNonJob`, when its call runs dynamic code
 a script whose resolved origin is dynamic. Any other pinless call is not
 refused by the mode. A step whose pin has installed origin is refused with
 `policyDenied` once the step-0 rules pass when `installedTrusted` no longer
-holds for its source digest. -/
+holds for its source digest, unless its call is script-less
+(`CallArgs.scriptless`): that pin names the artifact, which `engineChanged`
+already checks. -/
 def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusal Job :=
   if job.state ≠ .running then .error .terminal
   else if !ctx.available || !ctx.engineProvenanceOperator then .error .notAvailable
@@ -434,7 +442,8 @@ def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusa
       else if job.pin.isNone && (Background.admitBackground ctx.liveBackground).isNone then
         .error .backgroundBudgetExceeded
       else if job.pin.isNone && ctx.startedByJob then .error .depthExceeded
-      else if pin.origin = .installed ∧ ctx.installedTrusted pin.sourceDigest = false then
+      else if pin.origin = .installed ∧ ctx.installedTrusted pin.sourceDigest = false ∧
+          job.call.scriptless = false then
         .error .policyDenied
       else admitJobOutput ctx pin { stepRow ctx job out with pin := some pin, consecutiveFailures := 0 } out
 

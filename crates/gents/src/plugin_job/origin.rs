@@ -64,6 +64,29 @@ pub fn classify_origin(
     }
 }
 
+/// Lean `CallArgs.scriptless`: a call with no `argv` and no non-empty `script`
+/// or `path` runs the plugin artifact itself.
+pub fn scriptless(argv: &[String], script: Option<&str>, path: Option<&str>) -> bool {
+    argv.is_empty() && script.is_none_or(str::is_empty) && path.is_none_or(str::is_empty)
+}
+
+/// Lean `callOrigin`: a script-less call is `installed`, since its code is the
+/// operator-installed artifact the engine guard and `engine_changed` check;
+/// every other call is [`classify_origin`] over its pinned digest.
+pub fn call_origin(
+    scriptless: bool,
+    digest: &str,
+    index: &[(String, String, String, String)],
+    installed_via: &BTreeMap<&str, InstalledVia>,
+    trusted_packs: &[String],
+) -> JobOrigin {
+    if scriptless {
+        JobOrigin::Installed
+    } else {
+        classify_origin(digest, index, installed_via, trusted_packs)
+    }
+}
+
 /// The origin of `pin`'s script. An installed script whose file no longer
 /// hashes to the pinned digest is dynamic.
 pub fn classify(index: &ScriptIndex, pin: &JobPin) -> Origin {
@@ -201,6 +224,26 @@ mod tests {
     use super::*;
     use crate::pack::InstalledVia;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_scriptless_call_is_installed_and_a_scripted_one_follows_its_digest() {
+        let none: &[String] = &[];
+        let run = ["run".to_owned()];
+        assert!(scriptless(none, None, None));
+        assert!(scriptless(none, Some(""), Some("")));
+        assert!(!scriptless(&run, None, None));
+        assert!(!scriptless(none, Some("module.exports = (i) => i"), None));
+        assert!(!scriptless(none, None, Some("flows/a.js")));
+        let via = BTreeMap::new();
+        assert_eq!(
+            call_origin(true, "sha256:x", &[], &via, &[]),
+            JobOrigin::Installed
+        );
+        assert_eq!(
+            call_origin(false, "sha256:x", &[], &via, &[]),
+            JobOrigin::Dynamic
+        );
+    }
 
     #[test]
     fn trusted_hint_is_operator_trusted_pack_tier_only() {

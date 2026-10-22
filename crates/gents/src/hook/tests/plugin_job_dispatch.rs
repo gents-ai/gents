@@ -909,6 +909,34 @@ async fn a_js_script_spawn_is_refused_under_the_check_policy() {
     step.finish().await;
 }
 
+/// A call without `argv`, `script` or `path` runs the plugin artifact itself:
+/// its pin is `installed` whatever digest it names (Lean `callOrigin`), so the
+/// `check` policy, which refuses a dynamic run's first spawn, admits it and no
+/// `workflows` mount or marker file is needed.
+#[tokio::test]
+async fn a_scriptless_call_adopts_as_installed_under_check() {
+    let step = step0(
+        adopting(),
+        Options {
+            settings: Some(worker_settings(JobPolicy {
+                dynamic: DynamicMode::Check,
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let answer = step
+        .call_as("call-1", r#"{"args": {"base": "main"}, "agent_budget": 2}"#)
+        .await;
+    assert_eq!(answer["status"], "running", "{answer}");
+    assert_eq!(
+        step.pin_of(&step.row_of("call-1").await).await.origin,
+        gents_protocol::job::JobOrigin::Installed
+    );
+    step.finish().await;
+}
+
 /// A step 0 that adopts a job and asks to resume `row`.
 fn resuming(row: &str) -> Value {
     json!({"effects": {
