@@ -1,10 +1,12 @@
 use gents::{
     JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
-    P2pPeerFetchSnapshot, P2pPushBacklogSnapshot, P2pPushRetryMarkerSnapshot,
-    P2pRequestDispatchSnapshot, P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
+    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPushBacklogSnapshot,
+    P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot, P2pSyncStatusAdapter,
+    P2pSyncStatusSnapshot,
 };
+
 use p2p::sync::{DispatchSnapshot, PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
-use p2p::{InboundClassSnapshot, PeerFetchStats};
+use p2p::{InboundClassSnapshot, PeerFetchStats, PeerSummary};
 use storage::stores::PushRetryMarkerStats;
 
 fn pinned_upstream_wire() -> serde_json::Value {
@@ -156,6 +158,13 @@ fn pinned_upstream_wire() -> serde_json::Value {
         next_pending_retry_in_ms: Some(71),
         pending_dag_terminal_quarantined: 73,
         quarantined_pending_dags: 79,
+        peers: vec![PeerSummary {
+            peer_id: "peer-a".to_string(),
+            connected: true,
+            last_seen_at: "2026-10-22T14:00:05Z".parse().unwrap(),
+            last_block_received_at: Some("2026-10-22T14:00:03Z".parse().unwrap()),
+            last_head_acked_at: None,
+        }],
     };
 
     let mut wire = serde_json::to_value(upstream).expect("serialize pinned DefraDB SyncStatus");
@@ -337,6 +346,13 @@ fn pinned_defradb_sync_status_maps_field_for_field_into_the_typed_snapshot() {
             next_pending_retry_in_ms: Some(71),
             pending_dag_terminal_quarantined: 73,
             quarantined_pending_dags: 79,
+            peers: vec![P2pPeerSummarySnapshot {
+                peer_id: "peer-a".into(),
+                connected: true,
+                last_seen_at: "2026-10-22T14:00:05Z".into(),
+                last_block_received_at: Some("2026-10-22T14:00:03Z".into()),
+                last_head_acked_at: None,
+            }],
         },
         "the observability adapter must map every pinned DefraDB sync field without drift"
     );

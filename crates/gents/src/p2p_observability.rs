@@ -44,6 +44,7 @@ pub struct P2pSyncStatusSnapshot {
     pub next_pending_retry_in_ms: Option<u64>,
     pub pending_dag_terminal_quarantined: u64,
     pub quarantined_pending_dags: usize,
+    pub peers: Vec<P2pPeerSummarySnapshot>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -70,6 +71,16 @@ pub struct P2pPeerFetchSnapshot {
     pub partial_ppm: u64,
     pub in_flight: u64,
     pub in_flight_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct P2pPeerSummarySnapshot {
+    pub peer_id: String,
+    pub connected: bool,
+    pub last_seen_at: String,
+    pub last_block_received_at: Option<String>,
+    pub last_head_acked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

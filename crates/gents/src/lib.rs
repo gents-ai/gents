@@ -518,8 +518,9 @@ pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunR
 pub use openai_wire::OpenAiWireApi;
 pub use p2p_observability::{
     JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
-    P2pPeerFetchSnapshot, P2pPushBacklogSnapshot, P2pPushRetryMarkerSnapshot,
-    P2pRequestDispatchSnapshot, P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
+    P2pPeerFetchSnapshot, P2pPeerSummarySnapshot, P2pPushBacklogSnapshot,
+    P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot, P2pSyncStatusAdapter,
+    P2pSyncStatusSnapshot,
 };
 pub use periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,

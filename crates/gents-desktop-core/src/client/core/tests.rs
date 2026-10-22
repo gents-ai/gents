@@ -1725,6 +1725,7 @@ async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> any
             agent_id: "agent".into(),
             created_at: "2026-10-22T00:00:00Z".into(),
             closed_at: None,
+            stopped_at: None,
             title: None,
             tags: Vec::new(),
             provenance: started_by.map(|parent| gents_protocol::session::SessionProvenance {
