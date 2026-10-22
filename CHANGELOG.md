@@ -163,6 +163,9 @@ source consistency checks, not a separate runtime compatibility version.
 - A workflow child spawned with a relative `cwd` now starts in that folder
   under the run's working folder, the path its admission checked, instead of
   failing `request admission denied: resolve invocation cwd`.
+- Under `dynamic = "off"`, a workflow call that names an installed script and
+  sends `path: ""` or `script: ""` now runs it instead of failing
+  `plugin_job_policy_denied`: an empty source field carries no code.
 
 ## 0.21.0-rc0 - 2026-10-17
 

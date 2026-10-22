@@ -371,12 +371,14 @@ def admitNonJob (ctx : StepContext) (job : Job) : StepOutput → Except Refusal 
 def scriptVerbs : List String := ["run", "check", "import"]
 
 /-- A call runs dynamic script code when a script verb carries its source with
-the call: an inline `script` or a `path`. A pinless call presents no source
-digest, so the host treats a carried source as dynamic. A named run of an
-installed script and the workflow control, status, result and help verbs
-carry neither. -/
+the call: a non-empty inline `script` or `path`. A pinless call presents no
+source digest, so the host treats a carried source as dynamic. An empty string
+carries no source: models fill unused fields with `""`, and that call names
+its script as `argv` does. A named run of an installed script and the workflow
+control, status, result and help verbs carry neither. -/
 def CallArgs.runsDynamicScript (c : CallArgs) : Bool :=
-  c.argv.head?.any scriptVerbs.contains && (c.script.isSome || c.path.isSome)
+  c.argv.head?.any scriptVerbs.contains &&
+    (c.script.any (!·.isEmpty) || c.path.any (!·.isEmpty))
 
 /-- A pinless call runs dynamic code when it carries a dynamic source
 (`CallArgs.runsDynamicScript`) or when a script verb names a script whose
@@ -409,7 +411,7 @@ accepts it (`resumeAdmitted`), otherwise refused with the cause `resumeRefusal`
 names, and its effects are admitted against the resumed chain row (`stepRow`). Under `policy.mode = off` a dynamic-origin pin is
 refused with `policyDenied` by `dynamicModeRefusal`, and a pinless step 0
 here, before `admitNonJob`, when its call runs dynamic code
-(`runsDynamicCode`): it carries a `script` or a `path`, or a script verb names
+(`runsDynamicCode`): it carries a non-empty `script` or `path`, or a script verb names
 a script whose resolved origin is dynamic. Any other pinless call is not
 refused by the mode. A step whose pin has installed origin is refused with
 `policyDenied` once the step-0 rules pass when `installedTrusted` no longer
