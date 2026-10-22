@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
 use tokio::sync::{watch, Mutex};
@@ -21,7 +21,7 @@ mod tests;
 
 type TriggerLockKey = (String, String, Option<String>);
 type TriggerLock = Arc<Mutex<()>>;
-type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
+type TriggerLockMap = RapidHashMap<TriggerLockKey, TriggerLock>;
 
 pub(crate) fn durable_fire_key(namespace: &str, components: &[&str]) -> String {
     let mut key = format!("{}:{namespace}", namespace.chars().count());
@@ -266,7 +266,7 @@ impl TriggerEngine {
         Self {
             snapshot_rx,
             materializer,
-            per_trigger_locks: Mutex::new(HashMap::new()),
+            per_trigger_locks: Mutex::new(RapidHashMap::new()),
         }
     }
 

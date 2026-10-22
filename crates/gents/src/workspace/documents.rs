@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -144,10 +144,10 @@ pub trait WorkspaceDocuments {
 
 #[derive(Debug, Default)]
 pub struct MemoryWorkspaceDocuments {
-    pub workspaces: HashMap<String, IsolatedWorkspaceDoc>,
-    pub placements: HashMap<String, WorkspacePlacementDoc>,
-    pub bindings: HashMap<String, WorkspaceBindingDoc>,
-    pub receipts: HashMap<String, WorkspaceReceiptDoc>,
+    pub workspaces: RapidHashMap<String, IsolatedWorkspaceDoc>,
+    pub placements: RapidHashMap<String, WorkspacePlacementDoc>,
+    pub bindings: RapidHashMap<String, WorkspaceBindingDoc>,
+    pub receipts: RapidHashMap<String, WorkspaceReceiptDoc>,
 }
 
 impl WorkspaceDocuments for MemoryWorkspaceDocuments {

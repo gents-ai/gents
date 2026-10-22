@@ -351,7 +351,7 @@ pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
 
 pub(crate) fn chunk_capture_payloads(payloads: [&str; 2]) -> [Vec<ChunkedBlock>; 2] {
     let ranges = payloads.map(long_json_strings);
-    let mut occurrences = std::collections::HashMap::<&str, usize>::new();
+    let mut occurrences = rapidhash::RapidHashMap::<&str, usize>::default();
     for (payload, ranges) in payloads.iter().zip(&ranges) {
         for &(start, end) in ranges {
             *occurrences.entry(&payload[start..end]).or_default() += 1;

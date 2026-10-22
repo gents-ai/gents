@@ -429,7 +429,7 @@ fn read(home: &Path) -> Result<Stored> {
         Ok(bytes) => {
             let stored: Stored = serde_json::from_slice(&bytes)
                 .context("the workspace permissions file is unreadable")?;
-            let mut keys = std::collections::HashSet::new();
+            let mut keys = rapidhash::RapidHashSet::default();
             for entry in &stored.entries {
                 anyhow::ensure!(
                     keys.insert(&entry.workspace),

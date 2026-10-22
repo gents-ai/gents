@@ -75,7 +75,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
         patch
             .iter()
             .filter_map(|row| row.doc_id.as_deref())
-            .collect::<std::collections::HashSet<_>>(),
+            .collect::<rapidhash::RapidHashSet<_>>(),
         [selected.as_str(), replacement.as_str()]
             .into_iter()
             .collect()

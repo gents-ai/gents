@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::future::Future;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
@@ -38,9 +38,9 @@ enum TxnBackend<'a> {
 
 struct MutationWriteGate {
     permits: Arc<tokio::sync::Semaphore>,
-    owners: StdMutex<HashMap<u64, MutationWriteOwner>>,
+    owners: StdMutex<RapidHashMap<u64, MutationWriteOwner>>,
     next_lease_id: AtomicU64,
-    pending_acquires: StdMutex<HashMap<u64, PendingWriteAcquire>>,
+    pending_acquires: StdMutex<RapidHashMap<u64, PendingWriteAcquire>>,
     next_pending_acquire_id: AtomicU64,
     store_claim: StdMutex<Option<Arc<StoreClaim>>>,
 }
@@ -208,9 +208,9 @@ impl MutationWriteGate {
     fn new() -> Self {
         Self {
             permits: Arc::new(tokio::sync::Semaphore::new(MUTATION_WRITE_GATE_CAPACITY)),
-            owners: StdMutex::new(HashMap::new()),
+            owners: StdMutex::new(RapidHashMap::new()),
             next_lease_id: AtomicU64::new(1),
-            pending_acquires: StdMutex::new(HashMap::new()),
+            pending_acquires: StdMutex::new(RapidHashMap::new()),
             next_pending_acquire_id: AtomicU64::new(1),
             store_claim: StdMutex::new(None),
         }
@@ -757,9 +757,10 @@ where
     tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, cleanup).await
 }
 
-fn mutation_write_gates() -> &'static StdMutex<HashMap<usize, Weak<MutationWriteGate>>> {
-    static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
-    GATES.get_or_init(|| StdMutex::new(HashMap::new()))
+fn mutation_write_gates() -> &'static StdMutex<RapidHashMap<usize, Weak<MutationWriteGate>>> {
+    static GATES: OnceLock<StdMutex<RapidHashMap<usize, Weak<MutationWriteGate>>>> =
+        OnceLock::new();
+    GATES.get_or_init(|| StdMutex::new(RapidHashMap::new()))
 }
 
 fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {

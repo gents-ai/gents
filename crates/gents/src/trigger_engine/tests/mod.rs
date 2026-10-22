@@ -1,6 +1,6 @@
 mod durable_contract;
 
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -39,10 +39,10 @@ type MaterializeCall = (Option<String>, TriggerKind, String);
 
 type SupersedeCall = String;
 
-type NonterminalRequests = Arc<Mutex<HashMap<String, Vec<String>>>>;
+type NonterminalRequests = Arc<Mutex<RapidHashMap<String, Vec<String>>>>;
 
 fn remove_except<K: Clone + Eq + std::hash::Hash>(
-    requests: &mut HashMap<K, Vec<String>>,
+    requests: &mut RapidHashMap<K, Vec<String>>,
     key: &K,
     excluded_request_id: Option<&str>,
 ) -> Vec<String> {
@@ -114,7 +114,7 @@ struct MaterializeGate {
 struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
     materialize_goal_objectives: Arc<Mutex<Vec<Option<String>>>>,
-    materialized_request_ids: Arc<Mutex<HashSet<String>>>,
+    materialized_request_ids: Arc<Mutex<RapidHashSet<String>>>,
     materialize_source_doc_ids: Arc<Mutex<Vec<Option<String>>>>,
     next_request_id: AtomicUsize,
     nonterminal_for: NonterminalRequests,
@@ -123,7 +123,7 @@ struct SpyMaterializer {
     supersede_calls: Arc<Mutex<Vec<SupersedeCall>>>,
     superseded_request_ids: Arc<Mutex<Vec<String>>>,
     materialize_gate: Mutex<Option<MaterializeGate>>,
-    group_markers: Arc<Mutex<HashSet<(String, String, String)>>>,
+    group_markers: Arc<Mutex<RapidHashSet<(String, String, String)>>>,
     persist_group_markers_for_did: Mutex<Option<String>>,
     track_materialized_nonterminal: AtomicBool,
 }
@@ -133,16 +133,16 @@ impl SpyMaterializer {
         Arc::new(Self {
             materialize_calls: Arc::new(Mutex::new(Vec::new())),
             materialize_goal_objectives: Arc::new(Mutex::new(Vec::new())),
-            materialized_request_ids: Arc::new(Mutex::new(HashSet::new())),
+            materialized_request_ids: Arc::new(Mutex::new(RapidHashSet::new())),
             materialize_source_doc_ids: Arc::new(Mutex::new(Vec::new())),
             next_request_id: AtomicUsize::new(0),
-            nonterminal_for: Arc::new(Mutex::new(HashMap::new())),
+            nonterminal_for: Arc::new(Mutex::new(RapidHashMap::new())),
             gate_dids: Arc::new(Mutex::new(Vec::new())),
             supersede_dids: Arc::new(Mutex::new(Vec::new())),
             supersede_calls: Arc::new(Mutex::new(Vec::new())),
             superseded_request_ids: Arc::new(Mutex::new(Vec::new())),
             materialize_gate: Mutex::new(None),
-            group_markers: Arc::new(Mutex::new(HashSet::new())),
+            group_markers: Arc::new(Mutex::new(RapidHashSet::new())),
             persist_group_markers_for_did: Mutex::new(None),
             track_materialized_nonterminal: AtomicBool::new(false),
         })
@@ -409,21 +409,21 @@ impl MaterializerHandle for SpyMaterializer {
 }
 
 fn snapshot_with_schedules(
-    schedules: HashMap<String, ResolvedSchedule>,
+    schedules: RapidHashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
         vec![integration_test_agent("general")],
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
     .with_automation(crate::runtime_snapshot::ResolvedAutomation {
         schedules,
         ..Default::default()
     })
     .with_node(stub_principal());
-    Arc::new(resolved.activate(1, HashMap::new()))
+    Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
 fn resolved_task(prompt_template: &str) -> ResolvedTask {
@@ -538,9 +538,9 @@ fn snapshot_from_trigger_contract(
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
         vec![integration_test_agent("general")],
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
     .with_automation(crate::runtime_snapshot::ResolvedAutomation {
         schedules: active_schedules,
@@ -548,7 +548,7 @@ fn snapshot_from_trigger_contract(
         ..Default::default()
     })
     .with_node(stub_principal());
-    Arc::new(resolved.activate(1, HashMap::new()))
+    Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
 fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
@@ -602,16 +602,16 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
 
 fn snapshot_with_agent_and_schedules(
     behavior: Arc<ResolvedAgent>,
-    schedules: HashMap<String, ResolvedSchedule>,
+    schedules: RapidHashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let principal = behavior.node.clone();
     let local_did = behavior.node_did().to_string();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         behavior.agent_id.clone(),
         vec![behavior],
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
     .with_automation(crate::runtime_snapshot::ResolvedAutomation {
         schedules,
@@ -619,7 +619,7 @@ fn snapshot_with_agent_and_schedules(
     })
     .with_node(principal)
     .with_local_did(local_did);
-    Arc::new(resolved.activate(1, HashMap::new()))
+    Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
 mod dispatch;

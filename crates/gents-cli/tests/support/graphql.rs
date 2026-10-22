@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -7,8 +7,8 @@ use serde_json::Value;
 
 pub use gents::graphql::escape_graphql_string;
 
-fn served_principals() -> &'static Mutex<HashMap<u16, String>> {
-    static PRINCIPALS: OnceLock<Mutex<HashMap<u16, String>>> = OnceLock::new();
+fn served_principals() -> &'static Mutex<RapidHashMap<u16, String>> {
+    static PRINCIPALS: OnceLock<Mutex<RapidHashMap<u16, String>>> = OnceLock::new();
     PRINCIPALS.get_or_init(Default::default)
 }
 

@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use rapidhash::RapidHashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
@@ -126,7 +127,7 @@ pub fn script_index(
 /// by `(pack coordinate, digest, path)`; a project mount has no digest and is
 /// hashed on every call.
 fn mount_files(pack: &str, digest: &str, path: &str) -> Result<Vec<(String, String)>> {
-    type Cache = Mutex<HashMap<(String, String, String), Vec<(String, String)>>>;
+    type Cache = Mutex<RapidHashMap<(String, String, String), Vec<(String, String)>>>;
     static CACHE: LazyLock<Cache> = LazyLock::new(Default::default);
     let key = (pack.to_owned(), digest.to_owned(), path.to_owned());
     if !digest.is_empty() {

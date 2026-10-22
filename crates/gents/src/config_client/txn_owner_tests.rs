@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashSet};
+use rapidhash::{HashSetExt, RapidHashSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1882,7 +1883,7 @@ enum FirstCommit {
 #[derive(Clone)]
 struct FakeTxnState {
     next_id: Arc<AtomicUsize>,
-    active_ids: Arc<Mutex<HashSet<String>>>,
+    active_ids: Arc<Mutex<RapidHashSet<String>>>,
     staged_ids: Arc<Mutex<Vec<String>>>,
     committed_ids: Arc<Mutex<Vec<String>>>,
     discarded_ids: Arc<Mutex<Vec<String>>>,
@@ -1895,7 +1896,7 @@ impl FakeTxnState {
     fn new(first_commit: FirstCommit) -> Self {
         Self {
             next_id: Arc::new(AtomicUsize::new(0)),
-            active_ids: Arc::new(Mutex::new(HashSet::new())),
+            active_ids: Arc::new(Mutex::new(RapidHashSet::new())),
             staged_ids: Arc::new(Mutex::new(Vec::new())),
             committed_ids: Arc::new(Mutex::new(Vec::new())),
             discarded_ids: Arc::new(Mutex::new(Vec::new())),

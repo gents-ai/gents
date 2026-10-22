@@ -2,11 +2,11 @@ use super::shared::default_enabled;
 use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::SandboxMode;
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -95,7 +95,7 @@ pub struct ToolsV2 {
 pub struct AnalyticsConfig {
     pub enabled: Option<bool>,
     #[serde(default, flatten)]
-    pub additional: HashMap<String, JsonValue>,
+    pub additional: RapidHashMap<String, JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,7 +128,7 @@ pub struct AppToolConfig {
 #[serde(rename_all = "snake_case")]
 pub struct AppToolsConfig {
     #[serde(default, flatten)]
-    pub tools: HashMap<String, AppToolConfig>,
+    pub tools: RapidHashMap<String, AppToolConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -149,7 +149,7 @@ pub struct AppsConfig {
     #[serde(default, rename = "_default")]
     pub default: Option<AppsDefaultConfig>,
     #[serde(default, flatten)]
-    pub apps: HashMap<String, AppConfig>,
+    pub apps: RapidHashMap<String, AppConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -195,9 +195,9 @@ pub struct Config {
     pub analytics: Option<AnalyticsConfig>,
     #[serde(default)]
     pub apps: Option<AppsConfig>,
-    pub desktop: Option<HashMap<String, JsonValue>>,
+    pub desktop: Option<RapidHashMap<String, JsonValue>>,
     #[serde(default, flatten)]
-    pub additional: HashMap<String, JsonValue>,
+    pub additional: RapidHashMap<String, JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -271,7 +271,7 @@ pub struct ConfigReadParams {
 #[serde(rename_all = "camelCase")]
 pub struct ConfigReadResponse {
     pub config: Config,
-    pub origins: HashMap<String, ConfigLayerMetadata>,
+    pub origins: RapidHashMap<String, ConfigLayerMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<ConfigLayer>>,
 }

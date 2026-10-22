@@ -17,7 +17,7 @@ pub fn encode_blocks(blocks: &[MessageBlock]) -> serde_json::Result<Option<Value
         closing_documents: Vec::new(),
         blocks: blocks.to_vec(),
     };
-    let mut slots = std::collections::HashMap::new();
+    let mut slots = rapidhash::RapidHashMap::default();
     visit_references(&mut table.blocks, |reference| {
         let slot = *slots
             .entry(reference.close_doc_id.clone())

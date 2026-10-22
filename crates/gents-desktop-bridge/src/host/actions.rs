@@ -39,7 +39,7 @@ pub(super) async fn catalog(
             .context("The action catalog returned no schedules.")?
             .clone(),
     )?;
-    let mut identities = std::collections::HashSet::new();
+    let mut identities = rapidhash::RapidHashSet::default();
     let mut actions = Vec::with_capacity(tasks.len() + schedules.len());
     for task in tasks {
         ensure!(

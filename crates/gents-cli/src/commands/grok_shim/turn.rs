@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -384,7 +385,7 @@ impl PendingPrompt {
 #[derive(Default)]
 struct ConnectionState {
     closed: bool,
-    entries: HashMap<(String, String), PendingPrompt>,
+    entries: RapidHashMap<(String, String), PendingPrompt>,
 }
 
 struct ObservedRequest {
@@ -409,7 +410,7 @@ impl ObservedRequest {
 
 type ObservedRequests = BTreeMap<(String, String), Arc<Mutex<ObservedRequest>>>;
 
-type ForegroundDeliveries = Arc<std::sync::Mutex<HashMap<String, usize>>>;
+type ForegroundDeliveries = Arc<std::sync::Mutex<RapidHashMap<String, usize>>>;
 
 pub(super) struct ForegroundDelivery {
     sessions: ForegroundDeliveries,
@@ -443,9 +444,9 @@ pub(super) struct TurnManager {
     state: Mutex<ConnectionState>,
     delivery_gate: Mutex<()>,
     foreground_deliveries: ForegroundDeliveries,
-    autonomous_delivery: Mutex<HashMap<String, String>>,
+    autonomous_delivery: Mutex<RapidHashMap<String, String>>,
     observed: Mutex<ObservedRequests>,
-    observers: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    observers: Mutex<RapidHashMap<String, tokio::task::JoinHandle<()>>>,
     #[cfg(test)]
     insertion_gate: Mutex<Option<TestGate>>,
     #[cfg(test)]
@@ -470,10 +471,10 @@ impl TurnManager {
             config,
             state: Mutex::new(ConnectionState::default()),
             delivery_gate: Mutex::new(()),
-            foreground_deliveries: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            autonomous_delivery: Mutex::new(HashMap::new()),
+            foreground_deliveries: Arc::new(std::sync::Mutex::new(RapidHashMap::new())),
+            autonomous_delivery: Mutex::new(RapidHashMap::new()),
             observed: Mutex::new(BTreeMap::new()),
-            observers: Mutex::new(HashMap::new()),
+            observers: Mutex::new(RapidHashMap::new()),
             #[cfg(test)]
             insertion_gate: Mutex::new(None),
             #[cfg(test)]
@@ -1929,7 +1930,7 @@ impl TurnManager {
             session,
             child.requester_did.as_deref(),
         ));
-        let mut seen = HashSet::new();
+        let mut seen = RapidHashSet::new();
         let mut requests = Vec::new();
         let mut offset = 0usize;
         loop {

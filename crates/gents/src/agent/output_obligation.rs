@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -156,9 +156,9 @@ impl OutputObligationGate {
                 .context("completed output query omitted AgentToolCall rows")?,
         )?;
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
-        let mut requests = HashMap::new();
-        let mut writes = HashMap::<String, Vec<CompletedWriteRow>>::new();
-        let mut scoped_rows = HashMap::<(String, String, Option<String>), Vec<_>>::new();
+        let mut requests = RapidHashMap::new();
+        let mut writes = RapidHashMap::<String, Vec<CompletedWriteRow>>::new();
+        let mut scoped_rows = RapidHashMap::<(String, String, Option<String>), Vec<_>>::new();
         for row in rows {
             if !self
                 .obligations
@@ -211,7 +211,7 @@ impl OutputObligationGate {
                 &tool_doc_ids,
             )
             .await?;
-            let mut calls_by_doc = HashMap::<String, Vec<_>>::new();
+            let mut calls_by_doc = RapidHashMap::<String, Vec<_>>::new();
             for call in calls {
                 let doc_id = call
                     .doc_id

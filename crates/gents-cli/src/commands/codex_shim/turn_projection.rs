@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::RapidHashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -26,7 +26,7 @@ use super::{Outbound, ShimState};
 
 #[derive(Default)]
 struct ReasoningCompletionTracker {
-    item_ids: HashSet<String>,
+    item_ids: RapidHashSet<String>,
 }
 
 impl ReasoningCompletionTracker {

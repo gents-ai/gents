@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ pub struct BackgroundToolRegistry {
 
 #[derive(Default)]
 struct BackgroundToolRegistryInner {
-    tools: HashMap<String, Arc<dyn ToolDyn>>,
+    tools: RapidHashMap<String, Arc<dyn ToolDyn>>,
     allowlist: Vec<String>,
     timeouts: crate::tool_surface::BackgroundTimeouts,
 }
@@ -58,8 +58,8 @@ impl BackgroundToolRegistry {
             .map(|name| name.trim())
             .filter(|name| !name.is_empty())
             .map(str::to_string)
-            .collect::<HashSet<_>>();
-        let mut registry_tools = HashMap::new();
+            .collect::<RapidHashSet<_>>();
+        let mut registry_tools = RapidHashMap::new();
         for tool in tools {
             let name = tool.name();
             if allowed.contains(&name) {
@@ -142,7 +142,7 @@ impl BackgroundLiveOutputState {
 
 #[derive(Clone, Default)]
 pub struct BackgroundExecutionRegistry {
-    inner: Arc<std::sync::Mutex<HashMap<String, BackgroundExecution>>>,
+    inner: Arc<std::sync::Mutex<RapidHashMap<String, BackgroundExecution>>>,
     live_outputs: BackgroundLiveOutputState,
     process_records: crate::managed_exec::ownership::ProcessRecordStore,
     task_hook_records: crate::task_hooks::TaskHookRecordStore,
@@ -379,7 +379,9 @@ impl BackgroundExecutionRegistry {
         }
     }
 
-    fn lock_executions(&self) -> std::sync::MutexGuard<'_, HashMap<String, BackgroundExecution>> {
+    fn lock_executions(
+        &self,
+    ) -> std::sync::MutexGuard<'_, RapidHashMap<String, BackgroundExecution>> {
         self.inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -430,7 +432,7 @@ struct SessionState {
     request_deadline_at: Option<DateTime<Utc>>,
     sequence: u32,
     transcript_turn: TranscriptTurnState,
-    tool_result_identities: HashMap<String, ToolResultIdentity>,
+    tool_result_identities: RapidHashMap<String, ToolResultIdentity>,
 }
 
 impl SessionState {
@@ -483,10 +485,10 @@ pub struct DefraSessionHook {
     failure_policy: FailurePolicy,
     counters: Arc<HookCounters>,
     state: Arc<Mutex<SessionState>>,
-    in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
-    accepted_tool_calls: Arc<Mutex<HashMap<String, crate::streaming::AcceptedToolCall>>>,
-    effect_tool_calls: Arc<Mutex<HashMap<String, (ToolCallLifecycle, String)>>>,
-    effect_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
+    in_flight_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
+    accepted_tool_calls: Arc<Mutex<RapidHashMap<String, crate::streaming::AcceptedToolCall>>>,
+    effect_tool_calls: Arc<Mutex<RapidHashMap<String, (ToolCallLifecycle, String)>>>,
+    effect_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: BackgroundLiveOutputState,
@@ -494,7 +496,7 @@ pub struct DefraSessionHook {
     remote_tools: Option<crate::document_config::RemoteTools>,
     goal_tools_enabled: bool,
     goal_creation_enabled: bool,
-    job_tools: HashMap<String, crate::plugin_job::JobBinding>,
+    job_tools: RapidHashMap<String, crate::plugin_job::JobBinding>,
     /// The runtime's job driver, whose handles step 0 of a job tool runs on.
     pub(crate) job_driver: Option<Arc<crate::plugin_job::driver::JobDriver>>,
     output_obligation_gate: Option<crate::agent::output_obligation::OutputObligationGate>,
@@ -653,12 +655,12 @@ impl DefraSessionHook {
                 request_deadline_at: None,
                 sequence: 0,
                 transcript_turn: TranscriptTurnState::Idle,
-                tool_result_identities: HashMap::new(),
+                tool_result_identities: RapidHashMap::new(),
             })),
-            in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
-            accepted_tool_calls: Arc::new(Mutex::new(HashMap::new())),
-            effect_tool_calls: Arc::new(Mutex::new(HashMap::new())),
-            effect_lifecycles: Arc::new(Mutex::new(HashMap::new())),
+            in_flight_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
+            accepted_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
+            effect_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
+            effect_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions,
             background_live_outputs,
@@ -666,7 +668,7 @@ impl DefraSessionHook {
             remote_tools: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
-            job_tools: HashMap::new(),
+            job_tools: RapidHashMap::new(),
             job_driver: None,
             output_obligation_gate: None,
             steering_input_source: None,
@@ -702,12 +704,12 @@ impl DefraSessionHook {
                 request_deadline_at: None,
                 sequence: max_seq,
                 transcript_turn: TranscriptTurnState::Idle,
-                tool_result_identities: HashMap::new(),
+                tool_result_identities: RapidHashMap::new(),
             })),
-            in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
-            accepted_tool_calls: Arc::new(Mutex::new(HashMap::new())),
-            effect_tool_calls: Arc::new(Mutex::new(HashMap::new())),
-            effect_lifecycles: Arc::new(Mutex::new(HashMap::new())),
+            in_flight_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
+            accepted_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
+            effect_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
+            effect_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions,
             background_live_outputs,
@@ -715,7 +717,7 @@ impl DefraSessionHook {
             remote_tools: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
-            job_tools: HashMap::new(),
+            job_tools: RapidHashMap::new(),
             job_driver: None,
             output_obligation_gate: None,
             steering_input_source: None,
@@ -754,7 +756,7 @@ impl DefraSessionHook {
     /// Bind the Agent's job tools; a plugin child call naming one is refused.
     pub(crate) fn with_job_tools(
         mut self,
-        job_tools: HashMap<String, crate::plugin_job::JobBinding>,
+        job_tools: RapidHashMap<String, crate::plugin_job::JobBinding>,
     ) -> Self {
         self.job_tools = job_tools;
         self

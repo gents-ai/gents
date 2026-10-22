@@ -1,4 +1,4 @@
-use std::collections::{hash_map::DefaultHasher, BTreeSet};
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, RwLock as StdRwLock};
@@ -192,7 +192,8 @@ async fn merge_accepted_edit_projection(
     let result = async {
         let mut doc_ids = selected_doc_ids.to_vec();
         doc_ids.extend(receipt.request_doc_ids.iter().cloned());
-        let mut unique = std::collections::HashSet::with_capacity(doc_ids.len());
+        let mut unique =
+            rapidhash::RapidHashSet::with_capacity_and_hasher(doc_ids.len(), Default::default());
         doc_ids.retain(|doc_id| unique.insert(doc_id.clone()));
         if doc_ids.is_empty() {
             return anyhow::Result::<()>::Ok(());
@@ -302,7 +303,7 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     let rows = patch.row_count();
     match serde_json::to_vec(&patch.to_rows()) {
         Ok(bytes) => {
-            let mut hasher = DefaultHasher::new();
+            let mut hasher = rapidhash::fast::RapidHasher::default();
             bytes.hash(&mut hasher);
             let mut byte_len = bytes.len();
             for row in &patch.transcript_messages {

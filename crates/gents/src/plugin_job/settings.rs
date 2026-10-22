@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 use std::ops::RangeInclusive;
 
 use anyhow::Context;
@@ -143,7 +143,7 @@ pub fn validate(settings: &PluginJobSettings) -> Vec<String> {
                 .to_owned(),
         );
     }
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     for target in &settings.agent_targets {
         if target.trim().is_empty() || !seen.insert(target) {
             errors.push(format!(

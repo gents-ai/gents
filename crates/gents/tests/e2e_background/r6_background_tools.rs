@@ -215,7 +215,7 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
                 row.get("request_id")?.as_str()?,
             ))
         })
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     let headers = response
         .data
         .as_ref()

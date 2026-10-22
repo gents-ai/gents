@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
@@ -142,7 +142,7 @@ pub(super) fn build_host_tools(
         .cli_tools()
         .iter()
         .map(|tool| (tool.name.clone(), tool.clone()))
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
     for tool_name in dedupe_strings(cli_tool_names.to_vec()) {
         match cli_tools.get(&tool_name) {
             Some(tool) => {
@@ -339,8 +339,8 @@ pub fn resolve_effective_tool_root(
 pub(super) fn dedupe_agent_targets(
     values: Vec<crate::document_config::AgentTargetDocument>,
 ) -> Vec<crate::document_config::AgentTargetDocument> {
-    use std::collections::HashSet;
-    let mut seen = HashSet::new();
+    use rapidhash::{HashSetExt, RapidHashSet};
+    let mut seen = RapidHashSet::new();
     let mut deduped = Vec::with_capacity(values.len());
     for target in values {
         if target.name.trim().is_empty()
@@ -357,8 +357,8 @@ pub(super) fn dedupe_agent_targets(
 }
 
 pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
-    use std::collections::HashSet;
-    let mut seen = HashSet::new();
+    use rapidhash::{HashSetExt, RapidHashSet};
+    let mut seen = RapidHashSet::new();
     let mut deduped = Vec::with_capacity(values.len());
     for value in values {
         let trimmed = value.trim();
@@ -469,8 +469,8 @@ fn project_measured_mcp_services(
         !node_did.trim().is_empty(),
         "MCP availability requires node scope"
     );
-    let mut expected_endpoints = HashMap::<String, HashSet<String>>::new();
-    let mut seen = HashSet::new();
+    let mut expected_endpoints = RapidHashMap::<String, RapidHashSet<String>>::new();
+    let mut seen = RapidHashSet::new();
     for service in services {
         anyhow::ensure!(
             service.node_did == node_did,

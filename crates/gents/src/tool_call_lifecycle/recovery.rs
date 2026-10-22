@@ -153,8 +153,8 @@ impl super::ToolCallLifecycle {
     ) -> Result<TerminalParentToolReport> {
         let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
         let mut report = TerminalParentToolReport::default();
-        let mut parent_cache: std::collections::HashMap<String, Option<AgentRequestRow>> =
-            std::collections::HashMap::new();
+        let mut parent_cache: rapidhash::RapidHashMap<String, Option<AgentRequestRow>> =
+            rapidhash::RapidHashMap::default();
 
         for row in rows {
             if row.node_did.as_deref() != Some(node_did) {
@@ -238,7 +238,7 @@ impl super::ToolCallLifecycle {
     ) -> Result<OrphanedBackgroundToolReport> {
         let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
         let mut report = OrphanedBackgroundToolReport::default();
-        let mut running_background = std::collections::HashSet::new();
+        let mut running_background = rapidhash::RapidHashSet::default();
 
         for row in rows {
             if row.node_did.as_deref() != Some(node_did) || !is_background_tool_row(&row) {
@@ -1242,7 +1242,7 @@ fn classify_running_tool_recovery(
 fn unresolved_parent_warning_due(doc_id: &str) -> bool {
     const INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
     static WARNED: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+        std::sync::Mutex<rapidhash::RapidHashMap<String, std::time::Instant>>,
     > = std::sync::OnceLock::new();
     let mut warned = WARNED
         .get_or_init(Default::default)

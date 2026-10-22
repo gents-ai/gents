@@ -6,8 +6,8 @@ use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
+use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 fn versions(values: &Value, identities: &[KeyIdentity]) -> Vec<super::super::GoalVersion> {
@@ -36,7 +36,7 @@ fn versions(values: &Value, identities: &[KeyIdentity]) -> Vec<super::super::Goa
 
 fn observation(
     value: anyhow::Result<RequestAssignmentObservation>,
-    roots: Option<&HashMap<u64, String>>,
+    roots: Option<&RapidHashMap<u64, String>>,
 ) -> Value {
     match value {
         Ok(RequestAssignmentObservation::Assigned(goal)) => {
@@ -140,7 +140,7 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
-    let mut roots = HashMap::new();
+    let mut roots = RapidHashMap::new();
     for version in case["versions"].as_array().unwrap() {
         let Some(root) = version["assignment"]["root"].as_u64() else {
             continue;
@@ -168,7 +168,7 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
     } else {
         persist_request(&access, identity, entry_id, reference).await
     };
-    let mut documents: HashMap<u64, String> = HashMap::new();
+    let mut documents: RapidHashMap<u64, String> = RapidHashMap::new();
     for version in case["versions"].as_array().unwrap() {
         let model_doc = version["document"].as_u64().unwrap();
         let mut value = serde_json::to_value(goal(&version["assignment"], identities)).unwrap();

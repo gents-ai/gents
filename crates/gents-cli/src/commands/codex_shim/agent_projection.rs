@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 use gents::toolset::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
 use gents_codex_protocol as codex;
@@ -45,7 +45,7 @@ pub(super) fn agent_tool_item(
         prompt,
         model: None,
         reasoning_effort: None,
-        agents_states: HashMap::new(),
+        agents_states: RapidHashMap::new(),
     }
 }
 

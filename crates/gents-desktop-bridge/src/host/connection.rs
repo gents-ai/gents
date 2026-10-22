@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -83,7 +83,7 @@ where
         result
     });
     let mut calls = JoinSet::new();
-    let mut pending = HashMap::<u32, CancellationToken>::new();
+    let mut pending = RapidHashMap::<u32, CancellationToken>::new();
     let mut sequence = 0_u64;
     let approvals = Arc::new(super::approvals::AttachmentApprovals::default());
     let mut approval_changes = approvals.changes();

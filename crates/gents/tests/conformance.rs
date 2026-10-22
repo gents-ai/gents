@@ -1,5 +1,7 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
+
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 use gents::defra_node::EmbeddedNode;
 use gents::event_delivery_contract::{

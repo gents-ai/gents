@@ -174,7 +174,7 @@ pub(super) struct AgentDaemon<M: ProviderModel> {
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     remote_tools: Option<crate::document_config::RemoteTools>,
-    job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
+    job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
     job_driver: Option<Arc<crate::plugin_job::driver::JobDriver>>,
     output_obligations: Arc<Vec<(String, crate::document_config::WriteToolOutputObligation)>>,
     startup_barrier: Arc<StartupBarrier>,
@@ -358,7 +358,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
 
     pub(super) fn with_job_tools(
         mut self,
-        job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
+        job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
     ) -> Self {
         self.job_tools = job_tools;
         self

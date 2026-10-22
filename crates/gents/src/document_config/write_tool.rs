@@ -331,12 +331,12 @@ pub(crate) fn validate_write_tool_declarations(
     let cli_tool_names = cli_tool_names
         .iter()
         .map(|name| name.trim())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     let additional_tool_names = additional_tool_names
         .iter()
         .map(|name| name.trim())
-        .collect::<std::collections::HashSet<_>>();
-    let mut seen_tool_names = std::collections::HashSet::new();
+        .collect::<rapidhash::RapidHashSet<_>>();
+    let mut seen_tool_names = rapidhash::RapidHashSet::default();
     for (i, decl) in decls.iter().enumerate() {
         decl.validate().map_err(|error| {
             anyhow::anyhow!(
@@ -364,7 +364,7 @@ pub(crate) fn validate_write_tool_declarations(
             &cli_tool_names,
             &additional_tool_names,
         )?;
-        let mut seen_field_names = std::collections::HashSet::new();
+        let mut seen_field_names = rapidhash::RapidHashSet::default();
         for (j, field) in decl.fields.iter().enumerate() {
             if !seen_field_names.insert(field.name.trim()) {
                 return Err(anyhow::anyhow!(
@@ -471,8 +471,8 @@ pub(crate) fn reject_tool_name_surface_collisions(
     index: usize,
     tool_name: &str,
     role: &str,
-    cli_tool_names: &std::collections::HashSet<&str>,
-    additional_tool_names: &std::collections::HashSet<&str>,
+    cli_tool_names: &rapidhash::RapidHashSet<&str>,
+    additional_tool_names: &rapidhash::RapidHashSet<&str>,
 ) -> Result<()> {
     let name = tool_name.trim();
     if is_reserved_builtin_tool_name(tool_name) {

@@ -682,7 +682,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     };
     use crate::tool_surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
     use crate::trigger_engine::{MaterializerHandle, TriggerKind, TriggerSource};
-    use std::collections::HashMap;
+    use rapidhash::{HashMapExt, RapidHashMap};
     use tokio::sync::watch;
     use tokio_util::sync::CancellationToken;
 
@@ -698,10 +698,10 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             ]),
         },
     );
-    let mut tasks = HashMap::new();
-    let mut routes = HashMap::new();
+    let mut tasks = RapidHashMap::new();
+    let mut routes = RapidHashMap::new();
     let mut agents = Vec::new();
-    let mut surfaces = HashMap::new();
+    let mut surfaces = RapidHashMap::new();
     let mut write_area = None;
     for stage in ["recon", "scan"] {
         let trigger = fx.route(stage);
@@ -815,15 +815,15 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             tasks["recon"].agent_id.clone(),
             agents,
             surfaces,
-            HashMap::new(),
-            HashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
         )
         .with_automation(crate::runtime_snapshot::ResolvedAutomation {
-            event_triggers: HashMap::from([(scan_route.0.clone(), trigger)]),
+            event_triggers: RapidHashMap::from_iter([(scan_route.0.clone(), trigger)]),
             ..Default::default()
         })
         .with_node(principal)
-        .activate(1, HashMap::new()),
+        .activate(1, RapidHashMap::new()),
     );
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
     let materializer = crate::trigger_engine::production_materializer::ProductionMaterializer::new(

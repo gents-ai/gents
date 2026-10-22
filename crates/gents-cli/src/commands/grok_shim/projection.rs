@@ -1374,7 +1374,7 @@ fn changed_tool_fields(last_sent: &Value, observed: &Value) -> Option<Value> {
 }
 
 fn payload_fingerprint(payload: &Value) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = rapidhash::fast::RapidHasher::default();
     hash_value(&mut hasher, payload);
     hasher.finish()
 }

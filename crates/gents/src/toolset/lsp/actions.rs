@@ -979,7 +979,7 @@ pub(crate) async fn run_linter_diagnostics(
 }
 
 fn status_text(
-    states: std::collections::HashMap<String, super::pool::PoolServerState>,
+    states: rapidhash::RapidHashMap<String, super::pool::PoolServerState>,
     servers: &[CatalogServer],
     workspace: &std::path::Path,
 ) -> String {

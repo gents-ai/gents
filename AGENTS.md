@@ -188,6 +188,11 @@ metadata.
   [WorkerIo](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/storage/src/backends/regolith/worker_io/mod.rs),
   and [Regolith commit tickets](https://github.com/sourcenetwork/regolith/blob/main/src/transaction/nowait.rs).
 - Use `tracing`, never `println!`.
+- Every hash map and set is `rapidhash::RapidHashMap`/`RapidHashSet` (the fast
+  hasher, built with `new`, `default` or `with_capacity` via `HashMapExt`/
+  `HashSetExt`), and hashers are `rapidhash::fast::RapidHasher`, as in DefraDB.
+  Use std's map only where a third-party signature fixes it;
+  `hash_maps_use_rapidhash` ratchets this and its allowlist only shrinks.
 - Treat flaky tests as defects: reproduce, file, and fix them.
 - Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are
   cloned efficiently.

@@ -49,12 +49,13 @@ fn created_tool_call_doc_ids(
     let expected = expected_keys
         .iter()
         .map(String::as_str)
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     anyhow::ensure!(
         expected.len() == expected_keys.len(),
         "provider publication contains duplicate physical tool-call keys"
     );
-    let mut doc_ids = std::collections::HashMap::with_capacity(rows.len());
+    let mut doc_ids =
+        rapidhash::RapidHashMap::with_capacity_and_hasher(rows.len(), Default::default());
     for row in rows {
         let key = row
             .get("tool_call_key")

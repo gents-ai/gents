@@ -131,8 +131,8 @@ fn supersedes_assignment(left: &super::GoalVersion, right: &super::GoalVersion) 
 pub(crate) fn latest_assignment_goals(
     versions: &[super::GoalVersion],
 ) -> anyhow::Result<Vec<GoalDocument>> {
-    use std::collections::{HashMap, HashSet};
-    let mut by_commit = HashMap::new();
+    use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+    let mut by_commit = RapidHashMap::new();
     for version in versions {
         anyhow::ensure!(
             version.height >= 0
@@ -167,14 +167,14 @@ pub(crate) fn latest_assignment_goals(
             );
         }
     }
-    let mut superseded = HashSet::new();
+    let mut superseded = RapidHashSet::new();
     for later in versions {
         let mut pending = later
             .parent_commit_cids
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let mut visited = HashSet::new();
+        let mut visited = RapidHashSet::new();
         while let Some(cid) = pending.pop() {
             if !visited.insert(cid) {
                 continue;
@@ -186,7 +186,7 @@ pub(crate) fn latest_assignment_goals(
             pending.extend(ancestor.parent_commit_cids.iter().map(String::as_str));
         }
     }
-    let mut unique_assignments = HashSet::new();
+    let mut unique_assignments = RapidHashSet::new();
     let mut goals = Vec::new();
     for version in versions {
         if superseded.contains(&(version.goal.doc_id.as_str(), version.commit_cid.as_str())) {
@@ -252,9 +252,9 @@ pub(crate) struct RequestAssignments {
     owner: String,
     session: String,
     rows: Vec<AgentRequestRow>,
-    index: std::collections::HashMap<String, usize>,
+    index: rapidhash::RapidHashMap<String, usize>,
     goals: Vec<GoalDocument>,
-    scopes: std::sync::Mutex<std::collections::HashMap<String, RequestAssignmentScope>>,
+    scopes: std::sync::Mutex<rapidhash::RapidHashMap<String, RequestAssignmentScope>>,
 }
 
 impl RequestAssignments {

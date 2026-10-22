@@ -628,7 +628,7 @@ impl Tools {
             values: impl IntoIterator<Item = &'a str>,
             exact_tools: bool,
         ) {
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = rapidhash::RapidHashSet::default();
             for value in values {
                 if value.trim().is_empty() {
                     errors.push(format!("{field} contains a blank name"));

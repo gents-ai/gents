@@ -205,7 +205,7 @@ impl RuntimeContext {
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
         remote_tools: Option<crate::document_config::RemoteTools>,
-        job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
+        job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
         output_obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
         root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
         client: C,

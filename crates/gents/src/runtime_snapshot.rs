@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -20,7 +21,7 @@ use gents_protocol::node_readiness::{
     effective_agent_readiness_admission, EffectiveAgentReadinessAdmission,
 };
 
-pub type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
+pub type DispatcherMap = RapidHashMap<String, mpsc::Sender<AgentRequest>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnavailableAgent {
@@ -149,11 +150,11 @@ pub struct ResolvedEventTrigger {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedAutomation {
-    pub(crate) tasks: HashMap<String, ResolvedTask>,
-    pub(crate) schedules: HashMap<String, ResolvedSchedule>,
-    pub(crate) unavailable_schedules: HashSet<String>,
-    pub(crate) event_triggers: HashMap<String, ResolvedEventTrigger>,
-    pub(crate) unavailable_event_triggers: HashSet<String>,
+    pub(crate) tasks: RapidHashMap<String, ResolvedTask>,
+    pub(crate) schedules: RapidHashMap<String, ResolvedSchedule>,
+    pub(crate) unavailable_schedules: RapidHashSet<String>,
+    pub(crate) event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
+    pub(crate) unavailable_event_triggers: RapidHashSet<String>,
 }
 
 pub(crate) fn seed_schedule_next_run_at(
@@ -196,15 +197,15 @@ pub(crate) struct ResolvedRuntimeSnapshot {
     pub(crate) node: Option<Arc<RuntimeNode>>,
     pub(crate) local_did: String,
     pub(crate) default_agent_id: String,
-    pub(crate) agents: HashMap<String, Arc<ResolvedAgent>>,
-    pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
-    pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-    pub(crate) unavailable_agents: HashMap<String, UnavailableAgent>,
-    pub(crate) active_schedules: HashMap<String, ResolvedSchedule>,
-    pub(crate) unavailable_schedules: HashSet<String>,
-    pub(crate) active_event_triggers: HashMap<String, ResolvedEventTrigger>,
-    pub(crate) unavailable_event_triggers: HashSet<String>,
-    pub(crate) active_tasks: HashMap<String, ResolvedTask>,
+    pub(crate) agents: RapidHashMap<String, Arc<ResolvedAgent>>,
+    pub(crate) tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
+    pub(crate) backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
+    pub(crate) unavailable_agents: RapidHashMap<String, UnavailableAgent>,
+    pub(crate) active_schedules: RapidHashMap<String, ResolvedSchedule>,
+    pub(crate) unavailable_schedules: RapidHashSet<String>,
+    pub(crate) active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
+    pub(crate) unavailable_event_triggers: RapidHashSet<String>,
+    pub(crate) active_tasks: RapidHashMap<String, ResolvedTask>,
 }
 
 impl ResolvedRuntimeSnapshot {
@@ -254,14 +255,14 @@ impl ResolvedRuntimeSnapshot {
     pub(crate) fn from_parts(
         default_agent_id: String,
         agents: Vec<Arc<ResolvedAgent>>,
-        tool_surfaces: HashMap<String, Arc<ToolSurface>>,
-        unavailable_agents: HashMap<String, UnavailableAgent>,
+        tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
+        unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     ) -> Self {
         Self::from_parts_with_admission_configs(
             default_agent_id,
             agents,
             tool_surfaces,
-            HashMap::new(),
+            RapidHashMap::new(),
             unavailable_agents,
         )
     }
@@ -269,9 +270,9 @@ impl ResolvedRuntimeSnapshot {
     pub(crate) fn from_parts_with_admission_configs(
         default_agent_id: String,
         agents: Vec<Arc<ResolvedAgent>>,
-        tool_surfaces: HashMap<String, Arc<ToolSurface>>,
-        backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-        unavailable_agents: HashMap<String, UnavailableAgent>,
+        tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
+        backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
+        unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     ) -> Self {
         Self {
             node: None,
@@ -284,11 +285,11 @@ impl ResolvedRuntimeSnapshot {
             tool_surfaces,
             backend_admission_configs,
             unavailable_agents,
-            active_schedules: HashMap::new(),
-            unavailable_schedules: HashSet::new(),
-            active_event_triggers: HashMap::new(),
-            unavailable_event_triggers: HashSet::new(),
-            active_tasks: HashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: RapidHashSet::new(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: RapidHashSet::new(),
+            active_tasks: RapidHashMap::new(),
         }
     }
 
@@ -337,8 +338,8 @@ impl ResolvedRuntimeSnapshot {
         self,
         generation: u64,
         dispatchers: DispatcherMap,
-        agent_executor_capacities: HashMap<String, usize>,
-        agent_executor_queue_capacities: HashMap<String, usize>,
+        agent_executor_capacities: RapidHashMap<String, usize>,
+        agent_executor_queue_capacities: RapidHashMap<String, usize>,
     ) -> ActiveRuntimeSnapshot {
         debug_assert!(
             self.node.is_some(),
@@ -389,18 +390,18 @@ pub struct ActiveRuntimeSnapshot {
     pub node: Option<Arc<RuntimeNode>>,
     pub local_did: String,
     pub default_agent_id: String,
-    pub agents: HashMap<String, Arc<ResolvedAgent>>,
-    pub tool_surfaces: HashMap<String, Arc<ToolSurface>>,
-    pub backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
-    pub unavailable_agents: HashMap<String, UnavailableAgent>,
-    pub active_schedules: HashMap<String, ResolvedSchedule>,
-    pub unavailable_schedules: HashSet<String>,
-    pub active_event_triggers: HashMap<String, ResolvedEventTrigger>,
-    pub unavailable_event_triggers: HashSet<String>,
-    pub active_tasks: HashMap<String, ResolvedTask>,
+    pub agents: RapidHashMap<String, Arc<ResolvedAgent>>,
+    pub tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
+    pub backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
+    pub unavailable_agents: RapidHashMap<String, UnavailableAgent>,
+    pub active_schedules: RapidHashMap<String, ResolvedSchedule>,
+    pub unavailable_schedules: RapidHashSet<String>,
+    pub active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
+    pub unavailable_event_triggers: RapidHashSet<String>,
+    pub active_tasks: RapidHashMap<String, ResolvedTask>,
     pub dispatchers: DispatcherMap,
-    pub agent_executor_capacities: HashMap<String, usize>,
-    pub agent_executor_queue_capacities: HashMap<String, usize>,
+    pub agent_executor_capacities: RapidHashMap<String, usize>,
+    pub agent_executor_queue_capacities: RapidHashMap<String, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -415,15 +416,15 @@ impl ActiveRuntimeSnapshot {
         self.agents.get(agent_id)
     }
 
-    pub(crate) fn active_schedules(&self) -> &HashMap<String, ResolvedSchedule> {
+    pub(crate) fn active_schedules(&self) -> &RapidHashMap<String, ResolvedSchedule> {
         &self.active_schedules
     }
 
-    pub(crate) fn active_event_triggers(&self) -> &HashMap<String, ResolvedEventTrigger> {
+    pub(crate) fn active_event_triggers(&self) -> &RapidHashMap<String, ResolvedEventTrigger> {
         &self.active_event_triggers
     }
 
-    pub(crate) fn active_tasks(&self) -> &HashMap<String, ResolvedTask> {
+    pub(crate) fn active_tasks(&self) -> &RapidHashMap<String, ResolvedTask> {
         &self.active_tasks
     }
 
@@ -498,15 +499,15 @@ impl ActiveRuntimeSnapshot {
 fn configuration_fingerprint(
     default_agent_id: &str,
     local_did: &str,
-    agents: &HashMap<String, Arc<ResolvedAgent>>,
-    tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
-    backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
-    unavailable_agents: &HashMap<String, UnavailableAgent>,
-    active_schedules: &HashMap<String, ResolvedSchedule>,
-    unavailable_schedules: &HashSet<String>,
-    active_event_triggers: &HashMap<String, ResolvedEventTrigger>,
-    unavailable_event_triggers: &HashSet<String>,
-    active_tasks: &HashMap<String, ResolvedTask>,
+    agents: &RapidHashMap<String, Arc<ResolvedAgent>>,
+    tool_surfaces: &RapidHashMap<String, Arc<ToolSurface>>,
+    backend_admission_configs: &RapidHashMap<String, BackendAdmissionConfig>,
+    unavailable_agents: &RapidHashMap<String, UnavailableAgent>,
+    active_schedules: &RapidHashMap<String, ResolvedSchedule>,
+    unavailable_schedules: &RapidHashSet<String>,
+    active_event_triggers: &RapidHashMap<String, ResolvedEventTrigger>,
+    unavailable_event_triggers: &RapidHashSet<String>,
+    active_tasks: &RapidHashMap<String, ResolvedTask>,
 ) -> String {
     let mut fingerprint = String::new();
     fingerprint.push_str("local_did:");

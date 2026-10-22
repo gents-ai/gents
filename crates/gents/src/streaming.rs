@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,9 +39,9 @@ pub use gents_loop::stream_writer::StreamWriter;
 pub struct DefraStreamWriter {
     node: Arc<EmbeddedNode>,
     batch_interval: Duration,
-    buffers: Mutex<HashMap<String, StreamBuffer>>,
-    published: Mutex<HashMap<String, String>>,
-    provider_tails: Mutex<HashMap<String, ProviderTail>>,
+    buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
+    published: Mutex<RapidHashMap<String, String>>,
+    provider_tails: Mutex<RapidHashMap<String, ProviderTail>>,
 }
 
 #[derive(Default)]
@@ -435,9 +435,9 @@ impl DefraStreamWriter {
         Self {
             node,
             batch_interval,
-            buffers: Mutex::new(HashMap::new()),
-            published: Mutex::new(HashMap::new()),
-            provider_tails: Mutex::new(HashMap::new()),
+            buffers: Mutex::new(RapidHashMap::new()),
+            published: Mutex::new(RapidHashMap::new()),
+            provider_tails: Mutex::new(RapidHashMap::new()),
         }
     }
 

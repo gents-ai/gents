@@ -1615,7 +1615,7 @@ async fn wait_cycle_requests_completed(access: &ConfigAccess, work_unit_id: &str
         let observed_agents = relevant
             .iter()
             .filter_map(|row| row["agent_id"].as_str())
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<rapidhash::RapidHashSet<_>>();
         if agents
             .iter()
             .all(|behavior| observed_agents.contains(behavior))

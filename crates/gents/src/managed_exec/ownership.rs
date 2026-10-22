@@ -204,7 +204,7 @@ impl HostRecord for ProcessRecord {
 
 #[derive(Debug, Clone)]
 pub(crate) enum HostRecordStore<R> {
-    Volatile(Arc<std::sync::Mutex<std::collections::HashMap<String, R>>>),
+    Volatile(Arc<std::sync::Mutex<rapidhash::RapidHashMap<String, R>>>),
     Durable(PathBuf),
 }
 
@@ -227,8 +227,8 @@ fn record_path(dir: &std::path::Path, key: &str) -> PathBuf {
 
 impl<R: HostRecord> HostRecordStore<R> {
     fn volatile(
-        records: &std::sync::Mutex<std::collections::HashMap<String, R>>,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, R>> {
+        records: &std::sync::Mutex<rapidhash::RapidHashMap<String, R>>,
+    ) -> std::sync::MutexGuard<'_, rapidhash::RapidHashMap<String, R>> {
         records
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

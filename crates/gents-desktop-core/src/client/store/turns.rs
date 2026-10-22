@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 
 use gents_protocol::client_protocol::{
     derive_turn as derive_client_turn, AttemptView, RequestSnapshot,
@@ -49,7 +49,7 @@ pub fn session_turn_request<'a>(
     resolve(
         requests,
         requests.len() + 1,
-        &mut HashSet::new(),
+        &mut RapidHashSet::new(),
         newest,
         true,
     )
@@ -62,7 +62,7 @@ pub fn request_answer_owner<'a>(
     resolve(
         requests,
         requests.len() + 1,
-        &mut HashSet::new(),
+        &mut RapidHashSet::new(),
         request,
         false,
     )
@@ -82,7 +82,7 @@ fn in_scope<'a>(
 fn resolve<'a>(
     requests: &[&'a AgentRequestRow],
     fuel: usize,
-    seen: &mut HashSet<RequestRowIdentity<'a>>,
+    seen: &mut RapidHashSet<RequestRowIdentity<'a>>,
     row: &'a AgentRequestRow,
     follow_queue: bool,
 ) -> &'a AgentRequestRow {
@@ -198,7 +198,7 @@ pub(super) fn derive_turn_for_request_for_node(
 fn attempt_chain_for_request(store: &ClientStore, request_id: &str) -> Vec<AttemptView> {
     let mut attempts = Vec::new();
     let mut cursor = Some(request_id.to_string());
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
 
     while let Some(current_request_id) = cursor.take() {
         if !seen.insert(current_request_id.clone()) {
@@ -223,7 +223,7 @@ fn attempt_chain_for_request_for_node(
 ) -> Vec<AttemptView> {
     let mut attempts = Vec::new();
     let mut cursor = Some(request_id.to_string());
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
 
     while let Some(current_request_id) = cursor.take() {
         if !seen.insert(current_request_id.clone()) {

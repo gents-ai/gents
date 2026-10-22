@@ -2,7 +2,7 @@
 //! single-collection query tool ([`QueryToolDecl`]). Stored under an `entries`
 //! object envelope so DefraDB keeps the JSON scalar type.
 
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ pub fn merge_datastore_tool_surfaces<'a>(
     selection: &Tools,
     surfaces: impl IntoIterator<Item = &'a DatastoreToolSurfaceDocument>,
 ) -> Result<MergedSurfaceTools> {
-    let mut surface_by_id = HashMap::new();
+    let mut surface_by_id = RapidHashMap::new();
     for surface in surfaces {
         let surface_id = surface.surface_id.as_str();
         if surface_id.trim().is_empty() {
@@ -43,13 +43,13 @@ pub fn merge_datastore_tool_surfaces<'a>(
     let mut write_tools = Vec::new();
     let mut query_tools = Vec::new();
     let mut surface_of_tool = std::collections::BTreeMap::new();
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     let surface_ids = selection
         .datastore
         .as_ref()
         .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())
         .unwrap_or(&[]);
-    let mut linked_ids = HashSet::new();
+    let mut linked_ids = RapidHashSet::new();
     for surface_id in surface_ids {
         let surface_id = surface_id.as_str();
         if surface_id.trim().is_empty() {
@@ -323,12 +323,12 @@ pub(crate) fn validate_query_tool_declarations(
     let cli_tool_names = cli_tool_names
         .iter()
         .map(|name| name.trim())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     let additional_tool_names = additional_tool_names
         .iter()
         .map(|name| name.trim())
-        .collect::<std::collections::HashSet<_>>();
-    let mut seen_tool_names = std::collections::HashSet::new();
+        .collect::<rapidhash::RapidHashSet<_>>();
+    let mut seen_tool_names = rapidhash::RapidHashSet::default();
     for (i, decl) in decls.iter().enumerate() {
         if !decl.is_well_formed() {
             return Err(anyhow::anyhow!(
@@ -354,7 +354,7 @@ pub(crate) fn validate_query_tool_declarations(
             )
         })?;
         reject_protected_collection_name(&decl.collection)?;
-        let mut seen_field_names = std::collections::HashSet::new();
+        let mut seen_field_names = rapidhash::RapidHashSet::default();
         for (j, field) in decl.fields.iter().enumerate() {
             crate::graphql::validate_graphql_name(field).map_err(|error| {
                 anyhow::anyhow!(
@@ -371,7 +371,7 @@ pub(crate) fn validate_query_tool_declarations(
                 ));
             }
         }
-        let mut seen_filter_names = std::collections::HashSet::new();
+        let mut seen_filter_names = rapidhash::RapidHashSet::default();
         for (j, field) in decl.filter_fields.iter().enumerate() {
             if field.name.trim().is_empty() {
                 return Err(anyhow::anyhow!(

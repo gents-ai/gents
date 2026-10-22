@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -211,18 +211,18 @@ fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
         node: None,
         local_did: local_did.to_string(),
         default_agent_id: crate::support::AGENT_NAME.to_string(),
-        agents: HashMap::new(),
-        tool_surfaces: HashMap::new(),
-        backend_admission_configs: HashMap::new(),
-        unavailable_agents: HashMap::new(),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
-        active_event_triggers: HashMap::new(),
-        unavailable_event_triggers: HashSet::new(),
-        active_tasks: HashMap::new(),
-        dispatchers: HashMap::new(),
-        agent_executor_capacities: HashMap::new(),
-        agent_executor_queue_capacities: HashMap::new(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
     })
 }
 
@@ -1053,7 +1053,7 @@ async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
     let keys = children
         .iter()
         .map(|child| child.retry_key.as_deref().expect("retry key"))
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     assert_eq!(keys.len(), 2);
 }
 

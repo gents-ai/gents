@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use std::collections::BTreeSet;
 
 use super::{indexing::clean_string, ClientStore, ClientStoreRows};
 
@@ -219,7 +220,7 @@ fn owner_or_source<'a>(owner: Option<&'a str>, source: Option<&'a str>) -> Optio
 }
 
 fn insert_doc_owner<T>(
-    index: &mut HashMap<String, Option<usize>>,
+    index: &mut RapidHashMap<String, Option<usize>>,
     rows: &[T],
     row_index: usize,
     doc_id: &str,
@@ -249,12 +250,12 @@ impl ClientStore {
     pub(super) fn build_scope_indexes(
         rows: &ClientStoreRows,
     ) -> (
-        HashMap<String, Option<usize>>,
-        HashSet<String>,
-        HashMap<String, Option<usize>>,
+        RapidHashMap<String, Option<usize>>,
+        RapidHashSet<String>,
+        RapidHashMap<String, Option<usize>>,
     ) {
-        let mut request_index_by_doc_id = HashMap::new();
-        let mut unscoped_placeholder_request_ids = HashSet::new();
+        let mut request_index_by_doc_id = RapidHashMap::new();
+        let mut unscoped_placeholder_request_ids = RapidHashSet::new();
         for (index, row) in rows.requests.iter().enumerate() {
             if row.doc_id.is_none() && nonblank(row.node_did.as_deref()).is_none() {
                 unscoped_placeholder_request_ids.insert(row.request_id.clone());
@@ -271,7 +272,7 @@ impl ClientStore {
             }
         }
 
-        let mut mailbox_index_by_doc_id = HashMap::new();
+        let mut mailbox_index_by_doc_id = RapidHashMap::new();
         for (index, row) in rows.mailbox_items.iter().enumerate() {
             insert_doc_owner(
                 &mut mailbox_index_by_doc_id,

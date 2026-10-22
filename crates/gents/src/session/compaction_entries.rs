@@ -2,7 +2,8 @@ use super::rows::dedupe_paths;
 use super::*;
 use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
 use anyhow::Context;
-use std::collections::{BTreeSet, HashSet};
+use rapidhash::RapidHashSet;
+use std::collections::BTreeSet;
 
 #[derive(Serialize)]
 struct FilePathDelta<'a> {
@@ -584,7 +585,7 @@ fn new_file_paths(cumulative: &[String], current: &[String]) -> Vec<String> {
     let mut seen = cumulative
         .iter()
         .map(String::as_str)
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     let mut delta = current
         .iter()
         .filter(|path| seen.insert(path.as_str()))

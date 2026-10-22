@@ -280,7 +280,7 @@ fn session_snapshot_binds_generated_session_turn_cases() {
             .expected_read_docs
             .iter()
             .map(|doc| format!("doc-{doc}"))
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<rapidhash::RapidHashSet<_>>();
         let newest_requester = case.rows.last().expect("generated case has rows").requester;
         for row in case
             .rows

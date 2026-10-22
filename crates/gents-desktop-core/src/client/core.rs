@@ -12,7 +12,8 @@ mod writes;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, HashMap};
+use rapidhash::RapidHashMap;
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -310,7 +311,7 @@ pub struct ClientCore {
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     observation_scope: observation_scope::ObservationScope,
-    request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
+    request_patch_signatures: tokio::sync::Mutex<RapidHashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     shutdown_completion: Mutex<Option<watch::Receiver<Option<std::result::Result<(), String>>>>>,
     #[cfg(test)]

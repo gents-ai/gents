@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 
 fn node_filter(node_did: Option<&str>) -> String {
     node_did
@@ -261,7 +261,7 @@ fn missing_session_head_scopes(
     let seeded_docs = seeds
         .iter()
         .filter_map(|row| row.doc_id.as_deref())
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     scopes
         .iter()
         .filter(|(doc_id, _, _, _, _)| !seeded_docs.contains(doc_id.as_str()))
@@ -357,7 +357,7 @@ fn task_request_boundary_queries(rows: &[AgentRequestRow]) -> Result<Vec<String>
 }
 
 fn dedupe_request_seeds(rows: &mut Vec<AgentRequestRow>) {
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     rows.retain(|row| {
         row.doc_id
             .as_ref()
@@ -380,7 +380,7 @@ pub(super) fn scoped_session_heads(
                 request_id.as_str(),
             )
         })
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     rows.into_iter()
         .filter(|row| {
             row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)

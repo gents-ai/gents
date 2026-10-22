@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -80,8 +80,8 @@ pub(super) fn session_summaries(
     tasks: &[TaskView],
     triggers: &[TriggerView],
 ) -> Vec<SessionSummary> {
-    let mut requests_by_session: HashMap<(&str, Option<&str>), Vec<&AgentRequestRow>> =
-        HashMap::new();
+    let mut requests_by_session: RapidHashMap<(&str, Option<&str>), Vec<&AgentRequestRow>> =
+        RapidHashMap::new();
     for request in requests {
         if request.node_did.as_deref() != Some(node_did) {
             continue;
@@ -212,8 +212,8 @@ pub(super) fn task_run_histories(
     store: &ClientStore,
     node_did: &str,
     triggers: &[TriggerView],
-) -> HashMap<String, Vec<TaskRunSummaryView>> {
-    let mut trigger_tasks: HashMap<&str, Vec<&str>> = HashMap::new();
+) -> RapidHashMap<String, Vec<TaskRunSummaryView>> {
+    let mut trigger_tasks: RapidHashMap<&str, Vec<&str>> = RapidHashMap::new();
     for trigger in triggers
         .iter()
         .filter(|trigger| trigger.config.node_did == node_did)
@@ -224,7 +224,7 @@ pub(super) fn task_run_histories(
             tasks.push(task_id);
         }
     }
-    let mut latest: HashMap<&str, Vec<&AgentRequestRow>> = HashMap::new();
+    let mut latest: RapidHashMap<&str, Vec<&AgentRequestRow>> = RapidHashMap::new();
     for request in &store.requests {
         if !request_matches_node(request, node_did) {
             continue;

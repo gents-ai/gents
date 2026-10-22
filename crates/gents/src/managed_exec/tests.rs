@@ -1,5 +1,5 @@
 #[cfg(unix)]
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -395,7 +395,7 @@ async fn managed_exec_environment_replaces_the_inherited_environment() {
         cancellation_token: CancellationToken::new(),
         max_output_bytes: 4096,
         stdin: Vec::new(),
-        environment: Some(HashMap::from([(
+        environment: Some(RapidHashMap::from_iter([(
             "TEST_SCOPED_VAR".to_string(),
             "scoped-only".to_string(),
         )])),

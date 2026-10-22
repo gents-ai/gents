@@ -214,7 +214,7 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
         "introspection errors: {:?}",
         response.errors
     );
-    let names: HashSet<String> = response
+    let names: RapidHashSet<String> = response
         .data
         .as_ref()
         .and_then(|d| d.get("__type"))

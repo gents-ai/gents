@@ -204,7 +204,7 @@ fn selected_group<'a>(
         edit.messages.is_empty() || edit.messages.len() == count,
         "Replacement must preserve the selected message count."
     );
-    let mut sources = std::collections::HashSet::new();
+    let mut sources = rapidhash::RapidHashSet::default();
     for message in &edit.messages {
         anyhow::ensure!(
             edit.selected_request_doc_ids
@@ -485,7 +485,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
             creates.len() == edit.messages.len(),
             "Replacement request count changed."
         );
-        let mut ids = std::collections::HashSet::new();
+        let mut ids = rapidhash::RapidHashSet::default();
         for ((slot, message), create) in selected.iter().zip(&edit.messages).zip(creates) {
             anyhow::ensure!(
                 ids.insert(&create.request_id) && !create.request_id.is_empty(),

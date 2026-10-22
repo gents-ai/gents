@@ -626,7 +626,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         .await
         .unwrap();
     }
-    let mut ids = std::collections::HashMap::new();
+    let mut ids = rapidhash::RapidHashMap::default();
     for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
         let actor = ::identity::Did::new(did).unwrap();
         let rows = crate::config_client::ConfigAccess::transact_local_write(

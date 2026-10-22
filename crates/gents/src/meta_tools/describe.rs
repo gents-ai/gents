@@ -1,9 +1,9 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
+use rapidhash::RapidHashSet;
 use rmcp::model::{ListToolsResult, Tool as McpTool};
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use std::collections::HashSet;
 
 use crate::truncation::{truncate_text, TruncationLimits, TruncationMode};
 
@@ -413,7 +413,7 @@ fn push_field_section(out: &mut String, heading: &str, fields: &[&ArgumentField]
     out.push('\n');
 }
 
-fn required_names(schema: &Map<String, Value>) -> HashSet<&str> {
+fn required_names(schema: &Map<String, Value>) -> RapidHashSet<&str> {
     schema
         .get("required")
         .and_then(Value::as_array)

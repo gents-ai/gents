@@ -267,7 +267,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
             schedule.concurrency = ConcurrencyMode::LatestOnly;
             let snapshot = snapshot_with_agent_and_schedules(
                 behavior,
-                HashMap::from([(next.identity.trigger_id.clone(), schedule)]),
+                RapidHashMap::from_iter([(next.identity.trigger_id.clone(), schedule)]),
             );
             let (_tx, rx) = watch::channel(snapshot);
             let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));

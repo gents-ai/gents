@@ -243,7 +243,7 @@ async fn patch_config_components_in_txn(
         !node_did.trim().is_empty(),
         "component patch requires an owner"
     );
-    let mut identities = std::collections::HashSet::new();
+    let mut identities = rapidhash::RapidHashSet::default();
     for (target, id, patch) in patches {
         anyhow::ensure!(
             !id.trim().is_empty(),

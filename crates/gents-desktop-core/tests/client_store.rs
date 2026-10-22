@@ -426,7 +426,7 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     .context("timed out waiting for all 20 nodes to appear in store")??;
 
     let snap = core.store().snapshot();
-    let dids: std::collections::HashSet<&str> =
+    let dids: rapidhash::RapidHashSet<&str> =
         snap.nodes.iter().map(|p| p.node_did.as_str()).collect();
     for i in 0..20usize {
         let want = format!("did:race-{i}");

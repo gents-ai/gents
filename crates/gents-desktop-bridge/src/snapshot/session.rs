@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use gents::config_client::ConfigAccess;
@@ -56,7 +57,7 @@ pub use timeline_page::{apply_session_timeline_page, apply_session_timeline_page
 
 pub(super) fn message_is_runtime_control(
     message: &TranscriptMessageRow,
-    requests_by_id: &HashMap<&str, &AgentRequestRow>,
+    requests_by_id: &RapidHashMap<&str, &AgentRequestRow>,
 ) -> bool {
     let request_input = message
         .message
@@ -116,7 +117,7 @@ pub(super) fn request_origin_view(
 pub(super) fn message_origin(
     store: &ClientStore,
     message: &TranscriptMessageRow,
-    requests_by_id: &HashMap<&str, &AgentRequestRow>,
+    requests_by_id: &RapidHashMap<&str, &AgentRequestRow>,
 ) -> Option<RequestOriginView> {
     if message.message.role != gents_protocol::output::MessageRole::User {
         return None;
@@ -390,7 +391,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                 .transcript_messages
                 .iter()
                 .map(|row| i64::from(row.message.sequence))
-                .collect::<std::collections::HashSet<_>>();
+                .collect::<rapidhash::RapidHashSet<_>>();
             match gents_desktop_core::client::load_session_compaction_entries_on(
                 access,
                 session_id,
@@ -469,7 +470,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
 fn attach_context_reduction_timeline_events(
     snapshot: &mut DesktopSessionSnapshot,
     history: Vec<LoadedRequestContext>,
-    page_sequences: &std::collections::HashSet<i64>,
+    page_sequences: &rapidhash::RapidHashSet<i64>,
 ) {
     struct RequestSummary {
         sequence: i64,
@@ -565,7 +566,7 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
     call_ids.sort();
     call_ids.dedup();
     let access = ConfigAccess::local(core.node_arc());
-    let mut outcomes = HashMap::new();
+    let mut outcomes = RapidHashMap::new();
     for tool_call_id in call_ids {
         let key = JobKey::Address {
             session_id: snapshot.session_id.clone(),
@@ -621,7 +622,7 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
 fn attach_session_compaction_timeline_events(
     snapshot: &mut DesktopSessionSnapshot,
     entries: &[gents_protocol::row::CompactionEntryRow],
-    page_sequences: &std::collections::HashSet<i64>,
+    page_sequences: &rapidhash::RapidHashSet<i64>,
 ) {
     for entry in entries {
         let Some(sequence) = entry
@@ -648,7 +649,7 @@ fn job_row_fill(
     state: Option<JobState>,
     progress: Option<&JobProgress>,
     handle: Option<&str>,
-    outcomes: &HashMap<String, JobOutcome>,
+    outcomes: &RapidHashMap<String, JobOutcome>,
 ) -> Option<(Option<JobOutcome>, Vec<String>)> {
     let (state, tool_call_id) = (state?, tool_call_id?);
     let outcome = outcomes.get(tool_call_id).cloned();
@@ -666,7 +667,7 @@ pub(super) fn order_queued_turns(snapshot: &mut DesktopSessionSnapshot, arrivals
     let queued = std::mem::take(&mut snapshot.queued_turns)
         .into_iter()
         .filter_map(|turn| Some((turn.request_doc_id.clone()?, turn)))
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
     snapshot.queued_turns = arrivals
         .iter()
         .filter_map(|id| queued.get(id).cloned())
@@ -825,7 +826,7 @@ mod paging_coverage_tests {
         attach_context_reduction_timeline_events(
             &mut snapshot,
             history,
-            &std::collections::HashSet::from([1]),
+            &rapidhash::RapidHashSet::from_iter([1]),
         );
         assert!(matches!(
             snapshot.timeline_items.as_slice(),

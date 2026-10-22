@@ -241,7 +241,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
                 resolved_schedule(&trigger_id, task.clone()),
             )
         })
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
     let snapshot = snapshot_with_schedules(schedules);
     let first_trigger_id = snapshot
         .active_schedules()
@@ -331,7 +331,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-1".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-1".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -417,7 +417,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-1".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-1".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -550,7 +550,7 @@ async fn schedule_source_next_fire_honors_cancellation_token() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let snapshot = snapshot_with_schedules(HashMap::new());
+    let snapshot = snapshot_with_schedules(RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
@@ -618,7 +618,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-e2e".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-e2e".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
 
@@ -779,7 +779,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-null".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-null".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -861,7 +861,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-cron-null".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-cron-null".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -918,7 +918,7 @@ async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let snapshot = snapshot_with_schedules(HashMap::new());
+    let snapshot = snapshot_with_schedules(RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())

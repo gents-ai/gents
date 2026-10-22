@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 #[cfg(test)]
 use std::collections::VecDeque;
 use std::fmt;
@@ -127,10 +127,10 @@ pub(crate) fn lock_fixtures_for_test() -> std::sync::MutexGuard<'static, ()> {
 /// [`push_line`]: MessagesSseState::push_line
 /// [`finish`]: MessagesSseState::finish
 pub struct MessagesSseState {
-    surface: HashSet<String>,
+    surface: RapidHashSet<String>,
     pending: Option<PendingBlock>,
     last_reasoning_index: Option<u64>,
-    seen_ids: HashSet<String>,
+    seen_ids: RapidHashSet<String>,
     usage: Option<rig::completion::Usage>,
     data: String,
     finished: bool,
@@ -141,12 +141,12 @@ pub struct MessagesSseState {
 }
 
 impl MessagesSseState {
-    pub fn new(surface: HashSet<String>) -> Self {
+    pub fn new(surface: RapidHashSet<String>) -> Self {
         Self {
             surface,
             pending: None,
             last_reasoning_index: None,
-            seen_ids: HashSet::new(),
+            seen_ids: RapidHashSet::new(),
             usage: None,
             data: String::new(),
             finished: false,
@@ -607,14 +607,14 @@ impl MessagesSseState {
 
 pub fn parse_messages_sse(
     sse: &str,
-    surface: &HashSet<String>,
+    surface: &RapidHashSet<String>,
 ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
     parse_messages_sse_typed(sse, surface).map_err(Into::into)
 }
 
 pub fn parse_messages_sse_typed(
     sse: &str,
-    surface: &HashSet<String>,
+    surface: &RapidHashSet<String>,
 ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
     let mut state = MessagesSseState::new(surface.clone());
     let mut events = Vec::new();
@@ -680,8 +680,8 @@ impl PendingTool {
 
 fn mapped_tool_call(
     tool: PendingTool,
-    surface: &HashSet<String>,
-    seen_ids: &mut HashSet<String>,
+    surface: &RapidHashSet<String>,
+    seen_ids: &mut RapidHashSet<String>,
 ) -> Result<RawStreamingChoice<ClaudeStreamResponse>, MessagesParseError> {
     if tool.id.trim().is_empty() || tool.name.trim().is_empty() {
         return Err(MessagesParseError::MalformedToolUse {
@@ -865,7 +865,7 @@ async fn push_line_observed(
 pub async fn stream_messages<S: BearerSource>(
     model: &str,
     request: &CompletionRequest,
-    surface: HashSet<String>,
+    surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,
@@ -880,7 +880,7 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     uri: &str,
     model: &str,
     request: &CompletionRequest,
-    surface: HashSet<String>,
+    surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,

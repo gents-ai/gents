@@ -5,7 +5,7 @@
 //! operator/bootstrap intent knob, and the prober's only doc write is the
 //! recurring `unknown → healthy` promotion.
 
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,7 +87,7 @@ pub struct BackendHealthSnapshot {
 
 #[derive(Clone, Default)]
 pub struct BackendHealthMap {
-    inner: Arc<RwLock<HashMap<String, BackendHealthEntry>>>,
+    inner: Arc<RwLock<RapidHashMap<String, BackendHealthEntry>>>,
 }
 
 impl BackendHealthMap {
@@ -103,7 +103,7 @@ impl BackendHealthMap {
             .map(|entry| snapshot_from_entry(backend_id, entry))
     }
 
-    pub async fn snapshot(&self) -> HashMap<String, BackendHealthSnapshot> {
+    pub async fn snapshot(&self) -> RapidHashMap<String, BackendHealthSnapshot> {
         self.inner
             .read()
             .await
@@ -112,7 +112,7 @@ impl BackendHealthMap {
             .collect()
     }
 
-    pub async fn vetoed_backend_ids(&self) -> HashSet<String> {
+    pub async fn vetoed_backend_ids(&self) -> RapidHashSet<String> {
         self.inner
             .read()
             .await
@@ -143,7 +143,7 @@ impl BackendHealthMap {
         self.inner.write().await.insert(backend_id, entry);
     }
 
-    async fn retain_backends(&self, backend_ids: &HashSet<String>) {
+    async fn retain_backends(&self, backend_ids: &RapidHashSet<String>) {
         self.inner
             .write()
             .await
@@ -207,11 +207,11 @@ pub struct ProbeCycleOutcome {
 
 #[derive(Default)]
 struct ProbeSchedule {
-    known: HashMap<String, InferenceBackend>,
+    known: RapidHashMap<String, InferenceBackend>,
 }
 
 impl ProbeSchedule {
-    fn select(&mut self, backends: &[InferenceBackend], periodic: bool) -> HashSet<String> {
+    fn select(&mut self, backends: &[InferenceBackend], periodic: bool) -> RapidHashSet<String> {
         let due = backends
             .iter()
             .filter(|backend| backend.enabled)
@@ -363,10 +363,10 @@ async fn probe_selected_backends(
     health_map: &BackendHealthMap,
     options: &BackendProberOptions,
     oauth: Option<OAuthProbeContext<'_>>,
-    selected: Option<&HashSet<String>>,
+    selected: Option<&RapidHashSet<String>>,
 ) -> ProbeCycleOutcome {
     let mut outcome = ProbeCycleOutcome::default();
-    let mut probed_ids = HashSet::new();
+    let mut probed_ids = RapidHashSet::new();
 
     for backend in backends {
         if backend.provider_kind.is_node_scoped_oauth() && oauth.is_none() {
@@ -773,14 +773,14 @@ mod tests {
                 .due
                 .iter()
                 .map(|id| format!("backend-{id}"))
-                .collect::<HashSet<_>>();
+                .collect::<RapidHashSet<_>>();
             assert_eq!(selected, expected, "{}", case.name);
             let observed = case
                 .observed
                 .iter()
                 .map(configuration)
                 .map(|backend| (backend.backend_id.clone(), backend))
-                .collect::<HashMap<_, _>>();
+                .collect::<RapidHashMap<_, _>>();
             assert_eq!(
                 serde_json::to_value(&schedule.known).unwrap(),
                 serde_json::to_value(observed).unwrap(),
@@ -851,7 +851,7 @@ mod tests {
                     .due
                     .iter()
                     .map(|id| format!("backend-{id}"))
-                    .collect::<HashSet<_>>();
+                    .collect::<RapidHashSet<_>>();
                 assert_eq!(
                     schedule.select(std::slice::from_ref(&changed), false),
                     expected,

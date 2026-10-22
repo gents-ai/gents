@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -203,7 +203,7 @@ pub struct Gents {
     node: Arc<EmbeddedNode>,
     runtime_node: Arc<RuntimeNode>,
     agents: Vec<Arc<ResolvedAgent>>,
-    unavailable_agents: HashMap<String, UnavailableAgent>,
+    unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
     local_hostname: String,
@@ -361,7 +361,7 @@ impl Gents {
         &self.runtime_node.default_agent_id
     }
 
-    pub fn unavailable_agents(&self) -> &HashMap<String, UnavailableAgent> {
+    pub fn unavailable_agents(&self) -> &RapidHashMap<String, UnavailableAgent> {
         &self.unavailable_agents
     }
 

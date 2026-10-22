@@ -17,12 +17,12 @@ pub(super) fn diff_counts(
         .agents
         .keys()
         .cloned()
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     let proposed_ids = proposed
         .agents
         .keys()
         .cloned()
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     let added = proposed_ids.difference(&current_ids).count();
     let removed = current_ids.difference(&proposed_ids).count();
     let updated = current_ids

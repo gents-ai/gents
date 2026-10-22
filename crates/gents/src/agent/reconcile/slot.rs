@@ -16,7 +16,7 @@ use crate::startup_readiness::{BuildOutcome, BuildStanding};
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
 
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 const AGENT_EXECUTOR_QUEUE_CAPACITY: usize = 32;
 const MAX_BEHAVIOR_WORKERS: usize = 256;
@@ -165,7 +165,7 @@ pub(super) fn spawn_slots<F, Fut>(
     runner: F,
     shutdown: watch::Receiver<bool>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
-) -> HashMap<String, AgentSlot>
+) -> RapidHashMap<String, AgentSlot>
 where
     F: Fn(
             Arc<ResolvedAgent>,
@@ -180,7 +180,7 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    let mut slots = HashMap::with_capacity(resolved_snapshot.agents.len());
+    let mut slots = RapidHashMap::with_capacity(resolved_snapshot.agents.len());
     for (agent_id, agent_config) in &resolved_snapshot.agents {
         let tool_surface = resolved_snapshot
             .tool_surfaces
@@ -312,7 +312,7 @@ where
 
 pub(super) fn agent_executor_capacity(
     agent_config: &ResolvedAgent,
-    backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
+    backend_admission_configs: &RapidHashMap<String, BackendAdmissionConfig>,
 ) -> usize {
     let Some(backend_id) = agent_config
         .backend_id
