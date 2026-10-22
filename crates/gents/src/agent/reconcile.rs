@@ -7,6 +7,7 @@ use tokio::task::{JoinError, JoinSet};
 use tracing::Instrument;
 
 use crate::admission::AdmissionRegistry;
+use crate::agent::worker_capacity::WorkerCapacity;
 use crate::config::ResolvedAgent;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
@@ -122,6 +123,7 @@ where
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut

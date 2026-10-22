@@ -27,7 +27,6 @@ const LISTENER_GRACE: Duration = if cfg!(test) {
 
 tokio::task_local! {
     static INTERACTIVE: ();
-    static COMPOSED: ();
 }
 
 pub async fn scope_interactive<F>(interactive: bool, future: F) -> F::Output
@@ -45,30 +44,11 @@ pub fn carry_interactive<F>(future: F) -> impl std::future::Future<Output = F::O
 where
     F: std::future::Future,
 {
-    let composed = composed();
-    let future = workspace::carry(scope_interactive(interactive(), future));
-    async move {
-        if composed {
-            COMPOSED.scope((), future).await
-        } else {
-            future.await
-        }
-    }
+    workspace::carry(scope_interactive(interactive(), future))
 }
 
 pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
-}
-
-pub(crate) async fn scope_composed<F>(future: F) -> F::Output
-where
-    F: std::future::Future,
-{
-    COMPOSED.scope((), future).await
-}
-
-fn composed() -> bool {
-    COMPOSED.try_with(|_| ()).is_ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,16 +57,12 @@ pub(crate) enum Consent {
     Deny,
 }
 
-pub(crate) fn consent_route(interactive: bool, _composed: bool) -> Consent {
+pub(crate) fn consent(interactive: bool) -> Consent {
     if interactive {
         Consent::Ask
     } else {
         Consent::Deny
     }
-}
-
-pub(crate) fn consent(interactive: bool) -> Consent {
-    consent_route(interactive, composed())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -31,9 +31,7 @@ impl ShutdownDrainFailure {
 }
 
 use super::runtime::StartupBarrier;
-use crate::agent::worker_capacity::{
-    bind_current_claim, current_slot_capacity, scope_request_capacity, WorkerTicket,
-};
+use crate::agent::worker_capacity::{RequestGuard, WorkerCapacity, WorkerTicket};
 use crate::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
 use crate::config::ResolvedAgent;
 use crate::hook::FailurePolicy;
@@ -410,6 +408,7 @@ where
     pub(super) async fn run(
         &mut self,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        capacity: Arc<WorkerCapacity>,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         tracing::info!(
@@ -478,56 +477,46 @@ where
             let agent_id = self.agent_config.agent_id.clone();
             let backend_id = self.agent_config.backend_id.clone().unwrap_or_default();
 
-            let active_guard = if let Some(capacity) = current_slot_capacity() {
-                let cancellation = tokio_util::sync::CancellationToken::new();
-                let guard = tokio::select! {
-                    biased;
-                    _ = shutdown.changed() => break Ok(()),
-                    guard = capacity.acquire_unbound(&cancellation) => guard,
-                };
-                match guard {
-                    Ok(guard) => Some(guard),
-                    Err(error) => {
-                        tracing::warn!(agent_id, error = %error, "request worker capacity admission stopped");
-                        break Ok(());
-                    }
+            let cancellation = tokio_util::sync::CancellationToken::new();
+            let guard = tokio::select! {
+                biased;
+                _ = shutdown.changed() => break Ok(()),
+                guard = capacity.acquire_unbound(&cancellation) => guard,
+            };
+            let active_guard = match guard {
+                Ok(guard) => Some(RequestGuard::Unbound(guard)),
+                Err(error) => {
+                    tracing::warn!(agent_id, error = %error, "request worker capacity admission stopped");
+                    break Ok(());
                 }
-            } else {
-                None
             };
 
-            let process =
-                self.process_request(request, shutdown.clone())
-                    .instrument(tracing::info_span!(
-                        "agent.request",
-                        request_doc_id = %trace_attrs.request_doc_id,
-                        request_id = %trace_attrs.request_id,
-                        session_id = %trace_attrs.session_id,
-                        node_did = %trace_attrs.node_did,
-                        agent_id = %agent_id,
-                        requested_agent_id = %trace_attrs.requested_agent_id,
-                        backend_id = %backend_id,
-                        execution_origin = %trace_attrs.execution_origin,
-                        persisted_execution_origin = %trace_attrs.execution_origin,
-                        deadline_at = %trace_attrs.deadline_at,
-                        has_deadline = trace_attrs.has_deadline,
-                        request_hop = trace_attrs.request_hop,
-                        parent_request_id = %trace_attrs.parent_request_id,
-                        parent_tool_call_id = %trace_attrs.parent_tool_call_id,
-                        selected_skill_count = trace_attrs.selected_skill_count,
-                        workspace_cwd_set = trace_attrs.workspace_cwd_set,
-                        claim_outcome = tracing::field::Empty,
-                        request_outcome = tracing::field::Empty,
-                        failure_class = tracing::field::Empty,
-                    ));
-            if let Some(guard) = active_guard {
-                if let Err(error) = scope_request_capacity(guard, process).await {
-                    break Err(error);
-                }
-            } else {
-                if let Err(error) = process.await {
-                    break Err(error);
-                }
+            let process = self
+                .process_request_with_capacity(request, active_guard, shutdown.clone())
+                .instrument(tracing::info_span!(
+                    "agent.request",
+                    request_doc_id = %trace_attrs.request_doc_id,
+                    request_id = %trace_attrs.request_id,
+                    session_id = %trace_attrs.session_id,
+                    node_did = %trace_attrs.node_did,
+                    agent_id = %agent_id,
+                    requested_agent_id = %trace_attrs.requested_agent_id,
+                    backend_id = %backend_id,
+                    execution_origin = %trace_attrs.execution_origin,
+                    persisted_execution_origin = %trace_attrs.execution_origin,
+                    deadline_at = %trace_attrs.deadline_at,
+                    has_deadline = trace_attrs.has_deadline,
+                    request_hop = trace_attrs.request_hop,
+                    parent_request_id = %trace_attrs.parent_request_id,
+                    parent_tool_call_id = %trace_attrs.parent_tool_call_id,
+                    selected_skill_count = trace_attrs.selected_skill_count,
+                    workspace_cwd_set = trace_attrs.workspace_cwd_set,
+                    claim_outcome = tracing::field::Empty,
+                    request_outcome = tracing::field::Empty,
+                    failure_class = tracing::field::Empty,
+                ));
+            if let Err(error) = process.await {
+                break Err(error);
             }
         };
 
@@ -585,9 +574,22 @@ where
         admitted
     }
 
+    #[cfg(test)]
     pub(in crate::agent) async fn process_request(
         &mut self,
         request: AgentRequest,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<()> {
+        self.process_request_with_capacity(request, None, shutdown)
+            .await
+    }
+
+    /// `capacity` is the post-dequeue worker permit; this call owns it until
+    /// it returns, bound to the claim's execution generation once one exists.
+    pub(in crate::agent) async fn process_request_with_capacity(
+        &mut self,
+        request: AgentRequest,
+        mut capacity: Option<RequestGuard>,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         // Publication and terminal selection belong to this one execution.
@@ -652,7 +654,7 @@ where
                     }
                 };
                 let ticket = WorkerTicket::new(lifecycle.request().doc_id.clone(), generation);
-                if let Err(error) = bind_current_claim(ticket) {
+                if let Err(error) = RequestGuard::bind_claim(&mut capacity, ticket) {
                     let error = anyhow::Error::new(error);
                     record_current_request_outcome("worker_ticket_refused");
                     record_current_failure_class(&error);

@@ -118,6 +118,7 @@ impl RuntimeContext {
         agent_config: Arc<crate::config::ResolvedAgent>,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
@@ -175,6 +176,7 @@ impl RuntimeContext {
                 provider_family,
                 replay_issuer,
                 request_rx,
+                capacity,
                 slot_generation,
                 shutdown,
                 prompt_builder,
@@ -198,6 +200,7 @@ impl RuntimeContext {
         provider_family: Option<String>,
         replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
         prompt_builder: LayeredPromptBuilder,
@@ -261,7 +264,7 @@ impl RuntimeContext {
         if let Some((compactor, provider_family)) = summary_compactor {
             daemon = daemon.with_compactor(compactor, provider_family);
         }
-        daemon.run(request_rx, shutdown).await
+        daemon.run(request_rx, capacity, shutdown).await
     }
 }
 

@@ -517,7 +517,7 @@ async fn run_agent_owned(
         resolved_snapshot,
         admission_registry.clone(),
         agent.retry_policy.clone(),
-        move |agent, tool_surface, request_rx, generation, shutdown| {
+        move |agent, tool_surface, request_rx, capacity, generation, shutdown| {
             let runtime = runtime_for_runner.clone();
             #[cfg(test)]
             let test_slot_runner = test_slot_runner.clone();
@@ -527,7 +527,14 @@ async fn run_agent_owned(
                     return test_slot_runner(generation, shutdown.clone()).await;
                 }
                 runtime
-                    .run_agent(agent, tool_surface, request_rx, generation, shutdown)
+                    .run_agent(
+                        agent,
+                        tool_surface,
+                        request_rx,
+                        capacity,
+                        generation,
+                        shutdown,
+                    )
                     .await
             }
         },

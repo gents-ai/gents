@@ -72,21 +72,23 @@ fn rust_sources(root: &Path, output: &mut Vec<PathBuf>) {
 }
 
 fn production_sources(root: &Path) -> Vec<PathBuf> {
+    let workspace = toml_file(&root.join("Cargo.toml"));
     let mut sources = Vec::new();
-    for entry in std::fs::read_dir(root.join("crates"))
-        .expect("read crates")
-        .flatten()
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
     {
+        let member = root.join(member.as_str().expect("member path"));
         for directory in ["src", "examples"] {
-            let path = entry.path().join(directory);
+            let path = member.join(directory);
             if path.is_dir() {
                 rust_sources(&path, &mut sources);
             }
         }
-    }
-    let apps = root.join("apps");
-    if apps.is_dir() {
-        rust_sources(&apps, &mut sources);
+        let build = member.join("build.rs");
+        if build.is_file() {
+            sources.push(build);
+        }
     }
     sources.sort();
     sources
@@ -1059,24 +1061,28 @@ fn macro_names_rig(mut cursor: syn::buffer::Cursor) -> bool {
     false
 }
 
+fn item_cfg_test(item: &syn::Item) -> bool {
+    let attributes = match item {
+        syn::Item::Const(item) => &item.attrs,
+        syn::Item::Enum(item) => &item.attrs,
+        syn::Item::ExternCrate(item) => &item.attrs,
+        syn::Item::Fn(item) => &item.attrs,
+        syn::Item::Impl(item) => &item.attrs,
+        syn::Item::Macro(item) => &item.attrs,
+        syn::Item::Mod(item) => &item.attrs,
+        syn::Item::Static(item) => &item.attrs,
+        syn::Item::Struct(item) => &item.attrs,
+        syn::Item::Trait(item) => &item.attrs,
+        syn::Item::Type(item) => &item.attrs,
+        syn::Item::Use(item) => &item.attrs,
+        _ => return false,
+    };
+    cfg_test(attributes)
+}
+
 impl<'ast> Visit<'ast> for RigPathVisitor {
     fn visit_item(&mut self, item: &'ast syn::Item) {
-        let attributes = match item {
-            syn::Item::Const(item) => &item.attrs,
-            syn::Item::Enum(item) => &item.attrs,
-            syn::Item::ExternCrate(item) => &item.attrs,
-            syn::Item::Fn(item) => &item.attrs,
-            syn::Item::Impl(item) => &item.attrs,
-            syn::Item::Macro(item) => &item.attrs,
-            syn::Item::Mod(item) => &item.attrs,
-            syn::Item::Static(item) => &item.attrs,
-            syn::Item::Struct(item) => &item.attrs,
-            syn::Item::Trait(item) => &item.attrs,
-            syn::Item::Type(item) => &item.attrs,
-            syn::Item::Use(item) => &item.attrs,
-            _ => return visit::visit_item(self, item),
-        };
-        if !cfg_test(attributes) {
+        if !item_cfg_test(item) {
             visit::visit_item(self, item);
         }
     }
@@ -1440,4 +1446,123 @@ fn where_clause_fence_counts_inline_bounds_only() {
         let syntax = syn::parse_file(source).expect("parse snippet");
         assert_eq!(inline_bound_sites(&syntax), sites, "{source}");
     }
+}
+
+/// Request context (identity, signing, ACP bypass, transaction handles, the
+/// requester or session, trace or request IDs) travels as explicit arguments
+/// or fields. `tokio::task_local!` loses it across `tokio::spawn`, and Clippy's
+/// `disallowed_macros` cannot be allowed at an item-position macro site, so
+/// this ratchet owns the ban. Entries name why each production site remains;
+/// the list only shrinks.
+#[rustfmt::skip]
+const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("crates/gents-cli/src/request_helpers.rs", 1, "captures an embedded command's printed report; carries no request identity"),
+    ("crates/gents-loop/src/provider_input/routing_affinity.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
+    ("crates/gents-loop/src/rendered_request/scope.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
+    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 2, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
+    ("crates/gents/src/config_client/txn.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
+    ("crates/gents/src/managed_exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/tool_call_lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+];
+
+#[derive(Default)]
+struct AmbientContextVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for AmbientContextVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        if invocation
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "thread_local" || segment.ident == "task_local")
+        {
+            let tokens = invocation.tokens.clone().into_iter().collect::<Vec<_>>();
+            self.sites += tokens
+                .iter()
+                .enumerate()
+                .filter(|(index, token)| {
+                    let lifetime = index.checked_sub(1).is_some_and(|previous| {
+                        matches!(&tokens[previous], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '\'')
+                    });
+                    !lifetime
+                        && matches!(token, proc_macro2::TokenTree::Ident(ident) if ident == "static")
+                })
+                .count();
+        }
+        visit::visit_macro(self, invocation);
+    }
+}
+
+fn ambient_context_sites(syntax: &syn::File) -> usize {
+    let mut visitor = AmbientContextVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn ambient_request_context_only_shrinks() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| (relative, ambient_context_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = AMBIENT_CONTEXT_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new thread_local!/task_local! static(s); pass request context as an argument or field"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} thread_local!/task_local! statics exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} thread_local!/task_local! statics; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "ambient request context ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn ambient_context_counts_statics_outside_test_items() {
+    let syntax = syn::parse_file(
+        r#"
+        tokio::task_local! { static A: &'static str; static B: u8; }
+        fn f() { thread_local! { static C: u8 = const { 0 }; } }
+        #[cfg(test)]
+        tokio::task_local! { static D: u8; }
+        #[cfg(test)]
+        mod tests { thread_local! { static E: u8 = const { 0 }; } }
+        "#,
+    )
+    .expect("parse snippet");
+    assert_eq!(ambient_context_sites(&syntax), 3);
 }

@@ -8,7 +8,7 @@ use tokio::task::JoinSet;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::admission::BackendAdmissionConfig;
-use crate::agent::worker_capacity::{scope_slot_capacity, WorkerCapacity};
+use crate::agent::worker_capacity::WorkerCapacity;
 use crate::config::ResolvedAgent;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -170,6 +170,7 @@ pub(super) struct SlotConfig {
 #[derive(Clone)]
 struct SlotRuntime {
     request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+    capacity: Arc<WorkerCapacity>,
     shutdown: watch::Receiver<bool>,
     state_rx: watch::Receiver<AgentSlotState>,
     standing: Arc<std::sync::Mutex<BuildStanding>>,
@@ -188,6 +189,7 @@ where
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -236,6 +238,7 @@ where
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -270,6 +273,7 @@ where
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -315,12 +319,12 @@ where
         },
         SlotRuntime {
             request_rx,
+            capacity,
             shutdown,
             state_rx,
             standing,
         },
         executor_capacity,
-        capacity,
         runner,
     )));
 
@@ -380,6 +384,7 @@ where
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -398,6 +403,7 @@ where
     } = slot;
     let SlotRuntime {
         request_rx,
+        capacity,
         mut shutdown,
         mut state_rx,
         standing,
@@ -420,6 +426,7 @@ where
             agent_config.clone(),
             tool_surface.clone(),
             request_rx.clone(),
+            capacity.clone(),
             generation,
             shutdown.clone(),
         ))
@@ -510,7 +517,6 @@ async fn run_slot_workers<F, Fut>(
     slot: SlotConfig,
     runtime: SlotRuntime,
     executor_capacity: usize,
-    capacity: Arc<WorkerCapacity>,
     runner: F,
 ) -> Result<()>
 where
@@ -518,6 +524,7 @@ where
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -538,10 +545,7 @@ where
     );
     let mut workers = JoinSet::new();
     for worker_index in 0..worker_count {
-        workers.spawn(scope_slot_capacity(
-            capacity.clone(),
-            run_slot_loop(slot.clone(), runtime.clone(), runner.clone()),
-        ));
+        workers.spawn(run_slot_loop(slot.clone(), runtime.clone(), runner.clone()));
         tracing::debug!(
             agent_id = %agent_id,
             worker_index,

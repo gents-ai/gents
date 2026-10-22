@@ -176,6 +176,11 @@ metadata.
   HTTP GraphQL from feature code, and never add another retry loop or access
   wrapper. `write_owner_structure.rs` is a syntactic ratchet over direct node
   access, not complete enforcement; its allowlist only shrinks.
+- Request context (identity, signing, ACP bypass, transaction handles, the
+  requester or session, trace or request IDs) travels with the task or message
+  as an explicit argument or field, never in `thread_local!` or `task_local!`.
+  `ambient_request_context_only_shrinks` in `write_owner_structure.rs` bans new
+  production sites; its allowlist only shrinks.
 - Preserve DefraDB's execution boundaries when updating its adapter or dependency.
   Autocommit prepares remote inputs on the caller and routes only prepared database
   attempts; do not replace that sequence with a call that moves the whole request

@@ -2143,7 +2143,15 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                 "creator dispatched before daemon"
             );
         }
-        let daemon_task = tokio::spawn(async move { daemon.run(daemon_rx, daemon_shutdown).await });
+        let daemon_task = tokio::spawn(async move {
+            daemon
+                .run(
+                    daemon_rx,
+                    crate::agent::worker_capacity::WorkerCapacity::new(1),
+                    daemon_shutdown,
+                )
+                .await
+        });
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
@@ -2267,7 +2275,11 @@ async fn start_owned_title_daemon(
     .unwrap();
     let task = tokio::spawn(async move {
         daemon
-            .run(Arc::new(tokio::sync::Mutex::new(receiver)), shutdown_rx)
+            .run(
+                Arc::new(tokio::sync::Mutex::new(receiver)),
+                crate::agent::worker_capacity::WorkerCapacity::new(1),
+                shutdown_rx,
+            )
             .await
     });
     (dispatch, shutdown_tx, task, status_owner)

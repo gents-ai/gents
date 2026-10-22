@@ -364,6 +364,7 @@ async fn slot_panic_restarts_agent() {
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let starts = starts.clone();
@@ -445,7 +446,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     let runner = {
         let entered = entered.clone();
         let dropped = dropped.clone();
-        move |_, _, _, _, _| {
+        move |_, _, _, _, _, _| {
             let entered = entered.clone();
             let dropped = dropped.clone();
             async move {
@@ -504,6 +505,7 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let started_tx = started_tx.clone();
@@ -522,8 +524,6 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
                         return Ok(());
                     };
                     dequeued_tx.send(request.request_id.clone()).await.unwrap();
-                    let capacity = crate::agent::worker_capacity::current_slot_capacity()
-                        .expect("test runner has slot generation capacity");
                     let cancellation = tokio_util::sync::CancellationToken::new();
                     let unbound = tokio::select! {
                         _ = shutdown.changed() => return Ok(()),
@@ -651,6 +651,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let runner = move |_agent: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                        _generation: u64,
                        mut shutdown: watch::Receiver<bool>| async move {
         loop {
@@ -779,6 +780,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let runner = move |agent_config: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                        generation: u64,
                        mut shutdown: watch::Receiver<bool>| {
         let built_tx = built_tx.clone();
@@ -916,6 +918,7 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
         move |agent_config: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let (done_tx, held_tx, release) = (done_tx.clone(), held_tx.clone(), release.clone());
@@ -1110,6 +1113,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         move |agent_config: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let starts = starts.clone();
@@ -1275,6 +1279,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let runner = move |_agent: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                        _generation: u64,
                        mut shutdown: watch::Receiver<bool>| async move {
         loop {
@@ -1481,6 +1486,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             started_generations.lock().unwrap().push(generation);
@@ -1567,6 +1573,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let runner = move |_agent: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
                        _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                        generation: u64,
                        mut shutdown: watch::Receiver<bool>| {
         let started_tx = started_tx.clone();
@@ -1672,6 +1679,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let generation_one_exit = generation_one_exit.clone();
@@ -1820,6 +1828,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let exited = exited.clone();
@@ -1991,6 +2000,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         move |_agent: Arc<ResolvedAgent>,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let observed_tool_names = observed_tool_names.clone();
@@ -2116,6 +2126,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let runner = |_agent: Arc<ResolvedAgent>,
                   _tool_surface: Arc<ToolSurface>,
                   _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                  _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                   _generation: u64,
                   mut shutdown: watch::Receiver<bool>| async move {
         let _ = shutdown.changed().await;
@@ -2295,7 +2306,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
             base_delay_ms: 1,
             max_delay_ms: 1,
         },
-        |_, _, _, _, _| async { Ok(()) },
+        |_, _, _, _, _, _| async { Ok(()) },
         shutdown_rx,
     );
     assert!(
