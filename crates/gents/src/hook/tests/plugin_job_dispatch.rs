@@ -34,6 +34,8 @@ struct Options {
     /// Later steps of an adopted job end without effect and leave it running,
     /// instead of failing on a refused scratch file.
     idle: bool,
+    /// The plugin runs a call's `script` as its step (`script_runtime: js`).
+    script: bool,
 }
 
 /// The job block of `team/plugin` in the caller's Tools: it may start `worker`.
@@ -61,6 +63,7 @@ impl Default for Options {
             hop: 0,
             cwd: false,
             idle: false,
+            script: false,
         }
     }
 }
@@ -76,6 +79,7 @@ struct Step0 {
     data: bool,
     via: InstalledVia,
     idle: bool,
+    script: bool,
 }
 
 /// A guest that answers step 0 with `first` and every later step (its input
@@ -134,6 +138,7 @@ fn install_plugin(
     data: bool,
     via: InstalledVia,
     idle: bool,
+    script: bool,
 ) {
     let later = if idle {
         json!({"effects": {}})
@@ -149,6 +154,9 @@ fn install_plugin(
         class: "workflows".into(),
     }];
     record.owner_pack_coordinate = Some("team/plugin".into());
+    if script {
+        record.declaration.script_runtime = Some(crate::pack::ScriptRuntime::Js);
+    }
     if data {
         record.declaration.data = Some(PluginDataDeclaration {
             collections: vec!["Plain".into()],
@@ -224,6 +232,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         options.data,
         options.via,
         options.idle,
+        options.script,
     );
     let cwd = options.cwd.then(|| tempfile::tempdir().unwrap());
 
@@ -263,6 +272,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         data: options.data,
         via: options.via,
         idle: options.idle,
+        script: options.script,
     }
 }
 
@@ -432,7 +442,14 @@ impl Step0 {
 
     /// Replaces the installed plugin, as an operator reinstall does.
     fn reinstall(&self, output: &Value) {
-        install_plugin(self.home.path(), output, self.data, self.via, self.idle);
+        install_plugin(
+            self.home.path(),
+            output,
+            self.data,
+            self.via,
+            self.idle,
+            self.script,
+        );
     }
 
     /// The requests whose retry key names a spawn of the job rooted at `root`.
@@ -830,6 +847,65 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
         "{again}"
     );
     failed(&step.row_of("call-3").await, "policyDenied");
+    step.finish().await;
+}
+
+/// A `script_runtime: js` plugin runs the call's `script` as its step: a step-0
+/// spawn adopts with the host's pin (the script's digest), the run is `dynamic`,
+/// and the job policy applies to it like any dynamic origin.
+#[tokio::test]
+async fn a_js_script_step_adopts_with_the_hosts_pin_as_a_dynamic_run() {
+    let step = step0(
+        adopting(),
+        Options {
+            script: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let script = "module.exports = (i) => i.pin ? {effects: {}} : {effects: {spawn: [{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}]}};";
+    let call = json!({"script": script, "agent_budget": 2, "args": {"handle": "js-run"}});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["status"], "running", "{answer}");
+    let row = step.row_of("call-1").await;
+    let pin = step.pin_of(&row).await;
+    let digest = format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(script.as_bytes())
+    );
+    assert_eq!(pin.script_id, digest);
+    assert_eq!(pin.source_digest, format!("sha256:{digest}"));
+    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Dynamic);
+    assert_eq!(pin.agent_budget, 2);
+    assert_eq!(pin.handle, "js-run");
+    let child = step
+        .child_request(row["_docID"].as_str().unwrap(), "s")
+        .await;
+    assert!(
+        child["request_id"].is_string(),
+        "the spawn became a child request: {child}"
+    );
+    step.finish().await;
+}
+
+/// Under `policy.dynamic: check` the script's first spawn is refused like any dynamic run.
+#[tokio::test]
+async fn a_js_script_spawn_is_refused_under_the_check_policy() {
+    let step = step0(
+        adopting(),
+        Options {
+            script: true,
+            settings: Some(worker_settings(JobPolicy {
+                dynamic: DynamicMode::Check,
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let call = json!({"script": "module.exports = (i) => ({effects: {spawn: [{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}]}});", "agent_budget": 2});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["code"], "plugin_job_policy_denied", "{answer}");
     step.finish().await;
 }
 
