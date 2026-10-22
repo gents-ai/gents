@@ -16,6 +16,7 @@ use crate::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::llm::tool::{Tool, ToolDefinition};
 use crate::tool_surface::EndpointScope;
 use crate::NodeIdentity;
+use gents_protocol::enrollment::EnrollmentDecisionKind;
 
 #[cfg(test)]
 mod tests;
@@ -74,6 +75,7 @@ const ACTIONS: &[&str] = &[
     "enrollment_request",
     "enrollment_pending",
     "enrollment_approve",
+    "enrollment_deny",
     "enrollment_revoke",
     "enrollment_history",
     "sync_documents",
@@ -203,7 +205,7 @@ impl P2pTool {
             "enrollment authority is conflicted"
         );
         let active = projection.active.into_iter().find(|entry| entry.request.candidate_peer == peer)
-            .context("peer has no current authorized enrollment; next call: p2p {\"action\":\"enrollment_pending\"}")?;
+            .context("peer has no current authorized enrollment in this node's network. A pairing applied here needs the peer to have joined this node: it ran enrollment_request with this node's offer and this node approved it. Joining the peer's network does not count; pairing both ways needs each node enrolled in the other's network, so mint an offer here for the peer or have the peer apply its pairing toward this node; next call: p2p {\"action\":\"enrollment_pending\"}")?;
         ensure!(expected_did.is_none_or(|did| did == active.request.candidate_did), "peer DID does not match signed enrollment; next call: p2p {{\"action\":\"pairings_list\"}}");
         Ok(active)
     }
@@ -351,7 +353,7 @@ impl P2pTool {
             ["network", "get"] => &["peer_id"],
             ["pairings", "preview" | "apply"] => &["peer_id", "peer_did", "collections"],
             ["pairings", "revoke"] => &["peer_id"],
-            ["enrollment", "approve" | "revoke"] => &["request_id"],
+            ["enrollment", "approve" | "deny" | "revoke"] => &["request_id"],
             ["enrollment", "request"] => &["offer_token"],
             ["sync", "documents"] => &["peer_id", "collection", "doc_ids"],
             _ => {
@@ -582,20 +584,22 @@ impl P2pTool {
                     json!({"approve_on_peer":{"action":"enrollment_approve","request_id":request.request_id}}),
                 ))
             }
-            ["enrollment", operation @ ("approve" | "revoke")] => {
+            ["enrollment", operation @ ("approve" | "deny" | "revoke")] => {
                 ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
                 let store = GraphqlEnrollmentStore::new(self.node.clone(), actor);
                 let id = text("request_id")?;
-                let result = if *operation == "approve" {
-                    store
-                        .decide_request(
-                            id,
-                            gents_protocol::enrollment::EnrollmentDecisionKind::Approved,
-                        )
-                        .await?
-                } else {
-                    store.revoke_request(id).await?
-                };
+                let result = match *operation {
+                    "approve" => store.decide_request(id, EnrollmentDecisionKind::Approved).await,
+                    "deny" => store.decide_request(id, EnrollmentDecisionKind::Denied).await,
+                    _ => store.revoke_request(id).await,
+                }
+                .map_err(|error| {
+                    if format!("{error:#}").contains("challenge is reused") {
+                        error.context("an offer token is single use: two nodes requested with one offer, so both requests are refused. Each joining node needs its own fresh offer; mint one per node and have each re-request; next call: p2p {\"action\":\"enrollment_offer\"}")
+                    } else {
+                        error
+                    }
+                })?;
                 Ok(reply(
                     json!({"request_id":result.request_id,"state":result.state,"delivery_pending":result.delivery_pending,"decision_doc_id":result.decision_doc_id,"revision_doc_id":result.revision_doc_id}),
                     Some(json!({"action":"pairings_list"})),
@@ -711,10 +715,10 @@ fn reply(outcome: Value, next_call: Option<Value>, observations: Value) -> Reply
 
 fn help(resource: Option<&str>) -> Result<&'static str> {
     Ok(match resource {
-        None => "Actions: status; network_list, network_get; pairings_list, pairings_get, pairings_preview, pairings_apply, pairings_revoke; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_revoke, enrollment_history; sync_documents. Action help with topic status, network, pairings, enrollment, sync or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node. Mutation and collection grants are explicit.",
+        None => "Actions: status; network_list, network_get; pairings_list, pairings_get, pairings_preview, pairings_apply, pairings_revoke; enrollment_offer, enrollment_request, enrollment_pending, enrollment_approve, enrollment_deny, enrollment_revoke, enrollment_history; sync_documents. Action help with topic status, network, pairings, enrollment, sync or scope explains each; scope covers grants and capability boundaries. Identity comes from the running node. Mutation and collection grants are explicit.",
         Some("status" | "network") => "status returns native connected peer references (raw IDs or transport addresses) and native sync facts. network_list lists up to 50 registered peers with exact DIDs and addresses. network_get takes peer_id, validates the transport identity and returns its registry record plus observed connection. A registry entry is discovery, not enrollment authority or current connectivity; network_get's connected field is the observed transport connection. status defaults to backlog facts; details:true returns native diagnostic counters.",
         Some("pairings") => "pairings_get with peer_id inspects one peer; pairings_list shows desired, applied, enrolled and connected observations separately. Defaults show compact replicator counts; details:true includes native collection IDs and filters. pairings_preview and pairings_apply require peer_id, peer_did and collections (1-16 application names). The peer must have current signed enrollment; its DID/address come from that owner. Apply changes only the explicit engineer application overlay; the existing reconciler applies it. pairings_revoke requires peer_id and removes only that overlay. Protocol collections and another owner's overlays are refused. Replacing or revoking requires collection authority over the entire existing overlay. Inspect pairings_get after apply/revoke; submitted desired state is not proof of a live route.",
-        Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending, approves it and applies pairings. enrollment_offer requires mutation authority and returns this node's signed offer_token (valid 5 minutes), peer_id and DID; the token only lets its holder ask to join, approval stays here. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve or enrollment_revoke requires request_id and mutation authority. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for the default authorization lease and materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Do not invent a DID or substitute an unsigned pairing document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted.",
+        Some("enrollment") => "Joining: the approving node runs enrollment_offer and hands offer_token to the joining node, which runs enrollment_request; the approver then finds it with enrollment_pending, approves it and applies pairings. enrollment_offer requires mutation authority and returns this node's signed offer_token (valid 5 minutes), peer_id and DID; the token only lets its holder ask to join, approval stays here, and it is single use: give each joining node its own offer, because requests from two nodes made with one offer are both refused. enrollment_request requires offer_token from the approving node and mutation authority. It verifies the peer's signed offer, signs a request with this node's identity and delivers it; the peer's operator approves it there with approve_on_peer. enrollment_pending discovers signed request IDs. enrollment_approve, enrollment_deny or enrollment_revoke requires request_id and mutation authority; deny signs a refusal of a pending request, revoke ends an approved one. The existing enrollment owner verifies the operator, network and request and signs the durable decision. Approval admits the peer to this node's network for the default authorization lease and materializes its enrollment route, so approve only a request you were asked to approve whose peer_did you checked. Enrollment is one-way: approval enrolls the requester in this node's network, so this node can pair toward it, not the reverse. Pairing in both directions needs each node enrolled in the other's network, through a second offer, request and approval the other way. Do not invent a DID or substitute an unsigned pairing document. enrollment_history lists up to 50 current pending, approved, denied and revoked requests, newest first, with decision times and signers; requests that expired undecided or were superseded by the same peer's later request are omitted.",
         Some("sync") => "sync_documents requires peer_id, collection and doc_ids (1-16 physical document IDs). The peer needs current enrollment; only application collections in the tool grant are supported. Protocol collections, including credentials, are always excluded; neither broader grants nor ACP changes enable them. See help topic scope. The native adapter makes a bounded 10-second sync request, then this node observes actual document IDs. Missing IDs and request errors are explicit. DefraDB chooses providers; this does not certify which peer supplied a document. Use query for authorized document content.",
         Some("scope") => "Pairing overlays and document sync support application collections only. Gents protocol/configuration and credential collections are permanently excluded from these actions, even with broader tool grants or document ACP. Keep credentials with their existing operator owner. For an application collection, an authorized configuration owner may grant the exact P2P collection; native ACP still controls document access. Enrollment is a separate signed authority. Sync accepts 1-16 known document IDs, not collection-wide discovery, and cannot certify the supplying peer.",
         Some(resource) => { let next = if resource == "pairing" { "pairings" } else if resource == "documents" { "sync" } else { "scope" }; bail!("unknown P2P help topic {resource:?}; topics: {HELP_TOPICS:?}; next call: p2p {{\"action\":\"help\",\"topic\":\"{next}\"}}") },
@@ -732,7 +736,7 @@ impl Tool for P2pTool {
             |description: &str| json!({"type":"string","minLength":1,"description":description});
         ToolDefinition {
             name: Self::NAME.into(),
-            description: "Inspect this node's P2P peers, enroll nodes, manage authorized pairing overlays and request bounded sync. Pick an action and send only its fields: status [details]; network_list; network_get peer_id; pairings_list [details]; pairings_get peer_id [details]; pairings_preview and pairings_apply peer_id peer_did collections; pairings_revoke peer_id; enrollment_offer; enrollment_request offer_token; enrollment_pending; enrollment_approve and enrollment_revoke request_id; enrollment_history; sync_documents peer_id collection doc_ids. A node joins in four calls: the approver's enrollment_offer, the joining node's enrollment_request, then the approver's enrollment_pending and enrollment_approve; pairings_apply then replicates collections one direction. Action help with a topic explains rules. Enrollment and DefraDB enforce access.".into(),
+            description: "Inspect this node's P2P peers, enroll nodes, manage authorized pairing overlays and request bounded sync. Pick an action and send only its fields: status [details]; network_list; network_get peer_id; pairings_list [details]; pairings_get peer_id [details]; pairings_preview and pairings_apply peer_id peer_did collections; pairings_revoke peer_id; enrollment_offer; enrollment_request offer_token; enrollment_pending; enrollment_approve, enrollment_deny and enrollment_revoke request_id; enrollment_history; sync_documents peer_id collection doc_ids. A node joins in four calls: the approver's enrollment_offer, the joining node's enrollment_request, then the approver's enrollment_pending and enrollment_approve; the approver's pairings_apply then replicates collections toward the joiner. The reverse direction needs the same four calls the other way. Action help with a topic explains rules. Enrollment and DefraDB enforce access.".into(),
             parameters: json!({
                 "type": "object",
                 "required": ["action"],
@@ -745,7 +749,7 @@ impl Tool for P2pTool {
                     "collections": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16, "description": "Application collection names to replicate to the peer, e.g. [\"DeploymentNote\"]; they must be in this tool's P2P grant. pairings_preview/apply."},
                     "collection": text("One application collection name. sync_documents."),
                     "doc_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 16, "description": "Document IDs to fetch from the peer. sync_documents."},
-                    "request_id": text("Enrollment request ID (enroll-...) from enrollment_pending or the joining node's enrollment_request. enrollment_approve/revoke."),
+                    "request_id": text("Enrollment request ID (enroll-...) from enrollment_pending or the joining node's enrollment_request. enrollment_approve/deny/revoke."),
                     "offer_token": text("The approving node's token from its enrollment_offer, valid 5 minutes. enrollment_request, run on the joining node."),
                     "details": {"type": "boolean", "description": "status, pairings_list, pairings_get: include native diagnostic counters, collection IDs and filters."}
                 }
