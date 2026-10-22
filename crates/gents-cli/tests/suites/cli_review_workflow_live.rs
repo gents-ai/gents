@@ -15,8 +15,7 @@ use failure_artifacts::FailureArtifacts;
 
 const SEEDED_REPO: &str = "review_seeded_bug";
 const CODE_REVIEW_PACK: &str = "gents/code_review";
-// The inference slots each pack's manifest declares.
-const ENGINE_SLOTS: [&str; 4] = ["wf_all", "wf_execute", "wf_read_write", "wf_read_only"];
+// The inference slots the code_review manifest declares.
 const REVIEW_SLOTS: [&str; 3] = ["coordinator", "worker", "verifier"];
 const LENSES: [&str; 4] = [
     "correctness",
@@ -231,10 +230,11 @@ fn workflow_scratch_path(cwd: &Path, tool_call_id: &str, name: &str) -> PathBuf 
         .join(name)
 }
 
-/// Installs the engine wired to `agent`, then code_review, then grants
-/// `agent` the pack's targets and trusts the pack; no Tools edit. Every
-/// declared slot binds to `profile_id`. Packs that ship plugins install only
-/// on the node's own host, so this uses `--home`.
+/// Installs code_review (its `review_changes` job plugin needs
+/// `--grant-authority`), then wires the plugin to `agent` with the pack's own
+/// targets, which also trusts the pack; no Tools edit. Every declared slot
+/// binds to `profile_id`. Packs that ship plugins install only on the node's
+/// own host, so this uses `--home`.
 fn install_and_wire_workflow_packs(
     home_dir: &Path,
     node_did: &str,
@@ -252,27 +252,12 @@ fn install_and_wire_workflow_packs(
             })
             .collect::<Vec<_>>()
     };
-    let (engine_slots, review_slots) = (bind(&ENGINE_SLOTS), bind(&REVIEW_SLOTS));
+    let review_slots = bind(&REVIEW_SLOTS);
     let home = home_dir.to_str().context("live review home is not UTF-8")?;
     let scope = ["--home", home, "--node-did", node_did];
-    let engine = std::env::var("GENTS_RHAI_WORKFLOWS_PACK")
-        .unwrap_or_else(|_| "gents/rhai_workflows".to_owned());
-    let mut args = vec![
-        "pack",
-        "install",
-        &engine,
-        "--wire",
-        agent,
-        "--grant-authority",
-    ];
-    args.extend(scope);
-    args.extend(engine_slots.iter().map(String::as_str));
-    args.extend(["--output", "json"]);
-    run_cli_json(home_dir, &args)?;
-
     let content =
         std::env::var("GENTS_CODE_REVIEW_PACK").unwrap_or_else(|_| CODE_REVIEW_PACK.to_owned());
-    let mut args = vec!["pack", "install", content.as_str()];
+    let mut args = vec!["pack", "install", content.as_str(), "--grant-authority"];
     args.extend(scope);
     args.extend(review_slots.iter().map(String::as_str));
     args.extend(["--output", "json"]);
@@ -281,7 +266,7 @@ fn install_and_wire_workflow_packs(
     let mut args = vec![
         "pack",
         "wire",
-        "gents/workflow",
+        "gents/review_changes",
         "--agent",
         agent,
         "--targets-from",
@@ -456,7 +441,7 @@ impl ReviewNode {
             .context("live review work dir is not UTF-8")?;
         let input = serde_json::json!({ "cwd": cwd }).to_string();
         let content = format!(
-            "Call the workflow tool exactly once with argv [\"run\",\"review-changes\"], agent_budget {budget} and args {args}. Whatever it returns (a receipt, a pause or an error), report it and end your turn: do not poll, and never call resume or any other workflow verb. A result arrives later as a message."
+            "Call the review_changes tool exactly once with agent_budget {budget} and args {args}. Whatever it returns (a receipt, a pause or an error), report it and end your turn: do not poll, and never call the tool again. A result arrives later as a message."
         );
         let evidence = self.evidence.join(case);
         fs::create_dir_all(&evidence)?;
@@ -523,7 +508,7 @@ impl ReviewNode {
         let pin = &view["pin"];
         anyhow::ensure!(
             pin["origin"] == "installed",
-            "{case}: --targets-from did not make the pack's script installed: {view}"
+            "{case}: the trusted pack's marker did not make the run installed: {view}"
         );
         anyhow::ensure!(
             pin["agent_budget"] == budget && pin["cwd"] == cwd,
@@ -532,11 +517,11 @@ impl ReviewNode {
         anyhow::ensure!(
             pin["plugin_ref"]
                 .as_str()
-                .is_some_and(|plugin| plugin.contains("gents/workflow"))
+                .is_some_and(|plugin| plugin.contains("gents/review_changes"))
                 && pin["script_id"]
                     .as_str()
                     .is_some_and(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())),
-            "{case}: the pin does not name the workflow plugin and a script digest: {view}"
+            "{case}: the pin does not name the review_changes plugin and a marker digest: {view}"
         );
         Ok(ReviewJob {
             tool_call_id,
@@ -694,7 +679,7 @@ async fn run_review_changes(artifacts: &mut FailureArtifacts, evidence: &Path) -
     };
     let args = |base: &str, head: &str| serde_json::json!({ "repository": SEEDED_REPO, "base": base, "head": head });
 
-    // Step 0: below 22 the script pauses before any agent() runs.
+    // Step 0: below 22 the plugin pauses before any child runs.
     let paused = node
         .review("budget-pause", args("HEAD~1", "HEAD"), 8, false)
         .await?;
