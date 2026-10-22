@@ -28,6 +28,8 @@ mod runtime_observability;
 mod schedule_snapshot_reconcile;
 #[path = "e2e_runtime/self_config_tools.rs"]
 mod self_config_tools;
+#[path = "e2e_runtime/storage_budget.rs"]
+mod storage_budget;
 
 #[test]
 fn provider_wire_fixtures_do_not_contain_credentials() {
