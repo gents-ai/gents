@@ -17,7 +17,7 @@ use crate::agent::{
 };
 use crate::backend_registry;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
-use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
+use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
 
@@ -421,14 +421,16 @@ async fn run_agent_owned(
             return Err(error);
         }
     };
-    let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
+    let mut resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
             runtime_status.publish_error(&format!("{error:#}")).await;
             return Err(error);
         }
     };
-    if let Err(error) = validate_startup_snapshot(&agent, &tool_runtime, &resolved_snapshot).await {
+    if let Err(error) =
+        validate_startup_snapshot(&agent, &tool_runtime, &mut resolved_snapshot).await
+    {
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
@@ -1195,10 +1197,10 @@ fn is_degraded_startup_unavailable_reason(
     )
 }
 
-async fn validate_startup_snapshot(
+pub(super) async fn validate_startup_snapshot(
     agent: &Gents,
     tool_runtime: &ToolRuntimeContext,
-    snapshot: &ResolvedRuntimeSnapshot,
+    snapshot: &mut ResolvedRuntimeSnapshot,
 ) -> Result<()> {
     snapshot.validate_node_readiness_source().with_context(|| {
         format!(
@@ -1206,6 +1208,33 @@ async fn validate_startup_snapshot(
             agent.node_did()
         )
     })?;
+
+    let mut agent_ids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
+    agent_ids.sort();
+
+    for agent_id in agent_ids {
+        let tool_surface = snapshot
+            .tool_surfaces
+            .get(&agent_id)
+            .ok_or_else(|| anyhow!("missing tool surface for agent_config {agent_id}"))?;
+        if let Err(error) = tool_surface.build_tools(tool_runtime).await {
+            let reason = UnavailableAgent::new(
+                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                format!("building startup tool surface: {error:#}"),
+            );
+            tracing::error!(
+                agent_id = %agent_id,
+                public_reason = ?reason.public_reason,
+                diagnostic = %reason.diagnostic,
+                "agent_config tool surface unavailable at startup; starting without it"
+            );
+            crate::native_logging::mirror_service_diagnostic(&format!(
+                "gents runtime: agent_config {agent_id} unavailable at startup: {}",
+                reason.diagnostic
+            ));
+            snapshot.demote_agent(&agent_id, reason);
+        }
+    }
 
     if snapshot.agents.is_empty() {
         let mut unavailable = snapshot
@@ -1252,22 +1281,6 @@ async fn validate_startup_snapshot(
         }
     }
 
-    let mut agent_ids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
-    agent_ids.sort();
-
-    for agent_id in agent_ids {
-        let tool_surface = snapshot
-            .tool_surfaces
-            .get(&agent_id)
-            .ok_or_else(|| anyhow!("missing tool surface for agent_config {agent_id}"))?;
-        tool_surface
-            .build_tools(tool_runtime)
-            .await
-            .with_context(|| {
-                format!("building startup tool surface for agent_config {agent_id}")
-            })?;
-    }
-
     Ok(())
 }
 
@@ -1284,7 +1297,7 @@ async fn resolve_tool_surfaces(
     Ok(tool_surfaces)
 }
 
-async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapshot> {
+pub(super) async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapshot> {
     match agent.document_runtime_context() {
         Some(resolve_context) => {
             resolve_document_snapshot_with_tools(&agent.node, resolve_context).await

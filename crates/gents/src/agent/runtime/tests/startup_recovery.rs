@@ -1106,3 +1106,298 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
     }
     node.shutdown().await;
 }
+
+async fn write_runtime_documents(
+    node: &Arc<defra_node::EmbeddedNode>,
+    documents: Vec<(crate::Collection, Value)>,
+) {
+    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .unwrap();
+    ConfigAccess::transact_local_write(node, None, "test.runtime.configure", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+}
+
+fn tools_naming_missing_plugin(node_did: &str, tools_id: &str) -> (crate::Collection, Value) {
+    (
+        crate::Collection::Tools,
+        serde_json::json!({"node_did": node_did, "tools_id": tools_id,
+            "integrations": {"plugins": [{"plugin": "acme/missing_plugin"}]}}),
+    )
+}
+
+#[tokio::test]
+async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-missing-plugin"));
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_agent_backend(
+        &node,
+        identity.did(),
+        "backend-missing-plugin",
+        endpoint.endpoint(),
+    )
+    .await;
+    let node_did = identity.did().to_string();
+    let default_agent_id = crate::default_agent_id_for_node(&node_did);
+    let broken = "web_persona";
+    write_runtime_documents(
+        &node,
+        vec![
+            (
+                crate::Collection::Agent,
+                serde_json::json!({"node_did": node_did, "agent_id": broken,
+                    "context_id": "web_persona:context",
+                    "inference_profile_id": format!("{default_agent_id}:inference")}),
+            ),
+            (
+                crate::Collection::AgentContext,
+                serde_json::json!({"node_did": node_did, "context_id": "web_persona:context",
+                    "tools_id": "web_persona:tools"}),
+            ),
+            tools_naming_missing_plugin(&node_did, "web_persona:tools"),
+        ],
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+
+    wait_for_runtime_process_state(node.as_ref(), &node_did, "ready").await;
+    let readiness = fetch_node_readiness(node.as_ref(), &node_did).await;
+    assert_eq!(readiness.process_state, NodeReadinessProcessState::Ready);
+    let entry = |agent_id: &str| {
+        readiness
+            .agents
+            .iter()
+            .find(|entry| entry.agent_id == agent_id)
+            .unwrap_or_else(|| panic!("{agent_id} readiness in {readiness:?}"))
+            .clone()
+    };
+    assert_eq!(entry(&default_agent_id).state, AgentReadinessState::Ready);
+    let broken_entry = entry(broken);
+    assert_eq!(broken_entry.state, AgentReadinessState::Unavailable);
+    assert_eq!(
+        broken_entry.reason,
+        Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
+    );
+
+    let request_doc_id = create_agent_request_for_agent(
+        node.as_ref(),
+        &node_did,
+        Some(broken),
+        "req-missing-plugin",
+        "session-missing-plugin",
+        "hello",
+    )
+    .await;
+    wait_for_request_state(node.as_ref(), &request_doc_id, "failed").await;
+    let response = crate::config_client::ConfigAccess::local(node.clone())
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ failure_reason }} }}"#,
+            escape_graphql_string(&request_doc_id),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response["data"]["AgentRequest"][0]["failure_reason"],
+        "tool surface is unavailable"
+    );
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(STARTUP_DEADLOCK_GUARD, handle)
+        .await
+        .expect("agent task should join")
+        .expect("run task should join")
+        .expect("agent run should return ok");
+}
+
+#[tokio::test]
+async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-all-missing-plugin"));
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_agent_backend(
+        &node,
+        identity.did(),
+        "backend-all-missing-plugin",
+        endpoint.endpoint(),
+    )
+    .await;
+    let node_did = identity.did().to_string();
+    let tools_id = format!("{}:tools", crate::default_agent_id_for_node(&node_did));
+    write_runtime_documents(
+        &node,
+        vec![tools_naming_missing_plugin(&node_did, &tools_id)],
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let error = agent
+        .run(shutdown_rx)
+        .await
+        .expect_err("startup must refuse when no agent is runnable");
+    let error_text = format!("{error:#}");
+    assert!(
+        error_text.contains("no runnable agents at startup due to invalid configuration")
+            && error_text.contains("tool surface is unavailable"),
+        "unexpected startup error: {error_text}"
+    );
+    assert!(
+        !error_text.contains("acme/missing_plugin"),
+        "private diagnostics leaked through the startup error: {error_text}"
+    );
+}
+
+#[tokio::test]
+async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("startup-demotion-cascade"));
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    bind_default_agent_backend(
+        &node,
+        identity.did(),
+        "backend-demotion-cascade",
+        endpoint.endpoint(),
+    )
+    .await;
+    let node_did = identity.did().to_string();
+    let default_agent_id = crate::default_agent_id_for_node(&node_did);
+    let inference_profile_id = format!("{default_agent_id}:inference");
+    let agent_document = |agent_id: &str| {
+        (
+            crate::Collection::Agent,
+            serde_json::json!({"node_did": node_did, "agent_id": agent_id,
+                "context_id": format!("{agent_id}:context"),
+                "inference_profile_id": inference_profile_id}),
+        )
+    };
+    let context_document = |agent_id: &str| {
+        (
+            crate::Collection::AgentContext,
+            serde_json::json!({"node_did": node_did, "context_id": format!("{agent_id}:context"),
+                "tools_id": format!("{agent_id}:tools")}),
+        )
+    };
+    write_runtime_documents(
+        &node,
+        vec![
+            agent_document("web_persona"),
+            context_document("web_persona"),
+            tools_naming_missing_plugin(&node_did, "web_persona:tools"),
+            agent_document("caller"),
+            context_document("caller"),
+            (
+                crate::Collection::Tools,
+                serde_json::json!({"node_did": node_did, "tools_id": "caller:tools",
+                    "agents": {"target_ids": ["target-web-persona"], "enabled": true}}),
+            ),
+            (
+                crate::Collection::AgentTarget,
+                serde_json::json!({"node_did": node_did, "target_id": "target-web-persona",
+                    "target_node_did": node_did, "agent_id": "web_persona", "name": "web"}),
+            ),
+            (
+                crate::Collection::Task,
+                serde_json::json!({"node_did": node_did, "task_id": "task-web", "agent_id": "web_persona",
+                    "prompt_template": "tick", "enabled": true}),
+            ),
+            (
+                crate::Collection::Schedule,
+                serde_json::json!({"node_did": node_did, "schedule_id": "schedule-web",
+                    "cadence": {"kind": "interval", "interval_secs": 300}}),
+            ),
+            (
+                crate::Collection::Trigger,
+                serde_json::json!({"node_did": node_did, "trigger_id": "trigger-web", "task_id": "task-web",
+                    "source": {"kind": "schedule", "schedule_id": "schedule-web"}, "enabled": true}),
+            ),
+        ],
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity.clone(),
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let tool_runtime = crate::tool_surface::ToolRuntimeContext::new_with_node_did(
+        agent.node.clone(),
+        agent.mcp_pool.clone(),
+        crate::health_checker::ServiceHealthMap::new(),
+        agent.local_hostname.clone(),
+        agent.local_subnet.clone(),
+        node_did.clone(),
+        Some(identity.clone()),
+    )
+    .with_plugins(agent.plugins().clone());
+
+    let mut snapshot = startup::resolve_startup_snapshot(&agent).await.unwrap();
+    startup::validate_startup_snapshot(&agent, &tool_runtime, &mut snapshot)
+        .await
+        .unwrap();
+
+    assert!(snapshot.unavailable_agents.contains_key("web_persona"));
+    assert!(snapshot.agents.contains_key("caller"));
+    assert!(
+        snapshot.tool_surfaces["caller"]
+            .agent_targets()
+            .iter()
+            .all(|target| target.agent_id != "web_persona"),
+        "a demoted agent must not stay offered as a subagent target"
+    );
+    assert!(
+        !snapshot.active_schedules.contains_key("trigger-web")
+            && snapshot.unavailable_schedules.contains("trigger-web"),
+        "a demoted agent's schedule must be unavailable, not active"
+    );
+    assert!(
+        !snapshot.active_tasks.contains_key("task-web"),
+        "a demoted agent's task must not stay active"
+    );
+}
