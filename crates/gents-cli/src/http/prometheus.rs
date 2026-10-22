@@ -954,7 +954,12 @@ async fn load_inference_metrics_query_data(
     let mut offset = 0usize;
 
     loop {
-        let query = inference_metrics_query(INFERENCE_METRICS_PAGE_SIZE, offset, offset == 0);
+        let query = inference_metrics_query(
+            INFERENCE_METRICS_PAGE_SIZE,
+            offset,
+            offset == 0,
+            &window_started_at,
+        );
         let page = load_inference_metrics_page(graphql, &query).await?;
         if offset == 0 {
             result.nodes = page.nodes;
@@ -988,7 +993,20 @@ async fn load_inference_metrics_page(
     serde_json::from_value(data).context("decoding inference metrics query response")
 }
 
-fn inference_metrics_query(limit: usize, offset: usize, include_metadata: bool) -> String {
+/// `ended_at` is stored as RFC 3339 UTC text. The bound keeps whole seconds
+/// and no offset, so it sorts before every timestamp inside the window; rows
+/// are still checked exactly by `retain_windowed_inference_calls`.
+fn inference_metrics_ended_lower_bound(window_started_at: &DateTime<Utc>) -> String {
+    window_started_at.format("%Y-%m-%dT%H:%M:%S").to_string()
+}
+
+fn inference_metrics_query(
+    limit: usize,
+    offset: usize,
+    include_metadata: bool,
+    window_started_at: &DateTime<Utc>,
+) -> String {
+    let ended_after = inference_metrics_ended_lower_bound(window_started_at);
     let metadata = if include_metadata {
         r#"
         Node {
@@ -1018,7 +1036,8 @@ fn inference_metrics_query(limit: usize, offset: usize, include_metadata: bool) 
         InferenceCall(
             filter: {{
                 call_kind: {{ _eq: "inference" }},
-                call_state: {{ _in: ["completed", "failed", "cancelled"] }}
+                call_state: {{ _in: ["completed", "failed", "cancelled"] }},
+                ended_at: {{ _ge: "{ended_after}" }}
             }},
             order: [{{ ended_at: DESC }}, {{ call_id: DESC }}],
             limit: {limit},
@@ -2087,6 +2106,20 @@ mod tests {
         assert_eq!(families.request_totals.get(&failed_key), Some(&1));
         assert_eq!(families.prompt_token_totals.get(&token_key), Some(&22));
         assert_eq!(families.completion_token_totals.get(&token_key), Some(&7));
+    }
+
+    #[test]
+    fn inference_metrics_query_reads_only_the_scrape_window() {
+        let start = DateTime::parse_from_rfc3339("2026-10-22T21:15:00.500+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let bound = inference_metrics_ended_lower_bound(&start);
+        assert_eq!(bound, "2026-10-22T21:15:00");
+        let inside = (start + Duration::milliseconds(1)).to_rfc3339();
+        assert!(bound.as_str() <= inside.as_str());
+        assert!(bound.as_str() <= "2026-10-22T21:15:00+00:00");
+        let query = inference_metrics_query(500, 0, false, &start);
+        assert!(query.contains(r#"ended_at: { _ge: "2026-10-22T21:15:00" }"#));
     }
 
     #[test]

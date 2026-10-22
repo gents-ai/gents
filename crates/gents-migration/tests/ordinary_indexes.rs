@@ -782,3 +782,75 @@ async fn transcript_tool_page_streams_sequence_and_key_order() {
     }
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn inference_metrics_window_seeks_recent_terminal_calls() {
+    use gents_protocol::schemas::{INFERENCE_CALL, INFERENCE_CALL_NAME};
+    let node = fresh_node().await;
+    node.add_schema(INFERENCE_CALL).await.unwrap();
+    let call = |id: String, state: &str, ended_at: &str| {
+        serde_json::json!({
+            "call_id": id, "call_kind": "inference", "call_state": state, "ended_at": ended_at
+        })
+    };
+    let mut calls = (0..160)
+        .map(|i| {
+            call(
+                format!("old-{i}"),
+                "completed",
+                "2026-01-01T00:00:00.000001+00:00",
+            )
+        })
+        .collect::<Vec<_>>();
+    calls.extend([
+        call(
+            "recent".into(),
+            "completed",
+            "2026-10-22T21:20:00.193356+00:00",
+        ),
+        call(
+            "recent-failed".into(),
+            "failed",
+            "2026-10-22T21:21:00+00:00",
+        ),
+        call("running".into(), "running", "2026-10-22T21:21:00+00:00"),
+    ]);
+    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(calls)).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{ create_InferenceCall(input:{input}) {{_docID}} }}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let baseline = DEFAULT_BASELINE
+        .iter()
+        .find(|c| c.name == INFERENCE_CALL_NAME)
+        .unwrap();
+    let index = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|i| i.name == "InferenceCall_kind_ended_at")
+        .unwrap();
+    let registry = Registry {
+        baseline: std::slice::from_ref(baseline),
+        steps: &[],
+        ordinary_indexes: std::slice::from_ref(index),
+    };
+    ensure_migrations_with_registry(node.as_ref(), &registry)
+        .await
+        .unwrap();
+    let query = r#"query { InferenceCall(
+        filter: { call_kind: { _eq: "inference" }, call_state: { _in: ["completed", "failed", "cancelled"] }, ended_at: { _ge: "2026-10-22T21:15:00" } },
+        order: [{ ended_at: DESC }, { call_id: DESC }], limit: 500
+    ) { call_id } }"#;
+    let rows = node.execute(query).await;
+    assert!(!rows.has_errors(), "{:?}", rows.errors);
+    let ids = rows.data.unwrap()["InferenceCall"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["call_id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["recent-failed", "recent"]);
+    assert_indexed_query(node.as_ref(), query, index.name, 4).await;
+    node.shutdown().await;
+}
