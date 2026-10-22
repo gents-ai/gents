@@ -86,6 +86,12 @@ source consistency checks, not a separate runtime compatibility version.
   required AgentRequest row array` on a node whose access control denies
   anonymous reads. `gents trace` now says when a read returned no data because
   the node probably denied it.
+- A plugin job's spawns, its `job.agent_targets` and its
+  `policy.dynamic_targets` now name AgentTargets by their `target_id`, as the
+  protocol and `gents pack wire --targets-from` already did; a workflow whose
+  targets have a `target_id` different from their `agent_id` (such as
+  code_review's) was refused `plugin_job_policy_denied` before any child
+  started.
 
 ## 0.21.0-rc0 - 2026-10-17
 
