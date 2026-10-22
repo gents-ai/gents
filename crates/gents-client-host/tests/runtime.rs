@@ -1710,6 +1710,24 @@ async fn exercise_message_edit(
         child != source && fork["nodeDid"] == node_did,
         "fork receipt crossed source scope"
     );
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let view = client
+                .call(
+                    *id,
+                    "desktop_session_goal",
+                    json!({"nodeDid":node_did,"sessionId":child}),
+                )
+                .await;
+            *id += 1;
+            if view["sessionId"] == child {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .context("the fork's signed goal observation did not reach the client")?;
     let sent = client
         .call(
             *id,
