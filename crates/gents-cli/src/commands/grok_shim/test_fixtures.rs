@@ -991,22 +991,14 @@ pub(crate) async fn seed_job_row(
     } else {
         r#"completed_at: "2026-06-01T10:05:00Z","#
     };
-    let created = node
-        .execute(&format!(
-            r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "request-{call}", session_id: "{session}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "test", content: "test", lifecycle_state: "pending", created_at: "2026-06-01T10:00:00Z"}}) {{ _docID }} }}"#
-        ))
-        .await;
-    ensure_no_errors(&created, "seed job request").unwrap();
-    let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(json!({
-        "_docID": gents_protocol::graphql::extract_mutation_doc_id(
-            &json!({"data": created.data}),
-            "AgentRequest",
-        )
-        .unwrap(),
-        "request_id": format!("request-{call}"), "session_id": session,
-        "node_did": node_did, "requester_did": node_did,
-    }))
-    .unwrap();
+    let request = seed_signed_request(
+        node,
+        node_did,
+        session,
+        &format!("request-{call}"),
+        "2026-06-01T10:00:00Z",
+    )
+    .await;
     let doc_id = seed_canonical_tool_call(
         node, &request, call, "workflow", lifecycle, "{}", None, None, None, None,
     )
@@ -1038,4 +1030,47 @@ pub(crate) async fn seed_job_row(
     )
     .await
     .unwrap()
+}
+
+/// A pending `local-self` request authored through the production request
+/// builder and signed by `node_did`'s registered identity, so readers that
+/// verify the owning request's admission accept the rows seeded under it.
+async fn seed_signed_request(
+    node: &EmbeddedNode,
+    node_did: &str,
+    session_id: &str,
+    request_id: &str,
+    created_at: &str,
+) -> gents_protocol::row::AgentRequestRow {
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    let create = gents::build_signed_request(
+        gents::RequestSpec::new(
+            RequestPurpose::Normal,
+            gents::RequestIdentity {
+                request_id: request_id.into(),
+                node_did: node_did.into(),
+                requester_did: None,
+                agent_id: "test".into(),
+                session_id: session_id.into(),
+                content: "test".into(),
+                execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                created_at: created_at.into(),
+            },
+            AgentRequestAdmissionRecord::local_self(node_did),
+        ),
+        gents::RequestSigner::RegisteredTarget,
+    )
+    .await
+    .unwrap();
+    let created = node.execute(&create.graphql_mutation().unwrap()).await;
+    ensure_no_errors(&created, "seed signed request").unwrap();
+    let row = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+            gents::graphql::escape_graphql_string(request_id),
+            gents::SIGNED_REQUEST_FIELDS,
+        ))
+        .await;
+    ensure_no_errors(&row, "seeded signed request row").unwrap();
+    serde_json::from_value(row.data.unwrap()["AgentRequest"][0].clone()).unwrap()
 }

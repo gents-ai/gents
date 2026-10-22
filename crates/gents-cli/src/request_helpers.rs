@@ -325,7 +325,7 @@ pub(crate) async fn prepare_agent_request(
     .await
 }
 
-async fn prepare_agent_request_with_input(
+pub(crate) async fn prepare_agent_request_with_input(
     graphql: &GraphqlEndpoint,
     node_did: &str,
     content: &str,

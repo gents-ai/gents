@@ -231,7 +231,7 @@ pub(crate) async fn seed_job(
     let mutation = format!(
         r#"mutation($job_pin: JSON, $job_progress: JSON) {{ create_AgentToolCall(input: {{
             tool_call_key: "{key}", request_id: "request-{call}", request_doc_id: "{request_doc_id}",
-            session_id: "{session}", node_did: "{node_did}", tool_name: "workflow",
+            session_id: "{session}", node_did: "{node_did}", requester_did: "{node_did}", tool_name: "workflow",
             tool_call_id: "{call}", message_sequence: 1, await_mode: "background", status: "{lifecycle}", lifecycle_state: "{lifecycle}",
             started_at: "2026-06-01T10:00:00Z", {completed_at}
             job_pin: $job_pin, job_progress: $job_progress
@@ -304,7 +304,7 @@ pub(crate) async fn seed_admission(
     let created_at = "2026-06-01T10:00:00Z";
     let segment = OutputSegment {
         node_did: node_did.into(),
-        requester_did: None,
+        requester_did: Some(node_did.into()),
         session_id: session.into(),
         request_doc_id: request_doc_id.into(),
         source: OutputSource::ProviderTurn {
@@ -349,10 +349,10 @@ pub(crate) async fn seed_admission(
     let close_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")?;
     let message = TranscriptMessage {
-        message_key: gents::session::sequence_message_key(node_did, session, None, 1),
+        message_key: gents::session::sequence_message_key(node_did, session, Some(node_did), 1),
         session_id: session.into(),
         node_did: node_did.into(),
-        requester_did: None,
+        requester_did: Some(node_did.into()),
         request_doc_id: Some(request_doc_id.into()),
         publication: MessagePublication::RequestExecution {
             execution_generation: generation,
@@ -398,7 +398,7 @@ pub(crate) async fn seed_receipt(
     let key = format!("{session}:background-receipt:{row_doc_id}");
     let segment = OutputSegment {
         node_did: node_did.into(),
-        requester_did: None,
+        requester_did: Some(node_did.into()),
         session_id: session.into(),
         request_doc_id: request_doc_id.into(),
         source: OutputSource::Authored { key: key.clone() },
@@ -435,7 +435,7 @@ pub(crate) async fn seed_receipt(
         message_key: key,
         session_id: session.into(),
         node_did: node_did.into(),
-        requester_did: None,
+        requester_did: Some(node_did.into()),
         request_doc_id: Some(request_doc_id.into()),
         publication: MessagePublication::ToolDelivery {
             tool_call_doc_id: row_doc_id.into(),
@@ -585,17 +585,40 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
         let node = initialized_node(tempdir.path(), &node_home, "cli-job-offline").await?;
         gents::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(Arc::new(node));
-        let request = graphql_mutation_with_variables(
+        let create = gents::build_signed_request(
+            gents::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                gents::RequestIdentity {
+                    request_id: "request-call-running".into(),
+                    node_did: did.clone(),
+                    requester_did: None,
+                    agent_id: "general".into(),
+                    session_id: "job-s1".into(),
+                    content: "run".into(),
+                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: "2026-06-01T10:00:00Z".into(),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+            ),
+            gents::RequestSigner::RegisteredTarget,
+        )
+        .await?;
+        let mutation = create
+            .graphql_mutation()
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let request = graphql_mutation_with_variables(&access, &mutation, &json!({})).await?;
+        let request_doc_id =
+            gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
+        // A claimed request is processing; claim is not part of the signed receipt.
+        graphql_mutation_with_variables(
             &access,
             &format!(
-                r#"mutation {{ create_AgentRequest(input: {{ request_id: "request-call-running", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "job-s1", content: "run", lifecycle_state: "processing", created_at: "2026-06-01T10:00:00Z" }}) {{ _docID }} }}"#,
-                node_did = escape_graphql_string(&did)
+                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&request_doc_id)
             ),
             &json!({}),
         )
         .await?;
-        let request_doc_id =
-            gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
         let row = seed_job(
             &access,
             &did,

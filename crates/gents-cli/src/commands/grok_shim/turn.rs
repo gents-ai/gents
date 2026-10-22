@@ -1417,7 +1417,27 @@ impl TurnManager {
             )
             .await
         } else {
-            let prepared = crate::request_helpers::prepare_agent_request(
+            // The shim owns the destination node, so it binds the canonical
+            // Goal directly; the signed remote observation exists for callers
+            // that cannot read it, and lags a session the shim just opened.
+            let mut options = options;
+            let (node_did, agent_id) = (&*self.config.node_did, &*self.config.agent_id);
+            let session_id = &*request.session_id;
+            options.input = Some(
+                gents::ConfigAccess::local(self.node.clone())
+                    .transact_readonly("grok.prompt.goal_input", |txn| {
+                        Box::pin(gents::goal::prepare_goal_input_in_txn(
+                            txn,
+                            node_did,
+                            session_id,
+                            agent_id,
+                            Some(node_did),
+                            Default::default(),
+                        ))
+                    })
+                    .await?,
+            );
+            let prepared = crate::request_helpers::prepare_agent_request_with_input(
                 &graphql,
                 &self.config.node_did,
                 &content,
