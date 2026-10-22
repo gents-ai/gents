@@ -610,7 +610,32 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
         }
     };
 
-    let offer = call(&server_tool, json!({"action":"enrollment_offer"})).await;
+    for valid_for_secs in [0, 3601] {
+        let refused = Tool::call(
+            &server_tool,
+            serde_json::from_value(
+                json!({"action":"enrollment_offer","valid_for_secs":valid_for_secs}),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("between 1 and 3600 seconds"), "{refused}");
+    }
+    let offer = call(
+        &server_tool,
+        json!({"action":"enrollment_offer","valid_for_secs":1800}),
+    )
+    .await;
+    let expires_at =
+        chrono::DateTime::parse_from_rfc3339(offer["outcome"]["expires_at"].as_str().unwrap())
+            .unwrap();
+    let remaining = expires_at.with_timezone(&chrono::Utc) - chrono::Utc::now();
+    assert!(
+        remaining > chrono::Duration::minutes(29) && remaining <= chrono::Duration::minutes(30),
+        "{offer}"
+    );
     let token = offer["outcome"]["offer_token"].as_str().unwrap();
     let denied_id = call(
         &tool(&first),

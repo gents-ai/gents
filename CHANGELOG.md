@@ -46,6 +46,11 @@ source consistency checks, not a separate runtime compatibility version.
   authority and a peer's `/status` enrollment token, a node signs and delivers
   its own enrollment request, so the peer approves it with `enrollment approve`
   and pairs with `pairings apply` without the desktop app.
+- `enrollment_offer` takes `valid_for_secs` (1 to 3600, default 300), so an
+  approver relaying offers by hand can give the joiner time to request; the
+  request carries the offer's expiry. A joining node accepts offers valid up
+  to an hour (it refused anything over 10 minutes), so joiners need this
+  version. The `/status` offer stays at 5 minutes.
 - The `p2p` tool adds `enrollment_deny`, which signs a refusal of a pending
   request. Its help says that enrollment is one-way, so pairing both ways
   needs each node enrolled in the other's network, and that an offer token is
