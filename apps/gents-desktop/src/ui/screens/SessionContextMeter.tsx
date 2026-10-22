@@ -93,6 +93,8 @@ export function SessionContext({
       ? "Session compactions unavailable"
       : `${sessionCompactionCount} session ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`;
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* A press pins the details open; only hover previews close on pointer exit */
+  const pinned = useRef(false);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {
     if (!canHover()) return;
@@ -100,14 +102,18 @@ export function SessionContext({
     hoverTimer.current = setTimeout(() => popover.onOpenChange(true), 150);
   };
   const hoverClose = () => {
-    if (!canHover()) return;
+    if (!canHover() || pinned.current) return;
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => popover.onOpenChange(false), 200);
+    hoverTimer.current = setTimeout(() => onOpenChange(false), 200);
+  };
+  const onOpenChange = (next: boolean) => {
+    if (!next) pinned.current = false;
+    popover.onOpenChange(next);
   };
   return (
     <Popover
       open={popover.open}
-      onOpenChange={popover.onOpenChange}
+      onOpenChange={onOpenChange}
       onOpenChangeComplete={popover.onOpenChangeComplete}
     >
       <PopoverTrigger
@@ -129,6 +135,10 @@ export function SessionContext({
             />
           )
         }
+        onClick={() => {
+          if (hoverTimer.current) clearTimeout(hoverTimer.current);
+          pinned.current = true;
+        }}
         onMouseEnter={hoverOpen}
         onMouseLeave={hoverClose}
       >
@@ -184,7 +194,7 @@ export function SessionContext({
             variant="ghost"
             size="icon-xs"
             aria-label="Close context details"
-            onClick={() => popover.onOpenChange(false)}
+            onClick={() => onOpenChange(false)}
           >
             <X />
           </Button>
