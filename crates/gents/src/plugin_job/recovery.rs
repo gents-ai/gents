@@ -17,9 +17,10 @@ use crate::graphql::escape_graphql_string;
 use crate::plugin::store::{parse_coordinate, read_record};
 use crate::request_binding::load_agent_request_by_doc_id;
 
-/// Lean `PluginJobRow` for one running job row, less `running`.
+/// Lean `PluginJobRow` for one job row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryFacts {
+    pub running: bool,
     pub session_stopped: bool,
     pub terminal_children: u32,
     pub observed: u32,
@@ -29,7 +30,7 @@ pub struct RecoveryFacts {
     pub available: Result<(), Refusal>,
 }
 
-/// What one application of Lean's `pluginJobRecover` does to a running row.
+/// What one application of Lean's `pluginJobRecover` does to a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickAction {
     Untouched,
@@ -37,10 +38,14 @@ pub enum TickAction {
     Step,
 }
 
-/// Lean `pluginJobRecover`, first application: a stopped session cancels its
-/// job; a row past its deadline, unavailable or stalled is failed closed; one
-/// with unobserved terminals is re-driven one step; any other row is left alone.
+/// Lean `pluginJobRecover`, first application: a row that is no longer running
+/// is left alone; a stopped session cancels its job; a row past its deadline,
+/// unavailable or stalled is failed closed; one with unobserved terminals is
+/// re-driven one step; any other row is left alone.
 pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
+    if !facts.running {
+        return TickAction::Untouched;
+    }
     if facts.session_stopped {
         return TickAction::Kill(KillCause::Stop);
     }
@@ -206,6 +211,7 @@ async fn facts_of(
     };
     let deadline = pin.adopted_at + u64::from(pin.ceiling_at_pin.max_wall_secs) * 1000;
     let facts = RecoveryFacts {
+        running: lifecycle.is_running(),
         session_stopped,
         terminal_children: terminal_count(&row) as u32,
         observed: row.observed_terminal,

@@ -58,10 +58,8 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
 /// rule over that step's output (`is_stalled`, the admission owner) is the
 /// second. Returns the owner action and the row after it.
 fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecoveryRow) {
-    if !row.running {
-        return (TickAction::Untouched, row);
-    }
     let facts = RecoveryFacts {
+        running: row.running,
         session_stopped: row.session_stopped,
         terminal_children: row.terminal_children,
         observed: row.observed,
