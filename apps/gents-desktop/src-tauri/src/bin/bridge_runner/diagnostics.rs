@@ -104,28 +104,10 @@ pub(crate) async fn build_desktop_client_snapshot(
     fixture: &LiveBridgeFixture,
 ) -> DesktopClientSnapshot {
     let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
-    if let Err(error) = overlay_fixture_operator_config(fixture).await {
-        tracing::warn!(
-            node_did = fixture.node_did(),
-            error = %error,
-            "live bridge runtime-owned config overlay failed"
-        );
-    }
     DesktopClientSnapshot {
         bootstrap: fixture.build_bootstrap_summary().await,
         client: Some(build_runtime_snapshot(fixture.desktop_core().as_ref()).await),
     }
-}
-
-async fn overlay_fixture_operator_config(fixture: &LiveBridgeFixture) -> anyhow::Result<()> {
-    if let Some(error) = refresh_store_with_timeout(fixture.remote_core().as_ref()).await {
-        anyhow::bail!(error);
-    }
-    let remote = fixture.remote_core().store().snapshot();
-    let local = fixture.desktop_core().store().snapshot();
-    let overlayed = local.overlay_node_operator_config(fixture.node_did(), &remote);
-    fixture.desktop_core().store().replace_snapshot(overlayed);
-    Ok(())
 }
 
 pub(crate) async fn build_desktop_session_snapshot(
