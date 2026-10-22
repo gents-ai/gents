@@ -153,7 +153,8 @@ export type MobilePerformanceHarnessController = {
   streamUpdate(): number;
   streamBurst(count: number): number;
 
-  toolBatch(count: number, failed?: number): void;
+  /** `outputLines` gives the first command that much output */
+  toolBatch(count: number, failed?: number, outputLines?: number): void;
 
   streamText(text: string): void;
   setOlderPageDelay(ms: number): void;
@@ -2836,7 +2837,7 @@ export function createDesktopUiHarness(
             notify("store");
           },
 
-          toolBatch(count, failed = 0) {
+          toolBatch(count, failed = 0, outputLines = 0) {
             const session = sessions.get("session-large");
             if (!session) {
               throw new Error("mobile performance fixture lost session-large");
@@ -2861,7 +2862,13 @@ export function createDesktopUiHarness(
                   cwd: null,
                   executionMode: "read_only",
                   networkMode: "disabled",
-                  stdout: "",
+                  stdout:
+                    index === 0
+                      ? Array.from(
+                          { length: outputLines },
+                          (_, n) => `output line ${n}`,
+                        ).join("\n")
+                      : "",
                   stderr: "",
                   fallbackOutput: null,
                 },
