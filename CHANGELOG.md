@@ -81,6 +81,11 @@ source consistency checks, not a separate runtime compatibility version.
 - The plugin job recovery sweep no longer fails a just resumed workflow run as
   `plugin_job_stalled` before its first step runs; a run at rest with nothing
   live re-drives that step, and only a run that stalled after a step is ended.
+- `gents pack scenario run` reads timelines and projections as the served
+  home, so `expect.projections` no longer fail with `timeline query omitted
+  required AgentRequest row array` on a node whose access control denies
+  anonymous reads. `gents trace` now says when a read returned no data because
+  the node probably denied it.
 
 ## 0.21.0-rc0 - 2026-10-17
 
