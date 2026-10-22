@@ -166,8 +166,8 @@ pub fn transcript_message_create_variables(
     message: &gents_protocol::output::TranscriptMessage,
 ) -> Result<serde_json::Value> {
     let mut input = serde_json::to_value(message).context("serializing canonical AgentMessage")?;
-    if !message.blocks.is_empty() {
-        input["blocks"] = gents_protocol::output::storage::encode_blocks(&message.blocks)?;
+    if let Some(compact) = gents_protocol::output::storage::encode_blocks(&message.blocks)? {
+        input["blocks"] = compact;
     }
     Ok(serde_json::Value::Object(serde_json::Map::from_iter([(
         "input".to_owned(),

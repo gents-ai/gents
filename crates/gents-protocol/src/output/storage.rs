@@ -10,9 +10,9 @@ struct ReferenceTable {
 }
 
 /// Compacts only typed references; provider-owned JSON never enters the table.
-/// The ordinary wire representation remains the expanded block array.
-pub fn encode_blocks(blocks: &[MessageBlock]) -> serde_json::Result<Value> {
-    let expanded = serde_json::to_value(blocks)?;
+/// The ordinary wire representation remains the expanded block array, so this
+/// returns the table only when it serializes smaller.
+pub fn encode_blocks(blocks: &[MessageBlock]) -> serde_json::Result<Option<Value>> {
     let mut table = ReferenceTable {
         closing_documents: Vec::new(),
         blocks: blocks.to_vec(),
@@ -30,11 +30,11 @@ pub fn encode_blocks(blocks: &[MessageBlock]) -> serde_json::Result<Value> {
         Ok(())
     })
     .map_err(<serde_json::Error as serde::ser::Error>::custom)?;
-    let compact = serde_json::to_value(table)?;
-    if serde_json::to_vec(&compact)?.len() < serde_json::to_vec(&expanded)?.len() {
-        Ok(compact)
+    let encoded = serde_json::to_vec(&table)?;
+    if encoded.len() < serde_json::to_vec(blocks)?.len() {
+        serde_json::from_slice(&encoded).map(Some)
     } else {
-        Ok(expanded)
+        Ok(None)
     }
 }
 
@@ -151,7 +151,7 @@ mod tests {
                 additional_params: Some(json!({"close_doc_id":"0", "closing_documents":[]})),
             },
         ];
-        let encoded = encode_blocks(&blocks).unwrap();
+        let encoded = encode_blocks(&blocks).unwrap().unwrap();
         assert!(
             serde_json::to_vec(&encoded).unwrap().len()
                 < serde_json::to_vec(&blocks).unwrap().len() / 2
