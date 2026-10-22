@@ -106,6 +106,9 @@ private def resumeOf (row : DocId) : StepOutput :=
   .suspend .pause none noExtras (some guestPin)
     (some { rowDoc := row, engineCurrent := false, answer := none, budget := none })
 
+private def offContext : StepContext :=
+  { context with policy := { context.policy with mode := .off } }
+
 def admissionCases : List AdmissionCase :=
   [ ⟨"panel_one_refused_target_admits_none", context, pinned [] 0 0,
       effects [spawn "1:a" targetA, spawn "2:c" targetC]⟩
@@ -136,7 +139,13 @@ def admissionCases : List AdmissionCase :=
         none⟩
   , ⟨"resume_of_chain_head_admitted", resumeContext true, stepZero, resumeOf "row-0"⟩
   , ⟨"resume_of_unknown_row_refused", resumeContext true, stepZero, resumeOf "row-9"⟩
-  , ⟨"resume_of_continued_row_refused", resumeContext false, stepZero, resumeOf "row-0"⟩ ]
+  , ⟨"resume_of_continued_row_refused", resumeContext false, stepZero, resumeOf "row-0"⟩
+  , ⟨"empty_source_fields_run_named_script_under_off", offContext,
+      { stepZero with call := { stepZero.call with path := some "", script := some "" } },
+      .result noExtras [] none none⟩
+  , ⟨"inline_script_refused_under_off", offContext,
+      { stepZero with call := { stepZero.call with script := some "workflow flow { }" } },
+      .result noExtras [] none none⟩ ]
 
 
 private def observation : SpawnKey → Recovery.KillObservation := fun _ => .causedLiveLocal
@@ -166,7 +175,9 @@ theorem admission_regressions :
       , (none, some (.completed, 0, 0), 0)
       , (none, some (.completed, 0, 0), 0)
       , (some "plugin_job_resume_unknown", none, 0)
-      , (some "plugin_job_resume_not_head", none, 0) ] := by native_decide
+      , (some "plugin_job_resume_not_head", none, 0)
+      , (none, some (.running, 0, 0), 0)
+      , (some "plugin_job_policy_denied", none, 0) ] := by native_decide
 
 private def targetJson (t : Target) : Json :=
   Json.mkObj [("node", toJson t.1), ("agent", toJson t.2)]

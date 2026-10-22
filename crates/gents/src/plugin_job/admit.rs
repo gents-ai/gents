@@ -861,8 +861,8 @@ fn runs_dynamic_code(ctx: &StepContext, call: &StepCall) -> bool {
     call.argv
         .first()
         .is_some_and(|verb| SCRIPT_VERBS.contains(&verb.as_str()))
-        && (call.script.is_some()
-            || call.path.is_some()
+        && (call.script.as_deref().is_some_and(|s| !s.is_empty())
+            || call.path.as_deref().is_some_and(|p| !p.is_empty())
             || ctx.named_origin == Some(JobOrigin::Dynamic))
 }
 
