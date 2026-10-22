@@ -1086,7 +1086,7 @@ pub struct ConfigApplyTxn<'a> {
     rollback_on_drop: Option<RollbackOnDrop>,
     affected_documents: AtomicU64,
     operation: Option<&'static str>,
-    contends_for_background_slot: AtomicBool,
+    contends_with_request_siblings: AtomicBool,
 }
 
 enum EmbeddedTransactionPurpose {
@@ -1509,7 +1509,7 @@ impl<'a> ConfigApplyTxn<'a> {
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
-            contends_for_background_slot: AtomicBool::new(false),
+            contends_with_request_siblings: AtomicBool::new(false),
             operation: Some(operation.as_str()),
         })
     }
@@ -1580,7 +1580,7 @@ impl<'a> ConfigApplyTxn<'a> {
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
-            contends_for_background_slot: AtomicBool::new(false),
+            contends_with_request_siblings: AtomicBool::new(false),
             operation: None,
         };
         Ok(txn)
@@ -1926,11 +1926,13 @@ impl<'a> ConfigApplyTxn<'a> {
         self.affected_documents.load(Ordering::Relaxed)
     }
 
-    /// Marks this attempt as contending for a request's background admission
-    /// slot. A conflict then retries within the admission budget, since every
-    /// concurrent admission to the request conflicts until one commits.
-    pub(crate) fn contend_for_background_slot(&self) {
-        self.contends_for_background_slot
+    /// Marks this attempt as writing a key that every concurrent sibling of
+    /// its request also writes: the background admission sequence, or the
+    /// session activity each published tool terminal refreshes. A conflict
+    /// then retries within the sibling budget, since such siblings conflict
+    /// until one commits.
+    pub(crate) fn contend_with_request_siblings(&self) {
+        self.contends_with_request_siblings
             .store(true, Ordering::Relaxed);
     }
 }
@@ -2336,10 +2338,10 @@ where
             }
             let conflict_source = retry::classified_transaction_conflict(&error);
             let source = conflict_source.unwrap_or(ConflictSource::None);
-            let slot_contention = conflict_source.is_some()
-                && txn.contends_for_background_slot.load(Ordering::Relaxed);
-            if slot_contention {
-                max_attempts = max_attempts.max(retry::BACKGROUND_SLOT_MAX_ATTEMPTS);
+            let sibling_contention = conflict_source.is_some()
+                && txn.contends_with_request_siblings.load(Ordering::Relaxed);
+            if sibling_contention {
+                max_attempts = max_attempts.max(retry::REQUEST_SIBLING_MAX_ATTEMPTS);
             }
             match failure_disposition(mode, conflict_source, retry_generic, attempt, max_attempts) {
                 FailureDisposition::Observe => {
@@ -2353,8 +2355,8 @@ where
                     return Ok(TransactionOutcome::ConflictObserved);
                 }
                 FailureDisposition::Retry(backoff) => {
-                    let backoff = if slot_contention {
-                        retry::background_slot_backoff(attempt - 1)
+                    let backoff = if sibling_contention {
+                        retry::request_sibling_backoff(attempt - 1)
                     } else {
                         backoff
                     };
