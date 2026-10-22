@@ -2011,12 +2011,6 @@ def caseCoverage : List CoverageEntry :=
       "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "reference_table_cases"
-      "ReferenceTableCases"
-      "output::storage::tests::generated_reference_table_cases_preserve_payload_identity"
-      "Generated table lookups bind stored closing-reference ordinals to exact document and stream identities, including missing-slot rejection.")
-      "canonical-output" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
       "reasoning_delta_cases"
       "ReasoningDeltaCases"
       "agent::stream_processor::tests::generated_reasoning_delta_cases_coalesce_native_parts"

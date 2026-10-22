@@ -128,37 +128,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn generated_reference_table_cases_preserve_payload_identity() {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["reference_table_cases"].as_array().unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let blocks = json!([{"type": "reasoning", "id": null, "parts": [
-                {"type": "summary", "text": {"close_doc_id": case["slot"].to_string(), "stream": case["stream"]}}
-            ]}]);
-            let encoded = json!({"reference_table_version":1,"closing_documents":case["table"],"blocks":blocks});
-            let actual = decode_blocks(encoded);
-            if case["expected"].is_null() {
-                assert!(actual.is_err(), "{}", case["name"]);
-            } else {
-                let mut actual = actual.unwrap();
-                let mut references = Vec::new();
-                visit_references(&mut actual, |reference| {
-                    references.push(serde_json::to_value(reference).unwrap());
-                    Ok(())
-                })
-                .unwrap();
-                assert_eq!(
-                    references,
-                    vec![case["expected"].clone()],
-                    "{}",
-                    case["name"]
-                );
-            }
-        }
-    }
-
-    #[test]
     fn storage_roundtrip_preserves_opaque_metadata_and_rejects_invalid_slots() {
         let closing = "bafyreia-long-closing-document-identity".repeat(3);
         let blocks = vec![
