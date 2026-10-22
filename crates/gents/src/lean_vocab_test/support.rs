@@ -1024,6 +1024,7 @@ pub(crate) struct LeanPluginJobRecoveryRow {
     pub(crate) deadline_expired: bool,
     pub(crate) available: bool,
     pub(crate) stepped: bool,
+    pub(crate) step_in_flight: bool,
 }
 
 /// `Conformance.PluginResources.dataCasesJson`: `PluginData.admitted` and

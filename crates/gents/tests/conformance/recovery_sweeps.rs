@@ -13,7 +13,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        45,
+        47,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -68,6 +68,7 @@ fn tick_row(row: LeanPluginJobRecoveryRow) -> (bool, LeanPluginJobRecoveryRow) {
             Err(Refusal::NotAvailable)
         },
         stepped: row.stepped,
+        in_flight: row.step_in_flight,
     };
     match tick_action(&facts) {
         TickAction::Untouched => (false, row),
@@ -103,7 +104,7 @@ fn tick_row(row: LeanPluginJobRecoveryRow) -> (bool, LeanPluginJobRecoveryRow) {
 #[tokio::test]
 async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
     let cases = lean_plugin_job_recovery_cases();
-    assert_eq!(cases.len(), 9, "Lean should emit the plugin-job tick rows");
+    assert_eq!(cases.len(), 11, "Lean should emit the plugin-job tick rows");
     let sweep_cases = lean_recovery_sweep_cases()
         .iter()
         .filter(|case| case.sweep_id == PLUGIN_JOB_SWEEP_ID)

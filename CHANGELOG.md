@@ -92,6 +92,9 @@ source consistency checks, not a separate runtime compatibility version.
   targets have a `target_id` different from their `agent_id` (such as
   code_review's) was refused `plugin_job_policy_denied` before any child
   started.
+- The plugin job recovery sweep no longer fails a healthy workflow run as
+  `plugin_job_stalled` while one of its steps is in flight; it decides a kill
+  on facts re-read while no step of the run can start.
 
 ## 0.21.0-rc0 - 2026-10-17
 
