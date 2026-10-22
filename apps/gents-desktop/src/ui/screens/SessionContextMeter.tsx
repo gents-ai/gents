@@ -139,7 +139,8 @@ export function SessionContext({
           if (hoverTimer.current) clearTimeout(hoverTimer.current);
           pinned.current = true;
         }}
-        onMouseEnter={hoverOpen}
+        /* a move, not an enter: the meter can render under a resting pointer */
+        onMouseMove={() => !popover.open && hoverOpen()}
         onMouseLeave={hoverClose}
       >
         <ContextRing

@@ -350,9 +350,15 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
     )
     .await
     .unwrap();
-    assert_eq!(
-        fired.data.as_ref().map(|data| &data["AgentRequest"]),
-        Some(&json!([{"content": SEED_MARKER}])),
+    let contents = fired.data.as_ref().map(|data| &data["AgentRequest"]);
+    let content = contents
+        .and_then(|rows| rows.as_array())
+        .filter(|rows| rows.len() == 1)
+        .and_then(|rows| rows[0]["content"].as_str())
+        .unwrap_or_else(|| panic!("one fired request: {fired:#?}"));
+    assert!(
+        content.starts_with("[event trigger:seed-trigger ")
+            && content.ends_with(&format!("]\n\n{SEED_MARKER}")),
         "{fired:#?}"
     );
     if existing_session {

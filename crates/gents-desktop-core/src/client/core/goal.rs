@@ -82,10 +82,9 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
-        if matches!(
-            operation,
-            GoalOperation::Stop {} | GoalOperation::Create { .. }
-        ) {
+        if matches!(operation, GoalOperation::Stop {})
+            || (matches!(operation, GoalOperation::Create { .. }) && expected.is_some())
+        {
             crate::local_runtime::ensure_goal_stop_supported(peer.as_ref()).await?;
         }
         crate::local_runtime::ensure_request_input_supported(peer.as_ref(), &input).await?;
