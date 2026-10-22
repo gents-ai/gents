@@ -483,6 +483,10 @@ pub struct DefraSessionHook {
     failure_policy: FailurePolicy,
     counters: Arc<HookCounters>,
     state: Arc<Mutex<SessionState>>,
+    /// Serializes this request's spawn admissions: each one conflicts on the
+    /// request's admission sequence, and a turn's concurrent spawns would
+    /// otherwise exhaust the bounded transaction retry.
+    background_admission: Arc<Mutex<()>>,
     in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
     accepted_tool_calls: Arc<Mutex<HashMap<String, crate::streaming::AcceptedToolCall>>>,
     effect_tool_calls: Arc<Mutex<HashMap<String, (ToolCallLifecycle, String)>>>,
@@ -655,6 +659,7 @@ impl DefraSessionHook {
                 transcript_turn: TranscriptTurnState::Idle,
                 tool_result_identities: HashMap::new(),
             })),
+            background_admission: Arc::new(Mutex::new(())),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             accepted_tool_calls: Arc::new(Mutex::new(HashMap::new())),
             effect_tool_calls: Arc::new(Mutex::new(HashMap::new())),
@@ -704,6 +709,7 @@ impl DefraSessionHook {
                 transcript_turn: TranscriptTurnState::Idle,
                 tool_result_identities: HashMap::new(),
             })),
+            background_admission: Arc::new(Mutex::new(())),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             accepted_tool_calls: Arc::new(Mutex::new(HashMap::new())),
             effect_tool_calls: Arc::new(Mutex::new(HashMap::new())),

@@ -54,6 +54,41 @@ pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::Con
     decode_live_backgrounded_rows(value)
 }
 
+/// The live count a background admission checks against the ceiling.
+/// DefraDB transactions do not conflict on predicate reads, so the admission
+/// also bumps the request's `background_admission_sequence`: concurrent
+/// admissions to one request then conflict at commit and their idempotent
+/// transaction replays this count.
+pub(crate) async fn reserve_background_slot_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+) -> anyhow::Result<usize> {
+    let live = count_live_backgrounded_rows_in(txn, request_doc_id).await?;
+    let escaped = crate::graphql::escape_graphql_string(request_doc_id);
+    let request = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(docID: "{escaped}") {{ background_admission_sequence }} }}"#
+        ))
+        .await?;
+    let rows = request
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("background admission request lookup omitted rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "background admission request {request_doc_id} is missing"
+    );
+    let next = rows[0]["background_admission_sequence"]
+        .as_u64()
+        .unwrap_or(0)
+        + 1;
+    txn.execute(&format!(
+        r#"mutation {{ update_AgentRequest(docID: "{escaped}", input: {{ background_admission_sequence: {next} }}) {{ _docID }} }}"#
+    ))
+    .await?;
+    Ok(live)
+}
+
 #[cfg(test)]
 mod background_count_tests {
     use super::decode_live_backgrounded_rows;

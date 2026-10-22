@@ -63,6 +63,8 @@ type AgentRequest @branchable {
     execution_lease_expires_at: String @index
     background_completion_input_through_sequence: Int
     background_completion_notification_keys_json: String
+    # Bumped by every background admission so concurrent slot checks conflict.
+    background_admission_sequence: Int
     # Runtime-derived execution deadline; excluded from requester signatures.
     deadline: String
     retry_count: Int @immutable

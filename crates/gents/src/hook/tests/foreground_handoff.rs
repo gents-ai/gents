@@ -46,7 +46,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         .unwrap()
         .success());
     let pid_file = dir.path().join("pid");
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
@@ -65,7 +65,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     lifecycle.start_running().await.unwrap();
     let tool_doc = lifecycle.doc_id().unwrap().to_owned();
     let request_doc = lifecycle.request_doc_id().unwrap().to_owned();
-    let mut replay = lifecycle.clone();
+    let stale_replay = lifecycle.clone();
     hook.in_flight_lifecycles
         .lock()
         .await
@@ -123,7 +123,11 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     let ForegroundResult::Backgrounded(receipt) = result else {
         panic!("expected background receipt");
     };
-    replay.background_with_receipt(&receipt).await.unwrap();
+    stale_replay
+        .clone()
+        .background_with_receipt(&receipt)
+        .await
+        .unwrap();
     let capacity = crate::lean_vocab_test::lean_r6_backgrounding_case(
         "background_tool_budget_count_8_rejects_spawn",
     )
@@ -193,7 +197,11 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
             .map(|capacity| capacity.0),
         Some(capacity)
     );
-    replay.background_with_receipt(&receipt).await.unwrap();
+    stale_replay
+        .clone()
+        .background_with_receipt(&receipt)
+        .await
+        .unwrap();
     for filler in &mut fillers {
         filler
             .cancel_during_run(crate::tool_call_lifecycle::CancelCause::UserCancelled)
@@ -272,7 +280,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
 
 #[tokio::test]
 async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_execution() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
@@ -350,7 +358,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
 
 #[tokio::test]
 async fn refused_foreground_handoff_can_be_retried() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());

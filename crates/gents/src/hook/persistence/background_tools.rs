@@ -178,6 +178,7 @@ impl DefraSessionHook {
             "status": "running",
             "effective_timeout_secs": effective_timeout.as_secs()
         }));
+        let admission_slot = self.background_admission.lock().await;
         let admission = parent_lifecycle
             .admit_spawned_background(
                 crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
@@ -188,6 +189,7 @@ impl DefraSessionHook {
                 &receipt,
             )
             .await;
+        drop(admission_slot);
         let mut lifecycle = match admission {
             Ok(lifecycle) => lifecycle,
             Err(error) => {

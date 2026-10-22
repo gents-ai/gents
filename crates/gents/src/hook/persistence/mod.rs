@@ -33,6 +33,7 @@ mod prompt_hook;
 mod session_message;
 
 pub(crate) use helpers::count_live_backgrounded_rows_in;
+pub(crate) use helpers::reserve_background_slot_in_txn;
 pub(crate) use helpers::BackgroundCapacityExceeded;
 use helpers::*;
 pub(crate) use prompt_hook::HookOwnedTool;

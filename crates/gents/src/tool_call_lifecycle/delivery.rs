@@ -564,7 +564,7 @@ impl ToolCallLifecycle {
                     anyhow::ensure!(parent_row["data"]["AgentToolCall"].as_array().is_some_and(|rows|
                         rows.len() == 1 && rows[0]["spawned_by_tool_call_doc_id"].is_null()),
                         "spawned admission lost its exact running accepted parent");
-                    let live = crate::hook::persistence::count_live_backgrounded_rows_in(txn, &request_doc_id).await?;
+                    let live = crate::hook::persistence::reserve_background_slot_in_txn(txn, &request_doc_id).await?;
                     if live >= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
                         return Err(crate::hook::persistence::BackgroundCapacityExceeded(live).into());
                     }
@@ -3595,7 +3595,7 @@ pub(crate) async fn start_running_in_txn(
     );
     if start.await_mode == "background" {
         let live =
-            crate::hook::persistence::count_live_backgrounded_rows_in(txn, &start.request).await?;
+            crate::hook::persistence::reserve_background_slot_in_txn(txn, &start.request).await?;
         if live >= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
             return Err(crate::hook::persistence::BackgroundCapacityExceeded(live).into());
         }
