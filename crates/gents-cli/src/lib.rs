@@ -433,7 +433,11 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Desktop { command } => commands::desktop::run(command).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args, runtime).await,
-        Command::Service { command } => service_command(command),
+        Command::Service { command } => {
+            tokio::task::spawn_blocking(move || service_command(command))
+                .await
+                .context("running the service command")?
+        }
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,

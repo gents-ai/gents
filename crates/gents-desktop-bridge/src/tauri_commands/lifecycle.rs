@@ -606,6 +606,10 @@ type ClientStartFailure = (
 /// Open the embedded node on a large-stack OS thread without blocking a Tokio
 /// worker: the worker awaits a oneshot instead of `thread::join`. The thread
 /// owns the lifecycle guard and hands it back with the core.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "dedicated large-stack OS thread outside the runtime workers; the caller awaits a oneshot"
+)]
 async fn start_client_core_async(
     paths: gents_desktop_core::client::DesktopPaths,
     store_key_custody: gents::store_key::StoreKeyCustodyChoice,

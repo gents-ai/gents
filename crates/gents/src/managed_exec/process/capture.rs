@@ -367,6 +367,10 @@ mod tests {
     struct DelayedReadyRead(bool);
 
     impl AsyncRead for DelayedReadyRead {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "simulates a read that overruns the drain budget within one poll"
+        )]
         fn poll_read(
             mut self: Pin<&mut Self>,
             _: &mut Context<'_>,
@@ -392,6 +396,10 @@ mod tests {
     struct CooperativeEof(bool);
 
     impl AsyncRead for CooperativeEof {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "simulates a read that overruns the drain budget within one poll"
+        )]
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,

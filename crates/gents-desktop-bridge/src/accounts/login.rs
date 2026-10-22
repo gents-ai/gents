@@ -83,7 +83,7 @@ pub(crate) async fn sign_in<A, O>(
 ) -> Result<SignIn, BridgeError>
 where
     A: Fn() -> anyhow::Result<gents::ConfigAccess>,
-    O: FnOnce(&str) -> Result<(), BridgeError>,
+    O: AsyncFnOnce(&str) -> Result<(), BridgeError>,
 {
     provider(method)?;
     if node_did.trim().is_empty() {
@@ -107,7 +107,7 @@ where
                 open_browser: false, ..Default::default()
             }).map_err(|_| BridgeError::untyped("Could not start the ChatGPT sign-in callback. Close another sign-in and try again."))?;
             let stop = server.cancel_handle();
-            let opened = on_url(&server.auth_url);
+            let opened = on_url(&server.auth_url).await;
             let tokens = finish(
                 server.block_until_done(),
                 cancel,
@@ -133,7 +133,7 @@ where
                 open_browser: false, ..Default::default()
             }).map_err(|_| BridgeError::untyped("Could not start the Claude sign-in callback. Close another sign-in and try again."))?;
             let stop = server.cancel_handle();
-            let opened = on_url(&server.auth_url);
+            let opened = on_url(&server.auth_url).await;
             let tokens = finish(
                 server.block_until_done(),
                 cancel,
@@ -173,11 +173,11 @@ where
             let login = gents::xai_oauth_login::run_device_code_login_with_url_callback(
                 &http,
                 Some(stop.clone()),
-                move |url| {
+                async move |url| {
                     if callback_stop.load(Ordering::SeqCst) {
                         return;
                     }
-                    if let Err(error) = on_url(url) {
+                    if let Err(error) = on_url(url).await {
                         *callback_failed
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error);
@@ -231,7 +231,7 @@ mod tests {
             gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
             None,
             &cancel,
-            |_| panic!("cancelled sign-in must not open a browser"),
+            async |_| panic!("cancelled sign-in must not open a browser"),
         )
         .await;
         assert!(result.unwrap_err().message.contains("cancelled"));

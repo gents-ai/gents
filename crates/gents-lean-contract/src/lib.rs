@@ -88,6 +88,10 @@ pub fn run_lake_build(proofs_dir: &Path) -> Result<()> {
     with_proofs_dir_lock(proofs_dir, || run_lake_build_unlocked(proofs_dir))
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous build driver outside any runtime; backs off between blocking lake runs"
+)]
 fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
     let mut failures = Vec::new();
 
@@ -504,6 +508,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "OS threads hold the in-process flight for real time"
+    )]
     fn concurrent_threads_single_flight_same_payload() {
         let proofs_dir = unique_temp_dir("single-flight");
         let cache = OnceLock::new();
@@ -715,6 +723,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "separate processes hold the file lock for real time"
+    )]
     fn cross_process_mutations_do_not_overlap() {
         const ENV_FIXTURE: &str = "GENTS_LEAN_CONTRACT_CROSS_PROCESS_FIXTURE";
         const CHILDREN: usize = 4;
@@ -811,6 +823,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "OS threads hold the lock for real time"
+    )]
     fn concurrent_threads_under_lock_never_overlap_mutation() {
         let proofs_dir = unique_temp_dir("thread-overlap");
         let active = Arc::new(AtomicUsize::new(0));

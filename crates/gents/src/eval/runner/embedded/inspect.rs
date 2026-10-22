@@ -36,30 +36,26 @@ pub async fn inspect_retained_requests(
     let trial_dir = retained_trial_dir(runs_dir, hint)?;
     let home_dir = trial_dir.join("home");
     let did = locator.trial_node_did.clone();
-    let blocking = runtime.clone();
-    runtime
-        .spawn_blocking(move || {
-            blocking.block_on(async move {
-                let home = EmbeddedHome::open_for_inspection(&home_dir, &did)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "opening retained trial home {} for inspection",
-                            home_dir.display()
-                        )
-                    })?;
-                let result = std::panic::AssertUnwindSafe(read_requests(&home))
-                    .catch_unwind()
-                    .await;
-                home.node.shutdown().await;
-                match result {
-                    Ok(result) => result,
-                    Err(panic) => std::panic::resume_unwind(panic),
-                }
-            })
-        })
-        .await
-        .context("inspecting retained trial requests")?
+    crate::storage_backend::drive_unsendable(runtime, move || async move {
+        let home = EmbeddedHome::open_for_inspection(&home_dir, &did)
+            .await
+            .with_context(|| {
+                format!(
+                    "opening retained trial home {} for inspection",
+                    home_dir.display()
+                )
+            })?;
+        let result = std::panic::AssertUnwindSafe(read_requests(&home))
+            .catch_unwind()
+            .await;
+        home.node.shutdown().await;
+        match result {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    })
+    .await
+    .context("inspecting retained trial requests")?
 }
 
 pub(super) fn retained_trial_dir(runs_dir: &Path, hint: &str) -> Result<PathBuf> {

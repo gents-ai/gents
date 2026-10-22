@@ -961,6 +961,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "synchronous test retrying a file lock that has no release notification"
+    )]
     fn scenario_cache_lease_excludes_pruning() {
         let home = tempfile::tempdir().unwrap();
         let pack = test_support::fixture_pack_source("documents_fixture", home.path());

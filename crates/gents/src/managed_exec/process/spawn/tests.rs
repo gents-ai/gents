@@ -202,6 +202,10 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
 }
 
 #[cfg(target_os = "macos")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous test waiting for a child process marker file"
+)]
 fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
     use super::super::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
     use std::time::{Duration, Instant};

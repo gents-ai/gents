@@ -1513,6 +1513,10 @@ fn provision_failed_and_sealed_rejected_remain_until_cleanup() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the retried integration needs a later wall-clock second"
+)]
 fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
     let fx = Fixture::new();
     let mut docs = MemoryWorkspaceDocuments::default();

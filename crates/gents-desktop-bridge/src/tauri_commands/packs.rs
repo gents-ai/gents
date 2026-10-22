@@ -39,9 +39,7 @@ where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = anyhow::Result<Value>>,
 {
-    let blocking = runtime.clone();
-    runtime
-        .spawn_blocking(move || blocking.block_on(operation()))
+    gents::storage_backend::drive_unsendable(runtime, operation)
         .await
         .map_err(|error| BridgeError::untyped(format!("the pack operation stopped: {error}")))?
         .map_err(failed)

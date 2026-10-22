@@ -626,6 +626,10 @@ mod tests {
             })
         }
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the tool must become ready past the wall deadline within one poll"
+        )]
         fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async move {
                 self.called.store(true, Ordering::SeqCst);

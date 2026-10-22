@@ -212,7 +212,7 @@ impl ClientHost {
                     || self.core.operator_graphql(&request.node_did).map(gents::ConfigAccess::Graphql)
                         .ok_or_else(|| anyhow::anyhow!("Connect this local runtime before managing its accounts.")),
                     &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
-                    |url| crate::host_browser::open_url(url).map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
+                    async |url| crate::host_browser::open_url(url).await.map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
                 ).await?;
                 if self.core.refresh_store().await.is_err() {
                     tracing::warn!("Account saved; its client observation is unavailable");

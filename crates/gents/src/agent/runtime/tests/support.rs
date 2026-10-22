@@ -258,48 +258,45 @@ impl MockModelEndpoint {
 
     fn start_with_blocking_chat(model_name: &str, blocking_chat: bool) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
         let model_name = model_name.to_string();
+        // Drop wakes the blocking accept with a self-connection.
         let handle = thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let request = match read_http_request(&mut stream) {
-                            Ok(request) => request,
-                            Err(_) => {
-                                let _ = stream.shutdown(Shutdown::Both);
-                                continue;
-                            }
-                        };
-                        if request.method == "POST"
-                            && request.path == "/v1/chat/completions"
-                            && blocking_chat
-                        {
-                            while !stop_for_thread.load(Ordering::Relaxed) {
-                                thread::sleep(Duration::from_millis(25));
-                            }
-                            let _ = stream.shutdown(Shutdown::Both);
-                            continue;
-                        }
-
-                        let (status, body) = if request.method == "GET"
-                            && (request.path == "/v1/models" || request.path == "/models")
-                        {
-                            ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
-                        } else {
-                            ("404 Not Found", r#"{"error":"not found"}"#.to_string())
-                        };
-                        let _ = write_http_response(&mut stream, status, "application/json", &body);
-                        let _ = stream.shutdown(Shutdown::Both);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                    Err(_) => break,
+            let mut held_chats = Vec::new();
+            for stream in listener.incoming() {
+                if stop_for_thread.load(Ordering::Relaxed) {
+                    break;
                 }
+                let Ok(mut stream) = stream else { break };
+                let request = match read_http_request(&mut stream) {
+                    Ok(request) => request,
+                    Err(_) => {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        continue;
+                    }
+                };
+                if blocking_chat
+                    && request.method == "POST"
+                    && request.path == "/v1/chat/completions"
+                {
+                    held_chats.push(stream);
+                    continue;
+                }
+
+                let (status, body) = if request.method == "GET"
+                    && (request.path == "/v1/models" || request.path == "/models")
+                {
+                    ("200 OK", format!(r#"{{"data":[{{"id":"{model_name}"}}]}}"#))
+                } else {
+                    ("404 Not Found", r#"{"error":"not found"}"#.to_string())
+                };
+                let _ = write_http_response(&mut stream, status, "application/json", &body);
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+            for stream in held_chats {
+                let _ = stream.shutdown(Shutdown::Both);
             }
         });
 

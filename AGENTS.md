@@ -200,6 +200,16 @@ metadata.
   `Handle::current`/`try_current`: a guard whose `Drop` owes async cleanup
   binds its runtime with `gents::drop_cleanup::DropCleanup::current`, and tests
   take theirs from their crate's test-support helper.
+- Never block a runtime thread: every wait is an `.await` (`tokio::time::sleep`,
+  the owner's notification, never a polling loop) and synchronous work runs on
+  `spawn_blocking`. Clippy bans `std::thread::sleep`, `Handle::block_on`,
+  `block_in_place` and the futures and tauri `block_on`; each remaining use
+  carries a reasoned `expect` and sits off the runtime workers (a synchronous
+  process or test, a dedicated OS thread, a `spawn_blocking` closure) or is a
+  test future that deliberately overruns a deadline within one poll.
+  `Runtime::block_on` is for process and test entry points and dedicated
+  threads. Drive a non-`Send` embedded-node future through
+  `storage_backend::drive_unsendable`.
 - Every hash map and set is `rapidhash::RapidHashMap`/`RapidHashSet` (the fast
   hasher, built with `new`, `default` or `with_capacity` via `HashMapExt`/
   `HashSetExt`), and hashers are `rapidhash::fast::RapidHasher`, as in DefraDB.

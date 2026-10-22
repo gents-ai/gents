@@ -416,9 +416,7 @@ where
     Open: FnOnce() -> Opening + Send + 'static,
     Opening: std::future::Future<Output = Result<EmbeddedHome>>,
 {
-    let blocking = runtime.clone();
-    runtime
-        .spawn_blocking(move || blocking.block_on(open()))
+    crate::storage_backend::drive_unsendable(runtime, open)
         .await
         .context("opening a trial home")?
 }
@@ -3109,7 +3107,8 @@ mod tests {
         fn assert_send<T>(_: T)
         where
             T: Send,
-        {}
+        {
+        }
         let executor = EmbeddedExecutor::new(
             DocumentRuntimeOptions::default(),
             PathBuf::new(),

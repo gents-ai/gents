@@ -42,29 +42,40 @@ where
                     .approvals_watch_task = Some(watch);
             }
             let handle = app.clone();
-            std::thread::spawn(move || {
-                let state = handle.state::<DesktopAppState>();
-                if let Err(error) =
-                    tauri_commands::managed_server::refresh_packaged_install(&handle, &state)
-                {
-                    tracing::warn!(
+            tauri::async_runtime::spawn(async move {
+                let refresh_handle = handle.clone();
+                let refreshed = tauri::async_runtime::spawn_blocking(move || {
+                    tauri_commands::managed_server::refresh_packaged_install(
+                        &refresh_handle,
+                        &refresh_handle.state::<DesktopAppState>(),
+                    )
+                })
+                .await;
+                match refreshed {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(
                         error = %error.message,
                         "could not bring the packaged Gents runtime up to date"
-                    );
+                    ),
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "could not bring the packaged Gents runtime up to date"
+                    ),
                 }
-                if let Err(error) = tauri::async_runtime::block_on(
-                    tauri_commands::managed_server::restart_outdated_managed_job(&handle, &state),
-                ) {
+                let state = handle.state::<DesktopAppState>();
+                if let Err(error) =
+                    tauri_commands::managed_server::restart_outdated_managed_job(&handle, &state)
+                        .await
+                {
                     tracing::warn!(
                         error = %error.message,
                         "could not restart the node service that predates this app"
                     );
                 }
-                if let Err(error) = tauri::async_runtime::block_on(
-                    tauri_commands::managed_server::start_configured_managed_server(
-                        &handle, &state,
-                    ),
-                ) {
+                if let Err(error) =
+                    tauri_commands::managed_server::start_configured_managed_server(&handle, &state)
+                        .await
+                {
                     tracing::warn!(
                         error = %error.message,
                         "could not start the configured local node"

@@ -6,12 +6,13 @@ mod diagnostics;
 #[path = "bridge_runner/http.rs"]
 mod http;
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use serde::Serialize;
+use tokio::io::AsyncReadExt;
 
 use http::BridgeRunnerServer;
 use live_fixture::{LiveBackendOverride, LiveBridgeFixture, LiveTargetBackendOverride};
@@ -58,9 +59,13 @@ struct ReadyMessage {
 }
 
 fn main() -> Result<()> {
-    let args = RunnerArgs::parse();
+    live_fixture::run_on_live_runtime(run(RunnerArgs::parse()))?
+}
+
+async fn run(args: RunnerArgs) -> Result<()> {
     let fixture = if args.desktop_only {
-        std::panic::catch_unwind(LiveBridgeFixture::start_desktop_only)
+        tokio::spawn(LiveBridgeFixture::start_desktop_only())
+            .await
             .map_err(|_| anyhow!("bridge runner panicked during desktop-only startup"))??
     } else {
         let backend_override = LiveBackendOverride {
@@ -77,12 +82,14 @@ fn main() -> Result<()> {
             api_key: args.agent_target_api_key,
             api_key_env_var: args.agent_target_api_key_env_var,
         };
-        std::panic::catch_unwind(|| {
-            LiveBridgeFixture::start(Some(backend_override), Some(agent_target_override))
-        })
+        tokio::spawn(LiveBridgeFixture::start(
+            Some(backend_override),
+            Some(agent_target_override),
+        ))
+        .await
         .map_err(|_| anyhow!("bridge runner panicked during startup"))??
     };
-    let server = BridgeRunnerServer::start(Arc::clone(&fixture))?;
+    let server = BridgeRunnerServer::start(Arc::clone(&fixture)).await?;
     let ready = ReadyMessage {
         kind: "ready",
         base_url: server.base_url(),
@@ -94,17 +101,17 @@ fn main() -> Result<()> {
     println!("{}", serde_json::to_string(&ready)?);
     std::io::stdout().flush().ok();
 
-    let result = wait_for_shutdown_signal();
-    server.stop();
-    fixture.runtime().block_on(fixture.shutdown())?;
+    let result = wait_for_shutdown_signal().await;
+    server.stop().await;
+    fixture.shutdown().await?;
     result
 }
 
-fn wait_for_shutdown_signal() -> Result<()> {
-    let mut stdin = std::io::stdin();
+async fn wait_for_shutdown_signal() -> Result<()> {
+    let mut stdin = tokio::io::stdin();
     let mut buffer = [0_u8; 1];
     loop {
-        match stdin.read(&mut buffer) {
+        match stdin.read(&mut buffer).await {
             Ok(0) => return Ok(()),
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,

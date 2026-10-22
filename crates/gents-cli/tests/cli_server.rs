@@ -127,6 +127,10 @@ fn count_inference_calls(rows: &[Value], agent_id: Option<&str>, call_state: &st
         .count() as i64
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous harness bounding a std child process exit in real time"
+)]
 fn wait_for_server_exit(
     serve: &mut ServeProcess,
     timeout: Duration,

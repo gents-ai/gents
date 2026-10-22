@@ -7,7 +7,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::package_tools;
 
@@ -54,7 +54,7 @@ impl std::fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
-pub fn open_url(url: &str) -> Result<(), OpenError> {
+pub async fn open_url(url: &str) -> Result<(), OpenError> {
     // macOS and Windows use their launch service in-process, so no package
     // environment reaches a child.
     if cfg!(any(target_os = "macos", windows)) {
@@ -91,7 +91,7 @@ pub fn open_url(url: &str) -> Result<(), OpenError> {
         } else {
             args.push(OsString::from(url));
         }
-        match launched(&resolved, &args) {
+        match launched(&resolved, &args).await {
             Ok(true) => {
                 tracing::info!(opener = %program, "opened the page in the host browser");
                 return Ok(());
@@ -109,7 +109,7 @@ pub fn open_url(url: &str) -> Result<(), OpenError> {
 
 /// Whether `program` started and did not fail: still running once it has had
 /// time to settle is a browser holding the session, not a dispatcher refusing.
-fn launched(program: &PathBuf, args: &[OsString]) -> std::io::Result<bool> {
+async fn launched(program: &PathBuf, args: &[OsString]) -> std::io::Result<bool> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -117,20 +117,12 @@ fn launched(program: &PathBuf, args: &[OsString]) -> std::io::Result<bool> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     package_tools::prepare_host_command(&mut command);
-    let mut child = command.spawn()?;
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        match child.try_wait()? {
-            Some(status) => return Ok(status.success()),
-            None if Instant::now() >= deadline => {
-                // Reap on its own thread so a long-lived browser leaves no zombie.
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-                return Ok(true);
-            }
-            None => std::thread::sleep(Duration::from_millis(25)),
-        }
+    // A dropped tokio child is reaped by the runtime, so a long-lived browser
+    // leaves no zombie.
+    let mut child = tokio::process::Command::from(command).spawn()?;
+    match tokio::time::timeout(SETTLE, child.wait()).await {
+        Ok(status) => Ok(status?.success()),
+        Err(_) => Ok(true),
     }
 }
 

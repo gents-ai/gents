@@ -93,7 +93,7 @@ where
         provider,
         label,
         &wait.cancel,
-        |url| {
+        async |url| {
             if wait.cancel.is_cancelled() || app.get_webview_window(window).is_none() {
                 return Err(BridgeError::untyped("Sign-in cancelled."));
             }
@@ -127,7 +127,7 @@ where
                 }
                 _ => {}
             }
-            if crate::host_browser::open_url(url).is_err() {
+            if crate::host_browser::open_url(url).await.is_err() {
                 tracing::warn!("Could not open the sign-in page; open its link in Settings");
             }
             Ok(())

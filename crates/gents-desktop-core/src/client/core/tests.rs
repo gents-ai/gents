@@ -51,6 +51,10 @@ async fn startup_subscriptions_use_one_batch_with_the_exact_allowed_scope() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "retries a file lock on a blocking-pool thread; the lock has no release notification"
+)]
 async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../gents/tests/fixtures/native_claim_lifetime.json"
