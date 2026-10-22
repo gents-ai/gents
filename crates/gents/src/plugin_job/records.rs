@@ -3,8 +3,8 @@
 
 use anyhow::{Context, Result};
 use gents_protocol::job::{
-    JobBudget, JobPauseReason, JobPin, JobProgress, JobResume, JobState, JOB_PROGRESS_MAX_BYTES,
-    JOB_PROGRESS_TEXT_MAX_BYTES,
+    JobBudget, JobPauseReason, JobPin, JobProgress, JobResume, JobState, JOB_GUEST_STATE_MAX_BYTES,
+    JOB_PROGRESS_MAX_BYTES, JOB_PROGRESS_TEXT_MAX_BYTES,
 };
 use gents_protocol::plugin::PluginExecutionReceipt;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,8 @@ pub enum RecordError {
     },
     #[error("job_progress is {bytes} bytes, over the {max} byte cap")]
     TooLarge { bytes: usize, max: usize },
+    #[error("the guest state is {bytes} bytes, over the {max} byte cap")]
+    GuestStateTooLarge { bytes: usize, max: usize },
 }
 
 /// Progress fields the host owns; the guest's values for them are overwritten.
@@ -44,7 +46,9 @@ pub struct HostProgressFacts {
 /// What the host keeps on a job row between steps (`AgentToolCall.job_step_state`):
 /// the evidence of the last step that ran, from which the terminal
 /// compare-and-set publishes the row's single execution receipt, and the
-/// validated resume block the row was adopted with, which every step echoes.
+/// validated resume block the row was adopted with, which every step echoes,
+/// and the guest's own state from its last step that carried one, stored
+/// verbatim and never read by the host.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JobStepState {
@@ -52,6 +56,8 @@ pub struct JobStepState {
     pub evidence: Option<PluginExecutionReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<JobResume>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest: Option<Value>,
 }
 
 async fn read_record<R: ConfigRead>(
@@ -117,17 +123,35 @@ pub async fn read_pin<R: ConfigRead>(reader: &R, row_doc_id: &str) -> Result<Opt
 /// Stores `evidence` as the evidence of the job step that just ran on
 /// `row_doc_id`, replacing the previous step's. `resume` is written once:
 /// `None` keeps the stored block, and a block that differs from a stored one
-/// is [`RecordError::ResumeConflict`]. Only the step and adoption
-/// transactions call it; the row's `plugin_execution_receipt` is never
-/// written here.
+/// is [`RecordError::ResumeConflict`]. `guest` replaces the stored guest
+/// state when given (within [`JOB_GUEST_STATE_MAX_BYTES`], else
+/// [`RecordError::GuestStateTooLarge`]) and `None` keeps it. Only the step and
+/// adoption transactions call it; the row's `plugin_execution_receipt` is
+/// never written here.
 pub async fn write_step_state_in_txn(
     txn: &ConfigApplyTxn<'_>,
     row_doc_id: &str,
     evidence: &PluginExecutionReceipt,
     resume: Option<&JobResume>,
+    guest: Option<&Value>,
 ) -> Result<()> {
     let stored = read_step_state(txn, row_doc_id).await?;
+    let stored_guest = stored.as_ref().and_then(|state| state.guest.clone());
     let stored_resume = stored.and_then(|state| state.resume);
+    let guest = match guest {
+        Some(guest) => {
+            let bytes = guest.to_string().len();
+            if bytes > JOB_GUEST_STATE_MAX_BYTES {
+                return Err(RecordError::GuestStateTooLarge {
+                    bytes,
+                    max: JOB_GUEST_STATE_MAX_BYTES,
+                }
+                .into());
+            }
+            Some(guest.clone())
+        }
+        None => stored_guest,
+    };
     let resume = match (stored_resume, resume) {
         (Some(stored), Some(new)) if stored != *new => {
             return Err(RecordError::ResumeConflict(row_doc_id.to_owned()).into());
@@ -138,6 +162,7 @@ pub async fn write_step_state_in_txn(
     let state = JobStepState {
         evidence: Some(evidence.clone()),
         resume,
+        guest,
     };
     write_record(
         txn,
@@ -509,7 +534,9 @@ mod tests {
         resume: Option<&JobResume>,
     ) -> anyhow::Result<()> {
         ConfigAccess::transact_local_write(&admission.node, None, "test.records.step", |txn| {
-            Box::pin(async move { write_step_state_in_txn(txn, doc_id, evidence, resume).await })
+            Box::pin(
+                async move { write_step_state_in_txn(txn, doc_id, evidence, resume, None).await },
+            )
         })
         .await
     }
@@ -531,6 +558,7 @@ mod tests {
         let expected = JobStepState {
             evidence: Some(b),
             resume: Some(r),
+            guest: None,
         };
         assert_eq!(
             read_step_state(&access(&admission), &doc_id).await.unwrap(),

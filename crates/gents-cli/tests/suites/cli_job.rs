@@ -761,6 +761,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                 let (_, _, agent_id) = node_state.expect("node state is set before submits");
                 let e0 = JobStepOutput::Effects {
                     effects: JobEffects {
+                        state: None,
                         pin: Some(JobGuestPin {
                             script_id: "fixture".into(),
                             source_digest: digest.clone(),
@@ -794,6 +795,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                 };
                 let holding = JobStepOutput::Effects {
                     effects: JobEffects {
+                        state: None,
                         pin: None,
                         resume: None,
                         spawn: Vec::new(),

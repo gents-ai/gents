@@ -24,14 +24,15 @@ use super::admit::{
 };
 use super::control::{kill, resume_target_in_txn, validate_resume, KillCause};
 use super::driver::{
-    progress_of, read_step_row, read_step_row_in_txn, scratch_of, settle_plugin_job_in_txn,
-    settlement_of, step_context_for, terminal_text, writes_of, JobDriver,
+    guest_state_of, progress_of, read_step_row, read_step_row_in_txn, scratch_of,
+    settle_plugin_job_in_txn, settlement_of, step_context_for, terminal_text, writes_of, JobDriver,
 };
 use super::effects::{stage_effects_in_txn, write_scratch, JobContext};
 use super::input::{build_step_input, CallArgs, StepKind};
 use super::origin::{classify_origin, engine_guard, engine_guard_next, script_index, trusted_hint};
 use super::records::{
-    write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn, HostProgressFacts,
+    read_step_state, write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn,
+    HostProgressFacts,
 };
 use super::settings::effective_ceiling;
 use super::JobBinding;
@@ -730,11 +731,20 @@ pub async fn adopt_step0(
                         },
                     )
                     .await?;
+                    // The guest state a resume continues from is the prior row's, unless step 0 wrote its own.
+                    let guest = match (guest_state_of(output), adoption.row.resume.as_ref()) {
+                        (Some(state), _) => Some(state.clone()),
+                        (None, Some(resume)) => read_step_state(txn, &resume.row_doc_id)
+                            .await?
+                            .and_then(|state| state.guest),
+                        (None, None) => None,
+                    };
                     write_step_state_in_txn(
                         txn,
                         row_doc_id,
                         step0_receipt,
                         adoption.row.resume.as_ref(),
+                        guest.as_ref(),
                     )
                     .await?;
                     // (d) step 0's data writes

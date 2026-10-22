@@ -93,6 +93,7 @@ pub(crate) fn spawn(slot: &str, prompt: &str) -> JobSpawn {
 pub(crate) fn effects(pin: Option<JobGuestPin>, spawn: Vec<JobSpawn>) -> JobStepOutput {
     JobStepOutput::Effects {
         effects: JobEffects {
+            state: None,
             pin,
             resume: None,
             spawn,

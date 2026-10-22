@@ -764,6 +764,33 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     .await;
     finish_job(&step, &root_id).await;
     assert_eq!(step.row_of("call-1").await["lifecycle_state"], "completed");
+    // The prior row's guest state, which the resume row continues from.
+    let evidence = read_step_state(&step.access(), &root_id)
+        .await
+        .unwrap()
+        .and_then(|state| state.evidence)
+        .expect("the finished root row keeps its last step's evidence");
+    let guest = json!({"phase": "verify", "groups": 2});
+    crate::config_client::ConfigAccess::transact_local_write(
+        &step.node,
+        None,
+        "test.guest",
+        |txn| {
+            let (root_id, evidence, guest) = (root_id.clone(), evidence.clone(), guest.clone());
+            Box::pin(async move {
+                crate::plugin_job::records::write_step_state_in_txn(
+                    txn,
+                    &root_id,
+                    &evidence,
+                    None,
+                    Some(&guest),
+                )
+                .await
+            })
+        },
+    )
+    .await
+    .unwrap();
 
     let resume = json!({"row_doc_id": root_id, "engine": "current"});
     step.reinstall(&json!({"effects": {
@@ -786,6 +813,11 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
         .unwrap()
         .unwrap();
     assert_eq!(state.resume, Some(serde_json::from_value(resume).unwrap()));
+    assert_eq!(
+        state.guest,
+        Some(guest),
+        "a resume row continues from the prior row's state"
+    );
 
     let again = step
         .call_as("call-3", r#"{"argv": ["resume", "root"]}"#)

@@ -1034,6 +1034,7 @@ mod tests {
     fn effects(spawn: Vec<JobSpawn>, messages: &[&str]) -> JobStepOutput {
         JobStepOutput::Effects {
             effects: JobEffects {
+                state: None,
                 pin: None,
                 resume: None,
                 spawn,
@@ -1083,6 +1084,7 @@ mod tests {
 
     fn suspend() -> JobStepOutput {
         JobStepOutput::Suspend {
+            state: None,
             suspend: JobSuspend {
                 kind: JobSuspendKind::Pause,
                 reason: None,
