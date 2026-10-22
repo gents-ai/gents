@@ -34,6 +34,13 @@ pub struct AcceptedToolCall {
 /// use this same bound.
 pub const MAX_LIVE_REASONING_BYTES: usize = 4 * 1024;
 
+/// Multiple of the stream batch interval at which reasoning-only growth is
+/// flushed. Every flush appends a permanent `AgentOutputSegment`, and
+/// reasoning dominates streamed bytes for reasoning models, so at the plain
+/// batch interval a response stores one document per streaming second.
+/// Visible text, tool calls and the first reasoning bytes keep their cadence.
+pub const REASONING_BATCH_FACTOR: u32 = 5;
+
 pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
@@ -66,6 +73,18 @@ struct StreamBuffer {
     current: StreamBufferSnapshot,
     last_flush_at: Instant,
     persisted: StreamBufferSnapshot,
+}
+
+impl StreamBuffer {
+    fn flush_interval(&self, batch_interval: Duration) -> Duration {
+        let reasoning_only = self.current.content_bytes == self.persisted.content_bytes
+            && self.current.audit_progress_seq == self.persisted.audit_progress_seq;
+        if reasoning_only {
+            batch_interval.saturating_mul(REASONING_BATCH_FACTOR)
+        } else {
+            batch_interval
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -456,7 +475,7 @@ impl DefraStreamWriter {
         }
         buffer
             .last_flush_at
-            .checked_add(self.batch_interval)
+            .checked_add(buffer.flush_interval(self.batch_interval))
             .map(tokio::time::Instant::from_std)
     }
 
@@ -503,7 +522,10 @@ impl DefraStreamWriter {
             .get_mut(doc_id)
             .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
         let first_visible_content = buf.current.first_visible_since(&buf.persisted);
-        if !force && !first_visible_content && buf.last_flush_at.elapsed() < self.batch_interval {
+        if !force
+            && !first_visible_content
+            && buf.last_flush_at.elapsed() < buf.flush_interval(self.batch_interval)
+        {
             return Ok(None);
         }
         let snapshot = buf.current.clone();

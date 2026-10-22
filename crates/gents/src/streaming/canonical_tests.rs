@@ -250,6 +250,68 @@ async fn pending_batch_deadline_is_fixed_and_idle_has_no_timer() {
     assert_eq!(writer.next_flush_deadline(request).await, None);
 }
 
+/// Drives one streamed response through the writer's cadence the way the
+/// inference loop does, on a simulated clock: each chunk is written, then the
+/// pending batch is flushed once its deadline has passed. Returns the number of
+/// flushes, which is the number of `AgentOutputSegment`s the response appends.
+async fn simulated_segments(
+    writer: &DefraStreamWriter,
+    request: &str,
+    seconds: u32,
+    chunks_per_second: u32,
+    reasoning: bool,
+) -> usize {
+    writer.reset_tail(request).await.unwrap();
+    let step = Duration::from_secs(1) / chunks_per_second;
+    let mut segments = 0;
+    for _ in 0..seconds * chunks_per_second {
+        let flushed = if reasoning {
+            writer.write_reasoning(request, "thinking ").await.unwrap()
+        } else {
+            writer.write_tokens(request, "answer ").await.unwrap()
+        };
+        segments += usize::from(flushed);
+        if let Some(buffer) = writer.buffers.lock().await.get_mut(request) {
+            buffer.last_flush_at = buffer.last_flush_at.checked_sub(step).unwrap();
+        }
+        let due = writer.next_flush_deadline(request).await;
+        if due.is_some_and(|due| due <= tokio::time::Instant::now()) {
+            segments += usize::from(writer.flush_pending(request).await.unwrap());
+        }
+    }
+    segments + usize::from(writer.flush_pending(request).await.unwrap())
+}
+
+#[tokio::test]
+async fn reasoning_stream_appends_one_segment_per_reasoning_batch() {
+    let (node, path, lifecycle, mut writer) = fixture("reasoning-cadence").await;
+    writer.batch_interval = Duration::from_millis(crate::config::DEFAULT_STREAM_BATCH_MS);
+    let request = lifecycle.request().doc_id.clone();
+    let seconds = 20;
+
+    let text = simulated_segments(&writer, &request, seconds, 50, false).await;
+    assert!(
+        text >= seconds as usize,
+        "visible text must keep the batch cadence; {seconds}s appended {text} segments"
+    );
+
+    // First bytes, one segment per five batch intervals, and the final flush.
+    let bound = 2 + seconds as usize / 5;
+    let coarse = simulated_segments(&writer, &request, seconds, 50, true).await;
+    let fine = simulated_segments(&writer, &request, seconds, 400, true).await;
+    assert!(
+        coarse <= bound && fine <= bound,
+        "a {seconds}s reasoning stream appended {coarse} segments at 50 chunks/s and {fine} at 400; text appended {text}"
+    );
+    // Wall-clock time spent in the loop can move one batch boundary.
+    assert!(
+        coarse.abs_diff(fine) <= 1,
+        "segments must follow stream time, not chunk count: {coarse} vs {fine}"
+    );
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(path);
+}
+
 fn provider_segment_for_message(
     lifecycle: &RequestLifecycle,
     message: &gents_protocol::message::Message,
