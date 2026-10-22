@@ -1,43 +1,33 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { describe, expect, it, vi } from "vitest";
 
-import { AppShell } from "../src/ui/app/AppShell";
+import { SettingsScreen } from "../src/ui/screens/settings/SettingsScreen";
 import { renderIn, testApp } from "./app-fixture";
 
-function renderShell(openDbExplorer?: () => Promise<string>) {
+function renderDeveloper(openDbExplorer?: () => Promise<string>) {
   return renderIn(
     testApp({ api: openDbExplorer ? { openDbExplorer } : {} }),
-    <TooltipProvider>
-      <AppShell route={{ name: "agents" }}>
-        <p>Content</p>
-      </AppShell>
-    </TooltipProvider>,
+    <SettingsScreen section="developer" />,
   );
 }
 
 describe("DB Explorer developer option", () => {
-  it("invokes the handler from the settings menu", async () => {
+  it("invokes the handler from the developer settings", async () => {
     const openDbExplorer = vi.fn(() => Promise.resolve(""));
     const user = userEvent.setup();
-    renderShell(openDbExplorer);
+    renderDeveloper(openDbExplorer);
 
-    await user.click(screen.getByLabelText("Menu"));
-    await user.click(await screen.findByLabelText("Settings"));
-    await user.click(await screen.findByText("DB Explorer"));
+    expect(screen.getByText("DB Explorer")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open" }));
 
     expect(openDbExplorer).toHaveBeenCalledOnce();
   });
 
-  it("hides the developer section without a handler", async () => {
-    const user = userEvent.setup();
-    renderShell();
+  it("hides the option without a handler", () => {
+    renderDeveloper();
 
-    await user.click(screen.getByLabelText("Menu"));
-    await user.click(await screen.findByLabelText("Settings"));
-
-    expect(await screen.findByText("Theme")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-screen").dataset.section).toBe("developer");
     expect(screen.queryByText("DB Explorer")).not.toBeInTheDocument();
   });
 });

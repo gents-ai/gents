@@ -46,6 +46,44 @@ source consistency checks, not a separate runtime compatibility version.
   authority and a peer's `/status` enrollment token, a node signs and delivers
   its own enrollment request, so the peer approves it with `enrollment approve`
   and pairs with `pairings apply` without the desktop app.
+- Wiring a pack plugin (`gents pack wire`, `pack install --wire`, the
+  desktop's Enable for agent) into an agent whose Tools enable the `p2p` tool
+  adds the collections the plugin uses from its pack's own SDL to
+  `built_ins.p2p_collections`, so the agent can pair them; unwiring leaves
+  the grant. The p2p tool's grant error says that a new grant applies from
+  the agent's next request.
+- `enrollment_offer` takes `valid_for_secs` (1 to 3600, default 300), so an
+  approver relaying offers by hand can give the joiner time to request; the
+  request carries the offer's expiry. A joining node accepts offers valid up
+  to an hour (it refused anything over 10 minutes), so joiners need this
+  version. The `/status` offer stays at 5 minutes.
+- The `p2p` tool adds `enrollment_deny`, which signs a refusal of a pending
+  request. Its help says that enrollment is one-way, so pairing both ways
+  needs each node enrolled in the other's network, and that an offer token is
+  single use. The "no current authorized enrollment" error says the same, and
+  approving a request whose offer another node also used now says to mint one
+  offer per joining node.
+- Under the `workspace_write` policy, `bash_unrestricted` says that `ps` and
+  `kill` cannot see or signal processes the command did not start, that their
+  `Operation not permitted` comes from the sandbox, and that programs opening
+  a network monitor, such as a P2P `gents server`, fail to start there.
+- `config` write and preview receipts report a text field longer than 2,048
+  bytes as its `chars` and `sha256` instead of echoing it: a 16 KB
+  `system_prompt` update returned 23 KB (the old and new prompts) and now
+  returns under 1 KB, and the `sha256` checks the install against its file.
+- The `p2p` tool's schema is a closed `action` enum (`status`,
+  `network_list`, `pairings_apply`, `enrollment_offer`, `enrollment_request`,
+  `enrollment_approve`, ...) with typed `peer_id`, `peer_did`, `collections`,
+  `request_id`, `offer_token`, `doc_ids` and `details` fields, each described,
+  and `topic` for help; its description lists each action's fields and the
+  four-call joining sequence. Replies, `next_call` hints and errors use the
+  same form. The previous `argv`/`options` form is still accepted.
+- The `p2p` tool adds `enrollment offer`, which returns this node's signed
+  offer token (valid 5 minutes), peer ID and DID for a joining node's
+  `enrollment request`, so an Engineer no longer reads `/status` through bash;
+  it needs mutation authority. `enrollment history` lists up to 50 current pending,
+  approved, denied and revoked requests with decision times and signers. The
+  enrollment help says approval admits the peer for the authorization lease.
 - `gents init --engineer` turns on the `p2p` tool with mutations, so an
   Engineer can request and approve enrollments and manage its pairings
   without editing its Tools. Application collection grants

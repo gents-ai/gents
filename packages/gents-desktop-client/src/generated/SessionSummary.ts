@@ -10,4 +10,8 @@ messageCount: number | null, toolCallCount: number | null,
 /**
  * Why this client cannot read the session, when it cannot.
  */
-unreadableReason?: string | null, };
+unreadableReason?: string | null,
+/**
+ * Why a send from this client into the session would be refused, when it would.
+ */
+unsendableReason?: string | null, };

@@ -22,6 +22,18 @@ use super::runtime_tasks::{
 };
 use super::to_health_view;
 
+static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Where lineage for `node_did` is read. The desktop's node holds a session's
+/// requests only once that session has been opened, so the runtime it
+/// operates is read when there is one.
+pub(crate) fn node_reads(core: &ClientCore, node_did: &str) -> gents::config_client::ConfigAccess {
+    core.operator_observation_graphql(node_did)
+        .map(gents::config_client::ConfigAccess::Graphql)
+        .unwrap_or_else(|| gents::config_client::ConfigAccess::local(core.node_arc()))
+}
+
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
     let sync_state = core.sync_state();
     let store = core.store().snapshot();
@@ -266,19 +278,23 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
             let node_scope = core.transcript_node_scope(&peer.node_did);
             let operator = core.operator_observation_graphql(&peer.node_did).is_some();
+            let sender = core.requester_did(&peer);
             for summary in &mut sessions {
-                summary.unreadable_reason = store
-                    .sessions
-                    .iter()
-                    .find(|row| {
-                        row.session_id == summary.session_id && row.node_did == summary.node_did
-                    })
+                let row = store.sessions.iter().find(|row| {
+                    row.session_id == summary.session_id && row.node_did == summary.node_did
+                });
+                summary.unreadable_reason = row
                     .and_then(|row| {
                         gents_desktop_core::client::session_unreadable_reason(
                             row,
                             node_scope.as_deref(),
                             operator,
                         )
+                    })
+                    .map(str::to_owned);
+                summary.unsendable_reason = row
+                    .and_then(|row| {
+                        gents_desktop_core::client::session_unsendable_reason(row, &sender)
                     })
                     .map(str::to_owned);
             }
@@ -384,14 +400,15 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         })
         .collect::<Vec<_>>();
 
-    let access = gents::config_client::ConfigAccess::local(core.node_arc());
-    super::runtime_tasks::resolve_summary_starters(
-        &access,
-        deployments
-            .iter_mut()
-            .flat_map(|deployment| deployment.sessions.iter_mut()),
-    )
-    .await;
+    for deployment in &mut deployments {
+        let access = node_reads(core, &deployment.node_did);
+        super::runtime_tasks::resolve_summary_starters(
+            &access,
+            &STARTERS,
+            deployment.sessions.iter_mut(),
+        )
+        .await;
+    }
     deployments.sort_by(|left, right| left.label.cmp(&right.label));
 
     DesktopRuntimeSnapshot {
@@ -813,6 +830,7 @@ mod agent_environment_tests {
             message_count: None,
             tool_call_count: None,
             unreadable_reason: None,
+            unsendable_reason: None,
         }
     }
 

@@ -106,11 +106,8 @@ test.describe("half-screen window", () => {
       await expectNoPageHorizontalOverflow(page);
 
       await page.getByRole("button", { name: "Menu" }).click();
-      await page.getByRole("button", { name: "Settings" }).click();
-      await expectInsideViewport(
-        page,
-        page.getByRole("menuitemradio", { name: "Dark" }),
-      );
+      await page.getByRole("link", { name: "Settings" }).click();
+      await expectInsideViewport(page, page.getByRole("combobox", { name: "Theme" }));
     });
   }
 

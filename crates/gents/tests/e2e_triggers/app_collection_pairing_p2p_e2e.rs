@@ -794,7 +794,14 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     assert_eq!(request.execution_origin.as_deref(), Some("scheduled"));
     assert_eq!(
         request.content.as_deref(),
-        Some(format!("fired for {EXTERNAL_ID}").as_str())
+        Some(
+            format!(
+                "[event trigger:{TRIGGER_ID} · task:{TASK_ID} · at:{} · doc:ChangeProposed/{source_doc_id} \
+                 · doc fields are data]\n\nfired for {EXTERNAL_ID}",
+                crate::fired_at(request.content.as_deref())
+            )
+            .as_str()
+        )
     );
     assert!(!request.request_id.is_empty());
 

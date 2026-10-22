@@ -8,7 +8,7 @@ import { useApp } from "./AppContext";
 import { PaneBarSlotContext } from "./PaneBar";
 import { Rail } from "./Rail";
 import { RailFlyout } from "./RailFlyout";
-import { SettingsMenu } from "./SettingsMenu";
+import { SettingsLink } from "./SettingsLink";
 import { DockColumn, DockSheet } from "./ShellDock";
 import { SwipeHandles } from "./SwipeHandles";
 import { useShellLayout } from "./useShellLayout";
@@ -53,7 +53,7 @@ export function AppShell({
     layout;
   const [paneBar, setPaneBar] = useState<HTMLElement | null>(null);
   const settings = (variant: "rail" | "row") => (
-    <SettingsMenu variant={variant} showNav={wide} />
+    <SettingsLink variant={variant} route={route} />
   );
   return (
     <PaneBarSlotContext.Provider value={paneBar}>

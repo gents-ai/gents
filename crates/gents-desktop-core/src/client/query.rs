@@ -51,7 +51,7 @@ pub use session_transcript::{
     load_session_compaction_entries, load_session_compaction_entries_on,
     load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
     load_session_transcript_page, load_session_transcript_page_on,
-    session_transcript_requester_scope, session_unreadable_reason,
+    session_transcript_requester_scope, session_unreadable_reason, session_unsendable_reason,
 };
 pub(crate) use snapshot_loaders::*;
 

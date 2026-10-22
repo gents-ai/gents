@@ -153,7 +153,7 @@ fn validate_fresh_window(issued_at: &str, expires_at: &str) -> Result<()> {
         "enrollment offer expires before issuance"
     );
     anyhow::ensure!(
-        expires - issued <= chrono::Duration::minutes(10),
+        expires - issued <= super::enrollment_offer::MAX_OFFER_VALIDITY,
         "enrollment offer validity window is too long"
     );
     Ok(())

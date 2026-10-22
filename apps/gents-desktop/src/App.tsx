@@ -48,6 +48,7 @@ import {
 } from "./ui/lib/router";
 import { useSwipeNav } from "./ui/lib/swipe-nav";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
+import { SettingsScreen } from "./ui/screens/settings/SettingsScreen";
 import { AgentsScreen } from "./ui/screens/AgentsScreen";
 import { MailboxScreen } from "./ui/screens/MailboxScreen";
 import { PluginPageScreen } from "./ui/screens/PluginPageScreen";
@@ -230,6 +231,8 @@ function RouteScreen({ route }: { route: Route }) {
       );
     case "plugin":
       return <PluginPageScreen pluginId={route.pluginId} />;
+    case "settings":
+      return <SettingsScreen section={route.section} />;
   }
 }
 

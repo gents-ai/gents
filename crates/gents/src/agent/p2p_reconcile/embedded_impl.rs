@@ -993,6 +993,8 @@ pub(super) mod tests {
         .expect("adopt accepted agent_new");
         let cause = crate::lifecycle::SessionMessageCause {
             caller_node_did: lifecycle.request().node_did.clone(),
+            caller_agent_id: lifecycle.request().agent_id.clone(),
+            caller_session_id: lifecycle.request().session_id.clone(),
             caller_request_id: lifecycle.request().request_id.clone(),
             caller_request_doc_id: lifecycle.request().doc_id.clone(),
             caller_hop: lifecycle.request().request_hop,

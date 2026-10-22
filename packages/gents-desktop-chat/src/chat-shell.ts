@@ -61,7 +61,8 @@ export type ChatBlockedReason =
   | "submittingRequest"
   | "waitingForRequestObservation"
   | "sessionMissingFromSnapshot"
-  | "inconsistentTurnObservation";
+  | "inconsistentTurnObservation"
+  | "sessionNotOwned";
 
 export type ChatWorkflowState =
   | { kind: "ready" }
@@ -210,6 +211,8 @@ function hintFor(reason: ChatBlockedReason) {
       return "Session missing from snapshot";
     case "inconsistentTurnObservation":
       return "Waiting for consistent turn observation";
+    case "sessionNotOwned":
+      return "Read-only";
   }
 }
 
@@ -247,6 +250,7 @@ function activityStatusFor(
 
   switch (sendStatus.reason) {
     case "composerEmpty":
+    case "sessionNotOwned":
       return null;
     case "clientOffline":
     case "nodeNotSelected":
@@ -429,6 +433,14 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         kind: "disabled",
         reason,
         hint: admissionStatus.detail,
+      };
+    }
+    const unsendable = input.selectedSessionSummary?.unsendableReason;
+    if (unsendable) {
+      return {
+        kind: "disabled",
+        reason: "sessionNotOwned",
+        hint: unsendable,
       };
     }
     if (input.sending || input.localWorkflow.kind === "submittingRequest") {

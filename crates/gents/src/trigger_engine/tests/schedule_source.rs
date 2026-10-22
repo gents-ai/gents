@@ -699,11 +699,13 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         Some("pending"),
         "ProductionMaterializer should enqueue pending requests for watcher/router execution: {row}"
     );
-    assert_eq!(
-        row.get("content").and_then(|v| v.as_str()),
-        Some(
-            "Scheduled task instructions (rendered from saved configuration):\n\nintegration fire"
-        ),
+    let content = row
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    assert!(
+        content.starts_with("[scheduled trigger:sched-e2e · task:task-e2e · at:20")
+            && content.ends_with("]\n\nintegration fire"),
         "rendered prompt template should land in AgentRequest.content: {row}"
     );
 

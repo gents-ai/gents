@@ -193,6 +193,7 @@ pub(super) fn session_summaries(
                 message_count: None,
                 tool_call_count: None,
                 unreadable_reason: None,
+                unsendable_reason: None,
             }
         })
         .collect::<Vec<_>>();
@@ -341,34 +342,60 @@ mod trigger_recent_runs_tests {
     }
 }
 
+/// Starters resolved so far, keyed by the parent request's document ID. A
+/// session's starter is written once and request document IDs are
+/// content-addressed, so an entry never goes stale; a parent no store holds
+/// is not recorded and is asked for again.
+#[derive(Default)]
+pub(crate) struct StarterCache(
+    std::sync::Mutex<std::collections::BTreeMap<String, gents::session_origin::SessionScope>>,
+);
+
 pub(super) async fn resolve_summary_starters<'a, R: gents::config_client::ConfigRead + ?Sized>(
     access: &R,
+    cache: &StarterCache,
     summaries: impl IntoIterator<Item = &'a mut SessionSummary>,
 ) {
-    let mut started = summaries
+    let started = summaries
         .into_iter()
         .filter_map(|summary| {
             let parent = summary.provenance.as_ref()?.parent_request_doc_id.clone()?;
             Some((summary, parent))
         })
         .collect::<Vec<_>>();
-    let scopes = match gents::session_origin::request_scopes(
-        access,
-        started.iter().map(|(_, parent)| parent.as_str()),
-    )
-    .await
-    {
-        Ok(scopes) => scopes
-            .into_iter()
-            .collect::<std::collections::BTreeMap<_, _>>(),
-        Err(error) => {
-            tracing::warn!(%error, sessions = started.len(), "session starters unavailable");
-            return;
-        }
+    let missing = {
+        let known = cache
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        started
+            .iter()
+            .map(|(_, parent)| parent.as_str())
+            .filter(|parent| !known.contains_key(*parent))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
     };
-    for (summary, parent) in &mut started {
+    if !missing.is_empty() {
+        match gents::session_origin::request_scopes(access, missing.iter().map(String::as_str))
+            .await
+        {
+            Ok(scopes) => cache
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .extend(scopes),
+            Err(error) => {
+                tracing::warn!(%error, sessions = missing.len(), "session starters unavailable");
+            }
+        }
+    }
+    let known = cache
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for (summary, parent) in started {
         summary.started_by =
-            scopes
+            known
                 .get(parent.as_str())
                 .map(|scope| super::super::types::LinkedSessionView {
                     node_did: scope.node_did.clone(),

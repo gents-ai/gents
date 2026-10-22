@@ -1550,3 +1550,42 @@ async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() 
         true
     );
 }
+
+#[tokio::test]
+async fn receipts_summarize_long_text_by_length_and_sha256() {
+    let (node, owner, tools) = setup("long-prompt", &["node", "tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    let prompt = "Review the deployment notes before each change.\n".repeat(100);
+    let receipt = ok(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"set":{"system_prompt":prompt}}),
+    )
+    .await;
+    let change = &receipt["changed"][0];
+    assert_eq!(change["field"], "system_prompt");
+    assert_eq!(change["to"]["chars"], prompt.chars().count());
+    use sha2::{Digest, Sha256};
+    assert_eq!(
+        change["to"]["sha256"],
+        format!("{:x}", Sha256::digest(&prompt))
+    );
+    assert!(!receipt.to_string().contains(&prompt[..200]));
+    let read = ok(
+        &tools,
+        json!({"argv":["context","get"],"target_id":context_id}),
+    )
+    .await;
+    assert!(read.to_string().contains("Review the deployment notes"));
+    let short = ok(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"set":{"system_prompt":"Review clearly."}}),
+    )
+    .await;
+    assert_eq!(short["changed"][0]["to"], "Review clearly.");
+    assert_eq!(
+        change["to"]["sha256"],
+        short["changed"][0]["from"]["sha256"]
+    );
+}

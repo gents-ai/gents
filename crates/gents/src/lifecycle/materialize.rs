@@ -564,6 +564,8 @@ pub fn request_hop_within_bound(max_request_hop: Option<u32>, hop: u32) -> bool 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageCause {
     pub(crate) caller_node_did: String,
+    pub(crate) caller_agent_id: String,
+    pub(crate) caller_session_id: String,
     pub(crate) caller_request_id: String,
     pub(crate) caller_request_doc_id: String,
     pub(crate) caller_hop: u32,
@@ -577,6 +579,24 @@ pub(crate) struct SessionMessageTarget {
     pub(crate) node_did: String,
     pub(crate) agent_id: String,
     pub(crate) session_id: String,
+}
+
+/// A same-node session message is signed by the operator's own DID, so this
+/// line is how the target model tells another agent's text from its operator's.
+pub(crate) fn session_message_sender_header(cause: &SessionMessageCause, at: &str) -> String {
+    let did = &cause.caller_node_did;
+    let node = match (did.get(..16), did.get(did.len().saturating_sub(4)..)) {
+        (Some(head), Some(tail)) if did.len() > 20 => format!("{head}..{tail}"),
+        _ => did.clone(),
+    };
+    let agent = cause
+        .caller_agent_id
+        .strip_prefix(&format!("{did}:"))
+        .unwrap_or(&cause.caller_agent_id);
+    format!(
+        "[message agent:{agent} session:{} node:{node} · at:{at} · cause:{}]",
+        cause.caller_session_id, cause.caller_request_id
+    )
 }
 
 pub(crate) async fn build_session_message_request(
@@ -631,15 +651,20 @@ pub(crate) async fn build_session_message_request_with_input(
     } else {
         AgentRequestAdmissionRecord::peer(&cause.caller_node_did)
     };
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let identity = RequestIdentity {
         requester_did: Some(cause.caller_node_did.clone()),
         request_id: request_id.to_owned(),
         node_did: target.node_did.clone(),
         agent_id: target.agent_id.clone(),
         session_id: target.session_id.clone(),
-        content: prompt_selection.prompt.clone(),
+        content: format!(
+            "{}\n\n{}",
+            session_message_sender_header(cause, &created_at),
+            prompt_selection.prompt
+        ),
         execution_origin: ExecutionOrigin::Interactive,
-        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        created_at,
     };
     input.selected_skill_ids = prompt_selection.selected_skill_ids;
     input.initial_title = title
@@ -1185,6 +1210,8 @@ mod session_message_tests {
         let _identity = pin_fixed_signing_identity(tempdir.path());
         let cause = SessionMessageCause {
             caller_node_did: PIN_FIXED_DID.to_owned(),
+            caller_agent_id: "caller-agent".to_owned(),
+            caller_session_id: "caller-session".to_owned(),
             caller_request_id: "caller-request".to_owned(),
             caller_request_doc_id: "caller-request-doc".to_owned(),
             caller_hop: 0,
@@ -1206,6 +1233,50 @@ mod session_message_tests {
         assert_eq!(carried.input.cwd.as_deref(), Some("/work/tree"));
         let unset = build(None).await.unwrap();
         assert_eq!(unset.input.cwd, None);
+    }
+
+    #[tokio::test]
+    async fn session_message_content_names_its_sender_after_skill_selection() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let _identity = pin_fixed_signing_identity(tempdir.path());
+        let cause = SessionMessageCause {
+            caller_node_did: PIN_FIXED_DID.to_owned(),
+            caller_agent_id: format!("{PIN_FIXED_DID}:default"),
+            caller_session_id: "sender-s2".to_owned(),
+            caller_request_id: "caller-request".to_owned(),
+            caller_request_doc_id: "caller-request-doc".to_owned(),
+            caller_hop: 0,
+            tool_call_id: "tool-call".to_owned(),
+            tool_call_doc_id: "tool-call-doc".to_owned(),
+            correlation: None,
+        };
+        let target = SessionMessageTarget {
+            node_did: PIN_FIXED_DID.to_owned(),
+            agent_id: "agent-1".to_owned(),
+            session_id: "session-1".to_owned(),
+        };
+        let create = build_session_message_request(
+            &cause,
+            &target,
+            "/triage\nlook at it",
+            None,
+            "req-sender",
+            None,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(create.input.selected_skill_ids, ["triage"]);
+        assert_eq!(
+            create.content,
+            format!(
+                "[message agent:default session:sender-s2 node:did:key:z6Mkmuzz..rco7 · at:{} \
+                 · cause:caller-request]\n\nlook at it",
+                create.created_at
+            )
+        );
     }
 }
 

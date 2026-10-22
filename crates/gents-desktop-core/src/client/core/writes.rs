@@ -456,6 +456,7 @@ impl ClientCore {
         let (signer, admission, requester_did) = self
             .request_authority(node_did, peer_record.as_ref())
             .await?;
+        self.ensure_sender_owns_session(node_did, session_id, &requester_did)?;
         let agent_id = agent_id_for_write(agent_id);
         match mutations::submit_request(
             &self.node,
@@ -485,6 +486,36 @@ impl ClientCore {
                 Ok(result)
             }
             Err(error) => Err(self.submit_failure(error)),
+        }
+    }
+
+    /// Refuse a send into a session another requester owns before writing it.
+    /// Core refuses such a request at claim time, and a refused request is
+    /// never observed under the session's owner, so the send would otherwise
+    /// wait for an observation that doesn't come. A session's owner is written
+    /// once, so the snapshot's row is current; a session the snapshot doesn't
+    /// hold is left to core's admission.
+    fn ensure_sender_owns_session(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        sender_did: &str,
+    ) -> Result<()> {
+        let store = self.store.snapshot();
+        let Some(session) = store
+            .sessions
+            .iter()
+            .find(|row| row.session_id == session_id && row.node_did == node_did)
+        else {
+            return Ok(());
+        };
+        match super::super::query::session_unsendable_reason(session, sender_did) {
+            Some(reason) => Err(crate::error::BridgeError::new(
+                crate::error::BridgeErrorCode::SessionNotOwned,
+                reason,
+            )
+            .into()),
+            None => Ok(()),
         }
     }
 
@@ -848,7 +879,8 @@ impl ClientCore {
         ))
     }
 
-    pub(super) fn requester_did(&self, record: &PeerRecord) -> String {
+    /// The DID this client sends as on `record`'s node.
+    pub fn requester_did(&self, record: &PeerRecord) -> String {
         if record.is_enrollment() {
             self.node_identity.did().to_string()
         } else {
@@ -2243,6 +2275,20 @@ impl ClientCore {
             .iter()
             .any(|peer| peer.node_did == node_did && peer.is_enrollment())
             .then(|| self.node_identity.did().to_string())
+    }
+
+    /// Whether this paired client reads the session through the node's operator
+    /// access because the node owns it. The node refuses to hydrate such a
+    /// session to this client's replica, so it is read only through the node.
+    pub fn session_read_through_operator(&self, session_id: &str, node_did: &str) -> bool {
+        let store = self.store.snapshot();
+        store
+            .sessions
+            .iter()
+            .find(|row| row.session_id == session_id && row.node_did == node_did)
+            .is_some_and(|session| session.requester_did.as_deref() == Some(node_did))
+            && self.transcript_node_scope(node_did).is_some()
+            && self.operator_observation_graphql(node_did).is_some()
     }
 
     pub fn session_unreadable_reason(

@@ -134,17 +134,24 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
                 "Lean case {} materialize trigger_kind drifted",
                 case.name
             );
-            assert_eq!(
-                rendered,
-                &if matches!(kind, TriggerKind::Schedule) {
-                    format!(
-                        "Scheduled task instructions (rendered from saved configuration):\n\nlean case {}",
-                        case.name
-                    )
-                } else {
-                    format!("lean case {}", case.name)
-                },
-                "Lean case {} rendered prompt drifted",
+            let body = format!("lean case {}", case.name);
+            let prompt_matches = match kind {
+                TriggerKind::Manual => *rendered == body,
+                kind => {
+                    let label = if kind == &TriggerKind::Event {
+                        "event"
+                    } else {
+                        "scheduled"
+                    };
+                    rendered.starts_with(&format!(
+                        "[{label} trigger:{} · ",
+                        trigger_id.as_deref().unwrap_or_default()
+                    )) && rendered.ends_with(&format!("]\n\n{body}"))
+                }
+            };
+            assert!(
+                prompt_matches,
+                "Lean case {} rendered prompt drifted: {rendered}",
                 case.name
             );
             assert_eq!(

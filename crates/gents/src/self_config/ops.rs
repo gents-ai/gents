@@ -1182,12 +1182,28 @@ async fn candidate_doc(
         .with_context(|| format!("candidate chain references missing {} {id:?}; inspect the role with agent get, then select an existing document or create this dependency before selecting it", wanted.collection_name()))?
         .1)
 }
+/// Receipts summarize longer text fields by length and SHA-256: the caller
+/// already holds the value it sent, and a prompt echoed in full costs its
+/// size again in the model's context.
+const RECEIPT_TEXT_LIMIT: usize = 2048;
+
 fn safe_diff(
     target: SelfConfigTarget,
     before: &Map<String, Value>,
     after: &Map<String, Value>,
 ) -> Vec<FieldDelta> {
     let mut deltas = diff_docs(target, before, after);
+    for delta in &mut deltas {
+        for value in [&mut delta.from, &mut delta.to] {
+            if let Some(text) = value
+                .as_str()
+                .filter(|text| text.len() > RECEIPT_TEXT_LIMIT)
+            {
+                use sha2::{Digest, Sha256};
+                *value = json!({"chars": text.chars().count(), "sha256": format!("{:x}", Sha256::digest(text))});
+            }
+        }
+    }
     if target == SelfConfigTarget::InferenceBackend {
         for delta in &mut deltas {
             if delta.field == "auth" {

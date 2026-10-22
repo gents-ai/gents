@@ -220,10 +220,11 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
         Some("scheduled"),
         "trigger-driven fires persist execution_origin=scheduled: {request:?}"
     );
-    let expected = format!("drift={DRIFT_SIG} summary={SUMMARY} paths={TARGET_PATHS}");
-    assert_eq!(
-        request.content.as_deref(),
-        Some(expected.as_str()),
+    let expected = format!("]\n\ndrift={DRIFT_SIG} summary={SUMMARY} paths={TARGET_PATHS}");
+    assert!(
+        request.content.as_deref().is_some_and(|content| content
+            .starts_with(&format!("[event trigger:{trigger_id} · "))
+            && content.ends_with(&expected)),
         "rendered prompt must substitute ALL of drift_sig/summary/target_paths from the \
          triggering doc: {request:?}"
     );

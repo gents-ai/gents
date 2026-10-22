@@ -163,4 +163,5 @@ fn preamble_no_targets_block_when_empty() {
     );
     assert!(!preamble.contains("## Agents"));
     assert!(!preamble.contains("agent_new"));
+    assert!(preamble.ends_with(SOURCE_HEADER_GUIDANCE));
 }

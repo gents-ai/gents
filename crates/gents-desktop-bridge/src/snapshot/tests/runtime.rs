@@ -425,7 +425,12 @@ async fn summary_starter_resolves_physical_cause_outside_latest_request_cache() 
     .unwrap()
     .unwrap();
     let mut summaries = session_summaries(&[child], &[], crate::tests::support::OPERATOR, &[], &[]);
-    super::super::runtime_tasks::resolve_summary_starters(&access, &mut summaries).await;
+    super::super::runtime_tasks::resolve_summary_starters(
+        &access,
+        &Default::default(),
+        &mut summaries,
+    )
+    .await;
     let starter = summaries[0].started_by.as_ref().unwrap();
     assert_eq!(starter.session_id, "sess_parent");
     assert_eq!(starter.cause_request_doc_id, parent_doc_id);
@@ -459,11 +464,13 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
         );
     }
     let reads = crate::tests::support::CountingRead::new(access);
+    let starters = super::super::runtime_tasks::StarterCache::default();
     let (first, second) = sessions.split_at(4);
     let mut first = session_summaries(first, &[], crate::tests::support::OPERATOR, &[], &[]);
     let mut second = session_summaries(second, &[], crate::tests::support::OPERATOR, &[], &[]);
     super::super::runtime_tasks::resolve_summary_starters(
         &reads,
+        &starters,
         first.iter_mut().chain(second.iter_mut()),
     )
     .await;
@@ -529,11 +536,11 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
     }
 
     let mut rebuilt = session_summaries(&sessions, &[], crate::tests::support::OPERATOR, &[], &[]);
-    super::super::runtime_tasks::resolve_summary_starters(&reads, &mut rebuilt).await;
+    super::super::runtime_tasks::resolve_summary_starters(&reads, &starters, &mut rebuilt).await;
     assert_eq!(
         reads.queries(),
         2,
-        "a second build over the same fleet must add exactly one batched read"
+        "a second build must ask again only for the parent no store holds"
     );
     assert!(
         rebuilt
@@ -543,5 +550,27 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
             .started_by
             .is_some(),
         "a rebuilt summary must resolve its starter identically"
+    );
+
+    let resolved = sessions
+        .iter()
+        .filter(|session| session.session_id != "sess_fleet_child_dangling")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut cached = session_summaries(&resolved, &[], crate::tests::support::OPERATOR, &[], &[]);
+    super::super::runtime_tasks::resolve_summary_starters(&reads, &starters, &mut cached).await;
+    assert_eq!(
+        reads.queries(),
+        2,
+        "a build whose parents are all known must not read"
+    );
+    assert!(
+        cached
+            .iter()
+            .find(|summary| summary.session_id == "sess_fleet_child_b")
+            .expect("cached summary must exist")
+            .started_by
+            .is_some(),
+        "a starter served from the cache must still be set"
     );
 }
