@@ -593,14 +593,13 @@ impl AssistantTurnAccumulator {
                 }
             }
         }
-        self.content
-            .push(AssistantMessageContent::Reasoning(AssistantReasoning {
-                id,
-                content: vec![gents_protocol::message::ReasoningContent::Text {
-                    text: fragment.to_owned(),
-                    signature: None,
-                }],
-            }));
+        self.push_reasoning(AssistantReasoning {
+            id,
+            content: vec![gents_protocol::message::ReasoningContent::Text {
+                text: fragment.to_owned(),
+                signature: None,
+            }],
+        });
     }
 
     pub fn push_provider_reasoning(
