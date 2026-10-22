@@ -1814,7 +1814,7 @@ mod tests {
 
         crate::config_client::ConfigAccess::write_local_response(
             &node,
-            "test delete reduction block",
+            "test.delete_reduction_block",
             &format!(
                 "mutation {{ delete_RenderedRequestBlock(docID: \"{}\") {{ _docID }} }}",
                 escape_graphql_string(blocks.first().unwrap())
