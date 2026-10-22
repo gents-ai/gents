@@ -198,10 +198,11 @@ theorem dynamic_off_refuses_run (ctx : StepContext) (job : Job) (out : StepOutpu
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
     (he : engineChanged ctx job out = false)
     (hres : (out.resume.isSome && !resumePlaced job out) = false)
+    (hadm : resumeAdmitted ctx out = true)
     (hp : stepPin ctx job out = some p) (ho : p.origin = .dynamic) :
     admitStep ctx job out = .error .policyDenied := by
   simp only [Bool.and_eq_true] at ha
-  simp [admitStep, hr, ha.1, ha.2, he, hres, hp, dynamicModeRefusal, ho, h]
+  simp [admitStep, hr, ha.1, ha.2, he, hres, hadm, hp, dynamicModeRefusal, ho, h]
 
 /-- Under `policy.mode = off`, a step that carries no installed pin (no pin at
 all, or a dynamic-origin one) and whose call runs dynamic code
@@ -211,14 +212,15 @@ theorem dynamic_off_refuses_pinless_step (ctx : StepContext) (job : Job) (out : 
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
     (he : engineChanged ctx job out = false)
     (hres : (out.resume.isSome && !resumePlaced job out) = false)
+    (hadm : resumeAdmitted ctx out = true)
     (hp : ∀ p, stepPin ctx job out = some p → p.origin = .dynamic)
     (hs : runsDynamicCode ctx job.call = true) :
     admitStep ctx job out = .error .policyDenied := by
   cases hstep : stepPin ctx job out with
   | none =>
     simp only [Bool.and_eq_true] at ha
-    simp [admitStep, hr, ha.1, ha.2, he, hres, hstep, h, hs]
-  | some p => exact dynamic_off_refuses_run ctx job out p h hr ha he hres hstep (hp p hstep)
+    simp [admitStep, hr, ha.1, ha.2, he, hres, hadm, hstep, h, hs]
+  | some p => exact dynamic_off_refuses_run ctx job out p h hr ha he hres hadm hstep (hp p hstep)
 
 /-- Under `policy.mode = off`, a pinless call that carries no `script` and no
 `path` and names no dynamic-origin script (a named run of an installed script
@@ -245,10 +247,11 @@ theorem dynamic_check_refuses_spawn (ctx : StepContext) (job : Job) (e : Effects
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
     (he : engineChanged ctx job (.effects e) = false)
     (hres : ((StepOutput.effects e).resume.isSome && !resumePlaced job (.effects e)) = false)
+    (hadm : resumeAdmitted ctx (.effects e) = true)
     (hp : stepPin ctx job (.effects e) = some p) (ho : p.origin = .dynamic) :
     admitStep ctx job (.effects e) = .error .policyDenied := by
   simp only [Bool.and_eq_true] at ha
-  simp [admitStep, hr, ha.1, ha.2, he, hres, hp, dynamicModeRefusal, ho, h, hs]
+  simp [admitStep, hr, ha.1, ha.2, he, hres, hadm, hp, dynamicModeRefusal, ho, h, hs]
 
 /-- Under `policy.mode = check`, a dynamic-origin effects output with a message
 is refused with `policyDenied` once rules 1-4 pass: a message would start an
@@ -259,10 +262,11 @@ theorem dynamic_check_refuses_message (ctx : StepContext) (job : Job) (e : Effec
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
     (he : engineChanged ctx job (.effects e) = false)
     (hres : ((StepOutput.effects e).resume.isSome && !resumePlaced job (.effects e)) = false)
+    (hadm : resumeAdmitted ctx (.effects e) = true)
     (hp : stepPin ctx job (.effects e) = some p) (ho : p.origin = .dynamic) :
     admitStep ctx job (.effects e) = .error .policyDenied := by
   simp only [Bool.and_eq_true] at ha
-  simp [admitStep, hr, ha.1, ha.2, he, hres, hp, dynamicModeRefusal, ho, h, hm]
+  simp [admitStep, hr, ha.1, ha.2, he, hres, hadm, hp, dynamicModeRefusal, ho, h, hm]
 
 /-- An installed-origin pin is never gated by the mode. -/
 theorem installed_ignores_mode (ctx : StepContext) (job : Job) (out : StepOutput) (p : Pin)
@@ -286,6 +290,7 @@ theorem installed_job_refused_when_untrusted (ctx : StepContext) (job : Job) (ou
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
     (he : engineChanged ctx job out = false)
     (hpin : job.pin = some p) (ho : p.origin = .installed)
+    (hadm : resumeAdmitted ctx out = true)
     (hu : originOf p.sourceDigest mounts ctx.policy.trustedPacks = .dynamic) :
     admitStep ctx job out = .error .policyDenied ∧
       settleStep ctx job out obs =
@@ -295,7 +300,7 @@ theorem installed_job_refused_when_untrusted (ctx : StepContext) (job : Job) (ou
   have hs : stepPin ctx job out = some p := by simp [stepPin, hpin]
   simp only [Bool.and_eq_true] at ha
   have hd : admitStep ctx job out = .error .policyDenied := by
-    simp [admitStep, hr, ha.1, ha.2, he, hs, hpin, ho, ht, dynamicModeRefusal]
+    simp [admitStep, hr, ha.1, ha.2, he, hs, hpin, ho, ht, hadm, dynamicModeRefusal]
   exact ⟨hd, (panel_refusal_fails_closed ctx p job out obs).2 hd⟩
 
 /-- `Policy.valid` ignores `dynamicTargets` when the mode is `off`, bounds them
