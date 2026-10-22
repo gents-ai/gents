@@ -265,6 +265,7 @@ impl Fixture {
         let executor = EmbeddedExecutor::new(
             DocumentRuntimeOptions::default(),
             self.request.runs_dir.clone(),
+            support::runtime_handle(),
         );
         run_job(
             &self.access,

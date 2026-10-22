@@ -2331,7 +2331,6 @@ fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously()
     let handle = transaction_handle(&txn);
     let gate = super::mutation_write_gate(&node);
     runtime.shutdown_background();
-    assert!(tokio::runtime::Handle::try_current().is_err());
     drop(txn);
     assert_eq!(
         gate.permits.available_permits(),

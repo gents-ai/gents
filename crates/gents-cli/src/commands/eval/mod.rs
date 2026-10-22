@@ -14,10 +14,14 @@ pub(crate) struct EvalContext {
     pub(crate) access: gents::config_client::ConfigAccess,
     pub(crate) home_dir: PathBuf,
     pub(crate) owner: String,
+    pub(crate) runtime: tokio::runtime::Handle,
 }
 
 impl EvalContext {
-    pub(crate) async fn resolve(scope: &EvalScopeArgs) -> Result<Self> {
+    pub(crate) async fn resolve(
+        scope: &EvalScopeArgs,
+        runtime: tokio::runtime::Handle,
+    ) -> Result<Self> {
         let (access, home_dir) =
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
         let owner = crate::resolve_node_did(Some(&home_dir), None)?;
@@ -25,6 +29,7 @@ impl EvalContext {
             access,
             home_dir,
             owner,
+            runtime,
         })
     }
 
@@ -55,7 +60,7 @@ pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
     }
 }
 
-pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
+pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Handle) -> Result<()> {
     if matches!(
         command,
         EvalCommand::Run(_) | EvalCommand::Batch(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
@@ -63,10 +68,14 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
         crate::process_resources::prepare()?;
     }
     if let EvalCommand::Cancel(args) = &command {
-        return cancel_without_context(args).await.map_err(surface_refusal);
+        return cancel_without_context(args, runtime)
+            .await
+            .map_err(surface_refusal);
     }
     if let EvalCommand::Watch(args) = &command {
-        return watch_while_held(args).await.map_err(surface_refusal);
+        return watch_while_held(args, runtime)
+            .await
+            .map_err(surface_refusal);
     }
     if let EvalCommand::Checks(args) = &command {
         let stdout = std::io::stdout();
@@ -76,8 +85,12 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
     if let EvalCommand::Init(args) = &command {
         init::preflight(args).await?;
     }
-    let ctx = EvalContext::resolve(command.scope()).await?;
-    let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
+    let ctx = EvalContext::resolve(command.scope(), runtime).await?;
+    let executor = EmbeddedExecutor::new(
+        gents::DocumentRuntimeOptions::default(),
+        ctx.runs_dir(),
+        ctx.runtime.clone(),
+    );
     let registry = CheckRegistry::builtin();
     let cancel = if matches!(
         command,
@@ -139,10 +152,13 @@ pub(crate) async fn execute(
 /// `gents eval cancel` from argv alone: the marker is written before the
 /// home's access is opened, since the process hosting the run may hold the
 /// home's embedded node.
-async fn cancel_without_context(args: &crate::cli::EvalRunIdArgs) -> Result<()> {
+async fn cancel_without_context(
+    args: &crate::cli::EvalRunIdArgs,
+    runtime: tokio::runtime::Handle,
+) -> Result<()> {
     let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let purpose = async {
-        let ctx = EvalContext::resolve(&args.scope).await?;
+        let ctx = EvalContext::resolve(&args.scope, runtime).await?;
         manage::run_purpose(&ctx.access, &ctx.owner, &args.run_id).await
     };
     let stdout = std::io::stdout();
@@ -153,7 +169,10 @@ async fn cancel_without_context(args: &crate::cli::EvalRunIdArgs) -> Result<()> 
 /// `gents eval watch` from argv. The process hosting the run may hold the
 /// home's embedded node; then the watch reads the files the runner leaves
 /// and tries the node again only once no live process holds the run.
-async fn watch_while_held(args: &crate::cli::EvalWatchArgs) -> Result<()> {
+async fn watch_while_held(
+    args: &crate::cli::EvalWatchArgs,
+    runtime: tokio::runtime::Handle,
+) -> Result<()> {
     use std::io::IsTerminal;
 
     let stdout = std::io::stdout();
@@ -163,7 +182,7 @@ async fn watch_while_held(args: &crate::cli::EvalWatchArgs) -> Result<()> {
         write!(out, "{}\x1b[2J", frame::HIDE_CURSOR)?;
     }
     let watched = async {
-        match EvalContext::resolve(&args.scope).await {
+        match EvalContext::resolve(&args.scope, runtime.clone()).await {
             Ok(ctx) => {
                 watch::watch(
                     &ctx.runs_dir(),
@@ -184,7 +203,7 @@ async fn watch_while_held(args: &crate::cli::EvalWatchArgs) -> Result<()> {
                     &runs_dir(&home_dir),
                     args,
                     screen,
-                    || watch::reopen(|| EvalContext::resolve(&args.scope)),
+                    || watch::reopen(|| EvalContext::resolve(&args.scope, runtime.clone())),
                     &mut out,
                 )
                 .await

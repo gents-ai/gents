@@ -52,6 +52,7 @@ const LIVE_EVERY: Duration = Duration::from_secs(5);
 pub struct EmbeddedExecutor {
     pub runtime_options: DocumentRuntimeOptions,
     pub runs_dir: PathBuf,
+    runtime: tokio::runtime::Handle,
     provisioned: Mutex<RapidHashMap<String, Provisioned>>,
 }
 
@@ -61,17 +62,26 @@ struct Provisioned {
 }
 
 impl EmbeddedExecutor {
-    pub fn new(runtime_options: DocumentRuntimeOptions, runs_dir: PathBuf) -> Self {
+    /// `runtime` drives trial homes, whose opening is not `Send`, on blocking threads.
+    pub fn new(
+        runtime_options: DocumentRuntimeOptions,
+        runs_dir: PathBuf,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             runtime_options,
             runs_dir,
+            runtime,
             provisioned: Mutex::new(RapidHashMap::new()),
         }
     }
 
     async fn provision_home(&self, spec: &TrialSpec) -> Result<TrialLocator> {
         let dir = spec.trial_dir.join("home");
-        let home = opened(move || async move { EmbeddedHome::create_retained(&dir).await }).await?;
+        let home = opened(&self.runtime, move || async move {
+            EmbeddedHome::create_retained(&dir).await
+        })
+        .await?;
         let workspace = workspace_dir(&spec.trial_dir);
         if let Err(error) = std::fs::create_dir_all(&workspace) {
             close(home).await;
@@ -295,18 +305,21 @@ impl TrialExecutor for EmbeddedExecutor {
         };
         let dir = trial_dir.join("home");
         let workspace = workspace_dir(&trial_dir);
-        let home =
-            match opened(move || async move { EmbeddedHome::open_retained(&dir).await }).await {
-                Ok(home) => home,
-                Err(error) => {
-                    tracing::warn!(
-                        error = %format!("{error:#}"),
-                        home = %trial_dir.display(),
-                        "eval trial home is no longer readable"
-                    );
-                    return None;
-                }
-            };
+        let home = match opened(&self.runtime, move || async move {
+            EmbeddedHome::open_retained(&dir).await
+        })
+        .await
+        {
+            Ok(home) => home,
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    home = %trial_dir.display(),
+                    "eval trial home is no longer readable"
+                );
+                return None;
+            }
+        };
         let requests = match session_requests(&home.node, &at.session_id).await {
             Ok(requests) => requests,
             Err(error) => {
@@ -397,14 +410,15 @@ fn http_status(reason: &str) -> Option<u16> {
 }
 
 /// Open a trial home from a `Send` future: `EmbeddedNode::build` is not `Send`,
-/// so the open is polled on a blocking thread of the current runtime.
-async fn opened<Open, Opening>(open: Open) -> Result<EmbeddedHome>
+/// so the open is polled on a blocking thread of `runtime`.
+async fn opened<Open, Opening>(runtime: &tokio::runtime::Handle, open: Open) -> Result<EmbeddedHome>
 where
     Open: FnOnce() -> Opening + Send + 'static,
     Opening: std::future::Future<Output = Result<EmbeddedHome>>,
 {
-    let runtime = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || runtime.block_on(open()))
+    let blocking = runtime.clone();
+    runtime
+        .spawn_blocking(move || blocking.block_on(open()))
         .await
         .context("opening a trial home")?
 }
@@ -2565,7 +2579,11 @@ mod tests {
             .join("base")
             .join("pack");
         write_slot_pack(&pack_dir, "gents:inference-slot:primary");
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir.clone(),
+            crate::test_support::runtime_handle(),
+        );
         let spec = TrialSpec {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
@@ -2902,7 +2920,11 @@ mod tests {
             .join("base")
             .join("pack");
         write_minimal_pack(&pack_dir);
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir.clone(),
+            crate::test_support::runtime_handle(),
+        );
         let spec = TrialSpec {
             pack_dir,
             pack_digest: "sha256:wrong".to_string(),
@@ -2995,8 +3017,11 @@ mod tests {
         };
         close(home).await;
 
-        let executor =
-            EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs.path().to_owned());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs.path().to_owned(),
+            crate::test_support::runtime_handle(),
+        );
         let evidence = executor.recollect(&locator, &[]).await.unwrap();
         assert_eq!(evidence.stages.len(), 2);
         assert!(evidence.anchor.terminal_states.is_empty());
@@ -3021,7 +3046,11 @@ mod tests {
                 .unwrap(),
         )
         .await;
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir.clone(),
+            crate::test_support::runtime_handle(),
+        );
         let locator = |hint: &str| TrialLocator {
             trial_node_did: "did:key:zAny".to_string(),
             session_id: "s-1".to_string(),
@@ -3060,7 +3089,11 @@ mod tests {
         )
         .await;
         std::os::unix::fs::symlink(&outside, runs_dir.join("ws").join("workspace")).unwrap();
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir);
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir,
+            crate::test_support::runtime_handle(),
+        );
         for hint in ["linked", "real", "ws"] {
             let locator = TrialLocator {
                 trial_node_did: "did:key:zAny".to_string(),
@@ -3071,14 +3104,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn discarding_is_a_send_future() {
+    #[tokio::test]
+    async fn discarding_is_a_send_future() {
         fn assert_send<T>(_: T)
         where
             T: Send,
-        {
-        }
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), PathBuf::new());
+        {}
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            PathBuf::new(),
+            crate::test_support::runtime_handle(),
+        );
         assert_send(executor.discard("t1"));
     }
 
@@ -3086,7 +3122,11 @@ mod tests {
     async fn a_discarded_trial_is_forgotten_and_executes_as_unprovisioned() {
         let dir = tempfile::tempdir().unwrap();
         let runs_dir = dir.path().join("runs");
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir.clone(),
+            crate::test_support::runtime_handle(),
+        );
         let spec = TrialSpec {
             trial_dir: runs_dir.join("run-1").join("trials").join("t1"),
             ..TrialSpec::empty_for_tests("t1")

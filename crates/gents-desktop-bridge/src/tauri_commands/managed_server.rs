@@ -692,6 +692,7 @@ where
             ensure_default_port_identity(&node_home).await?;
         }
         gents_server::server_host::ensure_standard_home(
+            tauri::async_runtime::handle().inner(),
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
                 node_name: node_name.to_string(),
@@ -2464,9 +2465,12 @@ where
     if let Err(error) = stop_before_reprovision(
         || async { run_native(native_service(&app, &state)?, |service| service.stop(false)).await },
         || async {
-            gents_server::server_host::ensure_standard_home(provision)
-                .await
-                .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+            gents_server::server_host::ensure_standard_home(
+                tauri::async_runtime::handle().inner(),
+                provision,
+            )
+            .await
+            .map_err(|error| BridgeError::untyped(format!("{error:#}")))
         },
         || async {
             save_confirmed_preference(
@@ -3163,6 +3167,7 @@ mod tests {
         };
         save_preference(&state, &forge).await.unwrap();
         gents_server::server_host::ensure_standard_home(
+            &crate::tests::support::runtime_handle(),
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
                 node_name: "Scout".to_string(),

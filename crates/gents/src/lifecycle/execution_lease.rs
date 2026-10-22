@@ -27,15 +27,12 @@ impl Drop for RequestLifecycle {
         ) {
             return;
         }
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
         let node = self.node.clone();
         let doc_id = self.request.doc_id.clone();
         let generation = lease.generation.as_str().to_owned();
         // Relinquishment only expires the matching generation. Recovery remains
         // the terminal owner, including when a panic or task abort drops us.
-        runtime.spawn(async move {
+        lease.runtime.spawn(async move {
             if let Err(error) =
                 relinquish_execution_lease(&node, &doc_id, &generation, Utc::now()).await
             {
@@ -85,12 +82,14 @@ impl ExecutionGeneration {
 #[derive(Debug, Clone)]
 pub(crate) struct RequestExecutionLease {
     pub(crate) generation: ExecutionGeneration,
+    runtime: crate::drop_cleanup::DropCleanup,
 }
 
 impl RequestExecutionLease {
     pub(crate) fn new(generation: String) -> Self {
         Self {
             generation: ExecutionGeneration(generation),
+            runtime: crate::drop_cleanup::DropCleanup::current(),
         }
     }
 }

@@ -21,6 +21,7 @@ use super::write_telemetry::{
     WriteAttemptEvent, WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
 };
 use super::{graphql_api_base, ConfigAccess, GraphqlEndpoint};
+use crate::drop_cleanup::DropCleanup;
 
 enum TxnBackend<'a> {
     Http {
@@ -791,14 +792,14 @@ fn existing_mutation_write_gate(node: &EmbeddedNode) -> Option<Arc<MutationWrite
 // the runtime that created it.
 enum RollbackOnDrop {
     Http {
-        runtime: tokio::runtime::Handle,
+        runtime: DropCleanup,
         endpoint: GraphqlEndpoint,
         id: String,
         client: reqwest::Client,
         armed: bool,
     },
     Embedded {
-        runtime: tokio::runtime::Handle,
+        runtime: DropCleanup,
         node: Arc<EmbeddedNode>,
         native_gate: Arc<MutationWriteGate>,
         native_owner: StdMutex<Option<BoxFuture<'static, Result<()>>>>,
@@ -840,7 +841,6 @@ impl Drop for RollbackOnDrop {
                 let endpoint = endpoint.clone();
                 let id = id.clone();
                 let client = client.clone();
-                let runtime = runtime.clone();
                 runtime.spawn(async move {
                     if let Err(error) = graphql::txn_discard(&endpoint, &id, &client).await {
                         tracing::debug!(%error, "discarding cancelled HTTP transaction");
@@ -880,7 +880,6 @@ impl Drop for RollbackOnDrop {
                     return;
                 }
                 let node = Arc::clone(node);
-                let runtime = runtime.clone();
                 let native_gate = Arc::clone(native_gate);
                 let native_operations = Arc::clone(native_operations);
                 let write_guard = write_guard.take();
@@ -974,7 +973,7 @@ where
         embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
     })??;
     let rollback = RollbackOnDrop::Embedded {
-        runtime: tokio::runtime::Handle::current(),
+        runtime: DropCleanup::current(),
         node: Arc::clone(&node),
         native_gate,
         native_owner: StdMutex::new(Some(native_owner)),
@@ -998,7 +997,7 @@ async fn begin_http_owned(
         .await
         .map_err(retry::transaction_storage_failure)?;
     let rollback = RollbackOnDrop::Http {
-        runtime: tokio::runtime::Handle::current(),
+        runtime: DropCleanup::current(),
         endpoint: endpoint.clone(),
         id: id.clone(),
         client: client.clone(),

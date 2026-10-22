@@ -25,6 +25,16 @@ pub mod snapshots;
 pub mod streaming_backend;
 pub mod waits;
 
+/// A test's `#[tokio::test]` runtime is its entry point; constructors take
+/// that runtime's handle from here.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test's #[tokio::test] runtime is its entry-point runtime"
+)]
+pub fn runtime_handle() -> tokio::runtime::Handle {
+    tokio::runtime::Handle::current()
+}
+
 pub const NODE_DID: &str = "did:test:test";
 pub const AGENT_NAME: &str = "test";
 pub const BACKEND_ID: &str = "backend-test";

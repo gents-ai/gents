@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{Mutex, Notify};
 
+use crate::drop_cleanup::DropCleanup;
 use crate::managed_exec::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
 use crate::toolset::prepare_managed_command;
 
@@ -79,6 +80,7 @@ pub(crate) struct LspLease {
     client: Arc<LspClient>,
     leases: Arc<AtomicUsize>,
     slot: Arc<Mutex<PoolEntry>>,
+    runtime: DropCleanup,
 }
 
 impl LspLease {
@@ -92,11 +94,7 @@ impl Drop for LspLease {
         let prev = self.leases.fetch_sub(1, Ordering::SeqCst);
         if prev == 1 {
             let slot = self.slot.clone();
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    complete_retirement_if_idle(slot).await;
-                });
-            }
+            self.runtime.spawn(complete_retirement_if_idle(slot));
         }
     }
 }
@@ -106,6 +104,7 @@ struct StartingCleanup {
     key: PoolKey,
     slot: Arc<Mutex<PoolEntry>>,
     disarm: Arc<AtomicBool>,
+    runtime: DropCleanup,
 }
 
 impl Drop for StartingCleanup {
@@ -116,19 +115,17 @@ impl Drop for StartingCleanup {
         let pool = self.pool.clone();
         let key = self.key.clone();
         let slot = self.slot.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                {
-                    let mut entry = slot.lock().await;
-                    if entry.state == EntryState::Starting {
-                        entry.start_error = Some("language-server start cancelled".into());
-                        entry.state = EntryState::Retiring;
-                        entry.ready.notify_waiters();
-                    }
+        self.runtime.spawn(async move {
+            {
+                let mut entry = slot.lock().await;
+                if entry.state == EntryState::Starting {
+                    entry.start_error = Some("language-server start cancelled".into());
+                    entry.state = EntryState::Retiring;
+                    entry.ready.notify_waiters();
                 }
-                pool.inner.lock().await.remove(&key);
-            });
-        }
+            }
+            pool.inner.lock().await.remove(&key);
+        });
     }
 }
 
@@ -203,15 +200,11 @@ impl Default for LspPool {
 
 impl LspPool {
     pub fn new() -> Self {
-        let pool = Self::default();
-        pool.try_spawn_sweeper();
-        pool
+        Self::default()
     }
 
-    fn try_spawn_sweeper(&self) {
-        if tokio::runtime::Handle::try_current().is_err() {
-            return;
-        }
+    /// Must be called from within the runtime the pool runs on.
+    fn spawn_sweeper_once(&self) {
         if self.sweep_started.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -271,6 +264,7 @@ impl LspPool {
             client,
             leases: entry.leases.clone(),
             slot: slot.clone(),
+            runtime: DropCleanup::current(),
         })
     }
 
@@ -284,7 +278,7 @@ impl LspPool {
             return Err(super::ARTIFACT_SCOPE_DENIAL.into());
         }
         key.validate_operator_guard()?;
-        self.try_spawn_sweeper();
+        self.spawn_sweeper_once();
         {
             let mut failed = self.failed.lock().await;
             if let Some((error, at)) = failed.get(&key) {
@@ -351,6 +345,7 @@ impl LspPool {
                             client,
                             leases: entry.leases.clone(),
                             slot: slot.clone(),
+                            runtime: DropCleanup::current(),
                         });
                     }
                 }
@@ -376,6 +371,7 @@ impl LspPool {
             pool: self.clone(),
             key: key.clone(),
             slot: slot.clone(),
+            runtime: DropCleanup::current(),
             disarm: Arc::new(AtomicBool::new(false)),
         };
         let started = self.start_client(&key, server, config).await;
@@ -410,6 +406,7 @@ impl LspPool {
                     client,
                     leases,
                     slot,
+                    runtime: DropCleanup::current(),
                 })
             }
             Err(error) => {

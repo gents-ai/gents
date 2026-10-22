@@ -65,8 +65,9 @@ impl SpeechTransport {
 
 /// rmcp 1.3 emits complete messages from its independently spawned service
 /// tasks, including audio and provider error bodies. A future-local span or
-/// dispatcher does not protect those tasks. This current-thread runtime keeps
-/// the pool and all of its transport tasks under a silent thread dispatcher.
+/// dispatcher does not protect those tasks. This current-thread runtime, the
+/// desktop's one runtime besides its entry runtime, keeps the pool and all of
+/// its transport tasks under a silent thread dispatcher.
 /// The worker receives no database handles, writes no journal and opens no
 /// audio devices; callers retain cancellation and product error presentation.
 fn run_worker(mut receiver: mpsc::Receiver<Work>) {

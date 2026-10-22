@@ -37,9 +37,16 @@ pub(crate) mod testing;
 
 pub(crate) const DEFAULT_MAX_TEXT_BYTES: usize = 32 * 1024;
 
-pub(crate) async fn dispatch(command: OptimizationCommand) -> Result<()> {
-    let ctx = EvalContext::resolve(command.scope()).await?;
-    let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
+pub(crate) async fn dispatch(
+    command: OptimizationCommand,
+    runtime: tokio::runtime::Handle,
+) -> Result<()> {
+    let ctx = EvalContext::resolve(command.scope(), runtime).await?;
+    let executor = EmbeddedExecutor::new(
+        gents::DocumentRuntimeOptions::default(),
+        ctx.runs_dir(),
+        ctx.runtime.clone(),
+    );
     let registry = CheckRegistry::builtin();
     let cancel = if matches!(command, OptimizationCommand::Run(_)) {
         cancel_on_ctrl_c(
@@ -1423,6 +1430,7 @@ mod tests {
             access: gents::ConfigAccess::local(node.clone()),
             home_dir: elsewhere.path().to_path_buf(),
             owner: fixture.ctx.owner.clone(),
+            runtime: fixture.ctx.runtime.clone(),
         };
         for argv in [&["rm", "job-1"][..], &["rm", "job-1", "--force"][..]] {
             let crate::cli::OptimizationCommand::Rm(args) =

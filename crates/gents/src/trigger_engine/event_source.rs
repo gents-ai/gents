@@ -1627,18 +1627,14 @@ impl EventSource {
     /// A fire whose result never reached the acknowledgment channel has no
     /// `on_result` writer of its own, so its park would otherwise leave no
     /// durable reason and a seed wait would spend its whole deadline on it.
-    /// The caller may be an unwinding or aborting task, so the spawn is
-    /// best-effort: outside a runtime it does nothing rather than panic.
     fn spawn_unacknowledged_field_write(
+        runtime: &crate::drop_cleanup::DropCleanup,
         node: Arc<EmbeddedNode>,
         node_did: String,
         trigger_id: String,
         source_doc_id: String,
     ) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        handle.spawn(async move {
+        runtime.spawn(async move {
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             let update = crate::document_config::TriggerRuntimeUpdate {
                 last_attempt_at: Some(now),
@@ -1990,6 +1986,7 @@ pub(super) struct UnacknowledgedGuard {
     node_did: String,
     trigger_id: String,
     source_doc_id: String,
+    runtime: crate::drop_cleanup::DropCleanup,
     armed: std::cell::Cell<bool>,
 }
 
@@ -2005,6 +2002,7 @@ impl UnacknowledgedGuard {
             node_did,
             trigger_id,
             source_doc_id,
+            runtime: crate::drop_cleanup::DropCleanup::current(),
             armed: std::cell::Cell::new(true),
         }
     }
@@ -2018,6 +2016,7 @@ impl Drop for UnacknowledgedGuard {
     fn drop(&mut self) {
         if self.armed.get() {
             EventSource::spawn_unacknowledged_field_write(
+                &self.runtime,
                 self.node.clone(),
                 self.node_did.clone(),
                 self.trigger_id.clone(),

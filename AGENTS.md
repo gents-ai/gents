@@ -188,6 +188,13 @@ metadata.
   [WorkerIo](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/storage/src/backends/regolith/worker_io/mod.rs),
   and [Regolith commit tickets](https://github.com/sourcenetwork/regolith/blob/main/src/transaction/nowait.rs).
 - Use `tracing`, never `println!`.
+- One Tokio runtime per process, built at its entry point (`main`, the Tauri
+  runtime install, `#[tokio::test]`); the speech worker's silent runtime is the
+  one documented exception. Code that needs a `tokio::runtime::Handle` takes it
+  from its caller; `tokio::spawn` inside a running task is fine. Never call
+  `Handle::current`/`try_current`: a guard whose `Drop` owes async cleanup
+  binds its runtime with `gents::drop_cleanup::DropCleanup::current`, and tests
+  take theirs from their crate's test-support helper.
 - Every hash map and set is `rapidhash::RapidHashMap`/`RapidHashSet` (the fast
   hasher, built with `new`, `default` or `with_capacity` via `HashMapExt`/
   `HashSetExt`), and hashers are `rapidhash::fast::RapidHasher`, as in DefraDB.

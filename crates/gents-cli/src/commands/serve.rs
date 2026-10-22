@@ -450,11 +450,11 @@ fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
     Ok(format!("wss://{authority}/"))
 }
 
-pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
+pub(crate) async fn serve(args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
-    serve_foreground(args).await
+    serve_foreground(args, runtime).await
 }
 
 async fn wait_for_shutdown_signal() {
@@ -557,7 +557,7 @@ async fn wait_for_embedded_http_bind(
     }
 }
 
-async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
+async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle) -> Result<()> {
     #[cfg(not(unix))]
     anyhow::ensure!(
         !args.grok_shim,
@@ -771,7 +771,8 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
                 return Err(error);
             }
         };
-    let mut runtime = ServeRuntime::new().retain_shutdown_owner(node.clone(), store_access.clone());
+    let mut runtime =
+        ServeRuntime::new(executor).retain_shutdown_owner(node.clone(), store_access.clone());
     #[cfg(unix)]
     let mut grok_shim_handle = None;
     let serve_result: Result<()> = async {
@@ -1286,10 +1287,10 @@ struct ServeRuntime {
 }
 
 impl ServeRuntime {
-    fn new() -> Self {
+    fn new(executor: tokio::runtime::Handle) -> Self {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         Self {
-            executor: tokio::runtime::Handle::current(),
+            executor,
             shutdown_tx,
             shutdown_rx: Some(shutdown_rx),
             handle: None,

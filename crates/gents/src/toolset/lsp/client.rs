@@ -8,6 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{oneshot, Mutex};
 
+use crate::drop_cleanup::DropCleanup;
 use crate::managed_exec::ManagedProcess;
 
 const MAX_CONTENT_LENGTH: usize = 8 * 1024 * 1024;
@@ -468,6 +469,7 @@ impl LspClient {
             pending: self.pending.clone(),
             id,
             completed: Arc::new(AtomicBool::new(false)),
+            runtime: DropCleanup::current(),
         };
         let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let cancel = runtime.map(|scope| scope.cancellation_token);
@@ -537,6 +539,7 @@ struct InflightRequest {
     pending: PendingMap,
     id: i64,
     completed: Arc<AtomicBool>,
+    runtime: DropCleanup,
 }
 
 impl Drop for InflightRequest {
@@ -547,17 +550,15 @@ impl Drop for InflightRequest {
         let stdin = self.stdin.clone();
         let pending = self.pending.clone();
         let id = self.id;
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                pending.lock().await.remove(&id);
-                let payload = json!({
-                    "jsonrpc": "2.0",
-                    "method": "$/cancelRequest",
-                    "params": { "id": id }
-                });
-                let _ = write_message(&mut *stdin.lock().await, &payload).await;
+        self.runtime.spawn(async move {
+            pending.lock().await.remove(&id);
+            let payload = json!({
+                "jsonrpc": "2.0",
+                "method": "$/cancelRequest",
+                "params": { "id": id }
             });
-        }
+            let _ = write_message(&mut *stdin.lock().await, &payload).await;
+        });
     }
 }
 

@@ -36,6 +36,16 @@ pub(crate) struct Fixture {
     _dirs: TempDir,
 }
 
+/// A test's `#[tokio::test]` runtime is its entry point; the fixture's
+/// context takes that runtime's handle from here.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test's #[tokio::test] runtime is its entry-point runtime"
+)]
+pub(crate) fn test_runtime_handle() -> tokio::runtime::Handle {
+    tokio::runtime::Handle::current()
+}
+
 impl Fixture {
     pub(crate) async fn new() -> Self {
         let home = EmbeddedHome::create_temp("cli-eval").await.unwrap();
@@ -48,6 +58,7 @@ impl Fixture {
             access: ConfigAccess::local(home.node.clone()),
             home_dir: dirs.path().join("home"),
             owner: owner.clone(),
+            runtime: test_runtime_handle(),
         };
         install(&ctx.access, documents(&owner)).await;
         Self {
