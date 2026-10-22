@@ -704,7 +704,7 @@ pub(crate) async fn store_shared_json_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     json: &str,
 ) -> Result<String> {
-    if json.len() < 4096 {
+    if json.len() < super::encoding::MIN_COMPRESSION_BYTES {
         return Ok(json.to_owned());
     }
     let chunks = super::encoding::chunk_capture_body(json);

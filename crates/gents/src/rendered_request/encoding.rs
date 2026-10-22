@@ -15,7 +15,7 @@ pub(crate) const MAX_DELTA_DEPTH: u8 = 8;
 const MIN_DELTA_SAVINGS: usize = 256;
 const COMPRESSED_JSON_VERSION: u32 = 2;
 const MAX_COMPRESSED_RECORD_BYTES: usize = 64 * 1024 * 1024;
-const MIN_COMPRESSION_BYTES: usize = 4096;
+pub(crate) const MIN_COMPRESSION_BYTES: usize = 4096;
 
 #[derive(Serialize, Deserialize)]
 struct CompressedEnvelope {
