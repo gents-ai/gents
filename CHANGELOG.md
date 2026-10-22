@@ -173,6 +173,11 @@ source consistency checks, not a separate runtime compatibility version.
 - A workflow child spawned with a relative `cwd` now starts in that folder
   under the run's working folder, the path its admission checked, instead of
   failing `request admission denied: resolve invocation cwd`.
+- `gents pack scenario run` reads timelines and projections as the served
+  home, so `expect.projections` no longer fail with `timeline query omitted
+  required AgentRequest row array` on a node whose access control denies
+  anonymous reads. `gents trace` now says when a read returned no data because
+  the node probably denied it.
 
 ## 0.21.0-rc0 - 2026-10-17
 
