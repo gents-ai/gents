@@ -17,9 +17,16 @@ source consistency checks, not a separate runtime compatibility version.
 - A request's concurrent background admissions (spawns, background starts,
   foreground handoffs and plugin adoptions) now reserve capacity through one
   shared write, so they can no longer exceed the per-request ceiling of 8.
+  A plugin job adoption refused at that ceiling now fails with
+  `background_tool_budget_exceeded` (`serviceUnavailable`) instead of
+  `plugin_job_policy_denied`.
+- Spawn receipts report one `effective_timeout_secs`; `lifetime_secs` is
+  removed.
+- A budget-limited Goal whose claimed continuation has invalid evidence
+  abandons its wrap-up and stays `budget_limited` instead of pausing.
 - `agent_stop` and `agent_resume` stop and resume another session; a stopped
-  session pauses its Goal and cancels its plugin jobs and background
-  processes, and resume waits until they have settled.
+  session drains its queued requests, pauses its Goal and cancels its plugin
+  jobs and background processes, and resume waits until they have settled.
 - `Node.max_request_hop` no longer defaults to 8; when it is absent the
   causal-hop cap is disabled.
 - `gents service install` takes `--http-addr`, `--http-port`,
