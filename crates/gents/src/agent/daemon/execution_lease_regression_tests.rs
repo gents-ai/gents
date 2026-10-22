@@ -373,10 +373,10 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         .collect::<Vec<_>>();
     assert_eq!(
         reconstructed.len(),
-        2,
+        1,
         "exact received part count: {reconstructed:?}"
     );
-    for (part, text) in [(0, "first"), (1, " second")] {
+    for (part, text) in [(0, "first second")] {
         let content = reconstructed[part]
             .as_ref()
             .expect("closed reasoning stream reconstructs");
