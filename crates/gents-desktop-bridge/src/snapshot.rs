@@ -289,6 +289,7 @@ use runtime_tasks::{request_matches_node, source_matches_node};
 #[path = "snapshot/runtime.rs"]
 mod runtime;
 pub use runtime::build_runtime_snapshot;
+pub(crate) use runtime::node_reads;
 
 #[path = "snapshot/operations_snapshot.rs"]
 pub mod operations_snapshot;
