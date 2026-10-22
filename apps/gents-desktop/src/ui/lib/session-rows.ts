@@ -2,114 +2,152 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 import { isLive } from "./live";
 
-export type SessionRow =
-  | {
-      kind: "session";
-      session: SessionSummary;
-      child: boolean;
-      /** shown only for what it started: it does not match itself */
-      context: boolean;
-      delay?: number;
-    }
-  | {
-      kind: "toggle";
-      /** the key of the session whose started sessions it opens */
-      of: string;
-      kin: number;
-      open: boolean;
-      running: number;
-    };
+export type SessionRow = {
+  session: SessionSummary;
+  /** the sessions it started that the list holds */
+  started: number;
+  /** of those, the ones still working, or with work running under them */
+  running: number;
+  /** while narrowed: the sessions between the level shown and this one */
+  path: readonly SessionSummary[] | null;
+  /** how far it is opened out under a row of the level */
+  depth: number;
+  /** its started sessions show under it, on this level */
+  open: boolean;
+  /** the starter the list holds, and the level that starter sits on (null
+      for the top); absent for a top session */
+  starter: { key: string; level: string | null } | null;
+  /** of the sessions it started, the ones its open group leaves out */
+  hidden: number;
+};
 
-/* an entrance, not a wait: a long group arrives as fast as a short one */
-const ENTRANCE_STEPS = 6;
+/* an open row shows this many of what it started; the rest are a level of
+   their own away */
+export const OPENED_SHOWN = 5;
 
 /**
- * The rows for `sessions` (the sessions in scope, in list order).
+ * One level of `sessions` (the sessions in scope, in list order): the ones
+ * `under` started, or the top ones when `under` is null.
  *
- * - A session started by another one in the list sits under the top session
- *   of its line, however deep, through starters the list leaves out
- *   (`parentOf` gives the nearest one listed); one with none listed is a
- *   top row.
- * - A top row with started sessions always has a toggle, closed unless the
- *   person opened it (`isOpen`); a list someone is reading does not
- *   rearrange itself as workers start and settle.
- * - While the list is narrowed (`matches`), a top row shows when it or
- *   anything it started matches; one shown only for what it started is
- *   context. Its matching started sessions show under it even while it is
- *   closed, without opening it; under an open row the rest read as context.
+ * - A session sits under the nearest starter the list holds (`parentOf`),
+ *   through starters it leaves out; one with none listed is a top session.
+ * - `trail` runs from the top to `under`. A starter the list no longer holds
+ *   shows the top level, so a narrowed pick can't strand the person.
+ * - A row the person opened on this level (`isOpen`) shows what it started
+ *   under it, one level deeper, and so on for the rows opened there: the
+ *   first `OPENED_SHOWN`, and any still working beyond them.
+ * - While narrowed (`matches`), the level is flat: every match at or below
+ *   it, each with the path from the level to it.
  *
- * `shown` counts the sessions that match (every session when not narrowed).
+ * `shown` counts the matches (every session on the level when not narrowed),
+ * out of `total`, the sessions at or below the level.
  */
 export function sessionRows({
   sessions,
   parentOf,
+  under,
   matches,
-  isOpen,
+  isOpen = () => false,
 }: {
   sessions: readonly SessionSummary[];
   parentOf: (session: SessionSummary) => SessionSummary | null;
+  under: string | null;
   /** null when nothing narrows the list */
   matches: ((session: SessionSummary) => boolean) | null;
-  isOpen: (key: string) => boolean;
-}): { rows: SessionRow[]; shown: number } {
+  isOpen?: (key: string) => boolean;
+}): { rows: SessionRow[]; trail: SessionSummary[]; shown: number; total: number } {
   const listed = new Map(sessions.map((s) => [sessionKeyOf(s), s]));
-  const topOf = (session: SessionSummary) => {
-    let top = session;
-    const seen = new Set([sessionKeyOf(session)]);
-    for (;;) {
-      const parent = parentOf(top);
-      const key = parent && sessionKeyOf(parent);
-      const next = key ? listed.get(key) : undefined;
-      if (!key || !next) return top;
-      /* a loop in who started whom has no top: each stands on its own */
-      if (seen.has(key)) return session;
-      seen.add(key);
-      top = next;
+  const starterOf = new Map<string, string>();
+  for (const session of sessions) {
+    const parent = parentOf(session);
+    const key = parent && sessionKeyOf(parent);
+    if (key && listed.has(key)) starterOf.set(sessionKeyOf(session), key);
+  }
+  /* a loop in who started whom has no top: each in it stands on its own */
+  const lineOf = (key: string) => {
+    const line = [key];
+    for (let at = starterOf.get(key); at; at = starterOf.get(at)) {
+      if (line.includes(at)) return [key];
+      line.unshift(at);
     }
+    return line;
   };
   const tops: SessionSummary[] = [];
-  const started = new Map<string, SessionSummary[]>();
+  const startedBy = new Map<string, SessionSummary[]>();
   for (const session of sessions) {
-    const top = topOf(session);
-    if (top === session) {
+    const line = lineOf(sessionKeyOf(session));
+    if (line.length === 1) {
       tops.push(session);
       continue;
     }
-    const key = sessionKeyOf(top);
-    const kin = started.get(key);
+    const starter = line[line.length - 2]!;
+    const kin = startedBy.get(starter);
     if (kin) kin.push(session);
-    else started.set(key, [session]);
+    else startedBy.set(starter, [session]);
   }
-  const match = (session: SessionSummary) => !matches || matches(session);
+  const childrenOf = (key: string | null) =>
+    key === null ? tops : (startedBy.get(key) ?? []);
+
+  const level = under && listed.has(under) ? under : null;
+  const trail = level ? lineOf(level).map((key) => listed.get(key)!) : [];
+
+  const busy = new Map<string, boolean>();
+  const working = (session: SessionSummary): boolean => {
+    const key = sessionKeyOf(session);
+    let result = busy.get(key);
+    if (result === undefined) {
+      result = isLive(session.turnState) || childrenOf(key).some((s) => working(s));
+      busy.set(key, result);
+    }
+    return result;
+  };
+  const row = (
+    session: SessionSummary,
+    path: readonly SessionSummary[] | null,
+    depth: number,
+  ): SessionRow => {
+    const key = sessionKeyOf(session);
+    const kin = childrenOf(key);
+    const starter = starterOf.get(key);
+    return {
+      session,
+      started: kin.length,
+      running: kin.filter(working).length,
+      path,
+      depth,
+      open: !path && kin.length > 0 && isOpen(key),
+      hidden: 0,
+      starter:
+        starter && lineOf(key).length > 1
+          ? {
+              key: starter,
+              level: lineOf(starter).length > 1 ? starterOf.get(starter)! : null,
+            }
+          : null,
+    };
+  };
+
   const rows: SessionRow[] = [];
-  let shown = 0;
-  for (const top of tops) {
-    const key = sessionKeyOf(top);
-    const kin = started.get(key) ?? [];
-    const topMatches = match(top);
-    const kinMatching = kin.filter(match);
-    shown += (topMatches ? 1 : 0) + kinMatching.length;
-    if (!topMatches && kinMatching.length === 0) continue;
-    rows.push({ kind: "session", session: top, child: false, context: !topMatches });
-    if (kin.length === 0) continue;
-    const open = isOpen(key);
-    const drawn = open ? kin : matches ? kinMatching : [];
-    drawn.forEach((session, n) =>
-      rows.push({
-        kind: "session",
-        session,
-        child: true,
-        context: !kinMatching.includes(session),
-        delay: Math.min(n, ENTRANCE_STEPS),
-      }),
-    );
-    rows.push({
-      kind: "toggle",
-      of: key,
-      kin: kin.length,
-      open,
-      running: kin.filter((s) => isLive(s.turnState)).length,
-    });
-  }
-  return { rows, shown };
+  let total = 0;
+  const walk = (key: string | null, path: SessionSummary[]) => {
+    for (const session of childrenOf(key)) {
+      total += 1;
+      if (matches?.(session)) rows.push(row(session, path, 0));
+      walk(sessionKeyOf(session), [...path, session]);
+    }
+  };
+  walk(level, []);
+  if (matches) return { rows, trail, shown: rows.length, total };
+  const openOut = (key: string | null, depth: number, from: SessionRow | null) => {
+    const kin = childrenOf(key);
+    const drawn = from ? kin.filter((s, n) => n < OPENED_SHOWN || working(s)) : kin;
+    if (from) from.hidden = kin.length - drawn.length;
+    for (const session of drawn) {
+      const shown = row(session, null, depth);
+      rows.push(shown);
+      if (shown.open) openOut(sessionKeyOf(session), depth + 1, shown);
+    }
+  };
+  openOut(level, 0, null);
+  return { rows, trail, shown: childrenOf(level).length, total };
 }

@@ -176,7 +176,7 @@ export function NavPanel({
       </Item>
       <Item
         to={href({ name: "sessions" })}
-        active={route.name === "sessions"}
+        active={route.name === "sessions" || route.name === "sessionsUnder"}
         icon={<ScrollText className="size-4" />}
       >
         Sessions

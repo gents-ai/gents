@@ -13,7 +13,6 @@ vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
 import {
   isWorkerStep,
-  WorkerList,
   WorkerStep,
   failureLine,
   workerNow,
@@ -25,8 +24,7 @@ import {
   type Workers,
 } from "../src/ui/screens/workers";
 import { WorkerActionsContext } from "../src/ui/screens/WorkerActions";
-import { node, renderIn, testApp } from "./app-fixture";
-import { deployment } from "./config-panel-wiring/fixtures";
+import { renderIn, testApp } from "./app-fixture";
 
 const render = (ui: ReactElement) => renderIn(testApp(), ui);
 
@@ -272,46 +270,6 @@ describe("a background process row", () => {
     renderStep(process, null);
     expect(screen.getByText("cargo test")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Stop / })).toBeNull();
-  });
-});
-
-describe("agent list", () => {
-  it("lists each started session with its state and a way in", () => {
-    render(
-      <WorkerList workers={workersWith(reached(caused("child-req", "completed")))} />,
-    );
-    expect(screen.getByText("Started sessions")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Reviewer/ })).toBeInTheDocument();
-  });
-
-  it("names each agent's configuration from the selected node, outside the transcript", () => {
-    const named = worker("completed");
-    named.summary = { ...named.summary!, agentId: "reviewer" };
-    const app = testApp({
-      deployments: [
-        node({
-          agents: [
-            {
-              ...deployment.agents[0],
-              agentId: "reviewer",
-              displayName: "Code Reviewer",
-            },
-          ],
-        }),
-      ],
-    });
-    renderIn(
-      app,
-      <WorkerList
-        workers={workersWith(reached(caused("child-req", "completed"), named))}
-      />,
-    );
-    expect(screen.getByText("Cr")).toBeInTheDocument();
-  });
-
-  it("renders nothing for a session that started no other session", () => {
-    const view = render(<WorkerList workers={NO_WORKERS} />);
-    expect(view.container).toBeEmptyDOMElement();
   });
 });
 
