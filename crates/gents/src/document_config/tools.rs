@@ -1047,7 +1047,10 @@ fn merge_job_blocks(
 /// the defaults over `targets_from`; a merge never widens an existing block),
 /// the targets, trusted packs and skills. Each `targets_from` entry is
 /// (pack coordinate, the AgentTarget ids that pack ships, its provenance).
-/// `agents.enabled` is never written.
+/// When the Tools enable the p2p tool, the collections the plugin's data
+/// declaration uses from its pack's own SDL join `built_ins.p2p_collections`,
+/// so its agent can pair them with enrolled peers; enrollment and ACP still
+/// gate every pairing. `agents.enabled` is never written.
 pub fn wire_plugin(
     tools: &Tools,
     context: &super::AgentContext,
@@ -1175,6 +1178,23 @@ pub fn wire_plugin(
         context.skill_ids.extend(skills);
     }
 
+    if let Some(built_ins) = tools
+        .built_ins
+        .as_mut()
+        .filter(|built_ins| built_ins.enable_p2p_tool == Some(true))
+    {
+        let granted: Vec<String> = plugin
+            .data_collection_fields
+            .keys()
+            .filter(|collection| !built_ins.p2p_collections.contains(collection))
+            .cloned()
+            .collect();
+        if !granted.is_empty() {
+            changed.push(format!("granted P2P pairing of {}", granted.join(", ")));
+            built_ins.p2p_collections.extend(granted);
+        }
+    }
+
     let next_call = (plugin.declaration.job.0 && job.is_none())
         .then(|| format!("gents pack wire {coordinate} --agent <agent> --targets-from <pack>"));
     Ok((
@@ -1194,8 +1214,9 @@ pub fn wire_plugin(
 /// plugin entry still needs it (skills are not recorded per plugin, so any
 /// remaining plugin keeps them). With `targets_from`, keeps the plugin and
 /// removes only those packs' targets and trust entries; a block left without
-/// targets is dropped. `agents.enabled`, `policy.dynamic` and `project_roots`
-/// are never written.
+/// targets is dropped. `agents.enabled`, `policy.dynamic`, `project_roots` and
+/// `built_ins.p2p_collections` are never written: a P2P grant may back a live
+/// pairing or another plugin, so narrowing it stays an explicit Tools edit.
 pub fn unwire_plugin(
     tools: &Tools,
     context: &super::AgentContext,
@@ -1790,6 +1811,44 @@ mod tests {
                 strs(&["wf-a", "wf-b"]),
                 InstalledVia::Operator,
             )
+        }
+
+        #[test]
+        fn wiring_grants_the_plugins_pack_collections_for_p2p_when_enabled() {
+            let mut plugin = installed(false, Some("amygdala/fleet-board"));
+            plugin.data_collection_fields = [
+                ("FleetBoardPost".to_owned(), strs(&["post_id"])),
+                ("DeploymentNote".to_owned(), strs(&["text"])),
+            ]
+            .into_iter()
+            .collect();
+            let (tools, context) = start(None);
+            let (unchanged, _, report) =
+                wire_plugin(&tools, &context, &plugin, None, &[], &[]).unwrap();
+            assert!(unchanged.built_ins.is_none());
+            assert!(!report.changed.iter().any(|line| line.contains("P2P")));
+
+            let mut enabled = tools.clone();
+            enabled.built_ins = Some(BuiltInTools {
+                enable_p2p_tool: Some(true),
+                p2p_collections: strs(&["DeploymentNote"]),
+                ..BuiltInTools::default()
+            });
+            let (wired, wired_context, report) =
+                wire_plugin(&enabled, &context, &plugin, None, &[], &[]).unwrap();
+            assert_eq!(
+                wired.built_ins.as_ref().unwrap().p2p_collections,
+                strs(&["DeploymentNote", "FleetBoardPost"])
+            );
+            assert!(report
+                .changed
+                .contains(&"granted P2P pairing of FleetBoardPost".to_owned()));
+            let (again, _, report) =
+                wire_plugin(&wired, &wired_context, &plugin, None, &[], &[]).unwrap();
+            assert_eq!(again.built_ins, wired.built_ins);
+            assert!(!report.changed.iter().any(|line| line.contains("P2P")));
+            let (unwired, _, _) = unwire_plugin(&wired, &wired_context, &plugin, &[], &[]).unwrap();
+            assert_eq!(unwired.built_ins, wired.built_ins);
         }
 
         #[test]
