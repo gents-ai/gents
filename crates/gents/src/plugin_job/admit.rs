@@ -120,6 +120,8 @@ pub enum Refusal {
     TimedOut,
     StepFailed,
     BackgroundBudgetExceeded,
+    ResumeUnknown,
+    ResumeNotHead,
 }
 
 impl Refusal {
@@ -135,6 +137,8 @@ impl Refusal {
             Self::TimedOut => Some("plugin_job_timed_out"),
             Self::StepFailed => Some("plugin_job_step_failed"),
             Self::BackgroundBudgetExceeded => Some("background_tool_budget_exceeded"),
+            Self::ResumeUnknown => Some("plugin_job_resume_unknown"),
+            Self::ResumeNotHead => Some("plugin_job_resume_not_head"),
         }
     }
 }
@@ -277,7 +281,7 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
         return Err(Refusal::PolicyDenied);
     }
     if !resume_admitted(ctx, out) {
-        return Err(Refusal::PolicyDenied);
+        return Err(resume_refusal(ctx, out));
     }
     let Some(pin) = step_pin(ctx, job, out) else {
         if ctx.policy.dynamic == DynamicMode::Off && runs_dynamic_code(ctx, &job.call) {
@@ -457,6 +461,30 @@ fn resume_listed<'a>(
         .iter()
         .find(|(id, _, _)| id == doc_id)
         .map(|(_, head, target)| (*head, target.as_ref()))
+}
+
+/// Lean `resumeRefusal`.
+fn resume_refusal(ctx: &StepContext, out: &JobStepOutput) -> Refusal {
+    let (Some(resume), Some(_)) = (out_resume(out), out_pin(out)) else {
+        return Refusal::PolicyDenied;
+    };
+    match resume_listed(ctx, &resume.row_doc_id) {
+        None | Some((_, None)) => Refusal::ResumeUnknown,
+        Some((head, Some((owner, same_plugin, _, _)))) => {
+            if *same_plugin
+                && !head
+                && ctx.caller_scope.authorizes(
+                    &owner.session_id,
+                    &owner.node_did,
+                    owner.requester_did.as_deref(),
+                )
+            {
+                Refusal::ResumeNotHead
+            } else {
+                Refusal::PolicyDenied
+            }
+        }
+    }
 }
 
 /// Lean `resumeAdmitted`.
@@ -1651,9 +1679,11 @@ mod tests {
 
         let (mut ctx, job, out, _, _) = valid_resume();
         ctx.resume_targets.clear();
-        assert_eq!(code(&ctx, &job, &out), DENIED);
+        assert_eq!(code(&ctx, &job, &out), Some("plugin_job_resume_unknown"));
         let (mut ctx, job, out, _, _) = valid_resume();
         ctx.resume_targets[0].1 = false;
+        assert_eq!(code(&ctx, &job, &out), Some("plugin_job_resume_not_head"));
+        ctx.caller_scope.session_id = "other-session".into();
         assert_eq!(code(&ctx, &job, &out), DENIED);
         let (mut ctx, job, out, prior, mut root) = valid_resume();
         root.pin = None;

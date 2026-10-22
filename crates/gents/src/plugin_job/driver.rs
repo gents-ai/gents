@@ -169,6 +169,9 @@ fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, S
             "Next: wait for a background completion notification, then retry".to_owned(),
         ),
         Refusal::Terminal => ("the job already ended", inspect),
+        Refusal::ResumeUnknown | Refusal::ResumeNotHead => {
+            ("the job's resume named a row that is not the newest of a run", inspect)
+        }
     }
 }
 

@@ -150,6 +150,17 @@ source consistency checks, not a separate runtime compatibility version.
   dependencies are refused with the command that installs them directly. The
   scenario manifest key `graph_dependency_environment` is now
   `dependency_environment`; the old key is still accepted.
+- A workflow job resume that names no job row now fails with
+  `plugin_job_resume_unknown`, and one that names a row a later resume already
+  continued fails with `plugin_job_resume_not_head` and names the newest row's
+  address as the next call, instead of `plugin_job_policy_denied`. Refusals the
+  job policy makes keep `plugin_job_policy_denied`.
+- A workflow engine's `jobs[]` input lists the session's runs oldest first and
+  carries each row's `adopted_at` and the `resume_of` row it continued, so
+  resuming a run by its handle reaches its newest row.
+- The plugin job recovery sweep no longer fails a just resumed workflow run as
+  `plugin_job_stalled` before its first step runs; a run at rest with nothing
+  live re-drives that step, and only a run that stalled after a step is ended.
 
 ## 0.21.0-rc0 - 2026-10-17
 
