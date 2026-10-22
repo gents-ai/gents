@@ -1,8 +1,8 @@
-# Immutable capture content or an ordered manifest of child references.
-# Captures and blocks are one sync unit: a
-# manifest without its blocks is undecodable and a block without a referencing
-# manifest is inert, so neither is delivered, backed up or pruned without the
-# other. `@branchable` is deliberate and irreversible. `content_key` (sha256
+# Immutable capture or reduction content, or an ordered manifest of child
+# references. Captures, provider-context reductions and their blocks are one
+# sync unit: a manifest without its blocks is undecodable and a block without a
+# referencing manifest is inert, so neither is delivered, backed up or pruned
+# without the other. `@branchable` is deliberate and irreversible. `content_key` (sha256
 # over the payload bytes) is dedupe/lookup only, never integrity evidence:
 # integrity rides on the DefraDB field commit CID of `payload`, pinned in the
 # referencing manifest and re-checked at read time. A reference never broadens
