@@ -84,7 +84,11 @@ export type TranscriptListOptions<E> = {
   subject: string | null;
   entries: readonly E[];
   keyOf: (entry: E) => string;
-  estimateOf: (entry: E) => number;
+  /* a row's height before it is drawn, in a list this wide */
+  estimateOf: (entry: E, width: number) => number;
+  /* a row drawn for the first time, at the height it measured in a list
+     this wide */
+  onMeasured?: (entry: E, height: number, width: number) => void;
   /* the row of the newest message sent here, once it is drawn */
   sentTurn: string | null;
   anchorSentTurn: boolean;
@@ -138,6 +142,12 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
   live.current.keys = keys;
   live.current.room = room;
   const owner = useRef<ReturnType<typeof createOwner> | null>(null);
+  /* the width rows not yet drawn are guessed in, taken as a subject opens:
+     guesses that followed the width as it changed would move the length of
+     every row not drawn on each frame of a resize */
+  const guessWidth = useRef(0);
+  const widthForGuess = () =>
+    (guessWidth.current ||= listRef.current?.clientWidth || 0) || 720;
   /* what the list is told of the view. `by` is the difference the owner
      carries on the content while WebKit moves the view: the rows seen sit
      that much further down the list than the scroll position says.
@@ -183,7 +193,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       }
       return measureElement(element, entry, instance);
     },
-    estimateSize: (i) => estimateOf(entries[i]!),
+    estimateSize: (i) => estimateOf(entries[i]!, widthForGuess()),
     getItemKey: (i) => keyOf(entries[i]!),
     enabled: Boolean(scroller),
     initialRect: { width: 0, height: 800 },
@@ -818,6 +828,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
   useLayoutEffect(() => {
     if (!scroller || opened.current === subject || entries.length === 0) return;
     opened.current = subject;
+    guessWidth.current = 0;
     owner.current!.open(options.opening ?? null);
   });
 
@@ -854,14 +865,21 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
 
   const measureRow = useCallback(
     (node: HTMLDivElement | null) => {
+      const index = node ? Number(node.dataset.index) : NaN;
+      const entry = Number.isInteger(index)
+        ? live.current.options.entries[index]
+        : undefined;
+      const first =
+        entry !== undefined &&
+        !virtual.itemSizeCache.has(live.current.options.keyOf(entry));
       virtual.measureElement(node);
-      if (!node) return;
-      const index = Number(node.dataset.index);
+      if (!node || entry === undefined) return;
       /* the list skips measuring while the view moves and would place the
          row by its guess, or by a size it had before, until a later frame:
          the reader would see the gap */
-      if (Number.isInteger(index))
-        virtual.resizeItem(index, node.getBoundingClientRect().height);
+      const height = node.getBoundingClientRect().height;
+      virtual.resizeItem(index, height);
+      if (first) live.current.options.onMeasured?.(entry, height, widthForGuess());
     },
     [virtual],
   );
@@ -874,7 +892,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     : entries.reduce<{ index: number; start: number }[]>((all, _entry, index) => {
         const previous = all[index - 1];
         const start = previous
-          ? previous.start + estimateOf(entries[index - 1]!)
+          ? previous.start + estimateOf(entries[index - 1]!, 720)
           : virtual.options.scrollMargin;
         all.push({ index, start });
         return all;

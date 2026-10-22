@@ -58,6 +58,7 @@ import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
 import { useCopied } from "@/lib/clipboard";
 import { toastFailure } from "@/lib/failure";
+import { createHeightLearner, guessHeight, type RowShape } from "@/lib/rowHeights";
 import { useApp, useView } from "@/app/AppContext";
 import {
   ActivityGroup,
@@ -413,10 +414,23 @@ export type TranscriptOwner = {
 
 const EMPTY_ITEMS: RenderedTimelineItem[] = [];
 
-/* a row's height before it is measured: a guess only, the list measures
-   every row it draws */
-const estimateOf = (entry: TranscriptEntry) =>
-  entry.kind === "group" ? 220 : entry.item.kind === "userMessage" ? 92 : 160;
+/* what a row's height is guessed from before it is drawn */
+function shapeOf(entry: TranscriptEntry): RowShape {
+  if (entry.kind === "group")
+    return { kind: "group", open: !entry.settled, steps: entry.members.length };
+  const item = entry.item;
+  switch (item.kind) {
+    case "userMessage":
+    case "pendingUserTurn":
+    case "automatedInput":
+      return { kind: "user", text: item.content ?? "" };
+    case "assistantMessage":
+    case "liveAssistant":
+      return { kind: "reply", text: item.content ?? "" };
+    default:
+      return { kind: "other" };
+  }
+}
 
 /* where the reader left a session, so opening it again returns there */
 type SavedPlace = ReaderPlace & { sequence: number | null };
@@ -599,12 +613,30 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionKey, entries.length > 0]);
 
+  /* the guesses, corrected by what this session's first rows measure */
+  const heights = useMemo(() => createHeightLearner(), [sessionKey]);
+  const estimateOf = useCallback(
+    (entry: TranscriptEntry, width: number) => {
+      const shape = shapeOf(entry);
+      return Math.round(guessHeight(shape, width) * heights.scale(shape.kind));
+    },
+    [heights],
+  );
+  const onMeasured = useCallback(
+    (entry: TranscriptEntry, height: number, width: number) => {
+      const shape = shapeOf(entry);
+      heights.learn(shape.kind, guessHeight(shape, width), height);
+    },
+    [heights],
+  );
+
   const list = useTranscriptList({
     scroller,
     subject: sessionKey,
     entries,
     keyOf: entryKey,
     estimateOf,
+    onMeasured,
     sentTurn: rows.joined ? sentTurn : null,
     anchorSentTurn,
     turnWorks,
