@@ -461,6 +461,7 @@ async fn help_and_scope_distinguish_capability_limits_from_collection_grants() {
         .unwrap_err()
         .to_string();
     assert!(denied.contains("outside this tool's P2P collection grant"));
+    assert!(denied.contains("applies from the agent's next request, not in this turn"));
     assert!(!denied.contains("never supported"));
     let empty = tool
         .checked_collections(json!({"collections":[]}).as_object().unwrap())
