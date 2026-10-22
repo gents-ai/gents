@@ -47,6 +47,8 @@ import type {
   DesktopSessionSnapshot,
   SessionRenameRequest,
   SessionLiveDeltaView,
+  SessionRowsView,
+  SessionRowsWindow,
   TriggerDeleteRequest,
   TriggerSaveRequest,
   InferenceProbeResult,
@@ -189,6 +191,14 @@ export type DesktopApiAdapter = {
     sessionId: string,
     nodeDid?: string | null,
   ) => Promise<void>;
+  /** A stretch of a session's display rows by message number, without the
+   *  session's request state. */
+  fetchSessionRows: (request: {
+    sessionId: string;
+    nodeDid?: string | null;
+    window: SessionRowsWindow;
+    limit?: number;
+  }) => Promise<SessionRowsView | null>;
   fetchSessionLiveDelta?: (request: {
     sessionId: string;
     nodeDid?: string | null;

@@ -218,6 +218,17 @@ function projectBackendPatch(
   };
 }
 
+/* a drawn row's message number; a tool group rides with its message */
+function harnessSequenceOf(item: RenderedTimelineItem): number | null {
+  return item.kind === "toolGroup"
+    ? (item.messageSequence ?? null)
+    : item.kind === "userMessage" ||
+        item.kind === "assistantMessage" ||
+        item.kind === "automatedInput"
+      ? (item.sequence ?? null)
+      : null;
+}
+
 export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
@@ -1309,6 +1320,48 @@ export function createDesktopUiHarness(
       };
       sessions.set(sessionId, { ...session, hydration });
       notify("store");
+    },
+    /* each message number stands for one message, as in the runtime: a
+       read covers `limit` numbers and draws the rows among them */
+    async fetchSessionRows({ sessionId, window, limit }) {
+      const session = sessions.get(sessionId);
+      if (!session) return null;
+      if (window.kind !== "tip" && olderPageDelayMs > 0) await wait(olderPageDelayMs);
+      const durable = session.timelineItems.filter(
+        (item) => harnessSequenceOf(item) !== null,
+      );
+      const newest = durable.reduce(
+        (top, item) => Math.max(top, harnessSequenceOf(item)!),
+        -1,
+      );
+      const span = Math.max(1, Math.min(80, limit ?? 40));
+      const [from, through] =
+        window.kind === "tip"
+          ? [Math.max(0, newest - span + 1), newest]
+          : window.kind === "before"
+            ? [Math.max(0, window.sequence - span), window.sequence - 1]
+            : window.kind === "after"
+              ? [window.sequence + 1, window.sequence + span]
+              : [
+                  Math.max(0, window.sequence - Math.ceil(span / 2)),
+                  window.sequence + Math.ceil(span / 2) - 1,
+                ];
+      const rows = durable.filter((item) => {
+        const at = harnessSequenceOf(item)!;
+        return at >= from && at <= through;
+      });
+      return {
+        sessionId,
+        nodeDid: session.nodeDid,
+        rows: clone(rows),
+        coveredFrom: from,
+        coveredThrough: through >= newest ? null : through,
+        hasOlder: from > 0,
+        hasNewer: through < newest,
+        complete: true,
+        unreadable: null,
+        queryCount: 1,
+      };
     },
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);

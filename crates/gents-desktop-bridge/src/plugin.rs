@@ -142,6 +142,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::chat::desktop_session_snapshot,
             tauri_commands::chat::desktop_session_hydration_retry,
             tauri_commands::chat::desktop_session_live_delta,
+            tauri_commands::chat::desktop_session_rows,
             tauri_commands::chat::desktop_request_timeline,
             tauri_commands::tools_explain::desktop_tool_surface_explain,
             tauri_commands::chat::desktop_chat_send,

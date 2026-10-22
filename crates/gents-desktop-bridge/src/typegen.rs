@@ -304,6 +304,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DerivedCancelCauseView,
         DesktopSessionSnapshot,
         SessionLiveDeltaView,
+        SessionRowsView,
+        SessionRowsWindow,
         MessageView,
         ToolCallView,
         RequestResendResultView,

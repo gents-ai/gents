@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-session-rows"
+description = "Enables the desktop_session_rows command without any pre-configured scope."
+commands.allow = ["desktop_session_rows"]
+
+[[permission]]
+identifier = "deny-desktop-session-rows"
+description = "Denies the desktop_session_rows command without any pre-configured scope."
+commands.deny = ["desktop_session_rows"]

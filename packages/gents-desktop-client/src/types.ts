@@ -108,6 +108,8 @@ export type {
   SessionHydrationView,
   SessionLiveDeltaView,
   SessionLiveTextPatchView,
+  SessionRowsView,
+  SessionRowsWindow,
   SessionProjectionRevisionView,
   FoldedInputView,
   GoalView,

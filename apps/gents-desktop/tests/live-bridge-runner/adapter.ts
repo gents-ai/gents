@@ -17,6 +17,7 @@ import type {
   SessionProvenanceView,
   TaskRunResult,
   SessionLiveDeltaView,
+  SessionRowsView,
 } from "@source-inc/gents-desktop-client";
 import type { TauriDriverChatRequest } from "../tauri-driver";
 import type { LiveBridgeRunner } from "../live-bridge-runner";
@@ -132,6 +133,8 @@ export function createBridgeHttpAdapter(
         nodeDid,
       });
     },
+    fetchSessionRows: async (request) =>
+      client.postJson<SessionRowsView | null>("/desktop/session/rows", request),
     fetchSessionLiveDelta: async (request) =>
       client.postJson<SessionLiveDeltaView>("/desktop/session/live-delta", request),
     sendChatMessage: async (request) => {

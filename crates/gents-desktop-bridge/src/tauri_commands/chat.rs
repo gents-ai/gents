@@ -30,7 +30,7 @@ use crate::snapshot::build_session_live_delta;
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     ChatSendRequest, ChatSendResult, DesktopSessionSnapshot, SessionLiveDeltaView,
-    SessionRenameRequest,
+    SessionRenameRequest, SessionRowsView, SessionRowsWindow,
 };
 
 #[tauri::command]
@@ -57,6 +57,22 @@ pub async fn desktop_session_snapshot(
 }
 
 pub(crate) use crate::commands::session_snapshot;
+
+#[tauri::command]
+pub async fn desktop_session_rows(
+    session_id: String,
+    node_did: Option<String>,
+    window: SessionRowsWindow,
+    limit: Option<usize>,
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<SessionRowsView>, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Ok(None);
+    };
+    crate::commands::session_rows(&core, session_id, node_did, window, limit)
+        .await
+        .map(Some)
+}
 
 #[tauri::command]
 pub async fn desktop_session_hydration_retry(

@@ -544,6 +544,16 @@ impl ClientHost {
                 )
                 .await?,
             ),
+            ClientCommand::SessionRows(args) => encode(
+                crate::commands::session_rows(
+                    &self.core,
+                    args.session_id,
+                    Some(args.node_did),
+                    args.window,
+                    args.limit,
+                )
+                .await?,
+            ),
             ClientCommand::SessionLiveDelta(args) => encode(
                 crate::snapshot::build_session_live_delta(
                     &self.core,

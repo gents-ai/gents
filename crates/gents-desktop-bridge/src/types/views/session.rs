@@ -571,6 +571,38 @@ pub struct SessionTimelinePageView {
     pub tool_call_query_limit: Option<i64>,
 }
 
+/// Where a transcript rows read starts: the newest rows, or the rows before,
+/// after or around a message number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SessionRowsWindow {
+    Tip,
+    Before { sequence: i64 },
+    After { sequence: i64 },
+    Around { sequence: i64 },
+}
+
+/// A stretch of a session's display rows, in order, and the message numbers
+/// the read proves. Inside `[coveredFrom, coveredThrough]` a number without a
+/// row is empty, not unread; `coveredThrough: null` reaches the newest
+/// message. `complete` is false when the read came from this computer's copy
+/// of a session still arriving, so a later read can add rows inside the span.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRowsView {
+    pub session_id: String,
+    pub node_did: Option<String>,
+    pub rows: Vec<RenderedTimelineItem>,
+    pub covered_from: Option<i64>,
+    pub covered_through: Option<i64>,
+    pub has_older: bool,
+    pub has_newer: bool,
+    pub complete: bool,
+    /// Why this client cannot read the session; no rows come with it.
+    pub unreadable: Option<String>,
+    pub query_count: i64,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionProjectionRevisionView {

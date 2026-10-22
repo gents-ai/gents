@@ -220,6 +220,8 @@ pub enum ClientCommand {
     SessionSnapshot(SessionSnapshotArgs),
     #[serde(rename = "desktop_session_live_delta")]
     SessionLiveDelta(SessionLiveDeltaArgs),
+    #[serde(rename = "desktop_session_rows")]
+    SessionRows(SessionRowsArgs),
     #[serde(rename = "desktop_session_goal")]
     SessionGoal(SessionGoalArgs),
     #[serde(rename = "desktop_goal_control")]
@@ -289,6 +291,7 @@ impl ClientCommand {
         "desktop_peer_enroll_status",
         "desktop_session_snapshot",
         "desktop_session_live_delta",
+        "desktop_session_rows",
         "desktop_session_goal",
         "desktop_goal_control",
         "desktop_chat_send",
@@ -341,6 +344,16 @@ pub struct SessionSnapshotArgs {
     pub timeline_limit: Option<usize>,
     #[ts(optional = nullable)]
     pub timeline_before_item_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionRowsArgs {
+    pub session_id: String,
+    pub node_did: String,
+    pub window: crate::types::SessionRowsWindow,
+    #[ts(optional = nullable)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, TS)]

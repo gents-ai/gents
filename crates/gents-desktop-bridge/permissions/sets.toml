@@ -29,6 +29,7 @@ description = "Session/conversation snapshot and live-delta reads"
 permissions = [
   "allow-desktop-session-snapshot",
   "allow-desktop-session-live-delta",
+  "allow-desktop-session-rows",
   "allow-desktop-session-goal",
 ]
 

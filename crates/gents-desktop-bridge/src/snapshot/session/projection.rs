@@ -522,298 +522,14 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         .iter()
         .filter_map(|request| request.doc_id.as_deref().map(|doc_id| (doc_id, *request)))
         .collect();
-    let input_owners: HashMap<(String, String), &str> = requests
-        .iter()
-        .filter_map(|request| {
-            gents::lifecycle::input_message_owner(request)
-                .map(|owner| (owner, request.request_id.as_str()))
-        })
-        .collect();
-    let mut observed_messages = transcript
-        .messages
-        .iter()
-        .map(|row| gents_protocol::output::origin::ObservedMessage {
-            doc_id: &row.doc_id,
-            message: &row.message,
-        })
-        .collect::<Vec<_>>();
-    if let Some(dependencies) = canonical_dependencies {
-        observed_messages.extend(dependencies.origin_headers.iter().map(|row| {
-            gents_protocol::output::origin::ObservedMessage {
-                doc_id: &row.doc_id,
-                message: &row.message,
-            }
-        }));
-    }
-    let mut output_segment_rows = transcript
-        .output_segments
-        .iter()
-        .map(|row| (*row).clone())
-        .collect::<Vec<_>>();
-    if let Some(dependencies) = canonical_dependencies {
-        output_segment_rows.extend(dependencies.output_segments.iter().cloned());
-    }
-    let denied_headers = canonical_dependencies
-        .map(|dependencies| dependencies.denied_header_doc_ids.as_slice())
-        .unwrap_or_default();
-    let denied_segments = canonical_dependencies
-        .map(|dependencies| dependencies.denied_segment_doc_ids.as_slice())
-        .unwrap_or_default();
-    let dependency_denials = canonical_dependencies
-        .map(|dependencies| dependencies.dependency_denials.as_slice())
-        .unwrap_or_default();
-    let messages = transcript
-        .messages
-        .iter()
-        .copied()
-        .map(|row| {
-            let projection = project_message_with_dependencies(
-                row,
-                &observed_messages,
-                &output_segment_rows,
-                denied_headers,
-                denied_segments,
-                dependency_denials,
-            );
-            let (
-                mut reconstructed,
-                mut reconstruction_state,
-                mut reconstruction_error,
-                denied_dependency_doc_id,
-            ) = match projection {
-                CanonicalMessageProjection::Ready(message) => {
-                    (Some(message), ReconstructionState::Ready, None, None)
-                }
-                CanonicalMessageProjection::Loading(error) => (
-                    None,
-                    ReconstructionState::Loading,
-                    Some(error.to_string()),
-                    None,
-                ),
-                CanonicalMessageProjection::Denied { doc_id } => {
-                    (None, ReconstructionState::Denied, None, Some(doc_id))
-                }
-                CanonicalMessageProjection::Invalid(error) => (
-                    None,
-                    ReconstructionState::Invalid,
-                    Some(error.to_string()),
-                    None,
-                ),
-            };
-            let captured_context = match reconstructed
-                .as_ref()
-                .map(gents_protocol::request_input::CapturedContext::from_message)
-                .transpose()
-            {
-                Ok(context) => context.unwrap_or_default(),
-                Err(error) => {
-                    reconstructed = None;
-                    reconstruction_state = ReconstructionState::Invalid;
-                    reconstruction_error = Some(error.to_string());
-                    Vec::new()
-                }
-            };
-            let runtime_context = gents_protocol::output::origin::resolve_origin(
-                &observed_messages,
-                denied_headers,
-                &row.doc_id,
-                &row.message.node_did,
-                row.message.requester_did.as_deref(),
-            )
-            .ok()
-            .is_some_and(|origin| {
-                origin.message.role == gents_protocol::output::MessageRole::User
-                    && origin
-                        .message
-                        .request_doc_id
-                        .as_deref()
-                        .is_some_and(|doc_id| {
-                            origin.message.message_key == format!("authored:{doc_id}:context")
-                        })
-            });
-            let presentation = reconstructed.as_ref().map(present_message);
-            let input_text = match reconstructed.as_ref() {
-                Some(gents_protocol::message::Message::User { content }) => {
-                    let texts = content
-                        .iter()
-                        .filter_map(|item| match item {
-                            gents_protocol::message::UserContent::Text(text) => {
-                                Some(text.text.as_str())
-                            }
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    (!texts.is_empty()).then(|| texts.join("\n"))
-                }
-                _ => None,
-            };
-
-            MessageView {
-                message_key: row.message.message_key.clone(),
-                request_id: row
-                    .message
-                    .request_doc_id
-                    .as_deref()
-                    .and_then(|doc_id| requests_by_doc_id.get(doc_id))
-                    .map(|request| request.request_id.clone()),
-                owns_turn: row.message.role == gents_protocol::output::MessageRole::User
-                    && row.message.request_doc_id.as_deref().is_some_and(|doc_id| {
-                        row.message.message_key == authored_prompt_message_key(doc_id)
-                    }),
-                sequence: Some(i64::from(row.message.sequence)),
-                role: Some(
-                    match row.message.role {
-                        gents_protocol::output::MessageRole::System => "system",
-                        gents_protocol::output::MessageRole::User => "user",
-                        gents_protocol::output::MessageRole::Assistant => "assistant",
-                    }
-                    .to_string(),
-                ),
-                display_role: presentation
-                    .as_ref()
-                    .map(|presentation| presentation.role.label().to_ascii_lowercase()),
-                display_content: presentation.as_ref().and_then(|presentation| {
-                    normalize_optional(Some(presentation.body_markdown.as_str()))
-                }),
-                captured_context: (!captured_context.is_empty()).then_some(captured_context),
-                reasoning: presentation.as_ref().and_then(|presentation| {
-                    presentation
-                        .reasoning_markdown
-                        .as_deref()
-                        .and_then(|reasoning| normalize_optional(Some(reasoning)))
-                }),
-                has_tool_calls: presentation
-                    .as_ref()
-                    .is_some_and(|presentation| presentation.has_tool_calls),
-                has_tool_results: presentation
-                    .as_ref()
-                    .is_some_and(|presentation| presentation.has_tool_results),
-                reconstruction_state,
-                reconstruction_error,
-                denied_dependency_doc_id,
-                runtime_control: runtime_context
-                    || message_is_runtime_control(row, &requests_by_doc_id),
-                input_request_id: row.message.request_doc_id.as_ref().and_then(|doc| {
-                    input_owners
-                        .get(&(doc.clone(), row.message.message_key.clone()))
-                        .map(|id| (*id).to_owned())
-                }),
-                origin: if runtime_context {
-                    None
-                } else {
-                    message_origin(store, row, &requests_by_doc_id)
-                },
-                input_text,
-                timestamp: Some(row.message.created_at.clone()),
-            }
-        })
-        .collect::<Vec<_>>();
-
-    let tool_calls = transcript
-        .tool_calls
-        .into_iter()
-        .map(|row| {
-            let (args, result, reconstruction) = canonical_tool_payload(
-                row,
-                &transcript.messages,
-                &observed_messages,
-                &output_segment_rows,
-                denied_headers,
-                denied_segments,
-                dependency_denials,
-            );
-            let partial_output_tail = canonical_live_tool_output(
-                row,
-                row.request_doc_id
-                    .as_deref()
-                    .and_then(|id| requests_by_doc_id.get(id).copied()),
-                &transcript.messages,
-                &output_segment_rows,
-                denied_headers,
-                denied_segments,
-                dependency_denials,
-            );
-            let cancel_cause =
-                if let Some(persisted) = row.cancel_cause.as_deref().filter(|s| !s.is_empty()) {
-                    Some(DerivedCancelCauseView {
-                        cause: persisted.to_string(),
-                        source: "toolLifecycle".into(),
-                        confidence: "direct".into(),
-                        at: normalize_optional(row.completed_at.as_deref()),
-                        evidence: vec![format!(
-                            "AgentToolCall.cancel_cause = {persisted:?} (persisted)"
-                        )],
-                    })
-                } else {
-                    let req_for_tool = row
-                        .request_doc_id
-                        .as_deref()
-                        .and_then(|id| requests_by_doc_id.get(id).copied());
-                    let req_evidence = req_for_tool
-                        .map(|r| RequestEvidence {
-                            interrupt_requested_at: r.interrupt_requested_at.clone(),
-                        })
-                        .unwrap_or_default();
-                    let tool_evidence = ToolCallEvidence {
-                        lifecycle_state: row.lifecycle_state.clone(),
-                        deadline_at: row.deadline_at.clone(),
-                        completed_at: row.completed_at.clone(),
-                        timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
-                    };
-                    derive_tool_call_cause(&req_evidence, &tool_evidence)
-                };
-            let (job_progress, job_handle, job_state) = match row.job_pin.as_ref() {
-                Some(pin) => (
-                    row.job_progress.clone(),
-                    Some(pin.handle.clone()),
-                    row.lifecycle_state
-                        .as_deref()
-                        .and_then(gents::tool_call_lifecycle::ToolCallState::from_persisted)
-                        .map(|lifecycle| {
-                            gents::plugin::job_calls::job_state(
-                                lifecycle,
-                                row.job_progress.as_ref(),
-                            )
-                        }),
-                ),
-                None => (None, None, None),
-            };
-            ToolCallView {
-                background_available: Some(
-                    row.lifecycle_state.as_deref() == Some("running")
-                        && row.await_mode.as_deref() == Some("foreground")
-                        && row.plugin_parent_tool_call_doc_id.is_none()
-                        && row.spawned_by_tool_call_doc_id.is_none()
-                        && row.tool_name.as_deref().is_some_and(
-                            gents::background_tools::supports_foreground_backgrounding,
-                        ),
-                ),
-                tool_call_key: row.tool_call_key.clone(),
-                tool_call_doc_id: row.doc_id.clone(),
-                request_id: normalize_optional(row.request_id.as_deref()),
-                message_sequence: row.message_sequence,
-                tool_name: normalize_optional(row.tool_name.as_deref()),
-                tool_call_id: normalize_optional(row.tool_call_id.as_deref()),
-                args,
-                partial_output_tail,
-                result,
-                reconstruction,
-                status: normalize_optional(row.status.as_deref()),
-                lifecycle_state: normalize_optional(row.lifecycle_state.as_deref()),
-                await_mode: normalize_optional(row.await_mode.as_deref()),
-                started_at: normalize_optional(row.started_at.as_deref()),
-                deadline_at: normalize_optional(row.deadline_at.as_deref()),
-                completed_at: normalize_optional(row.completed_at.as_deref()),
-                denial: command_denial_from_row(&row),
-                cancel_cause,
-                job_progress,
-                job_handle,
-                job_state,
-                job_outcome: None,
-                job_next_calls: Vec::new(),
-            }
-        })
-        .collect::<Vec<_>>();
+    let (messages, tool_calls) = project_transcript_rows(
+        store,
+        &transcript,
+        canonical_dependencies,
+        &requests,
+        &requests_by_doc_id,
+        &[],
+    );
 
     let full_transcript = node_did.map_or_else(
         || context_store.transcript(session_id),
@@ -1676,4 +1392,344 @@ mod tests {
         .unwrap();
         assert!(!snapshot.timeline_items.iter().any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-1")));
     }
+}
+
+/// The display rows of a stretch of transcript: each message as it reads, and
+/// each tool call with its arguments, result and live output. Requests name a
+/// row's turn and tell runtime controls and delegated input apart; the store
+/// resolves where a request came from.
+pub(super) fn project_transcript_rows(
+    store: &ClientStore,
+    transcript: &gents_desktop_core::client::TranscriptView<'_>,
+    canonical_dependencies: Option<&gents_desktop_core::client::CanonicalTranscriptDependencies>,
+    requests: &[&AgentRequestRow],
+    requests_by_doc_id: &HashMap<&str, &AgentRequestRow>,
+    result_messages: &[&gents::session::canonical_rows::TranscriptMessageRow],
+) -> (Vec<MessageView>, Vec<ToolCallView>) {
+    /* messages a tool's arguments or result are read from: the rows and any
+    deliveries outside them */
+    let tool_sources = transcript
+        .messages
+        .iter()
+        .chain(result_messages.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    let input_owners: HashMap<(String, String), &str> = requests
+        .iter()
+        .filter_map(|request| {
+            gents::lifecycle::input_message_owner(request)
+                .map(|owner| (owner, request.request_id.as_str()))
+        })
+        .collect();
+    let mut observed_messages = tool_sources
+        .iter()
+        .map(|row| gents_protocol::output::origin::ObservedMessage {
+            doc_id: &row.doc_id,
+            message: &row.message,
+        })
+        .collect::<Vec<_>>();
+    if let Some(dependencies) = canonical_dependencies {
+        observed_messages.extend(dependencies.origin_headers.iter().map(|row| {
+            gents_protocol::output::origin::ObservedMessage {
+                doc_id: &row.doc_id,
+                message: &row.message,
+            }
+        }));
+    }
+    let mut output_segment_rows = transcript
+        .output_segments
+        .iter()
+        .map(|row| (*row).clone())
+        .collect::<Vec<_>>();
+    if let Some(dependencies) = canonical_dependencies {
+        output_segment_rows.extend(dependencies.output_segments.iter().cloned());
+    }
+    let denied_headers = canonical_dependencies
+        .map(|dependencies| dependencies.denied_header_doc_ids.as_slice())
+        .unwrap_or_default();
+    let denied_segments = canonical_dependencies
+        .map(|dependencies| dependencies.denied_segment_doc_ids.as_slice())
+        .unwrap_or_default();
+    let dependency_denials = canonical_dependencies
+        .map(|dependencies| dependencies.dependency_denials.as_slice())
+        .unwrap_or_default();
+    let messages = transcript
+        .messages
+        .iter()
+        .copied()
+        .map(|row| {
+            let projection = project_message_with_dependencies(
+                row,
+                &observed_messages,
+                &output_segment_rows,
+                denied_headers,
+                denied_segments,
+                dependency_denials,
+            );
+            let (
+                mut reconstructed,
+                mut reconstruction_state,
+                mut reconstruction_error,
+                denied_dependency_doc_id,
+            ) = match projection {
+                CanonicalMessageProjection::Ready(message) => {
+                    (Some(message), ReconstructionState::Ready, None, None)
+                }
+                CanonicalMessageProjection::Loading(error) => (
+                    None,
+                    ReconstructionState::Loading,
+                    Some(error.to_string()),
+                    None,
+                ),
+                CanonicalMessageProjection::Denied { doc_id } => {
+                    (None, ReconstructionState::Denied, None, Some(doc_id))
+                }
+                CanonicalMessageProjection::Invalid(error) => (
+                    None,
+                    ReconstructionState::Invalid,
+                    Some(error.to_string()),
+                    None,
+                ),
+            };
+            let captured_context = match reconstructed
+                .as_ref()
+                .map(gents_protocol::request_input::CapturedContext::from_message)
+                .transpose()
+            {
+                Ok(context) => context.unwrap_or_default(),
+                Err(error) => {
+                    reconstructed = None;
+                    reconstruction_state = ReconstructionState::Invalid;
+                    reconstruction_error = Some(error.to_string());
+                    Vec::new()
+                }
+            };
+            let runtime_context = gents_protocol::output::origin::resolve_origin(
+                &observed_messages,
+                denied_headers,
+                &row.doc_id,
+                &row.message.node_did,
+                row.message.requester_did.as_deref(),
+            )
+            .ok()
+            .is_some_and(|origin| {
+                origin.message.role == gents_protocol::output::MessageRole::User
+                    && origin
+                        .message
+                        .request_doc_id
+                        .as_deref()
+                        .is_some_and(|doc_id| {
+                            origin.message.message_key == format!("authored:{doc_id}:context")
+                        })
+            });
+            let presentation = reconstructed.as_ref().map(present_message);
+            let input_text = match reconstructed.as_ref() {
+                Some(gents_protocol::message::Message::User { content }) => {
+                    let texts = content
+                        .iter()
+                        .filter_map(|item| match item {
+                            gents_protocol::message::UserContent::Text(text) => {
+                                Some(text.text.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    (!texts.is_empty()).then(|| texts.join("\n"))
+                }
+                _ => None,
+            };
+
+            MessageView {
+                message_key: row.message.message_key.clone(),
+                request_id: row
+                    .message
+                    .request_doc_id
+                    .as_deref()
+                    .and_then(|doc_id| requests_by_doc_id.get(doc_id))
+                    .map(|request| request.request_id.clone()),
+                owns_turn: row.message.role == gents_protocol::output::MessageRole::User
+                    && row.message.request_doc_id.as_deref().is_some_and(|doc_id| {
+                        row.message.message_key == authored_prompt_message_key(doc_id)
+                    }),
+                sequence: Some(i64::from(row.message.sequence)),
+                role: Some(
+                    match row.message.role {
+                        gents_protocol::output::MessageRole::System => "system",
+                        gents_protocol::output::MessageRole::User => "user",
+                        gents_protocol::output::MessageRole::Assistant => "assistant",
+                    }
+                    .to_string(),
+                ),
+                display_role: presentation
+                    .as_ref()
+                    .map(|presentation| presentation.role.label().to_ascii_lowercase()),
+                display_content: presentation.as_ref().and_then(|presentation| {
+                    normalize_optional(Some(presentation.body_markdown.as_str()))
+                }),
+                captured_context: (!captured_context.is_empty()).then_some(captured_context),
+                reasoning: presentation.as_ref().and_then(|presentation| {
+                    presentation
+                        .reasoning_markdown
+                        .as_deref()
+                        .and_then(|reasoning| normalize_optional(Some(reasoning)))
+                }),
+                has_tool_calls: presentation
+                    .as_ref()
+                    .is_some_and(|presentation| presentation.has_tool_calls),
+                has_tool_results: presentation
+                    .as_ref()
+                    .is_some_and(|presentation| presentation.has_tool_results),
+                reconstruction_state,
+                reconstruction_error,
+                denied_dependency_doc_id,
+                runtime_control: runtime_context
+                    || message_is_runtime_control(row, requests_by_doc_id),
+                input_request_id: row.message.request_doc_id.as_ref().and_then(|doc| {
+                    input_owners
+                        .get(&(doc.clone(), row.message.message_key.clone()))
+                        .map(|id| (*id).to_owned())
+                }),
+                origin: if runtime_context {
+                    None
+                } else {
+                    message_origin(store, row, requests_by_doc_id)
+                },
+                input_text,
+                timestamp: Some(row.message.created_at.clone()),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let tool_calls = transcript
+        .tool_calls
+        .iter()
+        .copied()
+        .map(|row| {
+            let (args, result, reconstruction) = canonical_tool_payload(
+                row,
+                &tool_sources,
+                &observed_messages,
+                &output_segment_rows,
+                denied_headers,
+                denied_segments,
+                dependency_denials,
+            );
+            let partial_output_tail = canonical_live_tool_output(
+                row,
+                row.request_doc_id
+                    .as_deref()
+                    .and_then(|id| requests_by_doc_id.get(id).copied()),
+                &tool_sources,
+                &output_segment_rows,
+                denied_headers,
+                denied_segments,
+                dependency_denials,
+            );
+            let cancel_cause =
+                if let Some(persisted) = row.cancel_cause.as_deref().filter(|s| !s.is_empty()) {
+                    Some(DerivedCancelCauseView {
+                        cause: persisted.to_string(),
+                        source: "toolLifecycle".into(),
+                        confidence: "direct".into(),
+                        at: normalize_optional(row.completed_at.as_deref()),
+                        evidence: vec![format!(
+                            "AgentToolCall.cancel_cause = {persisted:?} (persisted)"
+                        )],
+                    })
+                } else {
+                    let req_for_tool = row
+                        .request_doc_id
+                        .as_deref()
+                        .and_then(|id| requests_by_doc_id.get(id).copied());
+                    let req_evidence = req_for_tool
+                        .map(|r| RequestEvidence {
+                            interrupt_requested_at: r.interrupt_requested_at.clone(),
+                        })
+                        .unwrap_or_default();
+                    let tool_evidence = ToolCallEvidence {
+                        lifecycle_state: row.lifecycle_state.clone(),
+                        deadline_at: row.deadline_at.clone(),
+                        completed_at: row.completed_at.clone(),
+                        timed_out: row.lifecycle_state.as_deref() == Some("timedOut"),
+                    };
+                    derive_tool_call_cause(&req_evidence, &tool_evidence)
+                };
+            let (job_progress, job_handle, job_state) = match row.job_pin.as_ref() {
+                Some(pin) => (
+                    row.job_progress.clone(),
+                    Some(pin.handle.clone()),
+                    row.lifecycle_state
+                        .as_deref()
+                        .and_then(gents::tool_call_lifecycle::ToolCallState::from_persisted)
+                        .map(|lifecycle| {
+                            gents::plugin::job_calls::job_state(
+                                lifecycle,
+                                row.job_progress.as_ref(),
+                            )
+                        }),
+                ),
+                None => (None, None, None),
+            };
+            ToolCallView {
+                background_available: Some(
+                    row.lifecycle_state.as_deref() == Some("running")
+                        && row.await_mode.as_deref() == Some("foreground")
+                        && row.plugin_parent_tool_call_doc_id.is_none()
+                        && row.spawned_by_tool_call_doc_id.is_none()
+                        && row.tool_name.as_deref().is_some_and(
+                            gents::background_tools::supports_foreground_backgrounding,
+                        ),
+                ),
+                tool_call_key: row.tool_call_key.clone(),
+                tool_call_doc_id: row.doc_id.clone(),
+                request_id: normalize_optional(row.request_id.as_deref()),
+                message_sequence: row.message_sequence,
+                tool_name: normalize_optional(row.tool_name.as_deref()),
+                tool_call_id: normalize_optional(row.tool_call_id.as_deref()),
+                args,
+                partial_output_tail,
+                result,
+                reconstruction,
+                status: normalize_optional(row.status.as_deref()),
+                lifecycle_state: normalize_optional(row.lifecycle_state.as_deref()),
+                await_mode: normalize_optional(row.await_mode.as_deref()),
+                started_at: normalize_optional(row.started_at.as_deref()),
+                deadline_at: normalize_optional(row.deadline_at.as_deref()),
+                completed_at: normalize_optional(row.completed_at.as_deref()),
+                denial: command_denial_from_row(&row),
+                cancel_cause,
+                job_progress,
+                job_handle,
+                job_state,
+                job_outcome: None,
+                job_next_calls: Vec::new(),
+            }
+        })
+        .collect::<Vec<_>>();
+    (messages, tool_calls)
+}
+
+/// The display rows of one transcript read, without the session's request
+/// state: no pending or queued turns and no live reply, which belong to the
+/// session's own read.
+pub(crate) fn render_transcript_rows(
+    store: &ClientStore,
+    page: &gents_desktop_core::client::SessionTranscriptQueryPage,
+    session_id: &str,
+) -> Vec<RenderedTimelineItem> {
+    let transcript = page.store.transcript(session_id);
+    let requests = page.requests.iter().collect::<Vec<_>>();
+    let requests_by_doc_id: HashMap<&str, &AgentRequestRow> = requests
+        .iter()
+        .filter_map(|request| request.doc_id.as_deref().map(|doc_id| (doc_id, *request)))
+        .collect();
+    let (messages, tool_calls) = project_transcript_rows(
+        store,
+        &transcript,
+        Some(&page.canonical_dependencies),
+        &requests,
+        &requests_by_doc_id,
+        &page.result_messages.iter().collect::<Vec<_>>(),
+    );
+    super::super::timeline::build_rendered_timeline(&messages, &tool_calls, &[])
 }
