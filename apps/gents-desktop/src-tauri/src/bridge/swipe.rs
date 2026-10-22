@@ -21,7 +21,7 @@ pub fn swipe_scroll_edges(window: WebviewWindow, left: bool, right: bool) {
     let mut room = SCROLL_ROOM
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    room.get_or_insert_with(RapidHashMap::new)
+    room.get_or_insert_with(RapidHashMap::default)
         .insert(window.label().to_owned(), (left, right));
 }
 

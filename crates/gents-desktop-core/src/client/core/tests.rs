@@ -1708,6 +1708,24 @@ async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> any
         })))
         .mount(&server)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":17})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx/17"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
+        .and(body_string_contains("AgentSession"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data":{"AgentSession":[]}
+        })))
+        .mount(&server)
+        .await;
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(temp.path().join("client")),
@@ -1725,6 +1743,7 @@ async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> any
             agent_id: "agent".into(),
             created_at: "2026-10-22T00:00:00Z".into(),
             closed_at: None,
+            stopped_at: None,
             title: None,
             tags: Vec::new(),
             provenance: started_by.map(|parent| gents_protocol::session::SessionProvenance {
