@@ -570,3 +570,115 @@ async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
         );
     }
 }
+
+#[tokio::test]
+async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
+    let server = crate::support::test_p2p_db("engineer-deny-server").await;
+    let first = crate::support::test_p2p_db("engineer-deny-first").await;
+    let second = crate::support::test_p2p_db("engineer-deny-second").await;
+    signed_enrollment_offer(
+        &server.node,
+        "engineer-deny",
+        "Engineer deny",
+        server.node_identity.as_ref(),
+        "challenge-engineer-deny".into(),
+    )
+    .await;
+    let scope = || EndpointScope::<String, ()>::only_units(["DeploymentNote".into()]);
+    let tool = |db: &crate::support::TestDb| {
+        P2pTool::new(
+            db.node.clone(),
+            Some(db.node_identity.clone()),
+            true,
+            scope(),
+        )
+    };
+    let server_tool = tool(&server);
+    let pending = |count: usize| {
+        let server_tool = server_tool.clone();
+        async move {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            loop {
+                let listed = call(&server_tool, json!({"action":"enrollment_pending"})).await;
+                if listed["outcome"]["pending"].as_array().unwrap().len() >= count
+                    || std::time::Instant::now() > deadline
+                {
+                    return listed;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+    };
+
+    let offer = call(&server_tool, json!({"action":"enrollment_offer"})).await;
+    let token = offer["outcome"]["offer_token"].as_str().unwrap();
+    let denied_id = call(
+        &tool(&first),
+        json!({"action":"enrollment_request","offer_token":token}),
+    )
+    .await["outcome"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    pending(1).await;
+    let denied = call(
+        &server_tool,
+        json!({"action":"enrollment_deny","request_id":denied_id}),
+    )
+    .await;
+    assert_eq!(denied["outcome"]["state"], "denied", "{denied}");
+    let history = call(&server_tool, json!({"action":"enrollment_history"})).await;
+    let entry = &history["outcome"]["history"][0];
+    assert_eq!(entry["request_id"], denied_id, "{history}");
+    assert_eq!(entry["state"], "denied");
+    assert_eq!(entry["decided_by"], server.node_identity.did());
+    let (first_peer, _) = wait_for_peer_identity(&first.node).await;
+    let unenrolled = Tool::call(
+        &server_tool,
+        serde_json::from_value(json!({"action":"pairings_apply","peer_id":first_peer,"peer_did":first.node_identity.did(),"collections":["DeploymentNote"]})).unwrap(),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        unenrolled.contains("each node enrolled in the other's network"),
+        "{unenrolled}"
+    );
+
+    let shared = call(&server_tool, json!({"action":"enrollment_offer"})).await;
+    let shared = shared["outcome"]["offer_token"].as_str().unwrap();
+    let mut ids = Vec::new();
+    for db in [&first, &second] {
+        let requested = call(
+            &tool(db),
+            json!({"action":"enrollment_request","offer_token":shared}),
+        )
+        .await;
+        ids.push(
+            requested["outcome"]["request_id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let error = loop {
+        let error = Tool::call(
+            &server_tool,
+            serde_json::from_value(json!({"action":"enrollment_approve","request_id":ids[1]}))
+                .unwrap(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        if error.contains("challenge is reused") || std::time::Instant::now() > deadline {
+            break error;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    assert!(error.contains("single use"), "{error}");
+    assert!(
+        error.contains("next call: p2p {\"action\":\"enrollment_offer\"}"),
+        "{error}"
+    );
+}
