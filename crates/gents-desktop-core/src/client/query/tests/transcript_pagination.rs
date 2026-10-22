@@ -86,6 +86,119 @@ async fn transcript_pages_bound_canonical_headers_and_keep_stable_cursors() {
 }
 
 #[tokio::test]
+async fn transcript_windows_read_either_way_from_a_message_number() {
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let headers = (1..=100)
+        .map(|sequence| {
+            canonical_header(
+                &format!("m{sequence}"),
+                &format!("windowed:{sequence}"),
+                "windowed",
+                "did:test:node",
+                None,
+                sequence,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let response = node.execute(&format!("mutation {{ {headers} }}")).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let read = |window| {
+        let node = node.clone();
+        async move {
+            let page = load_session_transcript_window(
+                node.as_ref(),
+                "windowed",
+                None,
+                None,
+                window,
+                Some(10),
+            )
+            .await
+            .expect("window");
+            let mut sequences = page
+                .store
+                .transcript_messages
+                .iter()
+                .map(|row| row.message.sequence)
+                .collect::<Vec<_>>();
+            sequences.sort_unstable();
+            (
+                sequences,
+                page.covered,
+                page.source_exhausted,
+                page.query_count,
+            )
+        }
+    };
+
+    let (tip, covered, exhausted, queries) = read(TranscriptWindow::Tip).await;
+    assert_eq!(tip, (91..=100).collect::<Vec<_>>());
+    assert_eq!(
+        covered,
+        TranscriptSpan {
+            from: Some(91),
+            through: None
+        }
+    );
+    assert!(!exhausted);
+    /* a window by message number needs no cursor lookup: one read for the
+    rows and one for the request they belong to */
+    assert_eq!(queries, 2);
+
+    let (older, covered, _, _) = read(TranscriptWindow::Before(91)).await;
+    assert_eq!(older, (81..=90).collect::<Vec<_>>());
+    assert_eq!(
+        covered,
+        TranscriptSpan {
+            from: Some(81),
+            through: Some(90)
+        }
+    );
+
+    let (newer, covered, _, _) = read(TranscriptWindow::After(50)).await;
+    assert_eq!(newer, (51..=60).collect::<Vec<_>>());
+    assert_eq!(
+        covered,
+        TranscriptSpan {
+            from: Some(51),
+            through: Some(60)
+        }
+    );
+
+    /* at either end the read proves the rest of the order */
+    let (last, covered, exhausted, _) = read(TranscriptWindow::After(95)).await;
+    assert_eq!(last, (96..=100).collect::<Vec<_>>());
+    assert_eq!(
+        covered,
+        TranscriptSpan {
+            from: Some(96),
+            through: None
+        }
+    );
+    assert!(exhausted);
+    let (first, covered, exhausted, _) = read(TranscriptWindow::Before(5)).await;
+    assert_eq!(first, (1..=4).collect::<Vec<_>>());
+    assert_eq!(
+        covered,
+        TranscriptSpan {
+            from: Some(0),
+            through: Some(4)
+        }
+    );
+    assert!(exhausted);
+}
+
+#[tokio::test]
 async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
     let node = Arc::new(
         crate::test_support::node_builder()
@@ -494,4 +607,93 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
     .expect("other scope");
     assert!(other.store.transcript_messages.is_empty());
     assert!(other.canonical_dependencies.output_segments.is_empty());
+}
+
+#[tokio::test]
+async fn a_window_brings_results_delivered_after_its_cut_but_not_as_rows() {
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let created = node
+        .execute(
+            r#"mutation { t: create_AgentToolCall(input: {
+                tool_call_key: "results:tool", session_id: "results",
+                request_doc_id: "request-results", message_sequence: 2,
+                tool_name: "list_files", tool_call_id: "call-1",
+                status: "completed", lifecycle_state: "completed"
+            }) { _docID } }"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let tool_doc_id = created.data.as_ref().expect("created tool")["t"][0]["_docID"]
+        .as_str()
+        .expect("tool doc id")
+        .to_owned();
+    let message = |alias: &str, key: &str, sequence: u32, role: &str, blocks: &str| {
+        format!(
+            r#"{alias}: create_AgentMessage(input: {{
+                message_key: "{key}", session_id: "results", node_did: "did:test:node",
+                requester_did: null, request_doc_id: "request-results",
+                publication: {{kind: "request_execution", execution_generation: "test-generation"}},
+                outcome: "complete", sequence: {sequence}, role: "{role}", blocks: {blocks},
+                created_at: "2026-08-25T00:00:00Z"
+            }}) {{ _docID }}"#
+        )
+    };
+    let delivery = format!(
+        r#"[{{type: "tool_result", tool_call_doc_id: "{tool_doc_id}", id: "result-1", call_id: "call-1", parts: []}}]"#
+    );
+    let messages = [
+        message("m1", "results:prompt", 1, "user", "[]"),
+        message("m2", "results:call", 2, "assistant", "[]"),
+        message("m3", "results:delivery", 3, "user", &delivery),
+        message("m4", "results:reply", 4, "assistant", "[]"),
+    ]
+    .join("\n");
+    let response = node.execute(&format!("mutation {{ {messages} }}")).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let cut = load_session_transcript_window(
+        node.as_ref(),
+        "results",
+        None,
+        None,
+        TranscriptWindow::Before(3),
+        Some(10),
+    )
+    .await
+    .expect("cut before the delivery");
+    let rows = cut
+        .store
+        .transcript_messages
+        .iter()
+        .map(|row| row.message.sequence)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(rows, std::collections::BTreeSet::from([1, 2]));
+    assert_eq!(cut.store.tool_calls.len(), 1);
+    assert_eq!(
+        cut.result_messages
+            .iter()
+            .map(|row| row.message.message_key.as_str())
+            .collect::<Vec<_>>(),
+        ["results:delivery"]
+    );
+
+    let whole = load_session_transcript_window(
+        node.as_ref(),
+        "results",
+        None,
+        None,
+        TranscriptWindow::Tip,
+        Some(10),
+    )
+    .await
+    .expect("whole session");
+    assert!(whole.result_messages.is_empty());
 }

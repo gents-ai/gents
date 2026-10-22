@@ -50,8 +50,9 @@ pub(crate) use request_closure::{close_request_rows, close_request_rows_on};
 pub use session_transcript::{
     load_session_compaction_entries, load_session_compaction_entries_on,
     load_session_context_store, load_session_context_store_on, load_session_diagnostics_store,
-    load_session_transcript_page, load_session_transcript_page_on,
-    session_transcript_requester_scope, session_unreadable_reason, session_unsendable_reason,
+    load_session_transcript_page, load_session_transcript_page_on, load_session_transcript_window,
+    load_session_transcript_window_on, session_transcript_requester_scope,
+    session_unreadable_reason, session_unsendable_reason, TranscriptWindow,
 };
 pub(crate) use snapshot_loaders::*;
 
@@ -69,6 +70,23 @@ pub struct SessionTranscriptQueryPage {
     pub tool_call_query_limit: usize,
     pub source_exhausted: bool,
     pub has_newer: bool,
+    pub covered: TranscriptSpan,
+    /// The requests the page's rows belong to, as far as they are readable.
+    /// Kept beside the store so a reader merging pages into its own request
+    /// state does not take them for the session's request history.
+    pub requests: Vec<AgentRequestRow>,
+    /// Delivery messages outside the page that carry results for its tool
+    /// calls: sources for those results, never rows of their own.
+    pub result_messages: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
+}
+
+/// The message numbers a transcript read proves, inclusive. Every message in
+/// the span is in the read, so a number inside it without a row is empty, not
+/// unread. `through: None` reaches the newest message the read could see.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TranscriptSpan {
+    pub from: Option<i64>,
+    pub through: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -230,44 +248,14 @@ pub(crate) async fn load_request_documents_on(
     access: &gents::config_client::ConfigAccess,
     doc_ids: &[String],
 ) -> Result<Vec<AgentRequestRow>> {
-    if doc_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    const BATCH_SIZE: usize = 128;
-    let mut expected = std::collections::HashSet::with_capacity(doc_ids.len());
-    let mut unique_doc_ids = Vec::with_capacity(doc_ids.len());
-    for doc_id in doc_ids {
-        if expected.insert(doc_id.clone()) {
-            unique_doc_ids.push(doc_id.clone());
-        }
-    }
-    let mut rows = Vec::with_capacity(unique_doc_ids.len());
-    let mut observed = std::collections::HashSet::with_capacity(unique_doc_ids.len());
-    for batch in unique_doc_ids.chunks(BATCH_SIZE) {
-        let ids = gents::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
-        let query =
-            format!(r#"{{ {AGENT_REQUEST_NAME}(docIDs: {ids}) {{ {AGENT_REQUEST_FIELDS} }} }}"#);
-        let data =
-            execute_access_graphql_query(access, &query, "pending edit request patch").await?;
-        let batch_rows: Vec<AgentRequestRow> = parse_query_rows(&data, AGENT_REQUEST_NAME)?;
-        for row in &batch_rows {
-            let doc_id = row
-                .doc_id
-                .as_ref()
-                .context("pending edit request patch lacks physical identity")?;
-            anyhow::ensure!(
-                batch.contains(doc_id),
-                "pending edit request patch returned an unrelated document"
-            );
-            anyhow::ensure!(
-                observed.insert(doc_id.to_owned()),
-                "pending edit request patch duplicated a document"
-            );
-        }
-        rows.extend(batch_rows);
-    }
+    let (rows, expected) = session_transcript::read_request_documents(
+        session_transcript::TranscriptAccess::Config(access),
+        doc_ids,
+        "pending edit request patch",
+    )
+    .await?;
     anyhow::ensure!(
-        observed.len() == expected.len(),
+        rows.len() == expected,
         "pending edit request patch is incomplete"
     );
     Ok(rows)
