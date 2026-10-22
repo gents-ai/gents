@@ -5,7 +5,6 @@ use serde_json::Value;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReferenceTable {
-    reference_table_version: u32,
     closing_documents: Vec<String>,
     blocks: Vec<MessageBlock>,
 }
@@ -13,9 +12,8 @@ struct ReferenceTable {
 /// Compacts only typed references; provider-owned JSON never enters the table.
 /// The ordinary wire representation remains the expanded block array.
 pub fn encode_blocks(blocks: &[MessageBlock]) -> serde_json::Result<Value> {
-    let legacy = serde_json::to_value(blocks)?;
+    let expanded = serde_json::to_value(blocks)?;
     let mut table = ReferenceTable {
-        reference_table_version: 1,
         closing_documents: Vec::new(),
         blocks: blocks.to_vec(),
     };
@@ -33,10 +31,10 @@ pub fn encode_blocks(blocks: &[MessageBlock]) -> serde_json::Result<Value> {
     })
     .map_err(<serde_json::Error as serde::ser::Error>::custom)?;
     let compact = serde_json::to_value(table)?;
-    if serde_json::to_vec(&compact)?.len() < serde_json::to_vec(&legacy)?.len() {
+    if serde_json::to_vec(&compact)?.len() < serde_json::to_vec(&expanded)?.len() {
         Ok(compact)
     } else {
-        Ok(legacy)
+        Ok(expanded)
     }
 }
 
@@ -56,9 +54,6 @@ fn decode_blocks(value: Value) -> Result<Vec<MessageBlock>, String> {
     }
     let mut table: ReferenceTable =
         serde_json::from_value(value).map_err(|error| error.to_string())?;
-    if table.reference_table_version != 1 {
-        return Err("unsupported transcript reference table version".into());
-    }
     visit_references(&mut table.blocks, |reference| {
         let slot = reference
             .close_doc_id
@@ -153,7 +148,7 @@ mod tests {
                     stream: 32,
                 },
                 signature: None,
-                additional_params: Some(json!({"close_doc_id":"0", "reference_table_version":1})),
+                additional_params: Some(json!({"close_doc_id":"0", "closing_documents":[]})),
             },
         ];
         let encoded = encode_blocks(&blocks).unwrap();
