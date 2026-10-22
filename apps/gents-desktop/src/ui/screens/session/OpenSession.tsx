@@ -17,7 +17,7 @@ import {
 } from "@/hooks/useClient";
 import { toastFailure } from "@/lib/failure";
 import { isWorkingNode } from "@/lib/nodes";
-import { useFollowTail, useScroller } from "@/lib/scroll";
+import { useScroller } from "@/lib/scroll";
 import { useSentTurnPlacement } from "@/preferences";
 import { listedSession, nodeOf } from "../../../hooks/fleetStore";
 import { useFleet, workersOfId } from "../../hooks/useFleet";
@@ -35,7 +35,7 @@ import { ParentLine, StartedByAutomation, Title } from "../SessionHeader";
 import { SessionLoading } from "../SessionLoading";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
 import { sentTurnKey } from "../stream-reveal";
-import { TranscriptPanel } from "../Transcript";
+import { TranscriptPanel, type TranscriptOwner } from "../Transcript";
 import { type WorkerActions } from "../WorkerActions";
 import { WorkerList } from "../WorkerStep";
 import { useSessionProvenance, useWorkers } from "../workers";
@@ -58,7 +58,6 @@ export function OpenSession() {
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   const column = useRef<HTMLDivElement | null>(null);
   const [scroller, ownScroller] = useScroller();
-  const [content, setContent] = useState<HTMLDivElement | null>(null);
   const columnRef = useCallback(
     (element: HTMLDivElement | null) => {
       column.current = element;
@@ -66,10 +65,11 @@ export function OpenSession() {
     },
     [ownScroller],
   );
-  const { atBottom, toBottom, settle } = useFollowTail(scroller, selectedSessionId, {
-    anchorSentTurn: useSentTurnPlacement() === "anchor",
-    sentTurn: useSentTurnKey(selectedSessionId, session?.latestRequestId ?? null),
-  });
+  /* the transcript owns the scroll position; the composer needs its foot */
+  const [owner, setOwner] = useState<TranscriptOwner>(NO_OWNER);
+  const { atBottom, toBottom, settle } = owner;
+  const anchorSentTurn = useSentTurnPlacement() === "anchor";
+  const sentTurn = useSentTurnKey(selectedSessionId, session?.latestRequestId ?? null);
   /* once the full header scrolls out, a condensed one sticks to the top */
   const [condensed, headerEnd] = useHeaderScrolledOut(scroller);
   const provenance = useSessionProvenance();
@@ -139,7 +139,6 @@ export function OpenSession() {
         <div ref={columnRef} className="min-h-0 flex-1">
           <ScrollArea className="h-full">
             <div
-              ref={setContent}
               data-transcript-content
               className={cn(
                 "mx-auto flex min-h-full w-full max-w-page flex-col px-6 pt-4",
@@ -263,7 +262,9 @@ export function OpenSession() {
                 inFlight={inFlight}
                 stopping={stopping}
                 scroller={scroller}
-                content={content}
+                sentTurn={sentTurn}
+                anchorSentTurn={anchorSentTurn}
+                onOwner={setOwner}
                 workers={workers}
                 parentWork={parentWork}
                 workerActions={workerActions}
@@ -284,6 +285,12 @@ export function OpenSession() {
     </div>
   );
 }
+
+const NO_OWNER: TranscriptOwner = {
+  atBottom: true,
+  toBottom: () => {},
+  settle: () => {},
+};
 
 function SelectedTranscript(
   props: Omit<ComponentProps<typeof TranscriptPanel>, "session">,

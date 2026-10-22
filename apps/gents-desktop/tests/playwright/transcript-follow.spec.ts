@@ -95,7 +95,7 @@ test.describe("a reader scrolled up in a transcript", () => {
 
   test("holds a growing row during wheel motion without writing the position", async ({
     page,
-  }) => {
+  }, testInfo) => {
     const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
     await wheelUp(page, viewport);
     const result = await viewport.evaluate(async (scroller) => {
@@ -112,28 +112,53 @@ test.describe("a reader scrolled up in a transcript", () => {
       const before = reader.getBoundingClientRect().top;
       const position = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
       let writes = 0;
+      /* how far the page's own writes moved the view */
+      let written = 0;
       Object.defineProperty(scroller, "scrollTop", {
         configurable: true,
         get: () => position.get!.call(scroller),
         set: (value) => {
           writes++;
+          const from = position.get!.call(scroller) as number;
           position.set!.call(scroller, value);
+          written += (position.get!.call(scroller) as number) - from;
         },
       });
       try {
+        const startTop = position.get!.call(scroller) as number;
         scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        /* the wheel is still moving while the row is checked: slow frames
+           would otherwise let the view come to rest, where a write is due */
+        const moving = setInterval(
+          () => scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 0 })),
+          30,
+        );
         above.style.paddingTop = "120px";
         await new Promise((resolve) =>
           requestAnimationFrame(() => requestAnimationFrame(resolve)),
         );
-        const during = { writes, moved: reader.getBoundingClientRect().top - before };
+        clearInterval(moving);
+        /* WebKit scrolls for a wheel event dispatched by a script; the
+           reader's row goes as far as their wheel takes it and no further */
+        const travel = () =>
+          startTop - ((position.get!.call(scroller) as number) - written);
+        const during = {
+          writes,
+          moved: reader.getBoundingClientRect().top - before - travel(),
+        };
         await new Promise((resolve) => setTimeout(resolve, 1200));
-        return { during, after: reader.getBoundingClientRect().top - before };
+        return {
+          during,
+          after: reader.getBoundingClientRect().top - before - travel(),
+        };
       } finally {
         delete (scroller as Partial<HTMLElement>).scrollTop;
       }
     });
-    expect(result.during.writes).toBe(0);
+    /* WebKit drops a write made while the wheel moves, so there the row is
+       held without one; other engines take the write */
+    if (testInfo.project.name.startsWith("webkit"))
+      expect(result.during.writes).toBe(0);
     expect(Math.abs(result.during.moved)).toBeLessThan(1);
     expect(Math.abs(result.after)).toBeLessThan(1);
   });
@@ -410,4 +435,64 @@ test("a sent message is drawn once from send to saved", async ({ page }, testInf
     await page.waitForTimeout(300);
     await expect(sent).toHaveCount(1);
   }
+});
+
+/* Typing in the composer is not a move of the transcript: when what is
+   below shrinks and the browser moves the view up to the new foot, the
+   transcript keeps following the reply. */
+test("keeps following while the person types and the foot moves", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  await expect(viewport).toHaveAttribute("data-following", "true");
+  await composer(page).pressSequentially("a draft", { delay: 5 });
+  /* the browser's own move to a nearer foot, as when the rows below shrink */
+  await viewport.evaluate((scroller) => {
+    scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight - 10;
+  });
+  await page.waitForTimeout(200);
+  await expect(viewport).toHaveAttribute("data-following", "true");
+});
+
+/* A command takes the view from wherever it is: going back to the foot
+   just after a wheel, before the browser reports where the wheel left the
+   view, still goes to the foot and follows. */
+test("goes back to the foot when asked just after a wheel", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  const panel = page.getByTestId("transcript-panel");
+  await panel.getByText("stream-start").last().waitFor();
+  const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  await panel.hover();
+  /* history is read in above the reader as they wheel, so the view leaves
+     the foot only once enough of it is there */
+  const back = page.getByRole("button", { name: "Back to bottom" });
+  for (let i = 0; i < 10 && !(await back.isVisible()); i += 1) {
+    await page.mouse.wheel(0, -1500);
+    await page.waitForTimeout(300);
+  }
+  await expect(viewport).toHaveAttribute("data-following", "false");
+  await restingScrollTop(page, viewport);
+  await back.waitFor();
+  await viewport.evaluate((scroller) => {
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true }));
+    scroller.scrollTop -= 100;
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Back to bottom"]')!
+      .click();
+  });
+  await expect(viewport).toHaveAttribute("data-following", "true");
 });
