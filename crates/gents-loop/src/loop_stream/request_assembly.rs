@@ -1037,13 +1037,16 @@ fn split_joined(
     (joined, new_messages)
 }
 
-async fn build_core<M: CompletionModel>(
+async fn build_core<M>(
     model: &M,
     history: &[TaggedMessage],
     new_messages: &[TaggedMessage],
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
-) -> Result<CompletionRequest, StreamingError> {
+) -> Result<CompletionRequest, StreamingError>
+where
+    M: CompletionModel,
+{
     let prompt = new_messages
         .last()
         .expect("new messages retain a prompt")
@@ -1318,14 +1321,17 @@ pub fn ensure_context_can_dispatch(
     )))
 }
 
-pub async fn assemble_provider_request<M: CompletionModel>(
+pub async fn assemble_provider_request<M>(
     model: &M,
     history: &mut Vec<TaggedMessage>,
     new_messages: &mut Vec<TaggedMessage>,
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
     replay: &LoopReplayInput,
-) -> Result<CompletionRequest, StreamingError> {
+) -> Result<CompletionRequest, StreamingError>
+where
+    M: CompletionModel,
+{
     let profile_wire = config.provider_input_counter.profile().replay_wire();
     if replay.wire.is_some() && replay.wire != profile_wire {
         return Err(replay_input_error(
@@ -1405,7 +1411,7 @@ pub async fn assemble_provider_request<M: CompletionModel>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn build_budgeted_request<M: CompletionModel>(
+pub(super) async fn build_budgeted_request<M>(
     model: &M,
     history: &mut Vec<TaggedMessage>,
     new_messages: &mut Vec<TaggedMessage>,
@@ -1415,7 +1421,10 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
     turn_index: usize,
     reduction_chain_keys: &mut Vec<String>,
     active_reduction_keys: &mut Vec<String>,
-) -> Result<(CompletionRequest, TurnContextDecision), StreamingError> {
+) -> Result<(CompletionRequest, TurnContextDecision), StreamingError>
+where
+    M: CompletionModel,
+{
     let request =
         assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
     let projection =
@@ -1565,13 +1574,16 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
     ))
 }
 
-pub(super) async fn repair_and_rebuild_request<M: CompletionModel>(
+pub(super) async fn repair_and_rebuild_request<M>(
     model: &M,
     history: &mut Vec<TaggedMessage>,
     new_messages: &mut Vec<TaggedMessage>,
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
-) -> Result<CompletionRequest, StreamingError> {
+) -> Result<CompletionRequest, StreamingError>
+where
+    M: CompletionModel,
+{
     repair_provider_input(history, new_messages)?;
     strip_all_reasoning(history);
     strip_all_reasoning(new_messages);

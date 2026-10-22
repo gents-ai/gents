@@ -14,7 +14,10 @@ impl InterruptionCapture {
     }
 }
 
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for InterruptionCapture {
+impl<S> tracing_subscriber::Layer<S> for InterruptionCapture
+where
+    S: tracing::Subscriber,
+{
     fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
         struct SourceVisitor<'a>(&'a mut Vec<String>);
         impl tracing::field::Visit for SourceVisitor<'_> {

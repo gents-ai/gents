@@ -587,11 +587,10 @@ fn build_record(
     })
 }
 
-async fn load_rows<T: DeserializeOwned>(
-    access: &ConfigAccess,
-    collection: &str,
-    query: &str,
-) -> Result<Vec<T>> {
+async fn load_rows<T>(access: &ConfigAccess, collection: &str, query: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
     graphql_rows_or_empty_if_collection_missing(access, collection, query)
         .await?
         .into_iter()
@@ -606,7 +605,10 @@ fn push_nonempty(parts: &mut Vec<String>, value: Option<&str>) {
     }
 }
 
-fn write_jsonl<T: Serialize>(path: Option<&std::path::Path>, records: &[T]) -> Result<()> {
+fn write_jsonl<T>(path: Option<&std::path::Path>, records: &[T]) -> Result<()>
+where
+    T: Serialize,
+{
     let mut output = String::new();
     for record in records {
         output.push_str(&serde_json::to_string(record)?);

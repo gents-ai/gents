@@ -36,7 +36,10 @@ impl ProviderHttpClient {
     }
 }
 
-fn instance_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> http_client::Error {
+fn instance_error<E>(error: E) -> http_client::Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     http_client::Error::Instance(Box::new(error))
 }
 

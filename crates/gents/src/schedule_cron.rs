@@ -104,7 +104,10 @@ impl CronSpec {
         })
     }
 
-    fn matches<TzRef: chrono::TimeZone>(&self, local: DateTime<TzRef>) -> bool {
+    fn matches<TzRef>(&self, local: DateTime<TzRef>) -> bool
+    where
+        TzRef: chrono::TimeZone,
+    {
         if !self.minutes.contains(local.minute()) {
             return false;
         }

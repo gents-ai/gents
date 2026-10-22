@@ -26,7 +26,10 @@ async fn flush_received_title_partial(context: &str) -> Result<()> {
 }
 
 #[derive(Clone)]
-pub(super) struct AuxiliaryTask<M: crate::llm::rig_compat::ProviderModel> {
+pub(super) struct AuxiliaryTask<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     node: Arc<EmbeddedNode>,
     agent_config: Arc<crate::config::ResolvedAgent>,
     provider_family: Option<String>,
@@ -45,7 +48,10 @@ enum AuxiliaryResult {
     Interrupted,
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
+impl<M> AgentDaemon<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     pub(super) fn auxiliary_task(&self) -> AuxiliaryTask<M> {
         AuxiliaryTask {
             node: Arc::clone(&self.node),
@@ -140,7 +146,10 @@ struct TitleGeneration<'a> {
     parent_requester_did: Option<String>,
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
+impl<M> AuxiliaryTask<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     async fn run(self, request: AgentRequest, shutdown: watch::Receiver<bool>) -> Result<()> {
         self.run_owned(request, shutdown, None).await.map(|_| ())
     }

@@ -52,7 +52,10 @@ fn contract() -> serde_json::Value {
         .clone()
 }
 
-fn decode<T: serde::de::DeserializeOwned>(value: &serde_json::Value) -> T {
+fn decode<T>(value: &serde_json::Value) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_json::from_value(value.clone()).unwrap()
 }
 

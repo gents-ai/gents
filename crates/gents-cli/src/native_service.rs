@@ -429,7 +429,10 @@ impl NativeServiceManager<ProcessCommandRunner> {
     }
 }
 
-impl<R: CommandRunner> NativeServiceManager<R> {
+impl<R> NativeServiceManager<R>
+where
+    R: CommandRunner,
+{
     pub fn with_runner(
         config: NativeServiceConfig,
         platform: NativeServicePlatform,

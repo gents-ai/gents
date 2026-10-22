@@ -288,7 +288,10 @@ pub(crate) trait AsyncCommit: Send + Sync {
     async fn commit(&self);
 }
 
-impl<T: AsyncCommit + ?Sized> AsyncCommit for &T {
+impl<T> AsyncCommit for &T
+where
+    T: AsyncCommit + ?Sized,
+{
     async fn commit(&self) {
         (**self).commit().await
     }
@@ -304,13 +307,19 @@ pub(crate) trait AsyncSendLine: Send + Sync {
     async fn send_line(&self, line: String) -> Result<()>;
 }
 
-impl<T: AsyncSendLine + ?Sized> AsyncSendLine for &T {
+impl<T> AsyncSendLine for &T
+where
+    T: AsyncSendLine + ?Sized,
+{
     async fn send_line(&self, line: String) -> Result<()> {
         (**self).send_line(line).await
     }
 }
 
-impl<T: AsyncSendLine + ?Sized> AsyncSendLine for Arc<T> {
+impl<T> AsyncSendLine for Arc<T>
+where
+    T: AsyncSendLine + ?Sized,
+{
     async fn send_line(&self, line: String) -> Result<()> {
         (**self).send_line(line).await
     }
@@ -1375,7 +1384,10 @@ fn payload_fingerprint(payload: &Value) -> u64 {
     hasher.finish()
 }
 
-fn hash_value<H: Hasher>(hasher: &mut H, value: &Value) {
+fn hash_value<H>(hasher: &mut H, value: &Value)
+where
+    H: Hasher,
+{
     match value {
         Value::Null => 0u8.hash(hasher),
         Value::Bool(value) => {

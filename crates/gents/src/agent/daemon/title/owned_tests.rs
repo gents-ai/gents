@@ -1033,7 +1033,10 @@ struct TitleProvider {
 #[derive(Default)]
 struct TitleWarningCapture(Arc<Mutex<Vec<&'static str>>>);
 
-impl<S: tracing::Subscriber> Layer<S> for TitleWarningCapture {
+impl<S> Layer<S> for TitleWarningCapture
+where
+    S: tracing::Subscriber,
+{
     fn on_event(&self, event: &tracing::Event<'_>, _: LayerContext<'_, S>) {
         let metadata = event.metadata();
         if metadata.target() == "gents::agent::daemon::title"
@@ -1321,11 +1324,10 @@ impl TitleFixture {
         }
     }
 
-    fn task<M: crate::llm::rig_compat::ProviderModel>(
-        &self,
-        model: M,
-        capture: bool,
-    ) -> AuxiliaryTask<M> {
+    fn task<M>(&self, model: M, capture: bool) -> AuxiliaryTask<M>
+    where
+        M: crate::llm::rig_compat::ProviderModel,
+    {
         AuxiliaryTask {
             node: self.node.clone(),
             agent_config: self.agent_config.clone(),

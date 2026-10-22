@@ -169,28 +169,33 @@ pub(crate) async fn load_document_runtime_view(
     Ok(view)
 }
 
-pub(super) fn decode_record<T: DeserializeOwned>(
-    name: &str,
-    id: &str,
-    canonical: serde_json::Value,
-) -> Result<T> {
+pub(super) fn decode_record<T>(name: &str, id: &str, canonical: serde_json::Value) -> Result<T>
+where
+    T: DeserializeOwned,
+{
     serde_json::from_value(canonical).with_context(|| format!("decoding {name} {id:?}"))
 }
 
-async fn load_records<T: DeserializeOwned>(
+async fn load_records<T>(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     collection: Collection,
-) -> Result<RapidHashMap<String, DocumentRecord<T>>> {
+) -> Result<RapidHashMap<String, DocumentRecord<T>>>
+where
+    T: DeserializeOwned,
+{
     load_records_skipping(txn, owner, collection, &mut RapidHashMap::new()).await
 }
 
-async fn load_records_skipping<T: DeserializeOwned>(
+async fn load_records_skipping<T>(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     collection: Collection,
     unknown_kinds: &mut RapidHashMap<String, String>,
-) -> Result<RapidHashMap<String, DocumentRecord<T>>> {
+) -> Result<RapidHashMap<String, DocumentRecord<T>>>
+where
+    T: DeserializeOwned,
+{
     let name = collection.graphql_type();
     let (fields, _) = config_projection(collection, None)?;
     let response = txn

@@ -117,7 +117,10 @@ impl HttpEthRpc {
     }
 }
 
-impl<T: JsonRpcTransport> EthRpcClient<T> {
+impl<T> EthRpcClient<T>
+where
+    T: JsonRpcTransport,
+{
     pub fn new(
         rpc_url: impl Into<String>,
         expected_chain_id: u64,

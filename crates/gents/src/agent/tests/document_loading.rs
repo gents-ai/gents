@@ -197,12 +197,15 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     assert_eq!(params["repetition_penalty"], 1.1);
 }
 
-async fn read_document<T: serde::de::DeserializeOwned>(
+async fn read_document<T>(
     node: &Arc<EmbeddedNode>,
     owner: &str,
     collection: crate::Collection,
     id: &str,
-) -> T {
+) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
     let owner = owner.to_owned();
     let id = id.to_owned();
     let value = crate::config_client::ConfigAccess::transact_local_write(
@@ -227,11 +230,14 @@ async fn read_document<T: serde::de::DeserializeOwned>(
     serde_json::from_value(value).unwrap()
 }
 
-async fn write_document<T: serde::Serialize>(
+async fn write_document<T>(
     node: &Arc<EmbeddedNode>,
     collection: crate::Collection,
     document: &T,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    T: serde::Serialize,
+{
     let value = serde_json::to_value(document)?;
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {

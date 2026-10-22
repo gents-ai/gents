@@ -8,10 +8,13 @@ use crate::state::DesktopAppState;
 const DB_EXPLORER_WINDOW_LABEL: &str = "db-explorer";
 
 #[tauri::command]
-pub async fn desktop_open_db_explorer<R: Runtime>(
+pub async fn desktop_open_db_explorer<R>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<String, BridgeError> {
+) -> Result<String, BridgeError>
+where
+    R: Runtime,
+{
     let status = super::managed_server::managed_server_status_for(&app, &state).await?;
     let graphql = status
         .graphql
@@ -59,7 +62,10 @@ fn explorer_url_from_graphql(graphql: &str) -> Result<String, BridgeError> {
     Ok(url)
 }
 
-fn open_db_explorer_window<R: Runtime>(app: &AppHandle<R>, url: &str) -> Result<(), BridgeError> {
+fn open_db_explorer_window<R>(app: &AppHandle<R>, url: &str) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let parsed: tauri::Url = url
         .parse()
         .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error}")))?;

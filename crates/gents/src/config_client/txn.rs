@@ -1129,11 +1129,14 @@ async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoun
 
 impl<'a> ConfigApplyTxn<'a> {
     #[cfg(test)]
-    pub(crate) async fn with_owned_local_operation_pause<F: Future>(
+    pub(crate) async fn with_owned_local_operation_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         LOCAL_OPERATION_PAUSE
             .scope(
                 Arc::new(LocalOperationPause {
@@ -1147,12 +1150,15 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_owned_local_operation_completion<F: Future>(
+    pub(crate) async fn with_owned_local_operation_completion<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         completed: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         LOCAL_OPERATION_PAUSE
             .scope(
                 Arc::new(LocalOperationPause {
@@ -1173,10 +1179,13 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_successful_mutation_failure_at<F: Future>(
+    pub(crate) async fn with_successful_mutation_failure_at<F>(
         fail_after: Option<usize>,
         future: F,
-    ) -> (F::Output, usize) {
+    ) -> (F::Output, usize)
+    where
+        F: Future,
+    {
         assert!(fail_after.is_none_or(|index| index > 0));
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after,
@@ -1252,15 +1261,21 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_post_commit_receipt_loss<F: Future>(future: F) -> (F::Output, bool) {
+    pub(crate) async fn with_post_commit_receipt_loss<F>(future: F) -> (F::Output, bool)
+    where
+        F: Future,
+    {
         Self::with_post_commit_receipt_loss_for_operation(None, future).await
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_post_commit_receipt_loss_for_operation<F: Future>(
+    pub(crate) async fn with_post_commit_receipt_loss_for_operation<F>(
         operation: Option<&'static str>,
         future: F,
-    ) -> (F::Output, bool) {
+    ) -> (F::Output, bool)
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1283,12 +1298,15 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_successful_mutation_pause_at<F: Future>(
+    pub(crate) async fn with_successful_mutation_pause_at<F>(
         after: usize,
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> (F::Output, bool) {
+    ) -> (F::Output, bool)
+    where
+        F: Future,
+    {
         assert!(after > 0);
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
@@ -1325,11 +1343,14 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_write_gate_observation<F: Future>(
+    pub(crate) async fn with_write_gate_observation<F>(
         queued: Arc<tokio::sync::Notify>,
         acquired: Arc<AtomicBool>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1377,10 +1398,10 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_read_storage_failure<F: Future>(
-        marker: &'static str,
-        future: F,
-    ) -> F::Output {
+    pub(crate) async fn with_read_storage_failure<F>(marker: &'static str, future: F) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1400,11 +1421,14 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_read_pause<F: Future>(
+    pub(crate) async fn with_read_pause<F>(
         marker: &'static str,
         reached: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1424,11 +1448,14 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_native_operation_pause<F: Future>(
+    pub(crate) async fn with_native_operation_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1448,11 +1475,14 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_rollback_failure_retry_boundary<F: Future>(
+    pub(crate) async fn with_rollback_failure_retry_boundary<F>(
         reached: Arc<tokio::sync::Notify>,
         cleanup_scheduled: Arc<AtomicBool>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),

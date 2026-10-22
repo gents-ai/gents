@@ -72,10 +72,10 @@ fn nonempty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
         .with_context(|| format!("audit usage has no {field}"))
 }
 
-fn required_rows<T: DeserializeOwned>(
-    response: &defra_node::QueryResponse,
-    field: &str,
-) -> Result<Vec<T>> {
+fn required_rows<T>(response: &defra_node::QueryResponse, field: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
     let value = response
         .data
         .as_ref()

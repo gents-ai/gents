@@ -156,7 +156,10 @@ pub(crate) async fn verify_request_at_claim_boundary(
     }
 }
 
-pub(super) struct AgentDaemon<M: ProviderModel> {
+pub(super) struct AgentDaemon<M>
+where
+    M: ProviderModel,
+{
     node: Arc<defra_node::EmbeddedNode>,
     agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
@@ -224,7 +227,10 @@ fn auxiliary_task_join_result(joined: std::result::Result<Result<()>, JoinError>
     }
 }
 
-pub(super) struct AgentDaemonInit<M: ProviderModel> {
+pub(super) struct AgentDaemonInit<M>
+where
+    M: ProviderModel,
+{
     pub(super) node: Arc<defra_node::EmbeddedNode>,
     pub(super) agent_config: Arc<ResolvedAgent>,
     pub(super) provider_family: Option<String>,
@@ -243,7 +249,10 @@ pub(super) struct AgentDaemonInit<M: ProviderModel> {
     pub(super) request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
 }
 
-impl<M: ProviderModel> AgentDaemon<M> {
+impl<M> AgentDaemon<M>
+where
+    M: ProviderModel,
+{
     pub(super) fn new(init: AgentDaemonInit<M>) -> Result<Self> {
         let AgentDaemonInit {
             node,

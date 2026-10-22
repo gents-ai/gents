@@ -1009,7 +1009,10 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
         .collect())
 }
 
-fn decode<T: serde::de::DeserializeOwned>(body: &str, context: &str) -> Result<T> {
+fn decode<T>(body: &str, context: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_json::from_str::<T>(body).context(context.to_string())
 }
 

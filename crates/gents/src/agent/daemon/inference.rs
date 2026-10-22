@@ -164,7 +164,10 @@ where
     }
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
+impl<M> AgentDaemon<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,

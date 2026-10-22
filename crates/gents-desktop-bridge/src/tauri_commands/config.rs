@@ -22,11 +22,14 @@ use crate::types::{
 };
 
 #[tauri::command]
-pub async fn desktop_node_config_save<R: Runtime>(
+pub async fn desktop_node_config_save<R>(
     app: AppHandle<R>,
     request: NodeConfigSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -38,11 +41,14 @@ pub async fn desktop_node_config_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_default_agent_set<R: Runtime>(
+pub async fn desktop_default_agent_set<R>(
     app: AppHandle<R>,
     request: DefaultAgentSetRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -54,11 +60,14 @@ pub async fn desktop_default_agent_set<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_agent_save<R: Runtime>(
+pub async fn desktop_agent_save<R>(
     app: AppHandle<R>,
     request: AgentSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -70,11 +79,14 @@ pub async fn desktop_agent_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_skill_save<R: Runtime>(
+pub async fn desktop_skill_save<R>(
     app: AppHandle<R>,
     request: SkillSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -86,11 +98,14 @@ pub async fn desktop_skill_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_skill_delete<R: Runtime>(
+pub async fn desktop_skill_delete<R>(
     app: AppHandle<R>,
     request: SkillDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -102,11 +117,14 @@ pub async fn desktop_skill_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_backend_save<R: Runtime>(
+pub async fn desktop_backend_save<R>(
     app: AppHandle<R>,
     request: BackendSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -118,11 +136,14 @@ pub async fn desktop_backend_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_inference_profile_save<R: Runtime>(
+pub async fn desktop_inference_profile_save<R>(
     app: AppHandle<R>,
     request: InferenceProfileSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -134,11 +155,14 @@ pub async fn desktop_inference_profile_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_tools_save<R: Runtime>(
+pub async fn desktop_tools_save<R>(
     app: AppHandle<R>,
     request: ToolsSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -150,11 +174,14 @@ pub async fn desktop_tools_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_tool_service_save<R: Runtime>(
+pub async fn desktop_tool_service_save<R>(
     app: AppHandle<R>,
     request: ToolServiceSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -179,11 +206,14 @@ pub async fn desktop_tool_service_test(
 }
 
 #[tauri::command]
-pub async fn desktop_task_delete<R: Runtime>(
+pub async fn desktop_task_delete<R>(
     app: AppHandle<R>,
     request: TaskDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -195,11 +225,14 @@ pub async fn desktop_task_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_schedule_delete<R: Runtime>(
+pub async fn desktop_schedule_delete<R>(
     app: AppHandle<R>,
     request: ScheduleDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -211,11 +244,14 @@ pub async fn desktop_schedule_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_trigger_delete<R: Runtime>(
+pub async fn desktop_trigger_delete<R>(
     app: AppHandle<R>,
     request: TriggerDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -227,11 +263,14 @@ pub async fn desktop_trigger_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_backend_delete<R: Runtime>(
+pub async fn desktop_backend_delete<R>(
     app: AppHandle<R>,
     request: BackendDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -243,11 +282,14 @@ pub async fn desktop_backend_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_inference_profile_delete<R: Runtime>(
+pub async fn desktop_inference_profile_delete<R>(
     app: AppHandle<R>,
     request: InferenceProfileDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -259,11 +301,14 @@ pub async fn desktop_inference_profile_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_tools_delete<R: Runtime>(
+pub async fn desktop_tools_delete<R>(
     app: AppHandle<R>,
     request: ToolsDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -275,11 +320,14 @@ pub async fn desktop_tools_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_tool_service_delete<R: Runtime>(
+pub async fn desktop_tool_service_delete<R>(
     app: AppHandle<R>,
     request: ToolServiceDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -291,11 +339,14 @@ pub async fn desktop_tool_service_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_agent_delete<R: Runtime>(
+pub async fn desktop_agent_delete<R>(
     app: AppHandle<R>,
     request: AgentDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -307,11 +358,14 @@ pub async fn desktop_agent_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_context_delete<R: Runtime>(
+pub async fn desktop_context_delete<R>(
     app: AppHandle<R>,
     request: ContextDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -323,11 +377,14 @@ pub async fn desktop_context_delete<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_config_components_apply<R: Runtime>(
+pub async fn desktop_config_components_apply<R>(
     app: AppHandle<R>,
     request: crate::types::ConfigComponentsApplyRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -338,11 +395,14 @@ pub async fn desktop_config_components_apply<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_config_components_patch<R: Runtime>(
+pub async fn desktop_config_components_patch<R>(
     app: AppHandle<R>,
     request: crate::types::ConfigComponentsPatchRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };

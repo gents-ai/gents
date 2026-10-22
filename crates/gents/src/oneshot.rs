@@ -172,7 +172,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_oneshot_owned<M: ProviderModel>(
+async fn run_oneshot_owned<M>(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
     provider_family: Option<String>,
@@ -184,7 +184,10 @@ async fn run_oneshot_owned<M: ProviderModel>(
     output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
     background_tool_registry: BackgroundToolRegistry,
     lsp_pool: crate::toolset::lsp::LspPool,
-) -> Result<OneshotRunResult> {
+) -> Result<OneshotRunResult>
+where
+    M: ProviderModel,
+{
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
         &agent.agent_id,

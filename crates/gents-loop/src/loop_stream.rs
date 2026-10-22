@@ -1308,14 +1308,17 @@ fn ensure_rendered_request_was_captured(
     Ok(())
 }
 
-pub async fn build_request<M: CompletionModel>(
+pub async fn build_request<M>(
     model: &M,
     prompt: Message,
     history: &[Message],
     prior: &[Message],
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
-) -> Result<CompletionRequest, StreamingError> {
+) -> Result<CompletionRequest, StreamingError>
+where
+    M: CompletionModel,
+{
     let rag_text = current_rag_text(&prompt, history, prior);
     let mut tool_defs = Vec::with_capacity(tools.len());
     for tool in tools {

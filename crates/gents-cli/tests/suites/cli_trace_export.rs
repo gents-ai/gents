@@ -2585,7 +2585,10 @@ fn canonical_text_header(
     }
 }
 
-fn with_mock_doc_id<T: serde::Serialize>(document: T, doc_id: &str) -> Value {
+fn with_mock_doc_id<T>(document: T, doc_id: &str) -> Value
+where
+    T: serde::Serialize,
+{
     let mut value = serde_json::to_value(document).expect("serialize canonical mock document");
     value
         .as_object_mut()

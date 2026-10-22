@@ -27,8 +27,13 @@ pub(crate) fn provider(method: InferenceAuthMethod) -> Result<&'static str, Brid
     }
 }
 
-struct Shutdown<F: Fn()>(F);
-impl<F: Fn()> Drop for Shutdown<F> {
+struct Shutdown<F>(F)
+where
+    F: Fn();
+impl<F> Drop for Shutdown<F>
+where
+    F: Fn(),
+{
     fn drop(&mut self) {
         (self.0)();
     }

@@ -309,10 +309,10 @@ fn stamp(value: Option<&str>) -> Option<i64> {
         .map(|value| value.timestamp_millis())
 }
 
-async fn usage_by_request<R: ConfigRead>(
-    reader: &R,
-    request_ids: &[String],
-) -> Result<UsageByRequest> {
+async fn usage_by_request<R>(reader: &R, request_ids: &[String]) -> Result<UsageByRequest>
+where
+    R: ConfigRead,
+{
     let mut grouped: UsageByRequest = RapidHashMap::new();
     if request_ids.is_empty() {
         return Ok(grouped);
@@ -342,11 +342,10 @@ async fn usage_by_request<R: ConfigRead>(
     Ok(grouped)
 }
 
-async fn read<T: serde::de::DeserializeOwned>(
-    reader: &impl ConfigRead,
-    document: &str,
-    collection: &str,
-) -> Result<Vec<T>> {
+async fn read<T>(reader: &impl ConfigRead, document: &str, collection: &str) -> Result<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
     #[cfg(test)]
     let _ = CHILD_QUERIES.try_with(|queries| {
         queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -440,11 +439,14 @@ pub(super) async fn live_job_settings(
 }
 
 /// `row_doc_id` and the rows its pin resumes, oldest first.
-pub(super) async fn chain_of<R: ConfigRead>(
+pub(super) async fn chain_of<R>(
     reader: &R,
     row_doc_id: &str,
     pin: Option<&JobPin>,
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>>
+where
+    R: ConfigRead,
+{
     let mut chain = vec![row_doc_id.to_owned()];
     let mut next = pin.and_then(|pin| pin.resume_of.clone());
     while let Some(prior) = next.take().filter(|prior| !chain.contains(prior)) {

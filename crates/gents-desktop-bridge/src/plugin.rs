@@ -5,7 +5,10 @@ use crate::config::BridgeConfig;
 use crate::state::{resolve_policy, DesktopAppState};
 use crate::tauri_commands;
 
-pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
+pub fn init<R>(config: BridgeConfig) -> TauriPlugin<R>
+where
+    R: Runtime,
+{
     Builder::<R>::new("gents-desktop-bridge")
         .setup(move |app, _api| {
             let app_data_dir = app.path().app_data_dir().ok();
@@ -213,7 +216,10 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
         .build()
 }
 
-fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
+fn register_window<R>(webview: tauri::Webview<R>)
+where
+    R: Runtime,
+{
     let window = webview.window();
     window
         .state::<DesktopAppState>()
@@ -221,10 +227,13 @@ fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
 }
 
 /// Holds the process lock across the reset reservation for the app lifetime.
-fn hold_desktop_process<R: Runtime>(
+fn hold_desktop_process<R>(
     app: &tauri::AppHandle<R>,
     paths: &gents_desktop_core::client::DesktopPaths,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    R: Runtime,
+{
     let reservation = gents_desktop_core::home_reset::lock_reset(paths)?;
     let process = gents_desktop_core::home_reset::lock_desktop_process(paths, false)?;
     anyhow::ensure!(

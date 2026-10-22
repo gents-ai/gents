@@ -2,7 +2,10 @@ use super::*;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 
-fn round_trip<T: DeserializeOwned + Serialize>(authored: Value) -> T {
+fn round_trip<T>(authored: Value) -> T
+where
+    T: DeserializeOwned + Serialize,
+{
     let parsed: T = serde_json::from_value(authored.clone()).unwrap();
     assert_eq!(serde_json::to_value(&parsed).unwrap(), authored);
     parsed

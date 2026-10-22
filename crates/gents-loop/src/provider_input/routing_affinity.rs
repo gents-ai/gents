@@ -37,6 +37,9 @@ pub fn current() -> Option<Arc<RoutingAffinity>> {
     ROUTING_AFFINITY.try_with(Clone::clone).ok().flatten()
 }
 
-pub async fn scope<F: Future>(state: Option<Arc<RoutingAffinity>>, future: F) -> F::Output {
+pub async fn scope<F>(state: Option<Arc<RoutingAffinity>>, future: F) -> F::Output
+where
+    F: Future,
+{
     ROUTING_AFFINITY.scope(state, future).await
 }

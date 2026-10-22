@@ -534,9 +534,10 @@ pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Resu
     Ok(values.into_iter().collect())
 }
 
-pub(crate) async fn http_get_json<T: DeserializeOwned>(
-    request: reqwest::RequestBuilder,
-) -> Result<T> {
+pub(crate) async fn http_get_json<T>(request: reqwest::RequestBuilder) -> Result<T>
+where
+    T: DeserializeOwned,
+{
     let (url, body) = http_send_bytes(request).await?;
     serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
 }

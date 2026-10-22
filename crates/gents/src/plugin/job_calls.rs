@@ -179,7 +179,10 @@ impl Session {
     }
 }
 
-fn answer<T: Serialize>(outcome: Result<T>) -> Value {
+fn answer<T>(outcome: Result<T>) -> Value
+where
+    T: Serialize,
+{
     let round = match outcome {
         Ok(result) => RoundResult::Result { result },
         Err(error) => RoundResult::Error {

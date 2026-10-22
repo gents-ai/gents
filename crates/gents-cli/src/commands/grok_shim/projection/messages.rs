@@ -122,12 +122,15 @@ pub(super) async fn project_messages(
     .await
 }
 
-async fn project_messages_with_sink<S: QuerySink>(
+async fn project_messages_with_sink<S>(
     sink: &S,
     message_sequence_high_water: Option<i64>,
     request: &gents_protocol::row::AgentRequestRow,
     context_window_tokens: u64,
-) -> Result<MessageProjection> {
+) -> Result<MessageProjection>
+where
+    S: QuerySink,
+{
     use gents::session::canonical_rows::{
         decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
         AGENT_OUTPUT_SEGMENT_FIELDS,

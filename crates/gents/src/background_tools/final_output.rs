@@ -46,10 +46,10 @@ pub(crate) async fn load_caused_request_terminals(
         .await
 }
 
-fn query_rows<T: serde::de::DeserializeOwned>(
-    response: &serde_json::Value,
-    collection: &str,
-) -> Result<Vec<T>> {
+fn query_rows<T>(response: &serde_json::Value, collection: &str) -> Result<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
     let rows = response
         .pointer(&format!("/data/{collection}"))
         .cloned()

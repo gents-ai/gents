@@ -1106,10 +1106,10 @@ async fn publish_home_config(
         .await
 }
 
-fn replacement<T: serde::Serialize>(
-    collection: Collection,
-    document: &T,
-) -> Result<DesiredStateApplyDocument> {
+fn replacement<T>(collection: Collection, document: &T) -> Result<DesiredStateApplyDocument>
+where
+    T: serde::Serialize,
+{
     let value = serde_json::to_value(document)?;
     Ok(DesiredStateApplyDocument {
         collection,

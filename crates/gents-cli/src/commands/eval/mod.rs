@@ -286,7 +286,10 @@ pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-pub(crate) fn write_json<T: Serialize>(out: &mut dyn Write, value: &T) -> Result<()> {
+pub(crate) fn write_json<T>(out: &mut dyn Write, value: &T) -> Result<()>
+where
+    T: Serialize,
+{
     serde_json::to_writer_pretty(&mut *out, value)?;
     writeln!(out)?;
     Ok(())

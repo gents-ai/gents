@@ -289,10 +289,13 @@ fn cursor_after_arg(after: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn cursor_page<T: serde::de::DeserializeOwned>(
+fn cursor_page<T>(
     response: &defra_node::QueryResponse,
     collection: &str,
-) -> Result<(Vec<T>, Option<String>)> {
+) -> Result<(Vec<T>, Option<String>)>
+where
+    T: serde::de::DeserializeOwned,
+{
     let cursor = response
         .data
         .as_ref()

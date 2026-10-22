@@ -200,12 +200,10 @@ pub fn validate(settings: &PluginJobSettings) -> Vec<String> {
     errors
 }
 
-fn bounded<T: Copy + PartialOrd + std::fmt::Display>(
-    errors: &mut Vec<String>,
-    field: &str,
-    value: T,
-    range: &RangeInclusive<T>,
-) {
+fn bounded<T>(errors: &mut Vec<String>, field: &str, value: T, range: &RangeInclusive<T>)
+where
+    T: Copy + PartialOrd + std::fmt::Display,
+{
     if !range.contains(&value) {
         errors.push(format!(
             "job.{field} is {value}; it must be within {}..={}",

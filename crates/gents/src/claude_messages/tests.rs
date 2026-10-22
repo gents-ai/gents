@@ -1055,10 +1055,10 @@ async fn transport_401_invalidates_the_bearer_once() {
     );
 }
 
-fn captured_request<S: crate::oauth_credential::BearerSource>(
-    bearer: &S,
-    request: &CompletionRequest,
-) -> String {
+fn captured_request<S>(bearer: &S, request: &CompletionRequest) -> String
+where
+    S: crate::oauth_credential::BearerSource,
+{
     let _guard = blocking_lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

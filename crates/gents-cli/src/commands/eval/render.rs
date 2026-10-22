@@ -21,7 +21,10 @@ pub(crate) fn percent(bp: Option<u32>) -> String {
     )
 }
 
-pub(crate) fn wire<T: Serialize>(value: &T) -> String {
+pub(crate) fn wire<T>(value: &T) -> String
+where
+    T: Serialize,
+{
     match serde_json::to_value(value) {
         Ok(serde_json::Value::String(text)) => text,
         Ok(other) => other.to_string(),

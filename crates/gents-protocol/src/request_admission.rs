@@ -1185,7 +1185,10 @@ fn optional_text(fields: &mut Vec<String>, name: &str, value: Option<&str>) {
     }
 }
 
-fn optional_scalar<T: std::fmt::Display>(fields: &mut Vec<String>, name: &str, value: Option<T>) {
+fn optional_scalar<T>(fields: &mut Vec<String>, name: &str, value: Option<T>)
+where
+    T: std::fmt::Display,
+{
     if let Some(value) = value {
         fields.push(format!("{name}: {value}"));
     }

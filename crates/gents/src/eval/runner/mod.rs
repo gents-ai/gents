@@ -3199,7 +3199,10 @@ mod tests {
 
     struct BackoffBegan(Arc<tokio::sync::Notify>);
 
-    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BackoffBegan {
+    impl<S> tracing_subscriber::Layer<S> for BackoffBegan
+    where
+        S: tracing::Subscriber,
+    {
         fn on_event(
             &self,
             event: &tracing::Event<'_>,

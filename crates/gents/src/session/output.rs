@@ -115,18 +115,20 @@ pub(crate) fn record_request_output_scan() {
 }
 
 #[cfg(test)]
-pub(crate) async fn count_request_output_scans<F: std::future::Future>(
-    future: F,
-) -> (F::Output, usize) {
+pub(crate) async fn count_request_output_scans<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
     let scans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = REQUEST_OUTPUT_SCANS.scope(scans.clone(), future).await;
     (output, scans.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[cfg(test)]
-pub(crate) async fn count_source_output_queries<F: std::future::Future>(
-    future: F,
-) -> (F::Output, usize) {
+pub(crate) async fn count_source_output_queries<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
     let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = SOURCE_OUTPUT_QUERIES.scope(queries.clone(), future).await;
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
@@ -138,9 +140,10 @@ tokio::task_local! {
 }
 
 #[cfg(test)]
-pub(crate) async fn count_capture_row_queries<F: std::future::Future>(
-    future: F,
-) -> (F::Output, usize) {
+pub(crate) async fn count_capture_row_queries<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
     let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = CAPTURE_ROW_QUERIES.scope(queries.clone(), future).await;
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))

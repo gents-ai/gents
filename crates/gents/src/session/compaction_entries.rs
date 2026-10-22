@@ -130,12 +130,15 @@ pub fn compaction_key(
     )
 }
 
-pub(super) fn validate_compaction_chain<T: CompactionProjection>(
+pub(super) fn validate_compaction_chain<T>(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     rows: &[T],
-) -> Result<()> {
+) -> Result<()>
+where
+    T: CompactionProjection,
+{
     let mut prior_cursor = None;
     for (index, row) in rows.iter().enumerate() {
         let expected_sequence = u32::try_from(index + 1).context("compaction sequence overflow")?;
@@ -162,7 +165,10 @@ pub(super) fn validate_compaction_chain<T: CompactionProjection>(
     Ok(())
 }
 
-fn compaction_generation<T: CompactionProjection>(rows: &[T]) -> Result<String> {
+fn compaction_generation<T>(rows: &[T]) -> Result<String>
+where
+    T: CompactionProjection,
+{
     let projection = rows
         .iter()
         .map(|row| {

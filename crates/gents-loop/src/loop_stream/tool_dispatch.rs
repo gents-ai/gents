@@ -8,7 +8,10 @@ pub(super) struct EffectDispatcher<H> {
     pub(super) fatal: tokio::sync::Mutex<Option<String>>,
 }
 
-impl<H: SessionHook + 'static> EffectDispatcher<H> {
+impl<H> EffectDispatcher<H>
+where
+    H: SessionHook + 'static,
+{
     pub(super) async fn settle_parent_result(
         &self,
         name: &str,
@@ -29,7 +32,10 @@ impl<H: SessionHook + 'static> EffectDispatcher<H> {
     }
 }
 
-impl<H: SessionHook + 'static> crate::tool_effects::ToolEffectDispatcher for EffectDispatcher<H> {
+impl<H> crate::tool_effects::ToolEffectDispatcher for EffectDispatcher<H>
+where
+    H: SessionHook + 'static,
+{
     fn call<'a>(
         &'a self,
         ordinal: u32,

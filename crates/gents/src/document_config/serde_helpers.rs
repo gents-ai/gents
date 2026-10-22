@@ -96,10 +96,13 @@ where
 /// Dual-shape JSON decoding: a list of `T` objects, a list of JSON strings
 /// encoding `T`, a single JSON string, null, or missing. Shared by write-tool
 /// and surface-entry deserializers so the contract cannot drift.
-pub fn deserialize_dual_shape<T: DeserializeOwned>(
+pub fn deserialize_dual_shape<T>(
     value: Option<Value>,
     label: &str,
-) -> std::result::Result<Vec<T>, String> {
+) -> std::result::Result<Vec<T>, String>
+where
+    T: DeserializeOwned,
+{
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -180,9 +183,10 @@ pub(super) fn default_enabled() -> bool {
 pub(super) fn is_enabled(value: &bool) -> bool {
     *value
 }
-pub(super) fn deserialize_enabled<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<bool, D::Error> {
+pub(super) fn deserialize_enabled<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
     Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(true))
 }
 
@@ -191,10 +195,13 @@ pub(super) fn is_disabled(value: &bool) -> bool {
 }
 
 /// Strict storage-envelope decoding for signing/configuration owners.
-pub(super) fn try_rows_with_doc_id<T: DeserializeOwned>(
+pub(super) fn try_rows_with_doc_id<T>(
     data: Option<&Value>,
     field: &str,
-) -> anyhow::Result<Vec<(String, T)>> {
+) -> anyhow::Result<Vec<(String, T)>>
+where
+    T: DeserializeOwned,
+{
     use anyhow::Context;
     let rows = data
         .and_then(|data| data.get(field))

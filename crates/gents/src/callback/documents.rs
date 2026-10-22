@@ -288,12 +288,15 @@ pub fn strip_secret_fields(value: Value) -> Value {
     }
 }
 
-async fn load_config<T: serde::de::DeserializeOwned + Send>(
+async fn load_config<T>(
     node: &std::sync::Arc<EmbeddedNode>,
     collection: crate::Collection,
     owner: &str,
     id: &str,
-) -> Result<Option<T>> {
+) -> Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned + Send,
+{
     crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,

@@ -5,7 +5,10 @@ pub(super) fn usize_to_i64(value: usize) -> i64 {
 }
 
 /// Desktop context meter estimate only; provider admission never consumes it.
-fn display_json_token_estimate<T: serde::Serialize>(value: &T) -> usize {
+fn display_json_token_estimate<T>(value: &T) -> usize
+where
+    T: serde::Serialize,
+{
     serde_json::to_vec(value)
         .map(|encoded| encoded.len() / 4)
         .unwrap_or_default()

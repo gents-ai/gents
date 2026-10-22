@@ -1378,7 +1378,10 @@ fn quoted_graphql_list(values: &[String]) -> String {
         .join(", ")
 }
 
-fn decode<T: serde::de::DeserializeOwned>(data: Option<&Value>, label: &str) -> Result<T> {
+fn decode<T>(data: Option<&Value>, label: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     let data = data
         .filter(|data| data.is_object())
         .cloned()

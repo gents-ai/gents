@@ -98,10 +98,13 @@ fn ensure_client_stopped_for_init(client_is_running: bool) -> Result<(), BridgeE
 }
 
 #[tauri::command]
-pub async fn desktop_client_start<R: Runtime>(
+pub async fn desktop_client_start<R>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     if state.app_exit.is_quitting() {
         return Err(BridgeError::new(
             BridgeErrorCode::ClientStartFailed,
@@ -186,10 +189,13 @@ pub(crate) fn register_client_start(
     })
 }
 
-fn claim_or_join_client_start<R: Runtime>(
+fn claim_or_join_client_start<R>(
     app: &AppHandle<R>,
     state: &State<'_, DesktopAppState>,
-) -> watch::Receiver<ClientStartProgress> {
+) -> watch::Receiver<ClientStartProgress>
+where
+    R: Runtime,
+{
     let registration = match register_client_start(state.inner()) {
         Ok(registration) => registration,
         Err(error) => {
@@ -218,11 +224,13 @@ fn claim_or_join_client_start<R: Runtime>(
     }
 }
 
-async fn run_detached_client_start<R: Runtime>(
+async fn run_detached_client_start<R>(
     app: AppHandle<R>,
     paths: gents_desktop_core::client::DesktopPaths,
     progress_tx: watch::Sender<ClientStartProgress>,
-) {
+) where
+    R: Runtime,
+{
     let state = app.state::<DesktopAppState>();
     #[cfg(any(unix, windows))]
     let mut client_listener = None;
@@ -438,10 +446,13 @@ async fn wait_for_start_inflight(state: &DesktopAppState) -> Result<(), BridgeEr
 }
 
 #[tauri::command]
-pub async fn desktop_client_shutdown<R: Runtime>(
+pub async fn desktop_client_shutdown<R>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     // Enrollment authoring temporarily installs bootstrap replication state.
     // Let that bounded operation unwind before dropping its core instead of
     // aborting the future between install and cleanup.
@@ -454,10 +465,13 @@ pub async fn desktop_client_shutdown<R: Runtime>(
         .map_err(BridgeError::untyped)
 }
 
-pub(crate) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
+pub(crate) async fn shutdown_client_under_managed_lifecycle<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     super::managed_server::drain_managed_runtime_pairing(state).await;
     drop(exclude_client(state).await?);
     let _ = app.emit(
@@ -467,10 +481,13 @@ pub(crate) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
     Ok(())
 }
 
-pub(crate) async fn shutdown_client_for_app_exit<R: Runtime>(
+pub(crate) async fn shutdown_client_for_app_exit<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let _managed_lifecycle = state.managed_server_lifecycle.lock().await;
     shutdown_client_under_managed_lifecycle(app, state).await
 }
@@ -544,7 +561,10 @@ where
 }
 
 #[tauri::command]
-pub fn desktop_app_quit<R: Runtime>(app: AppHandle<R>) {
+pub fn desktop_app_quit<R>(app: AppHandle<R>)
+where
+    R: Runtime,
+{
     app.exit(0);
 }
 
@@ -706,11 +726,14 @@ fn classify_client_start_error(
 }
 
 #[tauri::command]
-pub fn desktop_set_selected_node<R: Runtime>(
+pub fn desktop_set_selected_node<R>(
     window: WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
     node_did: Option<String>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let did = node_did
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());

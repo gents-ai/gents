@@ -687,10 +687,10 @@ impl<'a> ApplyRequest<'a> {
     }
 }
 
-pub(crate) fn decode_merged<T: serde::de::DeserializeOwned>(
-    collection: &str,
-    merged: &Map<String, Value>,
-) -> Result<T> {
+pub(crate) fn decode_merged<T>(collection: &str, merged: &Map<String, Value>) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_path_to_error::deserialize(Value::Object(merged.clone())).map_err(|error| {
         let path = error.path().to_string();
         let inner = error.inner().to_string();

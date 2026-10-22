@@ -74,16 +74,22 @@ pub(super) async fn compare(
 }
 
 #[derive(Serialize)]
-struct WithPolicy<'a, T: Serialize> {
+struct WithPolicy<'a, T>
+where
+    T: Serialize,
+{
     #[serde(flatten)]
     body: &'a T,
     policy: Option<&'a PolicyOutcome>,
 }
 
-fn with_policy<'a, T: Serialize>(
+fn with_policy<'a, T>(
     body: &'a T,
     comparison: &'a gents::eval::report::Comparison,
-) -> WithPolicy<'a, T> {
+) -> WithPolicy<'a, T>
+where
+    T: Serialize,
+{
     WithPolicy {
         body,
         policy: comparison.policy.as_ref(),

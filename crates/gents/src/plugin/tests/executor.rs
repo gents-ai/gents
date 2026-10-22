@@ -2183,9 +2183,10 @@ mod job_calls {
             .unwrap()
     }
 
-    fn answers<T: serde::de::DeserializeOwned>(
-        call: &PluginCall,
-    ) -> BTreeMap<String, RoundResult<T>> {
+    fn answers<T>(call: &PluginCall) -> BTreeMap<String, RoundResult<T>>
+    where
+        T: serde::de::DeserializeOwned,
+    {
         assert_eq!(
             call.outcome.verdict,
             PluginVerdict::Success,

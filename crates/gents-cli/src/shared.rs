@@ -244,7 +244,10 @@ impl ConfigExportBundle {
 pub(crate) struct ConfigApplyCounts(std::collections::BTreeMap<Collection, usize>);
 
 impl Serialize for ConfigApplyCounts {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(Some(Collection::ALL.len()))?;
         for collection in Collection::ALL {

@@ -41,11 +41,14 @@ type SupersedeCall = String;
 
 type NonterminalRequests = Arc<Mutex<RapidHashMap<String, Vec<String>>>>;
 
-fn remove_except<K: Clone + Eq + std::hash::Hash>(
+fn remove_except<K>(
     requests: &mut RapidHashMap<K, Vec<String>>,
     key: &K,
     excluded_request_id: Option<&str>,
-) -> Vec<String> {
+) -> Vec<String>
+where
+    K: Clone + Eq + std::hash::Hash,
+{
     let Some(request_ids) = requests.remove(key) else {
         return Vec::new();
     };

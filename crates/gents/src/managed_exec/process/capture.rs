@@ -68,7 +68,10 @@ where
 struct NativePipe<R>(R);
 
 #[cfg(unix)]
-impl<R: AsyncRead + Unpin + std::os::fd::AsRawFd> AsyncRead for NativePipe<R> {
+impl<R> AsyncRead for NativePipe<R>
+where
+    R: AsyncRead + Unpin + std::os::fd::AsRawFd,
+{
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -217,10 +220,10 @@ async fn read_capped<R>(
 /// Interrupted reads transfer no bytes and do not establish an I/O failure.
 /// Yield between retries so cancellation and the existing drain deadline remain
 /// observable even when a reader is repeatedly interrupted.
-async fn read_retry_interrupted<R: AsyncRead + Unpin>(
-    reader: &mut R,
-    buf: &mut [u8],
-) -> std::io::Result<usize> {
+async fn read_retry_interrupted<R>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize>
+where
+    R: AsyncRead + Unpin,
+{
     loop {
         match reader.read(buf).await {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {

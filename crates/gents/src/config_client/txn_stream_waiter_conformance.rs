@@ -52,7 +52,10 @@ impl Drop for GeneratorDropProbe {
     }
 }
 
-fn poll_once<F: Future + ?Sized>(future: Pin<&mut F>) -> Poll<F::Output> {
+fn poll_once<F>(future: Pin<&mut F>) -> Poll<F::Output>
+where
+    F: Future + ?Sized,
+{
     let waker = futures::task::noop_waker();
     let mut context = Context::from_waker(&waker);
     future.poll(&mut context)

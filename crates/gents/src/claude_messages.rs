@@ -873,7 +873,7 @@ async fn push_line_observed(
     parsed
 }
 
-pub async fn stream_messages<S: BearerSource>(
+pub async fn stream_messages<S>(
     model: &str,
     request: &CompletionRequest,
     surface: RapidHashSet<String>,
@@ -883,11 +883,14 @@ pub async fn stream_messages<S: BearerSource>(
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
-> {
+>
+where
+    S: BearerSource,
+{
     stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http, usage).await
 }
 
-pub(crate) async fn stream_messages_at<S: BearerSource>(
+pub(crate) async fn stream_messages_at<S>(
     uri: &str,
     model: &str,
     request: &CompletionRequest,
@@ -898,7 +901,10 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
-> {
+>
+where
+    S: BearerSource,
+{
     #[cfg(test)]
     let fixture = take_messages_sse_fixture();
     #[cfg(not(test))]

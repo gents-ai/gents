@@ -268,10 +268,13 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
     messages
 }
 
-async fn bounded_diagnostic<T: Debug>(
+async fn bounded_diagnostic<T>(
     timeout_duration: Duration,
     diagnostic: impl std::future::Future<Output = T>,
-) -> String {
+) -> String
+where
+    T: Debug,
+{
     match tokio::time::timeout(timeout_duration, diagnostic).await {
         Ok(value) => format!("{value:?}"),
         Err(_) => format!("<unavailable: diagnostic query timed out after {timeout_duration:?}>"),

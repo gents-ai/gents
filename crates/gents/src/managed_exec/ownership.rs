@@ -225,7 +225,10 @@ fn record_path(dir: &std::path::Path, key: &str) -> PathBuf {
     dir.join(format!("{name}.json"))
 }
 
-impl<R: HostRecord> HostRecordStore<R> {
+impl<R> HostRecordStore<R>
+where
+    R: HostRecord,
+{
     fn volatile(
         records: &std::sync::Mutex<rapidhash::RapidHashMap<String, R>>,
     ) -> std::sync::MutexGuard<'_, rapidhash::RapidHashMap<String, R>> {

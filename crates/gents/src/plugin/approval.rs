@@ -30,7 +30,10 @@ tokio::task_local! {
     static COMPOSED: ();
 }
 
-pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future: F) -> F::Output {
+pub async fn scope_interactive<F>(interactive: bool, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
     if interactive {
         INTERACTIVE.scope((), future).await
     } else {
@@ -38,9 +41,10 @@ pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future
     }
 }
 
-pub fn carry_interactive<F: std::future::Future>(
-    future: F,
-) -> impl std::future::Future<Output = F::Output> {
+pub fn carry_interactive<F>(future: F) -> impl std::future::Future<Output = F::Output>
+where
+    F: std::future::Future,
+{
     let composed = composed();
     let future = workspace::carry(scope_interactive(interactive(), future));
     async move {
@@ -56,7 +60,10 @@ pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
 }
 
-pub(crate) async fn scope_composed<F: std::future::Future>(future: F) -> F::Output {
+pub(crate) async fn scope_composed<F>(future: F) -> F::Output
+where
+    F: std::future::Future,
+{
     COMPOSED.scope((), future).await
 }
 

@@ -798,7 +798,10 @@ fn peer_reference_matches(reference: &str, peer: &str) -> bool {
         || p2p::iroh::parse_public_peer_addr(reference).is_ok_and(|(id, _)| id.as_str() == peer)
 }
 
-fn bounded_observation<T: Serialize>(mut items: Vec<T>) -> Value {
+fn bounded_observation<T>(mut items: Vec<T>) -> Value
+where
+    T: Serialize,
+{
     let observed_count = items.len();
     items.truncate(50);
     json!({"items":items,"observed_count":observed_count,"limit":50})

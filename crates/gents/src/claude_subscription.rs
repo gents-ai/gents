@@ -30,13 +30,19 @@ pub fn default_model_name() -> &'static str {
     DEFAULT_MODEL_ID
 }
 
-pub struct ClaudeSubscriptionClient<S: BearerSource = DbCredentialBearer> {
+pub struct ClaudeSubscriptionClient<S = DbCredentialBearer>
+where
+    S: BearerSource,
+{
     pub(crate) bearer: Arc<S>,
     pub(crate) http: ReqwestClient,
     pub(crate) usage: Option<Arc<UsageReporter>>,
 }
 
-impl<S: BearerSource> Clone for ClaudeSubscriptionClient<S> {
+impl<S> Clone for ClaudeSubscriptionClient<S>
+where
+    S: BearerSource,
+{
     fn clone(&self) -> Self {
         Self {
             bearer: self.bearer.clone(),
@@ -46,7 +52,10 @@ impl<S: BearerSource> Clone for ClaudeSubscriptionClient<S> {
     }
 }
 
-impl<S: BearerSource> fmt::Debug for ClaudeSubscriptionClient<S> {
+impl<S> fmt::Debug for ClaudeSubscriptionClient<S>
+where
+    S: BearerSource,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClaudeSubscriptionClient")
             .finish_non_exhaustive()
@@ -89,7 +98,10 @@ impl ClaudeSubscriptionClient<ApiKeyBearer> {
     }
 }
 
-impl<S: BearerSource> ClaudeSubscriptionClient<S> {
+impl<S> ClaudeSubscriptionClient<S>
+where
+    S: BearerSource,
+{
     #[cfg(test)]
     pub(crate) fn with_bearer(bearer: Arc<S>) -> Self {
         Self {
@@ -100,7 +112,10 @@ impl<S: BearerSource> ClaudeSubscriptionClient<S> {
     }
 }
 
-impl<S: BearerSource + 'static> CompletionClient for ClaudeSubscriptionClient<S> {
+impl<S> CompletionClient for ClaudeSubscriptionClient<S>
+where
+    S: BearerSource + 'static,
+{
     type CompletionModel = ClaudeSubscriptionModel<S>;
 }
 
@@ -115,14 +130,20 @@ impl GetTokenUsage for ClaudeStreamResponse {
     }
 }
 
-pub struct ClaudeSubscriptionModel<S: BearerSource = DbCredentialBearer> {
+pub struct ClaudeSubscriptionModel<S = DbCredentialBearer>
+where
+    S: BearerSource,
+{
     model: String,
     bearer: Arc<S>,
     http: ReqwestClient,
     usage: Option<Arc<UsageReporter>>,
 }
 
-impl<S: BearerSource> Clone for ClaudeSubscriptionModel<S> {
+impl<S> Clone for ClaudeSubscriptionModel<S>
+where
+    S: BearerSource,
+{
     fn clone(&self) -> Self {
         Self {
             model: self.model.clone(),
@@ -133,7 +154,10 @@ impl<S: BearerSource> Clone for ClaudeSubscriptionModel<S> {
     }
 }
 
-impl<S: BearerSource> fmt::Debug for ClaudeSubscriptionModel<S> {
+impl<S> fmt::Debug for ClaudeSubscriptionModel<S>
+where
+    S: BearerSource,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClaudeSubscriptionModel")
             .field("model", &self.model)
@@ -145,7 +169,10 @@ fn surface_of(request: &CompletionRequest) -> RapidHashSet<String> {
     request.tools.iter().map(|tool| tool.name.clone()).collect()
 }
 
-impl<S: BearerSource + 'static> CompletionModel for ClaudeSubscriptionModel<S> {
+impl<S> CompletionModel for ClaudeSubscriptionModel<S>
+where
+    S: BearerSource + 'static,
+{
     type Response = ();
     type StreamingResponse = ClaudeStreamResponse;
     type Client = ClaudeSubscriptionClient<S>;

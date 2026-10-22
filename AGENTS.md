@@ -193,6 +193,8 @@ metadata.
   `HashSetExt`), and hashers are `rapidhash::fast::RapidHasher`, as in DefraDB.
   Use std's map only where a third-party signature fixes it;
   `hash_maps_use_rapidhash` ratchets this and its allowlist only shrinks.
+- Trait bounds live in where clauses, never inline in generic parameter lists;
+  `trait_bounds_live_in_where_clauses` ratchets this.
 - Treat flaky tests as defects: reproduce, file, and fix them.
 - Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are
   cloned efficiently. In agent worktrees build and test with

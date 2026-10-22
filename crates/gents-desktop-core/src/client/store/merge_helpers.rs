@@ -168,11 +168,13 @@ pub(super) fn retire_request_placeholders(
 // Immutable canonical facts are set-unioned; a duplicated physical identity
 // with different bytes is retained so reconstruction can classify the
 // integrity conflict, never last-writer-wins.
-pub(super) fn union_immutable_rows<T: std::fmt::Debug>(
+pub(super) fn union_immutable_rows<T>(
     target: &mut Vec<T>,
     incoming: Vec<T>,
     doc_id: impl Fn(&T) -> &str,
-) {
+) where
+    T: std::fmt::Debug,
+{
     for row in incoming {
         let id = doc_id(&row).to_string();
         if target

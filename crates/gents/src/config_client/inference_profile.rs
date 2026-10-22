@@ -106,12 +106,15 @@ pub async fn agent_accounts(
         .collect())
 }
 
-async fn read<T: serde::de::DeserializeOwned>(
+async fn read<T>(
     txn: &super::ConfigApplyTxn<'_>,
     collection: Collection,
     node_did: &str,
     id: &str,
-) -> Result<Option<T>> {
+) -> Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
     super::desired_state::read_record(txn, collection, node_did, id)
         .await?
         .map(|(_, value)| {

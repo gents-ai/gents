@@ -3073,7 +3073,11 @@ mod tests {
 
     #[test]
     fn discarding_is_a_send_future() {
-        fn assert_send<T: Send>(_: T) {}
+        fn assert_send<T>(_: T)
+        where
+            T: Send,
+        {
+        }
         let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), PathBuf::new());
         assert_send(executor.discard("t1"));
     }

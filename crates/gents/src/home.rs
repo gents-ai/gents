@@ -232,10 +232,14 @@ pub fn init_config_path(home_dir: &Path) -> PathBuf {
 }
 
 /// Publish and sync the complete custody record before encrypted store writes.
-pub fn write_init_config<ToolPackage: Serialize, ToolCeiling: Serialize>(
+pub fn write_init_config<ToolPackage, ToolCeiling>(
     home_dir: &Path,
     state: &StoredInitConfig<ToolPackage, ToolCeiling>,
-) -> Result<()> {
+) -> Result<()>
+where
+    ToolPackage: Serialize,
+    ToolCeiling: Serialize,
+{
     fs::create_dir_all(home_dir)
         .with_context(|| format!("creating home directory {}", home_dir.display()))?;
     let path = init_config_path(home_dir);
@@ -253,9 +257,13 @@ pub fn write_init_config<ToolPackage: Serialize, ToolCeiling: Serialize>(
     Ok(())
 }
 
-pub fn read_init_config<ToolPackage: DeserializeOwned, ToolCeiling: DeserializeOwned>(
+pub fn read_init_config<ToolPackage, ToolCeiling>(
     home_dir: &Path,
-) -> Result<Option<StoredInitConfig<ToolPackage, ToolCeiling>>> {
+) -> Result<Option<StoredInitConfig<ToolPackage, ToolCeiling>>>
+where
+    ToolPackage: DeserializeOwned,
+    ToolCeiling: DeserializeOwned,
+{
     let path = init_config_path(home_dir);
     if !path.exists() {
         return Ok(None);

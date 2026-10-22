@@ -54,7 +54,10 @@ pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<
     }
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
+impl<M> AgentDaemon<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner. The loop remains the
     /// sole final legality authority.

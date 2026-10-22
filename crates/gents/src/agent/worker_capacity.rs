@@ -56,10 +56,10 @@ enum RequestGuard {
     Active { _guard: ActiveGuard },
 }
 
-pub(crate) async fn scope_slot_capacity<F: Future>(
-    capacity: Arc<WorkerCapacity>,
-    future: F,
-) -> F::Output {
+pub(crate) async fn scope_slot_capacity<F>(capacity: Arc<WorkerCapacity>, future: F) -> F::Output
+where
+    F: Future,
+{
     SLOT_CAPACITY.scope(capacity, future).await
 }
 
@@ -68,10 +68,10 @@ pub(crate) fn current_slot_capacity() -> Option<Arc<WorkerCapacity>> {
 }
 
 /// Owns one post-dequeue permit for the entire `process_request` future.
-pub(crate) async fn scope_request_capacity<F: Future>(
-    guard: UnboundActiveGuard,
-    future: F,
-) -> F::Output {
+pub(crate) async fn scope_request_capacity<F>(guard: UnboundActiveGuard, future: F) -> F::Output
+where
+    F: Future,
+{
     REQUEST_GUARD
         .scope(RefCell::new(Some(RequestGuard::Unbound(guard))), future)
         .await

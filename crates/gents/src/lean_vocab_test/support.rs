@@ -20,15 +20,18 @@ where
     T: Deserialize<'de>,
 {
     struct Pairs<T>(std::marker::PhantomData<T>);
-    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Pairs<T> {
+    impl<'de, T> serde::de::Visitor<'de> for Pairs<T>
+    where
+        T: Deserialize<'de>,
+    {
         type Value = Vec<(String, T)>;
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.write_str("a JSON object")
         }
-        fn visit_map<A: serde::de::MapAccess<'de>>(
-            self,
-            mut map: A,
-        ) -> Result<Self::Value, A::Error> {
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
             let mut pairs = Vec::new();
             while let Some(pair) = map.next_entry()? {
                 pairs.push(pair);
@@ -2429,7 +2432,10 @@ pub(crate) fn lean_plugin_calls_route_cases() -> &'static [LeanPluginCallsRouteC
 }
 
 /// One strictly decoded group of `plugin_resource_cases`.
-fn lean_plugin_resource_group<T: serde::de::DeserializeOwned>(group: &str) -> Vec<T> {
+fn lean_plugin_resource_group<T>(group: &str) -> Vec<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_json::from_value(lean_contract_snapshot().plugin_resource_cases[group].clone())
         .unwrap_or_else(|error| panic!("plugin_resource_cases.{group}: {error}"))
 }

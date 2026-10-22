@@ -1633,11 +1633,10 @@ fn add_request_conflict(
     add_conflict(conflicts, request_id.to_string(), reason);
 }
 
-fn add_conflict<K: Ord>(
-    conflicts: &mut BTreeMap<K, Vec<String>>,
-    key: K,
-    reason: impl Into<String>,
-) {
+fn add_conflict<K>(conflicts: &mut BTreeMap<K, Vec<String>>, key: K, reason: impl Into<String>)
+where
+    K: Ord,
+{
     let reason = reason.into();
     let reasons = conflicts.entry(key).or_default();
     if !reasons.contains(&reason) {
@@ -1645,7 +1644,10 @@ fn add_conflict<K: Ord>(
     }
 }
 
-fn finish_conflicts<K: Ord>(conflicts: BTreeMap<K, Vec<String>>) -> BTreeMap<K, String> {
+fn finish_conflicts<K>(conflicts: BTreeMap<K, Vec<String>>) -> BTreeMap<K, String>
+where
+    K: Ord,
+{
     conflicts
         .into_iter()
         .map(|(key, reasons)| (key, reasons.join("; ")))

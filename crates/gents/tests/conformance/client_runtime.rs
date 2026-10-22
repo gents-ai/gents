@@ -16,7 +16,10 @@ fn readiness_reason(code: &str) -> gents_protocol::row::AgentReadinessUnavailabl
     }
 }
 
-fn readiness_reason_code<T: serde::Serialize>(reason: T) -> String {
+fn readiness_reason_code<T>(reason: T) -> String
+where
+    T: serde::Serialize,
+{
     serde_json::to_value(reason)
         .expect("serialize readiness reason")
         .as_str()

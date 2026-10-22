@@ -351,11 +351,13 @@ pub(crate) struct StarterCache(
     std::sync::Mutex<std::collections::BTreeMap<String, gents::session_origin::SessionScope>>,
 );
 
-pub(super) async fn resolve_summary_starters<'a, R: gents::config_client::ConfigRead + ?Sized>(
+pub(super) async fn resolve_summary_starters<'a, R>(
     access: &R,
     cache: &StarterCache,
     summaries: impl IntoIterator<Item = &'a mut SessionSummary>,
-) {
+) where
+    R: gents::config_client::ConfigRead + ?Sized,
+{
     let started = summaries
         .into_iter()
         .filter_map(|summary| {

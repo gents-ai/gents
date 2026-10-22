@@ -18,7 +18,10 @@ use super::{content_hash, open_regular_file};
 pub(crate) struct FileChanges(Arc<ChangeBatch>);
 
 impl Serialize for FileChanges {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         self.0.as_ref().serialize(serializer)
     }
 }

@@ -615,10 +615,10 @@ fn quoted_list<'a>(ids: impl IntoIterator<Item = &'a str>) -> String {
         .join(",")
 }
 
-fn decode_rows<T: DeserializeOwned>(
-    response: &defra_node::QueryResponse,
-    field: &str,
-) -> Result<Vec<T>> {
+fn decode_rows<T>(response: &defra_node::QueryResponse, field: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
     response
         .data
         .as_ref()

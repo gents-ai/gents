@@ -331,7 +331,10 @@ fn record_request_fact_batch_query() {
 }
 
 #[cfg(test)]
-async fn count_request_fact_batch_queries<F: std::future::Future>(future: F) -> (F::Output, usize) {
+async fn count_request_fact_batch_queries<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
     let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = REQUEST_FACT_BATCH_QUERIES
         .scope(queries.clone(), future)

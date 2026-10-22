@@ -39,7 +39,7 @@ impl Drop for Wait<'_> {
     }
 }
 
-pub(super) async fn run<R: Runtime>(
+pub(super) async fn run<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     window: &str,
@@ -47,7 +47,10 @@ pub(super) async fn run<R: Runtime>(
     method: InferenceAuthMethod,
     provider: &str,
     label: Option<&str>,
-) -> Result<SignIn, BridgeError> {
+) -> Result<SignIn, BridgeError>
+where
+    R: Runtime,
+{
     super::sign_in_platform::require_supported(method, cfg!(target_os = "ios"))?;
     let core = current_core(state).ok_or_else(|| {
         BridgeError::new(

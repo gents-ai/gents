@@ -44,12 +44,18 @@ struct LiveToolOutputState {
 pub struct DeferredToolWrites(RapidHashMap<TypeId, Arc<dyn Any + Send + Sync>>);
 
 impl DeferredToolWrites {
-    pub fn new<T: Any + Send + Sync>(writes: T) -> Self {
+    pub fn new<T>(writes: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
         let writes: Arc<dyn Any + Send + Sync> = Arc::new(writes);
         Self(RapidHashMap::from_iter([(TypeId::of::<T>(), writes)]))
     }
 
-    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+    pub fn downcast_ref<T>(&self) -> Option<&T>
+    where
+        T: Any,
+    {
         self.0.get(&TypeId::of::<T>())?.downcast_ref()
     }
 }

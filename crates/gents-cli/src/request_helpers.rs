@@ -1053,7 +1053,10 @@ tokio::task_local! {
     static CAPTURED_REPORT: std::cell::RefCell<Option<Value>>;
 }
 
-pub(crate) fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<()> {
+pub(crate) fn print_json<T>(value: &T) -> Result<()>
+where
+    T: serde::Serialize + ?Sized,
+{
     if CAPTURED_REPORT.try_with(|_| ()).is_ok() {
         let value = serde_json::to_value(value).context("encoding JSON report")?;
         CAPTURED_REPORT.with(|report| *report.borrow_mut() = Some(value));
