@@ -1726,4 +1726,102 @@ mod tests {
         assert!(!high_water.doc_id.is_empty());
         assert!(!high_water.commit_cid.is_empty());
     }
+
+    #[tokio::test]
+    async fn shared_reduction_snapshots_reload_exactly_and_reuse_pinned_blocks() {
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let prefix = vec![Message::user("prefix 🦀 ".repeat(2400))];
+        let suffix = vec![Message::user("retained suffix ".repeat(2400))];
+        let associations = ReplayAssociations {
+            required: vec![],
+            prefix_rows: vec![unassociated_row()],
+            retained_rows: vec![unassociated_row()],
+        };
+        let sources = ["request-doc", "request-doc-2"].map(|request_doc_id| SourceBoundary {
+            boundary_version: SOURCE_BOUNDARY_VERSION,
+            request_doc_id: request_doc_id.to_string(),
+            request_commit_cid: "claim-cid-7".to_string(),
+            canonical_through: None,
+        });
+        let make_input = |source: usize| NewProviderContextReduction {
+            node_did: "did:key:agent",
+            requester_did: None,
+            session_id: "session",
+            request_id: "request",
+            request_doc_id: &sources[source].request_doc_id,
+            request_commit_cid: "claim-cid-7",
+            reduction_index: 1,
+            turn_index: 1,
+            parent_reduction_key: None,
+            producer_call: None,
+            source_boundary: &sources[source],
+            compacted_prefix: &prefix,
+            retained_suffix: &suffix,
+            checkpoint_messages: &suffix,
+            replay_associations: &associations,
+            summary: "",
+            original_tokens: 20000,
+            compacted_tokens: 10000,
+        };
+        let block_ids = || async {
+            graphql_with_transaction_retry(
+                &node,
+                "{ RenderedRequestBlock { _docID } }",
+                "test reduction blocks",
+            )
+            .await
+            .unwrap()
+            .data
+            .unwrap()["RenderedRequestBlock"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|block| block["_docID"].as_str().unwrap().to_string())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let first = persist(&node, make_input(0)).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Vec<Message>>(&first.compacted_prefix_json).unwrap(),
+            prefix
+        );
+        assert_eq!(first.checkpoint_messages().unwrap(), suffix);
+        let blocks = block_ids().await;
+        assert!(!blocks.is_empty());
+        let raw = graphql_with_transaction_retry(
+            &node,
+            "{ ProviderContextReduction { compacted_prefix_json retained_suffix_json } }",
+            "test reduction storage",
+        )
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+        for field in ["compacted_prefix_json", "retained_suffix_json"] {
+            let encoded = raw["ProviderContextReduction"][0][field].as_str().unwrap();
+            assert!(encoded.len() < 1024);
+            assert!(encoded.contains("\"kind\":\"tree\""));
+        }
+
+        let second = persist(&node, make_input(1)).await.unwrap();
+        assert_ne!(second.doc_id, first.doc_id);
+        assert_eq!(block_ids().await, blocks);
+        for request_doc_id in ["request-doc", "request-doc-2"] {
+            let loaded = load_for_request(&node, request_doc_id).await.unwrap();
+            assert_eq!(loaded[0].compacted_prefix_json, first.compacted_prefix_json);
+            assert_eq!(loaded[0].retained_suffix_json, first.retained_suffix_json);
+        }
+
+        crate::config_client::ConfigAccess::write_local_response(
+            &node,
+            "test delete reduction block",
+            &format!(
+                "mutation {{ delete_RenderedRequestBlock(docID: \"{}\") {{ _docID }} }}",
+                escape_graphql_string(blocks.first().unwrap())
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(load_for_request(&node, "request-doc").await.is_err());
+    }
 }
