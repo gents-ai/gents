@@ -1419,6 +1419,135 @@ mod tests {
         node.shutdown().await;
     }
 
+    async fn block_payload_bytes(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
+        let response = node
+            .execute(r#"{ RenderedRequestBlock { content_key payload } }"#)
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        response.data.unwrap()["RenderedRequestBlock"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                (
+                    row["content_key"].as_str().unwrap().to_owned(),
+                    row["payload"].as_str().unwrap().len(),
+                )
+            })
+            .collect()
+    }
+
+    /// The shape an agent loop captures each turn: stable tools, a growing
+    /// wire message list, and a provenance trace whose context accounting
+    /// changes on every call while its tool-result list only grows.
+    fn agent_loop_turn(turn: usize) -> RenderedCompletionRequest {
+        let mut messages = vec![json!({"role": "user", "content": capture_text(1, 8 * 1024)})];
+        let mut threaded = Vec::new();
+        for step in 0..turn {
+            let call_id = format!("call-{step:04}");
+            messages.push(
+                json!({"role": "assistant", "tool_calls": [{"id": call_id, "type": "function",
+                "function": {"name": "exec", "arguments": "{\"cmd\":\"rg capture\"}"}}]}),
+            );
+            messages.push(json!({"role": "tool", "tool_call_id": call_id,
+                "content": capture_text(500 + step as u64, 3 * 1024)}));
+            threaded.push(json!({"call_id": null, "message_index": 2 * step + 2, "tool_call_id": call_id,
+                "content": [{"type": "text", "text": format!("[tool: exec, call_id: {call_id}, 3072 bytes — full output: sessions {}]", capture_text(900 + step as u64, 160))}]}));
+        }
+        let mut rendered = rendered_turn(
+            turn,
+            json!({"model": "m", "stream": true, "messages": messages,
+                "tools": [{"type": "function", "function": {"name": "exec", "description": capture_text(2, 12 * 1024)}}]}),
+        );
+        rendered.provenance_payload_json = json!({
+            "build_path": "budgeted",
+            "context_accounting": {"accounting_version": 2, "attempt": 0, "compaction_reason": "below_threshold",
+                "compaction_threshold_tokens": 786_432, "context_window": 1_048_576,
+                "configured_max_output_tokens": 32_768, "estimated_input_tokens": 6000 + 900 * turn,
+                "components": {"additional_parameters": 82, "documents": 0, "messages": 5000 + 900 * turn,
+                    "output_schema": 0, "tool_schemas": 3000},
+                "estimator": "openai_chat_wire_json_bytes_div_4_v1", "turn_index": turn},
+            "effective_message_count": messages.len(),
+            "reduction_keys": [],
+            "trace_version": 4,
+            "assistant_message_ids": [],
+            "effective_messages": null,
+            "threaded_tool_results": threaded,
+        });
+        rendered
+    }
+
+    #[tokio::test]
+    async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let mut stored = std::collections::BTreeMap::new();
+        let mut first_provenance_leaf = None;
+        let mut checked_turns = 0;
+        for turn in 0..64 {
+            let rendered = agent_loop_turn(turn);
+            sink.capture(rendered.clone()).await.unwrap();
+            let after = block_payload_bytes(node.as_ref()).await;
+            let new_blocks = after
+                .keys()
+                .filter(|key| !stored.contains_key(*key))
+                .count();
+            let new_bytes: usize = after
+                .iter()
+                .filter(|(key, _)| !stored.contains_key(*key))
+                .map(|(_, len)| len)
+                .sum();
+            stored = after;
+
+            let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
+            let leaves = manifest_entries(
+                node.as_ref(),
+                row["request_json"].as_str().unwrap(),
+                "provenance_payload",
+            )
+            .await;
+            let first_leaf = (leaves.len() >= 3).then(|| leaves[0].1.clone());
+            // Each turn appends ~3.6 KiB of content; the remainder is the
+            // rewritten tail leaf and right manifest spine of both payloads.
+            if first_leaf.is_some() && first_provenance_leaf.is_some() {
+                checked_turns += 1;
+                assert_eq!(
+                    first_provenance_leaf, first_leaf,
+                    "turn {turn}: per-call accounting re-cut the stable provenance prefix"
+                );
+                assert!(
+                    new_blocks <= 10,
+                    "turn {turn}: {new_blocks} new blocks for one appended tool round"
+                );
+                assert!(
+                    new_bytes <= 24 * 1024,
+                    "turn {turn}: {new_bytes} new block bytes for one appended tool round"
+                );
+            }
+            first_provenance_leaf = first_leaf;
+            assert_eq!(
+                super::super::decode_capture_pair_embedded(
+                    node.as_ref(),
+                    super::super::CAPTURE_VERSION,
+                    row["request_json"].as_str().unwrap(),
+                )
+                .await
+                .unwrap(),
+                (
+                    super::super::canonical_json(&rendered.request_json),
+                    super::super::canonical_json(&rendered.provenance_payload_json)
+                )
+            );
+        }
+        assert!(
+            checked_turns >= 24,
+            "the provenance trace must span several blocks"
+        );
+        node.shutdown().await;
+    }
+
     #[test]
     fn the_collection_names_are_valid_graphql_identifiers() {
         crate::graphql::validate_collection_identifier(RENDERED_REQUEST_COLLECTION)

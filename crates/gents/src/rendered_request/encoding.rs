@@ -313,15 +313,28 @@ const APPEND_GROWING_FIELDS: [&str; 5] = [
     "threaded_tool_results",
 ];
 
+/// Small fields that change on every provider call. Laid out after the growing
+/// lists they ride in the tail block every append rewrites anyway; ahead of
+/// them they re-cut the first block and its whole manifest group per call.
+const PER_CALL_TRAILING_FIELDS: [&str; 2] = ["context_accounting", "effective_message_count"];
+
 pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
     let Value::Object(map) = super::canonical_json(value) else {
         return super::canonical_json_string(value);
     };
-    let (growing, stable): (Vec<_>, Vec<_>) = map
+    let (trailing, rest): (Vec<_>, Vec<_>) = map
         .iter()
+        .partition(|(key, _)| PER_CALL_TRAILING_FIELDS.contains(&key.as_str()));
+    let (growing, stable): (Vec<_>, Vec<_>) = rest
+        .into_iter()
         .partition(|(key, _)| APPEND_GROWING_FIELDS.contains(&key.as_str()));
     let mut layout = String::from("{");
-    for (index, (key, field)) in stable.into_iter().chain(growing).enumerate() {
+    for (index, (key, field)) in stable
+        .into_iter()
+        .chain(growing)
+        .chain(trailing)
+        .enumerate()
+    {
         if index > 0 {
             layout.push(',');
         }
