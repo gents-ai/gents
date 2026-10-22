@@ -161,6 +161,12 @@ source consistency checks, not a separate runtime compatibility version.
 - The plugin job recovery sweep no longer fails a just resumed workflow run as
   `plugin_job_stalled` before its first step runs; a run at rest with nothing
   live re-drives that step, and only a run that stalled after a step is ended.
+- A plugin job's spawns, its `job.agent_targets` and its
+  `policy.dynamic_targets` now name AgentTargets by their `target_id`, as the
+  protocol and `gents pack wire --targets-from` already did; a workflow whose
+  targets have a `target_id` different from their `agent_id` (such as
+  code_review's) was refused `plugin_job_policy_denied` before any child
+  started.
 
 ## 0.21.0-rc0 - 2026-10-17
 

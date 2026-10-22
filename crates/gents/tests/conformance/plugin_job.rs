@@ -68,6 +68,42 @@ fn target(t: &LeanPluginJobTarget) -> (String, String) {
     (t.node.clone(), t.agent.clone())
 }
 
+/// A target's wire spelling is its AgentTarget id, which the host resolves to
+/// Lean's `(node, agent)` pair; spelled unlike the agent id so a host that
+/// matched agent ids would refuse.
+fn wire_id(t: &LeanPluginJobTarget) -> String {
+    format!("{}@{}", t.agent, t.node)
+}
+
+/// The host's resolution table over every target a step case names.
+fn resolution(
+    c: &LeanPluginJobContext,
+    job: &LeanPluginJobRow,
+    output: &LeanPluginJobOutput,
+) -> Vec<(String, (String, String))> {
+    let mut named: Vec<&LeanPluginJobTarget> = c.target_hops.iter().map(|h| &h.target).collect();
+    for scope in [
+        &c.caller_targets,
+        &c.job_targets,
+        &c.live.targets,
+        &c.policy.dynamic_targets,
+    ] {
+        named.extend(&scope.targets);
+    }
+    named.extend(job.children.iter().map(|child| &child.target));
+    if let Some(pin) = &job.pin {
+        named.extend(&pin.ceiling_at_pin.targets.targets);
+    }
+    if let LeanPluginJobOutput::Effects { spawns, .. } = output {
+        named.extend(spawns.iter().map(|spawn| &spawn.target));
+    }
+    let mut table: Vec<(String, (String, String))> =
+        named.into_iter().map(|t| (wire_id(t), target(t))).collect();
+    table.sort();
+    table.dedup();
+    table
+}
+
 fn scope(s: &LeanPluginJobScope) -> EndpointScope<(String, String), ()> {
     match s.kind.as_str() {
         "none" => EndpointScope::None,
@@ -77,11 +113,11 @@ fn scope(s: &LeanPluginJobScope) -> EndpointScope<(String, String), ()> {
     }
 }
 
-/// The wire spelling of a scope: the permitted agent ids. `all` has none.
+/// The wire spelling of a scope: the permitted AgentTarget ids. `all` has none.
 fn scope_ids(s: &LeanPluginJobScope) -> Vec<String> {
     match s.kind.as_str() {
         "none" => Vec::new(),
-        "only" => s.targets.iter().map(|t| t.agent.clone()).collect(),
+        "only" => s.targets.iter().map(wire_id).collect(),
         other => panic!("Lean endpoint scope {other} has no wire spelling"),
     }
 }
@@ -325,7 +361,7 @@ fn output(o: &LeanPluginJobOutput) -> JobStepOutput {
                     .map(|s| JobSpawn {
                         slot: s.slot.clone(),
                         attempt: s.attempt,
-                        target: s.target.agent.clone(),
+                        target: wire_id(&s.target),
                         prompt: String::new(),
                         title: String::new(),
                         cwd: s.cwd.clone(),
@@ -359,12 +395,15 @@ fn job_policy(p: &LeanPluginJobPolicy) -> JobPolicy {
     }
 }
 
-/// A target's wire spelling is its agent id.
 fn target_ids(targets: &[LeanPluginJobTarget]) -> Vec<String> {
-    targets.iter().map(|t| t.agent.clone()).collect()
+    targets.iter().map(wire_id).collect()
 }
 
-fn context(c: &LeanPluginJobContext) -> StepContext {
+fn context(
+    c: &LeanPluginJobContext,
+    job: &LeanPluginJobRow,
+    out: &LeanPluginJobOutput,
+) -> StepContext {
     StepContext {
         live: ceiling(&c.live),
         available: c.available,
@@ -380,6 +419,7 @@ fn context(c: &LeanPluginJobContext) -> StepContext {
             .iter()
             .map(|h| (target(&h.target), h.hop))
             .collect(),
+        target_ids: resolution(c, job, out),
         live_background: c.live_background,
         started_by_job: c.started_by_job,
         cwd_allowed: c.cwd_allowed.clone(),
@@ -461,7 +501,7 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     for case in cases {
         assert!(names.insert(case.name.as_str()), "duplicate {}", case.name);
         let expected = &case.expected;
-        let context = context(&case.context);
+        let context = context(&case.context, &case.job, &case.output);
         let job = row(&case.job);
         let expected_state: JobState = spelled(&expected.row_state);
         let mut expected_kills: Vec<&str> = expected
@@ -536,7 +576,7 @@ fn generated_plugin_job_adoption_cases_drive_adopt() {
             } => {
                 let call = tool_call(call);
                 match gents::plugin_job::dispatch::adopt(
-                    &context(ctx),
+                    &context(ctx, job, out),
                     &call,
                     &row(job),
                     &output(out),

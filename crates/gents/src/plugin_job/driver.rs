@@ -696,7 +696,7 @@ pub(super) async fn step_context_for(
         for spawn in &effects.spawn {
             if let Some(target) = targets
                 .iter()
-                .find(|target| target.agent_id == spawn.target)
+                .find(|target| target.target_id == spawn.target)
             {
                 if !target_hops.iter().any(|(pair, _)| pair == &key(target)) {
                     target_hops.push((key(target), 0));
@@ -728,7 +728,7 @@ pub(super) async fn step_context_for(
             Some(ids) => EndpointScope::<(String, String), ()>::only_units(
                 targets
                     .iter()
-                    .filter(|target| ids.contains(&target.agent_id))
+                    .filter(|target| ids.contains(&target.target_id))
                     .map(key),
             ),
             None => EndpointScope::none(),
@@ -744,6 +744,10 @@ pub(super) async fn step_context_for(
         installed_trusted_sources,
         max_hop: max_request_hop_in_txn(txn, &caller.node_did).await?,
         target_hops,
+        target_ids: targets
+            .iter()
+            .map(|target| (target.target_id.clone(), key(target)))
+            .collect(),
         live_background: 0,
         started_by_job: false,
         cwd_allowed,
@@ -2124,7 +2128,7 @@ pub(crate) mod tests {
     }
 
     async fn stepper_wat(wat: &str) -> Stepper {
-        let settings = step_settings(&["a", "b"]);
+        let settings = step_settings(&["t-a", "t-b"]);
         let mut job = new_job(Some(&settings), None).await;
         write_inference(&job).await;
         for agent in ["a", "b"] {
@@ -2417,12 +2421,12 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn narrowed_live_ceiling_is_reread_inside_the_step_transaction() {
         let step = stepper(json!({"effects": {"spawn": [{
-            "slot": "slot-a", "attempt": 0, "target": "a", "prompt": "audit", "title": "Alpha"
+            "slot": "slot-a", "attempt": 0, "target": "t-a", "prompt": "audit", "title": "Alpha"
         }]}}))
         .await;
         let (input, revision) = step.input(&step.row).await;
-        assert_eq!(input.ceiling.targets, ["a", "b"]);
-        write_step_tools(&step.job, Some(&step_settings(&["b"]))).await;
+        assert_eq!(input.ceiling.targets, ["t-a", "t-b"]);
+        write_step_tools(&step.job, Some(&step_settings(&["t-b"]))).await;
         assert_eq!(
             step.step_from(&step.row, input, revision).await,
             StepOutcome::Refused(Refusal::PolicyDenied)

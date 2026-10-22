@@ -242,13 +242,15 @@ async fn stage_spawn(
     job: &JobContext<'_>,
     spawn: &JobSpawn,
 ) -> Result<AgentRequestCreate> {
-    let (node_did, agent_id, own) = job
+    let (node_did, agent_id) = super::admit::resolve_target(job.ctx, &spawn.target)
+        .cloned()
+        .context("spawn target is not a known AgentTarget id")?;
+    let own = job
         .ctx
         .target_hops
         .iter()
-        .find(|(pair, _)| pair.1 == spawn.target)
-        .map(|(pair, hop)| (pair.0.clone(), pair.1.clone(), *hop))
-        .context("spawn target is not in target_hops")?;
+        .find(|(pair, _)| pair.0 == node_did && pair.1 == agent_id)
+        .map_or(0, |(_, hop)| *hop);
     let hop = next_request_hop(
         RequestHopCause::CrossSession {
             cause_hop: job.row.caller_hop,
@@ -776,6 +778,10 @@ mod tests {
             installed_trusted_sources: Vec::new(),
             max_hop: Some(8),
             target_hops: vec![((node_did.to_owned(), "general".to_owned()), 0)],
+            target_ids: vec![(
+                "general".to_owned(),
+                (node_did.to_owned(), "general".to_owned()),
+            )],
             live_background: 0,
             started_by_job: false,
             cwd_allowed: Vec::new(),
