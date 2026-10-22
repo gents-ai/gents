@@ -444,6 +444,10 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) = self
+            .request_authority(node_did, peer_record.as_ref())
+            .await?;
+        self.ensure_sender_owns_session(node_did, session_id, &requester_did)?;
         // Queue preparation captures assignment intent before signing; a later
         // replacement must not change an already prepared unassigned message.
         if options.input.queue.is_none() {
@@ -453,10 +457,6 @@ impl ClientCore {
         }
         crate::local_runtime::ensure_request_input_supported(peer_record.as_ref(), &options.input)
             .await?;
-        let (signer, admission, requester_did) = self
-            .request_authority(node_did, peer_record.as_ref())
-            .await?;
-        self.ensure_sender_owns_session(node_did, session_id, &requester_did)?;
         let agent_id = agent_id_for_write(agent_id);
         match mutations::submit_request(
             &self.node,
