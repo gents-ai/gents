@@ -4,8 +4,22 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
-## Unreleased
+## 0.21.0 - 2026-10-22
 
+- Rendered request captures (capture v4) store shared, content-defined
+  manifest trees, so unchanged history is not stored again with each request;
+  context reduction snapshots reference those pinned blocks, unsigned
+  reasoning deltas coalesce into one transcript block, and closing references
+  are interned once per message. Server and desktop must both run 0.21.0.
+  Existing history is not rewritten.
+- DefraDB is pinned to its Iroh-integrated main, which also fixes history
+  pruning deleting blocks that retained documents still reference.
+- A request's concurrent background admissions (spawns, background starts,
+  foreground handoffs and plugin adoptions) now reserve capacity through one
+  shared write, so they can no longer exceed the per-request ceiling of 8.
+- `agent_stop` and `agent_resume` stop and resume another session; a stopped
+  session pauses its Goal and cancels its plugin jobs and background
+  processes, and resume waits until they have settled.
 - `Node.max_request_hop` no longer defaults to 8; when it is absent the
   causal-hop cap is disabled.
 - `gents service install` takes `--http-addr`, `--http-port`,
