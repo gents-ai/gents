@@ -67,6 +67,9 @@ source consistency checks, not a separate runtime compatibility version.
   names the plugin and the Tools document and says to install the pack that
   ships it or declare it as a dependency. A remote `--graphql` install, which
   cannot see the node's plugins, leaves that check to startup (#2767).
+- `gents job list`, `show` and `stop`, the Grok pager's workflow runs and
+  `/workflow` commands no longer fail with `duplicate slot attempt` after one
+  workflow script has run twice on a node; each run lists its own children.
 
 ## 0.21.0-rc0 - 2026-10-17
 

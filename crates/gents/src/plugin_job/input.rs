@@ -103,8 +103,10 @@ pub async fn derive_children_in_txn(
     );
     let rows: Vec<Stored> = read(txn, &document, "AgentRequest").await?;
     let caused: HashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
-    let mut attempts: BTreeMap<(String, u32), Attempt> = BTreeMap::new();
-    let mut sessions: HashMap<String, (String, u32)> = HashMap::new();
+    // Keyed by the whole spawn key, not only `(slot, attempt)`: slot ids come
+    // from the script, so the chains of two runs of one script repeat them.
+    let mut attempts: BTreeMap<(String, u32, String), Attempt> = BTreeMap::new();
+    let mut sessions: HashMap<String, (String, u32, String)> = HashMap::new();
     for row in rows {
         let key = row.retry_key.clone().unwrap_or_default();
         let Some((slot, attempt)) = decode_job_retry_key(&key) else {
@@ -114,12 +116,13 @@ pub async fn derive_children_in_txn(
             .session_id
             .clone()
             .context("spawn request omitted session_id")?;
-        if sessions.insert(session, (slot.clone(), attempt)).is_some() {
+        let attempt_key = (slot.clone(), attempt, key);
+        if sessions.insert(session, attempt_key.clone()).is_some() {
             anyhow::bail!("two spawn requests share a session");
         }
         if attempts
             .insert(
-                (slot.clone(), attempt),
+                attempt_key,
                 Attempt {
                     slot,
                     attempt,
@@ -140,12 +143,11 @@ pub async fn derive_children_in_txn(
     let document =
         format!("{{ AgentRequest(filter: {{ session_id: {{ _in: {list} }} }}) {{ {FIELDS} }} }}");
     for row in read::<Stored>(txn, &document, "AgentRequest").await? {
-        let Some((slot, attempt)) = row.session_id.as_deref().and_then(|id| sessions.get(id))
-        else {
+        let Some(attempt_key) = row.session_id.as_deref().and_then(|id| sessions.get(id)) else {
             continue;
         };
         let attempt = attempts
-            .get_mut(&(slot.clone(), *attempt))
+            .get_mut(attempt_key)
             .context("spawn session missing its attempt")?;
         if row.request_id == attempt.spawn.request_id {
             continue;

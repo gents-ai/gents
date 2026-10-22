@@ -873,6 +873,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_jobs_lists_two_runs_of_one_script_with_their_own_children() {
+        let mut job = new().await;
+        let first = pinned_job_row(&mut job, "call-1").await;
+        let second = pinned_job_row(&mut job, "call-2").await;
+        child(&job, &first, "child-1", "slot-a", 0, "First").await;
+        child(&job, &second, "child-2", "slot-a", 0, "Second").await;
+
+        let views = list_jobs(&job.access, &every_job()).await.unwrap();
+
+        let children: BTreeSet<(String, String)> = views
+            .iter()
+            .flat_map(|view| {
+                view.children
+                    .iter()
+                    .map(|child| (view.row_doc_id.clone(), child.request_id.clone()))
+            })
+            .collect();
+        assert_eq!(
+            children,
+            BTreeSet::from([(first, "child-1".into()), (second, "child-2".into())])
+        );
+        job.node.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn list_jobs_excludes_non_job_rows() {
         let mut job = new().await;
         job.row("workflow", "call-1", json!({"argv": ["run"]}))
