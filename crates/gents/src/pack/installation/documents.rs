@@ -208,6 +208,7 @@ pub async fn prepare_document_pack_install(
     requested: &PackInferenceBindings,
     dependencies: &[&PackArchive],
     installed_via: InstalledVia,
+    plugin_home: Option<&Path>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<PreparedDocumentPackInstall> {
     for dependency in dependencies {
@@ -349,12 +350,80 @@ pub async fn prepare_document_pack_install(
             installed_via,
         )?;
     }
+    ensure_plugin_references_resolve(
+        &std::iter::once((manifest, &config))
+            .chain(
+                prepared_dependencies
+                    .iter()
+                    .map(|dependency| (dependency.manifest(), dependency.config())),
+            )
+            .collect::<Vec<_>>(),
+        plugin_home,
+    )?;
     Ok(PreparedDocumentPackInstall {
         config,
         inference,
         dependency_inference,
         dependencies: prepared_dependencies,
     })
+}
+
+/// Refuses Tools naming a plugin that no pack in `packs` (the root first, then
+/// its dependencies) ships and that the node's plugin store lacks, since
+/// startup cannot build that agent's tools. `plugin_home` is `None` when that
+/// store is not visible to this installer (a remote GraphQL install);
+/// references outside these packs are then left to startup, which reports the
+/// agent unavailable.
+pub(super) fn ensure_plugin_references_resolve(
+    packs: &[(&super::super::PackManifest, &PackConfig)],
+    plugin_home: Option<&Path>,
+) -> Result<()> {
+    let Some(home) = plugin_home else {
+        return Ok(());
+    };
+    let root = &packs[0].0.name;
+    let shipped = packs
+        .iter()
+        .flat_map(|(shipper, _)| {
+            shipper
+                .metadata
+                .plugins
+                .iter()
+                .map(|plugin| format!("{}/{}", shipper.metadata.namespace, plugin.name))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    for (manifest, config) in packs {
+        for tools in &config.tools {
+            let references = tools
+                .integrations
+                .as_ref()
+                .and_then(|integrations| integrations.plugins.as_deref())
+                .unwrap_or_default();
+            for reference in references {
+                if shipped.contains(&reference.plugin) {
+                    continue;
+                }
+                let (namespace, name) = crate::plugin::store::parse_coordinate(&reference.plugin)?;
+                match crate::plugin::store::read_record(home, namespace, name) {
+                    Ok(_) => {}
+                    Err(error) if crate::plugin::store::is_not_found(&error) => anyhow::bail!(
+                        "pack {} Tools {:?} names plugin {}, which neither the pack nor its dependencies ship and this node has not installed; install the pack that ships {} first (`gents pack install <namespace>/<pack>`), or declare that pack as a dependency of {}",
+                        manifest.name,
+                        tools.tools_id,
+                        reference.plugin,
+                        reference.plugin,
+                        root
+                    ),
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("reading installed plugin {}", reference.plugin)
+                        })
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub async fn install_prepared_document_pack(

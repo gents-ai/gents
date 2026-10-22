@@ -56,6 +56,17 @@ source consistency checks, not a separate runtime compatibility version.
   dependencies are refused with the command that installs them directly. The
   scenario manifest key `graph_dependency_environment` is now
   `dependency_environment`; the old key is still accepted.
+- `gents serve` no longer refuses to start when one agent's tools cannot be
+  built, for example when its Tools names a plugin that is not installed. That
+  agent reports unavailable with `tool_surface_unavailable` and its requests
+  fail with that reason, while the other agents start; startup still refuses
+  when no agent is runnable (#2767).
+- `gents pack install` and the self-config install refuse a documents pack
+  whose Tools, or a documents dependency's Tools, name a plugin that neither
+  the pack nor its dependencies ship and the node has not installed. The error
+  names the plugin and the Tools document and says to install the pack that
+  ships it or declare it as a dependency. A remote `--graphql` install, which
+  cannot see the node's plugins, leaves that check to startup (#2767).
 
 ## 0.21.0-rc0 - 2026-10-17
 
