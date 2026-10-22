@@ -13,6 +13,12 @@ use uuid::Uuid;
 
 use crate::NodeIdentity;
 
+/// The `/status` offer keeps a short window, because each holder can file a
+/// pending request until it expires; an approver relaying offers by hand may
+/// ask for up to [`MAX_OFFER_VALIDITY`]. Approval remains the only grant.
+pub const DEFAULT_OFFER_VALIDITY: Duration = Duration::minutes(5);
+pub const MAX_OFFER_VALIDITY: Duration = Duration::hours(1);
+
 #[derive(Clone)]
 pub struct EnrollmentOfferIssuer {
     identity: Arc<dyn NodeIdentity>,
@@ -46,6 +52,15 @@ impl EnrollmentOfferIssuer {
     }
 
     pub async fn mint(&self) -> Result<EnrollmentOfferStatus> {
+        self.mint_valid_for(DEFAULT_OFFER_VALIDITY).await
+    }
+
+    pub async fn mint_valid_for(&self, validity: Duration) -> Result<EnrollmentOfferStatus> {
+        anyhow::ensure!(
+            validity > Duration::zero() && validity <= MAX_OFFER_VALIDITY,
+            "enrollment offer validity must be between 1 and {} seconds",
+            MAX_OFFER_VALIDITY.num_seconds()
+        );
         let server_peer = self
             .p2p
             .local_peer_id()
@@ -67,7 +82,7 @@ impl EnrollmentOfferIssuer {
         );
         let issued = Utc::now();
         let issued_at = issued.to_rfc3339_opts(SecondsFormat::Secs, true);
-        let expires_at = (issued + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let expires_at = (issued + validity).to_rfc3339_opts(SecondsFormat::Secs, true);
         let challenge = Uuid::new_v4().simple().to_string();
         let offer_id = format!(
             "offer-{}",
