@@ -427,6 +427,10 @@ pub(crate) async fn prepare_managed_command(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "run_command_for_test is called by tests outside the toolset module"
+)]
 pub(crate) async fn run_command(
     context: &ToolContext,
     tool_name: &'static str,
@@ -1486,7 +1490,7 @@ fn shell_command_script<'a>(command: &str, args: &'a [String]) -> Option<&'a str
 
 fn git_invocations_in_script(script: &str) -> Vec<Vec<String>> {
     let mut invocations = Vec::new();
-    for segment in script.split(|ch| matches!(ch, ';' | '\n' | '|' | '&')) {
+    for segment in script.split([';', '\n', '|', '&']) {
         let words: Vec<String> = segment.split_whitespace().map(str::to_string).collect();
         let Some(git_idx) = words.iter().position(|word| {
             executable_name_lookup_key(word)

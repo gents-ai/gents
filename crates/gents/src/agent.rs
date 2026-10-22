@@ -45,6 +45,7 @@ pub(crate) mod worker_capacity;
 pub(crate) use principal_assembly::assemble_node_and_agents;
 pub(crate) use principal_assembly::AgentBuildError;
 
+pub(crate) use builder::AgentFactory;
 #[cfg(test)]
 pub(crate) use builder::PendingAgent;
 pub use builder::{AgentBuilder, GentsBuilder};
@@ -81,23 +82,25 @@ where
         agent_config.node_identity().clone(),
         p2p_reconcile::enrollment_authority_channel().1,
     );
-    let mut daemon = daemon::AgentDaemon::new(
-        node.clone(),
+    let mut daemon = daemon::AgentDaemon::new(daemon::AgentDaemonInit {
+        node: node.clone(),
         agent_config,
-        None,
-        Arc::new(model),
+        provider_family: None,
+        model: Arc::new(model),
         preamble,
         loop_tools,
         prompt_builder,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-        crate::hook::BackgroundToolRegistry::default(),
-        crate::hook::BackgroundExecutionRegistry::default(),
-        Arc::new(runtime::StartupBarrier::ready_for_test()),
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+        ),
+        background_tool_registry: crate::hook::BackgroundToolRegistry::default(),
+        background_execution_registry: crate::hook::BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(runtime::StartupBarrier::ready_for_test()),
         runtime_status,
-        1,
+        slot_generation: 1,
         request_admission,
-    )?
+    })?
     .with_tool_surface_runtime_policy(tool_surface.root_execution_guard().cloned(), None)
     .with_approval_home(tool_runtime.plugin_home().map(std::path::Path::to_path_buf));
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -442,18 +445,33 @@ pub(crate) async fn resolve_document_runtime_snapshot(
     document_view::resolve_document_runtime_snapshot_from_view(node, context, &view).await
 }
 
+pub(crate) struct AgentDocumentInputs<'a> {
+    pub(crate) agent_config: &'a crate::document_config::Agent,
+    pub(crate) context: Option<&'a crate::document_config::AgentContext>,
+    pub(crate) compaction: Option<crate::document_config::CompactionConfig>,
+    pub(crate) compaction_inference: Option<crate::config::ResolvedInference>,
+    pub(crate) inference: &'a crate::config::ResolvedInference,
+    pub(crate) tool_selection: ResolvedToolSelection,
+    pub(crate) agent_tools: AgentToolConfig,
+    pub(crate) tool_ceiling: &'a ToolCeiling,
+    pub(crate) skills: Vec<crate::skills::Skill>,
+}
+
 pub(crate) fn agent_config_from_documents(
     principal: Arc<RuntimeNode>,
-    agent_config: &crate::document_config::Agent,
-    context: Option<&crate::document_config::AgentContext>,
-    compaction: Option<crate::document_config::CompactionConfig>,
-    compaction_inference: Option<crate::config::ResolvedInference>,
-    inference: &crate::config::ResolvedInference,
-    tool_selection: ResolvedToolSelection,
-    agent_tools: AgentToolConfig,
-    tool_ceiling: &ToolCeiling,
-    skills: Vec<crate::skills::Skill>,
+    inputs: AgentDocumentInputs<'_>,
 ) -> anyhow::Result<ResolvedAgent> {
+    let AgentDocumentInputs {
+        agent_config,
+        context,
+        compaction,
+        compaction_inference,
+        inference,
+        tool_selection,
+        agent_tools,
+        tool_ceiling,
+        skills,
+    } = inputs;
     let execution = inference.execution.clone().unwrap_or_default();
     let retry = inference.retry_policy.clone().unwrap_or_default();
     let stream_batch_ms = positive_duration_secs_or_default(

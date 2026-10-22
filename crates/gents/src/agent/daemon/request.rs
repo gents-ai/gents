@@ -118,9 +118,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             .await
         };
         let provider_request = assembled.map_err(anyhow::Error::new)?;
-        Ok(config
+        config
             .provider_input_counter
-            .estimate_request(&provider_request)?)
+            .estimate_request(&provider_request)
     }
 
     pub(super) async fn handle_request(
@@ -483,11 +483,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                     prior_provider_prefix,
                                     exact,
                                 )?;
-                            if compaction_generation_is_latest
-                                && compacted_through_sequence.is_some()
+                            if let (true, Some(compacted_through_sequence)) =
+                                (compaction_generation_is_latest, compacted_through_sequence)
                             {
-                                let compacted_through_sequence = compacted_through_sequence
-                                    .expect("the persistence branch requires a proven cursor");
                                 match session::save_exact_compaction_entry(
                                     &self.node,
                                     session::NewExactSessionCompaction {

@@ -433,10 +433,7 @@ async fn wait_for_start_inflight(state: &DesktopAppState) -> Result<(), BridgeEr
         let Some(progress_rx) = progress_rx else {
             return Ok(());
         };
-        match wait_for_client_start_progress(progress_rx).await {
-            Ok(()) => {}
-            Err(_) => {}
-        }
+        if let Ok(()) = wait_for_client_start_progress(progress_rx).await {}
     }
 }
 

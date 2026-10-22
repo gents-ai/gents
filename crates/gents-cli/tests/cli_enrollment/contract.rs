@@ -323,6 +323,10 @@ async fn run_contract_with_streaming_cadence(
     result
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test driver takes the turn's coordinates and stream probes"
+)]
 async fn visible_turn(
     core: &Arc<ClientCore>,
     graphql: &str,

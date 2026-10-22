@@ -2483,7 +2483,7 @@ fn generated_noncanonical_git_delta_is_rejected_without_filesystem_traversal() {
         serde_json::from_value(case["before"]["capability"].clone()).unwrap();
     let blob = git(&fx.repo, &["rev-parse", "HEAD:README.md"]);
     let mut tree = b"100644 ../outside\0".to_vec();
-    for byte in blob.as_bytes().chunks_exact(2) {
+    for byte in blob.as_bytes().as_chunks::<2>().0 {
         tree.push(u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap());
     }
     let mut child = Command::new("git")

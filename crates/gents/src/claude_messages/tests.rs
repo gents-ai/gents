@@ -987,7 +987,7 @@ fn non_success_error_carries_status_request_id_and_bounded_body_prefix() {
 
 #[tokio::test]
 async fn transport_429_usage_cap_reports_reset_time() {
-    let _guard = lock_fixtures_for_test();
+    let _guard = lock_fixtures_for_test().await;
     let url = crate::provider_http::tests::one_shot_server(
         "429 Too Many Requests",
         &[
@@ -1025,7 +1025,7 @@ async fn transport_429_usage_cap_reports_reset_time() {
 
 #[tokio::test]
 async fn transport_401_invalidates_the_bearer_once() {
-    let _guard = lock_fixtures_for_test();
+    let _guard = lock_fixtures_for_test().await;
     let (url, handle) = crate::oauth_credential::test_support::one_shot_token_server(
         401,
         r#"{"type":"error","error":{"type":"authentication_error","message":"bad token"}}"#,
@@ -1059,7 +1059,7 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(
     bearer: &S,
     request: &CompletionRequest,
 ) -> String {
-    let _guard = lock_fixtures_for_test();
+    let _guard = blocking_lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1179,7 +1179,7 @@ fn unsupported_replay_preflight_is_a_permanent_request_error() {
 
 #[test]
 fn usage_wiring_claude_live_messages_records_unified_headers() {
-    let _guard = lock_fixtures_for_test();
+    let _guard = blocking_lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

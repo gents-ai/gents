@@ -844,9 +844,7 @@ fn collect_refs_in_body(body: &str, out: &mut Vec<VariableRef>) {
 }
 
 fn utf8_char_len(first: u8) -> usize {
-    if first < 0x80 {
-        1
-    } else if first < 0xC0 {
+    if first < 0xC0 {
         1
     } else if first < 0xE0 {
         2

@@ -44,8 +44,8 @@ impl RequestLifecycle {
         let pending_keys = pending
             .into_iter()
             .filter_map(|row: AgentRequestRow| {
-                automated_queue_key(row_queue(&row)?)
-                    .and_then(|key| row.session_id.map(|session| (session, key)))
+                let key = automated_queue_key(row_queue(&row)?);
+                row.session_id.zip(key)
             })
             .collect::<BTreeSet<_>>();
 

@@ -37,9 +37,8 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
     assert!(matches!(result, FireResult::Fired { .. }), "{result:?}");
     assert_eq!(
         materializer.calls()[0].2,
-        format!(
-            "[scheduled trigger:sched-goal · task:t1 · at:2030-01-01T00:00:00Z]\n\nwork on release for runtime"
-        )
+        "[scheduled trigger:sched-goal · task:t1 · at:2030-01-01T00:00:00Z]\n\nwork on release for runtime"
+            .to_string()
     );
     assert_eq!(
         materializer.goal_objectives(),

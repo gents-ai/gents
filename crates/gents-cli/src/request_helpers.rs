@@ -421,6 +421,10 @@ pub(crate) async fn prepare_cli_goal_input(
 /// Exact retries use the same immutable submission key and converge to the
 /// already-committed pair; conflicting retries fail without mutating either
 /// document.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the request and its Goal are written together from these fields"
+)]
 pub(crate) async fn create_goal_backed_agent_request(
     graphql: &GraphqlEndpoint,
     node_did: &str,

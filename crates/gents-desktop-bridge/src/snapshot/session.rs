@@ -214,6 +214,10 @@ pub async fn build_session_snapshot_for_node(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "projection inputs come from separate stores and request options"
+)]
 pub async fn build_session_snapshot_for_node_with_transcript(
     core: &ClientCore,
     access: &ConfigAccess,
@@ -375,15 +379,14 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     }
     if let Some(snapshot) = snapshot.as_mut() {
         fill_job_outcomes(core, snapshot).await;
-        match loaded_context {
-            Some(context) => attach_last_request_context(
+        if let Some(context) = loaded_context {
+            attach_last_request_context(
                 snapshot,
                 context.request_id,
                 context.call_id,
                 context.call_sequence,
                 context.accounting,
-            ),
-            None => {}
+            )
         }
         if let (Some(node_did), Some(requester_did)) = (node_did, session_requester) {
             let page_sequences = transcript_store

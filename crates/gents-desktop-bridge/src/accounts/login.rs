@@ -62,6 +62,10 @@ where
     login.await.map_err(|_| failure)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "sign-in inputs from the IPC request plus the host's callbacks"
+)]
 pub(crate) async fn sign_in<A, O>(
     pending: &PendingOAuthCredentials,
     access: A,

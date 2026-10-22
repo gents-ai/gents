@@ -612,9 +612,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     .await
                     .is_ok(),
                 Step::AcceptTurn { generation } => {
-                    writer
-                        .start_provider_attempt(&head_doc, 0, 0, scope.clone())
-                        .await;
+                    writer.start_provider_attempt(&head_doc, 0, 0, scope).await;
                     match writer
                         .publish_native_turn(
                             &generations[generation].lifecycle,
@@ -748,9 +746,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                             .await
                             .unwrap();
                     if let Some(first) = snapshot.entries.first() {
-                        let result = replace_pending_user_messages(&access, db.identity.as_ref(),
-                            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(db.node_did()),
-                            db.node_did(), &session_id, db.node_did(), PendingQueueEdit {
+                        let result = replace_pending_user_messages(&access, db.identity.as_ref(), gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(db.node_did()), PendingEditActor { node_did: db.node_did(), session_id: &session_id, requester_did: db.node_did() }, PendingQueueEdit {
                                 expected_request_doc_ids: snapshot.entries.iter().map(|entry| entry.request_doc_id.clone()).collect(),
                                 selected_request_doc_ids: vec![first.request_doc_id.clone()], messages: vec![],
                             }, &[]).await;

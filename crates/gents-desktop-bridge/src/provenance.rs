@@ -207,9 +207,7 @@ async fn caused_calls(
         .collect())
 }
 
-fn turn_senders<'a>(
-    lineage: &'a gents::session_origin::SessionLineage,
-) -> Vec<(String, &'a SessionLink)> {
+fn turn_senders(lineage: &gents::session_origin::SessionLineage) -> Vec<(String, &SessionLink)> {
     let links = lineage
         .started_by
         .iter()

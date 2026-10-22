@@ -350,9 +350,7 @@ impl ResolvedToolSelection {
             defra_query_collections: datastore
                 .and_then(|datastore| datastore.defra_query_collections.as_deref())
                 .unwrap_or(&[])
-                .iter()
-                .cloned()
-                .collect(),
+                .to_vec(),
             application_write_collections: datastore
                 .and_then(|v| v.write_collections.clone())
                 .unwrap_or_default(),
@@ -362,12 +360,8 @@ impl ResolvedToolSelection {
             enable_self_config: self_config_group
                 .and_then(|group| group.enable_self_config)
                 .unwrap_or(false),
-            self_config_categories: self_config_group.and_then(|group| {
-                group
-                    .self_config_categories
-                    .as_ref()
-                    .map(|categories| categories.clone())
-            }),
+            self_config_categories: self_config_group
+                .and_then(|group| group.self_config_categories.clone()),
             self_config_no_lockout: self_config_group
                 .and_then(|group| group.self_config_no_lockout)
                 .unwrap_or(false),

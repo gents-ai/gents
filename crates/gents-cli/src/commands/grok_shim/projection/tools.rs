@@ -1410,7 +1410,7 @@ mod tests {
     fn running_row_streams_incremental_growth_not_replay() {
         let row = tool_row("bash", Some("running"));
         let first = project_tool_rows(
-            &[row.clone()],
+            std::slice::from_ref(&row),
             &live_presentation("doc-bash", "{}", Some("first")),
         );
         let second = project_tool_rows(
@@ -1443,7 +1443,7 @@ mod tests {
         let mut split_tail = "counter: 3 ".to_string();
         split_tail.push(REPLACEMENT_CHARACTER);
         let held = project_tool_rows(
-            &[row.clone()],
+            std::slice::from_ref(&row),
             &live_presentation("doc-bash", "{}", Some(&split_tail)),
         );
         let ToolUpdate::ToolCall(call) = &held.updates[0] else {
@@ -1764,6 +1764,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
     async fn seed_tool_delivery(
         node: &EmbeddedNode,
         request_doc_id: &str,
@@ -1849,6 +1853,10 @@ mod tests {
         .await;
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
     async fn seed_canonical_tool_call(
         node: &Arc<EmbeddedNode>,
         request_doc_id: &str,
@@ -2221,7 +2229,7 @@ mod tests {
             node_did: "did:test:grok-shim".into(),
             requester_did: Some("did:test:grok-shim".into()),
             session_id: session_id.into(),
-            request_doc_id: request_doc_id.clone().into(),
+            request_doc_id: request_doc_id.clone(),
             source: OutputSource::ToolCall {
                 tool_call_doc_id: child_doc_id.clone(),
             },
@@ -2264,7 +2272,7 @@ mod tests {
                 node_did: "did:test:grok-shim".into(),
                 requester_did: Some("did:test:grok-shim".into()),
                 session_id: session_id.into(),
-                request_doc_id: request_doc_id.clone().into(),
+                request_doc_id: request_doc_id.clone(),
                 source: OutputSource::ToolCall {
                     tool_call_doc_id: child_doc_id.clone(),
                 },

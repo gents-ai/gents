@@ -704,13 +704,17 @@ fn media_data(
 }
 
 fn validate_media_shape(media: &super::MediaBlock) -> bool {
-    match (&media.kind, &media.media_type, &media.detail) {
-        (MediaKind::Image, Some(MediaType::Image(_)) | None, _) => true,
-        (MediaKind::Audio, Some(MediaType::Audio(_)) | None, None) => true,
-        (MediaKind::Video, Some(MediaType::Video(_)) | None, None) => true,
-        (MediaKind::Document, Some(MediaType::Document(_)) | None, None) => true,
-        _ => false,
-    }
+    matches!(
+        (&media.kind, &media.media_type, &media.detail),
+        (MediaKind::Image, Some(MediaType::Image(_)) | None, _)
+            | (MediaKind::Audio, Some(MediaType::Audio(_)) | None, None)
+            | (MediaKind::Video, Some(MediaType::Video(_)) | None, None)
+            | (
+                MediaKind::Document,
+                Some(MediaType::Document(_)) | None,
+                None
+            )
+    )
 }
 
 fn reconstruct_media(

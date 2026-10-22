@@ -239,16 +239,27 @@ pub(crate) async fn stage_fire_receipt(
 
 /// Called in the terminal owner's transaction; an acknowledgement lost after
 /// commit cannot extend the chain because recovery reuses the unique outcome key.
+pub(crate) struct OutcomeStage<'a> {
+    pub(crate) goal: Option<&'a GoalOutcomeBinding>,
+    pub(crate) assignment_replaced: bool,
+    pub(crate) request_terminal: bool,
+    pub(crate) terminal_state: &'a str,
+    pub(crate) reason: &'a str,
+}
+
 pub(crate) async fn stage_outcome(
     txn: &ConfigApplyTxn<'_>,
     fire: &TriggerFire,
-    goal: Option<&GoalOutcomeBinding>,
-    assignment_replaced: bool,
-    request_terminal: bool,
-    terminal_state: &str,
-    reason: &str,
+    stage: OutcomeStage<'_>,
     now: &str,
 ) -> Result<bool> {
+    let OutcomeStage {
+        goal,
+        assignment_replaced,
+        request_terminal,
+        terminal_state,
+        reason,
+    } = stage;
     let Some(classification) =
         fire_outcome_reason(fire, request_terminal, assignment_replaced, goal)
     else {
@@ -322,7 +333,14 @@ pub(crate) async fn publish_request_outcome(
     let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(request_id))).await?;
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
-        stage_outcome(txn, &fire, None, false, true, terminal_state, reason, now).await?;
+        let stage = OutcomeStage {
+            goal: None,
+            assignment_replaced: false,
+            request_terminal: true,
+            terminal_state,
+            reason,
+        };
+        stage_outcome(txn, &fire, stage, now).await?;
     }
     Ok(())
 }
@@ -344,11 +362,13 @@ pub(crate) async fn publish_goal_outcomes(
         stage_outcome(
             txn,
             &fire,
-            binding.as_ref(),
-            assignment_replaced(&fire, binding.as_ref()),
-            false,
-            "",
-            reason,
+            OutcomeStage {
+                goal: binding.as_ref(),
+                assignment_replaced: assignment_replaced(&fire, binding.as_ref()),
+                request_terminal: false,
+                terminal_state: "",
+                reason,
+            },
             now,
         )
         .await?;

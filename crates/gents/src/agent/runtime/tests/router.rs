@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::agent::runtime::router::RuntimeAdmissionGate;
+use crate::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -197,16 +197,16 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     let gate_for_router = gate.clone();
     let router_node = node.clone();
     let router = tokio::spawn(async move {
-        super::super::router::run_router_with_watcher(
-            router_node,
-            node_did.to_string(),
-            ScriptedWatcher { rx: request_rx },
-            active_rx,
-            shutdown_rx,
-            gate_for_router,
-            status,
-            None,
-        )
+        super::super::router::run_router_with_watcher(RouterInputs {
+            node: router_node,
+            node_did: node_did.to_string(),
+            watcher: ScriptedWatcher { rx: request_rx },
+            active_snapshot_rx: active_rx,
+            shutdown: shutdown_rx,
+            admission_gate: gate_for_router,
+            runtime_status: status,
+            runtime_snapshot_observer: None,
+        })
         .await
     });
 
@@ -276,16 +276,16 @@ async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
     let router_node = node.clone();
     let status_for_router = status.clone();
     let router = tokio::spawn(async move {
-        super::super::router::run_router_with_watcher(
-            router_node,
-            node_did.to_string(),
-            ScriptedWatcher { rx: request_rx },
-            active_rx,
-            shutdown_rx,
-            gate_for_router,
-            status_for_router,
-            None,
-        )
+        super::super::router::run_router_with_watcher(RouterInputs {
+            node: router_node,
+            node_did: node_did.to_string(),
+            watcher: ScriptedWatcher { rx: request_rx },
+            active_snapshot_rx: active_rx,
+            shutdown: shutdown_rx,
+            admission_gate: gate_for_router,
+            runtime_status: status_for_router,
+            runtime_snapshot_observer: None,
+        })
         .await
     });
 
@@ -354,19 +354,19 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     request_tx.send(Ok(routed)).await.unwrap();
     let watcher_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-    let error = super::super::router::run_router_with_watcher(
-        node.clone(),
-        node_did.to_string(),
-        CountingWatcher {
+    let error = super::super::router::run_router_with_watcher(RouterInputs {
+        node: node.clone(),
+        node_did: node_did.to_string(),
+        watcher: CountingWatcher {
             rx: request_rx,
             calls: watcher_calls.clone(),
         },
-        active_rx,
-        shutdown_rx,
-        gate.clone(),
-        status,
-        None,
-    )
+        active_snapshot_rx: active_rx,
+        shutdown: shutdown_rx,
+        admission_gate: gate.clone(),
+        runtime_status: status,
+        runtime_snapshot_observer: None,
+    })
     .await
     .expect_err("router generation persistence failure must stop the router");
     assert!(
@@ -447,13 +447,15 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
         let wait = wait_for_next_request_with_latest_snapshot(
             node_did,
             &mut watcher,
-            &mut active_snapshot,
-            &mut active_rx,
+            RouterWaitState {
+                active_snapshot: &mut active_snapshot,
+                active_snapshot_rx: &mut active_rx,
+                admission_gate: &admission_gate,
+                admission_changed: &mut admission_rx,
+                readiness_changed: &mut readiness_rx,
+                pending_request: &mut pending_request,
+            },
             &mut shutdown_rx,
-            &admission_gate,
-            &mut admission_rx,
-            &mut readiness_rx,
-            &mut pending_request,
             None,
             None,
         );
@@ -560,13 +562,15 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         wait_for_next_request_with_latest_snapshot(
             node_did,
             &mut watcher,
-            &mut active_snapshot,
-            &mut active_rx,
+            RouterWaitState {
+                active_snapshot: &mut active_snapshot,
+                active_snapshot_rx: &mut active_rx,
+                admission_gate: &admission_gate,
+                admission_changed: &mut admission_rx,
+                readiness_changed: &mut readiness_rx,
+                pending_request: &mut pending_request,
+            },
             &mut shutdown_rx,
-            &admission_gate,
-            &mut admission_rx,
-            &mut readiness_rx,
-            &mut pending_request,
             Some(&runtime_status_for_router),
             None,
         )

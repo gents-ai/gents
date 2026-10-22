@@ -224,26 +224,44 @@ fn auxiliary_task_join_result(joined: std::result::Result<Result<()>, JoinError>
     }
 }
 
+pub(super) struct AgentDaemonInit<M: ProviderModel> {
+    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) agent_config: Arc<ResolvedAgent>,
+    pub(super) provider_family: Option<String>,
+    pub(super) model: Arc<M>,
+    pub(super) preamble: String,
+    pub(super) loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
+    pub(super) prompt_builder: LayeredPromptBuilder,
+    pub(super) hook_failure_policy: FailurePolicy,
+    pub(super) rendered_request_capture_factory:
+        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+    pub(super) background_tool_registry: crate::hook::BackgroundToolRegistry,
+    pub(super) background_execution_registry: crate::hook::BackgroundExecutionRegistry,
+    pub(super) startup_barrier: Arc<StartupBarrier>,
+    pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
+    pub(super) slot_generation: u64,
+    pub(super) request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
+}
+
 impl<M: ProviderModel> AgentDaemon<M> {
-    pub(super) fn new(
-        node: Arc<defra_node::EmbeddedNode>,
-        agent_config: Arc<ResolvedAgent>,
-        provider_family: Option<String>,
-        model: Arc<M>,
-        preamble: String,
-        loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
-        prompt_builder: LayeredPromptBuilder,
-        hook_failure_policy: FailurePolicy,
-        rendered_request_capture_factory: Option<
-            crate::rendered_request::RenderedRequestCaptureFactory,
-        >,
-        background_tool_registry: crate::hook::BackgroundToolRegistry,
-        background_execution_registry: crate::hook::BackgroundExecutionRegistry,
-        startup_barrier: Arc<StartupBarrier>,
-        runtime_status: crate::runtime_status::RuntimeStatusHandle,
-        slot_generation: u64,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
-    ) -> Result<Self> {
+    pub(super) fn new(init: AgentDaemonInit<M>) -> Result<Self> {
+        let AgentDaemonInit {
+            node,
+            agent_config,
+            provider_family,
+            model,
+            preamble,
+            loop_tools,
+            prompt_builder,
+            hook_failure_policy,
+            rendered_request_capture_factory,
+            background_tool_registry,
+            background_execution_registry,
+            startup_barrier,
+            runtime_status,
+            slot_generation,
+            request_admission,
+        } = init;
         let mut compaction_config = crate::completion_factory::loop_config(
             agent_config.as_ref(),
             preamble.clone(),

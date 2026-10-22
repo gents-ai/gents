@@ -132,7 +132,7 @@ pub(super) async fn read_actual(
         }
         replicator_collections_by_addr
             .entry(address.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .extend(replicator.collections);
         let Some(filters) = replicator.filters else {
             replicator_filters_unobserved.insert(address);

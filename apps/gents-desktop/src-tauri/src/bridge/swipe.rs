@@ -86,13 +86,7 @@ fn track(app: &AppHandle, event: &NSEvent) {
                 NSEventPhase::Cancelled => "cancelled",
                 _ => return,
             };
-            let _ = window.emit(
-                "native-swipe",
-                SwipeProgress {
-                    amount: amount as f64,
-                    phase,
-                },
-            );
+            let _ = window.emit("native-swipe", SwipeProgress { amount, phase });
         },
     );
     event.trackSwipeEventWithOptions_dampenAmountThresholdMin_max_usingHandler(

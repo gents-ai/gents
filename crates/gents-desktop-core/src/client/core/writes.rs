@@ -2239,12 +2239,12 @@ impl ClientCore {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
         let foreign_header = self
-            .session_unreadable_reason(&session_id, &node_did)
+            .session_unreadable_reason(session_id, node_did)
             .is_some();
         let (progress, detail, _) = self
-            .load_hydration_observation(&session_id, &node_did)
+            .load_hydration_observation(session_id, node_did)
             .await?;
-        if !should_start_session_hydration_request(&progress, &session_id, &node_did)
+        if !should_start_session_hydration_request(&progress, session_id, node_did)
             || foreign_header
         {
             return Ok((progress, detail));
@@ -2252,8 +2252,8 @@ impl ClientCore {
         let evidence = load_local_hydration_start_evidence(
             self.node.as_ref(),
             self.node_identity.did(),
-            &session_id,
-            &node_did,
+            session_id,
+            node_did,
         )
         .await?;
         if !hydration_start_evidence_is_ready(false, &progress, &evidence) {
@@ -2261,13 +2261,13 @@ impl ClientCore {
         }
         self.admit_session_hydration_request(
             gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::PassiveStart,
-            &session_id,
-            &node_did,
+            session_id,
+            node_did,
             &progress,
             Some(&evidence),
         )
         .await?;
-        self.load_hydration_status(&session_id, &node_did).await
+        self.load_hydration_status(session_id, node_did).await
     }
 
     pub fn transcript_node_scope(&self, node_did: &str) -> Option<String> {
@@ -2327,24 +2327,24 @@ impl ClientCore {
     )> {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
-        self.load_hydration_status(&session_id, &node_did).await
+        self.load_hydration_status(session_id, node_did).await
     }
 
     pub async fn retry_session_hydration(&self, session_id: &str, node_did: &str) -> Result<()> {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
-        if let Some(reason) = self.session_unreadable_reason(&session_id, &node_did) {
+        if let Some(reason) = self.session_unreadable_reason(session_id, node_did) {
             bail!("{reason}");
         }
         let (progress, _, request) = self
-            .load_hydration_observation(&session_id, &node_did)
+            .load_hydration_observation(session_id, node_did)
             .await?;
         if !gents::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
             gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
             &request,
             &progress,
-            &session_id,
-            &node_did,
+            session_id,
+            node_did,
             false,
             false,
             false,
@@ -2355,8 +2355,8 @@ impl ClientCore {
         if !self
             .admit_session_hydration_request(
                 gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
-                &session_id,
-                &node_did,
+                session_id,
+                node_did,
                 &progress,
                 None,
             )
@@ -2392,14 +2392,14 @@ impl ClientCore {
             }
         };
         let peer_record = self
-            .peer_record_for_chat_write(&node_did, Utc::now())
+            .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
-        ensure_peer_chat_ready_at(&node_did, peer_record.as_ref(), Utc::now())?;
+        ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
         let request_key = format!("{}:{session_id}", self.local_peer_id());
         let expected_requester_did = self.node_identity.did().to_owned();
         let requester_did = gents::graphql::escape_graphql_string(&expected_requester_did);
-        let node_did_gql = gents::graphql::escape_graphql_string(&node_did);
-        let session_id_gql = gents::graphql::escape_graphql_string(&session_id);
+        let node_did_gql = gents::graphql::escape_graphql_string(node_did);
+        let session_id_gql = gents::graphql::escape_graphql_string(session_id);
         let request_key_gql = gents::graphql::escape_graphql_string(&request_key);
         let now = gents::graphql::escape_graphql_string(
             &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -2474,7 +2474,7 @@ impl ClientCore {
                     );
                     let request = requests.first();
                     if let Some(request) = request {
-                        request.ensure_target(&request_key, &expected_requester_did, &node_did, &session_id)?;
+                        request.ensure_target(&request_key, &expected_requester_did, node_did, session_id)?;
                     }
                     let request_state = match request {
                         None => {
@@ -2502,8 +2502,8 @@ impl ClientCore {
                         action,
                         &request_state,
                         &observed_progress,
-                        &session_id,
-                        &node_did,
+                        session_id,
+                        node_did,
                         false,
                         evidence.is_some_and(|evidence| evidence.owned_session_present),
                         observed_progress.merged_count > 0,

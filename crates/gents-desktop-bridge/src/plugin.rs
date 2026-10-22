@@ -10,7 +10,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
         .setup(move |app, _api| {
             let app_data_dir = app.path().app_data_dir().ok();
             let policy = resolve_policy(&config, app_data_dir)
-                .map_err(|error| Box::<dyn std::error::Error>::from(error))?;
+                .map_err(Box::<dyn std::error::Error>::from)?;
             tracing::info!(
                 app = %policy.app_meta.app_name,
                 version = %policy.app_meta.app_version,

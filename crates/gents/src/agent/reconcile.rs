@@ -22,6 +22,7 @@ use diff::diff_counts;
 pub(in crate::agent) use slot::SlotFailurePolicy;
 use slot::{
     agent_executor_capacity, spawn_slot_with_capacity, spawn_slots, AgentSlot, AgentSlotState,
+    SlotConfig,
 };
 
 #[derive(Debug)]
@@ -382,14 +383,16 @@ where
             staged.insert(
                 agent_id.clone(),
                 spawn_slot_with_capacity(
-                    agent.clone(),
-                    tool_surface,
+                    SlotConfig {
+                        agent_config: agent.clone(),
+                        tool_surface,
+                        generation,
+                        retry_policy: self.retry_policy.clone(),
+                        failure_policy: self.slot_failure_policy.clone(),
+                    },
                     executor_capacity,
-                    generation,
-                    self.retry_policy.clone(),
                     self.runner.clone(),
                     shutdown.clone(),
-                    self.slot_failure_policy.clone(),
                 ),
             );
         }

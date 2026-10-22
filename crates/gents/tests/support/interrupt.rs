@@ -37,7 +37,7 @@ impl BootedAgent {
             shutdown_tx,
             handle: Some(handle),
             signal_shutdown_on_drop: true,
-            node_did: node_did,
+            node_did,
         }
     }
 
@@ -99,13 +99,15 @@ pub async fn create_runtime_request(
     create_runtime_request_inner(
         node,
         node_did,
-        agent_id,
-        request_id,
-        session_id,
-        None,
-        "interactive",
-        None,
-        content,
+        RuntimeRequestSpec {
+            agent_id,
+            request_id,
+            session_id,
+            valid_until: None,
+            execution_origin: "interactive",
+            caused_by_source_doc_id: None,
+            content,
+        },
     )
     .await
 }
@@ -122,13 +124,15 @@ pub async fn create_runtime_request_with_valid_until(
     create_runtime_request_inner(
         node,
         node_did,
-        agent_id,
-        request_id,
-        session_id,
-        Some(valid_until),
-        "interactive",
-        None,
-        content,
+        RuntimeRequestSpec {
+            agent_id,
+            request_id,
+            session_id,
+            valid_until: Some(valid_until),
+            execution_origin: "interactive",
+            caused_by_source_doc_id: None,
+            content,
+        },
     )
     .await
 }
@@ -145,13 +149,15 @@ pub async fn create_runtime_request_with_execution_origin(
     create_runtime_request_inner(
         node,
         node_did,
-        agent_id,
-        request_id,
-        session_id,
-        None,
-        execution_origin,
-        None,
-        content,
+        RuntimeRequestSpec {
+            agent_id,
+            request_id,
+            session_id,
+            valid_until: None,
+            execution_origin,
+            caused_by_source_doc_id: None,
+            content,
+        },
     )
     .await
 }
@@ -168,28 +174,43 @@ pub async fn create_runtime_request_caused_by_source(
     create_runtime_request_inner(
         node,
         node_did,
-        agent_id,
-        request_id,
-        session_id,
-        None,
-        "interactive",
-        Some(caused_by_source_doc_id),
-        content,
+        RuntimeRequestSpec {
+            agent_id,
+            request_id,
+            session_id,
+            valid_until: None,
+            execution_origin: "interactive",
+            caused_by_source_doc_id: Some(caused_by_source_doc_id),
+            content,
+        },
     )
     .await
+}
+
+struct RuntimeRequestSpec<'a> {
+    agent_id: &'a str,
+    request_id: &'a str,
+    session_id: &'a str,
+    valid_until: Option<&'a str>,
+    execution_origin: &'a str,
+    caused_by_source_doc_id: Option<&'a str>,
+    content: &'a str,
 }
 
 async fn create_runtime_request_inner(
     node: &EmbeddedNode,
     node_did: &str,
-    agent_id: &str,
-    request_id: &str,
-    session_id: &str,
-    valid_until: Option<&str>,
-    execution_origin: &str,
-    caused_by_source_doc_id: Option<&str>,
-    content: &str,
+    spec: RuntimeRequestSpec<'_>,
 ) -> String {
+    let RuntimeRequestSpec {
+        agent_id,
+        request_id,
+        session_id,
+        valid_until,
+        execution_origin,
+        caused_by_source_doc_id,
+        content,
+    } = spec;
     ensure_generated_session(node, node_did, agent_id, session_id).await;
 
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);

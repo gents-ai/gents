@@ -529,14 +529,13 @@ fn plan_reset(
         ensure_retirable_root(&desktop_root, "desktop client state", user_home)?;
     }
     let mut runtime_entries = match runtime.as_ref() {
-        Some((home, _)) => {
-            gents::home::home_entries(home, &[desktop_root.clone()]).map_err(|error| {
+        Some((home, _)) => gents::home::home_entries(home, std::slice::from_ref(&desktop_root))
+            .map_err(|error| {
                 BridgeError::new(
                     BridgeErrorCode::Backend,
                     format!("Listing {}: {error:#}", home.display()),
                 )
-            })?
-        }
+            })?,
         None => gents::home::HomeEntries::default(),
     };
     // A home proves it is a Gents home only through a readable init marker;
@@ -1298,6 +1297,30 @@ fn lock_in(directory: &Path, name: &str, wait: bool) -> anyhow::Result<gents::fi
     }
 }
 
+/// The CLI defaults to the home the desktop actually reviewed. An unreadable
+/// preference requires an explicit home, so corruption cannot select a
+/// different node for a destructive reset.
+pub fn reviewed_reset_home(paths: &crate::client::DesktopPaths) -> anyhow::Result<Option<PathBuf>> {
+    use anyhow::Context;
+    let path = paths.root().join(MANAGED_SERVER_CONFIG);
+    let bytes =
+        match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context(
+                "Reading desktop preference; specify --home to choose the reset target explicitly",
+            ),
+        };
+    let stored: StoredManagedServer = serde_json::from_slice(&bytes).context(
+        "Reading desktop preference; specify --home to choose the reset target explicitly",
+    )?;
+    Ok(stored
+        .reviewed_for
+        .map(|reviewed| reviewed.node_home)
+        .filter(|home| !home.trim().is_empty())
+        .map(PathBuf::from))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1899,28 +1922,4 @@ mod tests {
             .check_confirmation(&before.confirmation, HomeResetDisposition::Archive)
             .unwrap();
     }
-}
-
-/// The CLI defaults to the home the desktop actually reviewed. An unreadable
-/// preference requires an explicit home, so corruption cannot select a
-/// different node for a destructive reset.
-pub fn reviewed_reset_home(paths: &crate::client::DesktopPaths) -> anyhow::Result<Option<PathBuf>> {
-    use anyhow::Context;
-    let path = paths.root().join(MANAGED_SERVER_CONFIG);
-    let bytes =
-        match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error).context(
-                "Reading desktop preference; specify --home to choose the reset target explicitly",
-            ),
-        };
-    let stored: StoredManagedServer = serde_json::from_slice(&bytes).context(
-        "Reading desktop preference; specify --home to choose the reset target explicitly",
-    )?;
-    Ok(stored
-        .reviewed_for
-        .map(|reviewed| reviewed.node_home)
-        .filter(|home| !home.trim().is_empty())
-        .map(PathBuf::from))
 }

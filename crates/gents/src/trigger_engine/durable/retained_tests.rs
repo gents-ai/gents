@@ -171,11 +171,13 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
                         stage_outcome(
                             txn,
                             fire,
-                            Some(binding),
-                            false,
-                            true,
-                            "completed",
-                            &binding.status,
+                            OutcomeStage {
+                                goal: Some(binding),
+                                assignment_replaced: false,
+                                request_terminal: true,
+                                terminal_state: "completed",
+                                reason: &binding.status,
+                            },
                             "2026-10-21T00:00:01Z",
                         )
                         .await

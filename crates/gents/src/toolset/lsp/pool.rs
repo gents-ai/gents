@@ -158,13 +158,13 @@ async fn lru_idle_ready(
             continue;
         }
         let entry = slot.lock().await;
-        if entry.state == EntryState::Ready && entry.leases.load(Ordering::SeqCst) == 0 {
-            if victim
+        if entry.state == EntryState::Ready
+            && entry.leases.load(Ordering::SeqCst) == 0
+            && victim
                 .as_ref()
                 .is_none_or(|(_, used)| entry.last_used < *used)
-            {
-                victim = Some((key.clone(), entry.last_used));
-            }
+        {
+            victim = Some((key.clone(), entry.last_used));
         }
     }
     victim.map(|(key, _)| key)
@@ -493,19 +493,11 @@ impl LspPool {
                 key.session_id == incoming.session_id && key.agent_id == incoming.agent_id
             })
             .await?;
-            if let Some(slot) = map.remove(&victim) {
-                victims.push(slot);
-            } else {
-                return None;
-            }
+            victims.push(map.remove(&victim)?);
         }
         if map.len() >= MAX_GLOBAL {
             let victim = lru_idle_ready(map, |_| true).await?;
-            if let Some(slot) = map.remove(&victim) {
-                victims.push(slot);
-            } else {
-                return None;
-            }
+            victims.push(map.remove(&victim)?);
         }
         Some(victims)
     }

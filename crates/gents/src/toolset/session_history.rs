@@ -242,7 +242,7 @@ pub async fn load_pinned_request_context_observation(
         {INFERENCE_DETAIL_FIELDS}
     }} }}"#,
             escape_graphql_string(node_did),
-            escape_graphql_string(&doc)
+            escape_graphql_string(doc)
         ),
         "live context observation",
     )

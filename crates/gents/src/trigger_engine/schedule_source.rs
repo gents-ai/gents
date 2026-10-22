@@ -194,7 +194,7 @@ impl TriggerSource for ScheduleSource {
                             args_vars: None,
                             durable_fire_key: crate::trigger_engine::durable_fire_key(
                                 "schedule",
-                                &[&trigger_id, &next_run_at],
+                                &[trigger_id, &next_run_at],
                             ),
                             pre_materialized_request_id: None,
                             on_result: Box::new(move |result| {

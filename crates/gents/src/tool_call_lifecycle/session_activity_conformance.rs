@@ -3,7 +3,7 @@ use super::{
         publish_accepted_on_claimed_request, published_admission_with_owner,
         PublishedAdmissionOptions,
     },
-    delivery::TerminalFields,
+    delivery::{RawPresentation, TerminalFields},
     AwaitMode, ToolCallState,
 };
 use crate::{config_client::ConfigAccess, graphql::escape_graphql_string};
@@ -113,9 +113,11 @@ async fn tool_publications_follow_lean_session_activity() {
                         cancel: None,
                         completion_reason: None,
                     },
-                    "ok",
-                    "ok",
-                    PayloadPresentation::Full,
+                    RawPresentation {
+                        raw: "ok",
+                        rendered: "ok",
+                        presentation: PayloadPresentation::Full,
+                    },
                     "test.tool_activity",
                     now,
                 )

@@ -31,7 +31,7 @@ struct Case {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Step {
     Apply {
-        command: Command,
+        command: Box<Command>,
         facts: Value,
         now: i64,
         next_composite: String,

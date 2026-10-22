@@ -51,7 +51,7 @@ fn incoming_is_canonical_latest(
         session.session_id
     );
     anyhow::ensure!(
-        rows.iter().any(|row| *row == *incoming),
+        rows.contains(incoming),
         "incoming request row is missing from the scoped request facts"
     );
     Ok(rows
@@ -615,18 +615,18 @@ pub async fn apply_title_in_txn(
         anyhow::bail!("updating title: no AgentSession for session_id={session_id}");
     };
     let session = &row.session;
-    let applies = match (session.title.as_ref(), source) {
-        (_, gents_protocol::session::SessionTitleSource::User) => true,
-        (None, _) => true,
-        (
-            Some(gents_protocol::session::SessionTitle {
-                source: gents_protocol::session::SessionTitleSource::Placeholder,
-                ..
-            }),
-            gents_protocol::session::SessionTitleSource::Generated,
-        ) => true,
-        _ => false,
-    };
+    let applies = matches!(
+        (session.title.as_ref(), source),
+        (_, gents_protocol::session::SessionTitleSource::User)
+            | (None, _)
+            | (
+                Some(gents_protocol::session::SessionTitle {
+                    source: gents_protocol::session::SessionTitleSource::Placeholder,
+                    ..
+                }),
+                gents_protocol::session::SessionTitleSource::Generated,
+            )
+    );
     if !applies {
         return Ok(());
     }
@@ -782,13 +782,13 @@ mod observation_refresh_tests {
                             "content": "prompt", "created_at": time, "lifecycle_state": "pending"}}),
                     ).await?;
                 }
-                let local = load_latest_request_in_txn(&txn, "did:test:head", "head-session", Some(None)).await?.unwrap();
+                let local = load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(None)).await?.unwrap();
                 assert_eq!(local.observed.request_id, "z");
-                let all = load_latest_request_in_txn(&txn, "did:test:head", "head-session", None).await?.unwrap();
+                let all = load_latest_request_in_txn(txn, "did:test:head", "head-session", None).await?.unwrap();
                 assert_eq!(all.observed.request_id, "remote");
-                let exact = load_latest_request_in_txn(&txn, "did:test:head", "head-session", Some(Some("did:test:requester"))).await?.unwrap();
+                let exact = load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(Some("did:test:requester"))).await?.unwrap();
                 assert_eq!(exact, all);
-                assert!(load_latest_request_in_txn(&txn, "did:test:head", "head-session", Some(Some("did:test:absent"))).await?.is_none());
+                assert!(load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(Some("did:test:absent"))).await?.is_none());
                 Ok(())
             }),
         ).await.unwrap();
@@ -858,7 +858,7 @@ mod observation_refresh_tests {
 
                     let (heads, batch_queries) = count_request_fact_batch_queries(
                         load_latest_requests_in_txn(
-                            &txn,
+                            txn,
                             "did:test:batch-heads",
                             &session_ids,
                             None,
@@ -872,7 +872,7 @@ mod observation_refresh_tests {
                     assert_eq!(heads[&session_ids[1]].observed.request_id, "request-01");
 
                     let absent_requester = load_latest_requests_in_txn(
-                        &txn,
+                        txn,
                         "did:test:batch-heads",
                         &session_ids[..1],
                         Some(None),
@@ -880,7 +880,7 @@ mod observation_refresh_tests {
                     .await?;
                     assert_eq!(absent_requester[&session_ids[0]].observed.request_id, "z-tie");
                     let exact_requester = load_latest_requests_in_txn(
-                        &txn,
+                        txn,
                         "did:test:batch-heads",
                         &session_ids[..1],
                         Some(Some("did:test:requester")),
@@ -924,34 +924,34 @@ mod observation_refresh_tests {
             |txn| Box::pin(async move {
                 let now = "2030-01-01T00:00:01Z";
                 crate::session::ensure_session_in_txn(
-                    &txn, "refresh-session", "did:test:refresh", "refresh-agent",
+                    txn, "refresh-session", "did:test:refresh", "refresh-agent",
                     None, None, None, now,
                 ).await?;
                 let owner = load_agent_session_row_in_txn(
-                    &txn, "did:test:refresh", "refresh-session", None,
+                    txn, "did:test:refresh", "refresh-session", None,
                 ).await?.unwrap();
-                let facts = load_scoped_request_facts_in_txn(&txn, &owner.session, false).await?;
+                let facts = load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
                 assert_eq!(facts.len(), 1);
                 let fact = &facts[0];
-                assert!(advance_session_request_observation_in_txn(&txn, fact, "prompt", now).await?);
+                assert!(advance_session_request_observation_in_txn(txn, fact, "prompt", now).await?);
                 let doc_id = escape_graphql_string(&fact.observed.request_doc_id);
                 txn.execute_local_response(&format!(r#"mutation {{
                     update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                         input: {{ lifecycle_state: "completed" }}) {{ _docID }}
                 }}"#)).await?;
                 assert!(refresh_session_request_observation_in_txn(
-                    &txn, "did:test:refresh", None, "refresh-session",
+                    txn, "did:test:refresh", None, "refresh-session",
                     &fact.observed.request_doc_id, "refresh-request", now,
                 ).await?);
-                patch_session_in_txn(&txn, &owner.doc_id, serde_json::json!({
+                patch_session_in_txn(txn, &owner.doc_id, serde_json::json!({
                     "closed_at": "2030-01-01T00:00:02Z", "tags": ["review"]
                 })).await?;
                 assert!(crate::session::reopen_session_in_txn(
-                    &txn, "refresh-session", "did:test:refresh", None,
+                    txn, "refresh-session", "did:test:refresh", None,
                     "2030-01-01T00:00:03Z",
                 ).await?);
                 let reopened = load_agent_session_row_in_txn(
-                    &txn, "did:test:refresh", "refresh-session", None,
+                    txn, "did:test:refresh", "refresh-session", None,
                 ).await?.unwrap().session;
                 assert!(reopened.closed_at.is_none());
                 assert_eq!(reopened.created_at, now);
@@ -987,7 +987,7 @@ mod observation_refresh_tests {
                     .and_then(|row| row.get("_docID"))
                     .and_then(serde_json::Value::as_str)
                     .context("foreign request omitted _docID")?;
-                patch_session_in_txn(&txn, &owner.doc_id, serde_json::json!({
+                patch_session_in_txn(txn, &owner.doc_id, serde_json::json!({
                     "observation": {
                         "last_activity_at": "2030-01-01T00:00:03Z",
                         "preview": "prompt",
@@ -999,11 +999,11 @@ mod observation_refresh_tests {
                     }
                 })).await?;
                 assert!(!refresh_session_request_observation_in_txn(
-                    &txn, "did:test:refresh", None, "refresh-session",
+                    txn, "did:test:refresh", None, "refresh-session",
                     foreign_doc_id, "refresh-request", now,
                 ).await?);
                 let session = load_agent_session_row_in_txn(
-                    &txn, "did:test:refresh", "refresh-session", None,
+                    txn, "did:test:refresh", "refresh-session", None,
                 ).await?.unwrap().session;
                 assert_eq!(session.observation.unwrap().latest_request.unwrap().lifecycle_state,
                     RequestLifecycleState::Completed);

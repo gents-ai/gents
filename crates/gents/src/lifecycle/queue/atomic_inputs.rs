@@ -51,6 +51,10 @@ pub(super) fn background_completion_gate(
 }
 
 /// A concurrent claim conflicts and retries, so a wake cannot precede its input.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "called from background_completion::notification_delivery and queue tests with this shape"
+)]
 pub(crate) async fn persist_background_completion_with_message_canonical(
     node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
@@ -92,15 +96,17 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
                 background_completion_transaction_attempt(
                     txn,
                     parent,
-                    notification_content,
-                    message_key,
-                    queue_key_ref,
-                    agent_id,
-                    wake_content,
-                    queue,
-                    existing_notification_doc_id,
-                    native,
-                    wake,
+                    CompletionAttempt {
+                        content: notification_content,
+                        message_key,
+                        queue_key: queue_key_ref,
+                        agent_id,
+                        wake_content,
+                        queue,
+                        existing_notification_doc_id,
+                        native,
+                        wake,
+                    },
                 )
                 .await
             })
@@ -303,20 +309,36 @@ pub(crate) async fn persist_background_completion_with_message_waking(
     .await
 }
 
+struct CompletionAttempt<'a> {
+    content: &'a str,
+    message_key: &'a str,
+    queue_key: &'a str,
+    agent_id: &'a str,
+    wake_content: &'a str,
+    queue: &'a RequestQueue,
+    existing_notification_doc_id: Option<&'a str>,
+    native: &'a ToolNotificationPublication,
+    wake: crate::lifecycle::RequestHopCause,
+}
+
 async fn background_completion_transaction_attempt(
     txn: &ConfigApplyTxn<'_>,
     parent: &AgentRequest,
-    content: &str,
-    message_key: &str,
-    queue_key: &str,
-    agent_id: &str,
-    wake_content: &str,
-    queue: &RequestQueue,
-    existing_notification_doc_id: Option<&str>,
-    native: &ToolNotificationPublication,
-    wake: crate::lifecycle::RequestHopCause,
+    attempt: CompletionAttempt<'_>,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     use sha2::{Digest, Sha256};
+
+    let CompletionAttempt {
+        content,
+        message_key,
+        queue_key,
+        agent_id,
+        wake_content,
+        queue,
+        existing_notification_doc_id,
+        native,
+        wake,
+    } = attempt;
 
     let request_fields = crate::request_admission::SIGNED_REQUEST_FIELDS;
     let escaped_session_id = escape_graphql_string(&parent.session_id);
@@ -518,13 +540,15 @@ async fn background_completion_transaction_attempt(
             let request_mutation = session_request_create_mutation_at_hop(
                 parent,
                 wake_hop,
-                agent_id,
-                wake_content,
-                ExecutionOrigin::Scheduled,
-                wake_input,
-                &request_id,
-                &now,
-                Some(&retry_key),
+                SessionRequestFields {
+                    agent_id,
+                    content: wake_content,
+                    execution_origin: ExecutionOrigin::Scheduled,
+                    input: wake_input,
+                    request_id: &request_id,
+                    created_at: &now,
+                    retry_key: Some(&retry_key),
+                },
             )
             .await?;
             let response = txn.execute(&request_mutation).await?;

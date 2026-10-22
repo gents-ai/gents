@@ -69,10 +69,16 @@ fn queue_reads_do_not_advertise_or_refresh_a_listener() {
         &serde_json::to_vec(&request).unwrap(),
     )
     .unwrap();
-    assert_eq!(pending_requests(home.path()).unwrap(), [request.clone()]);
+    assert_eq!(
+        pending_requests(home.path()).unwrap(),
+        std::slice::from_ref(&request)
+    );
     assert!(!Queue::Unscoped.listener_file(home.path()).exists());
 
-    assert_eq!(pending(home.path()).unwrap(), [request.clone()]);
+    assert_eq!(
+        pending(home.path()).unwrap(),
+        std::slice::from_ref(&request)
+    );
     assert!(listener_fresh(home.path(), Queue::Unscoped));
     let mark = Queue::Unscoped.listener_file(home.path());
     let fresh = mark.metadata().unwrap().modified().unwrap();
@@ -85,7 +91,10 @@ fn queue_reads_do_not_advertise_or_refresh_a_listener() {
         .unwrap()
         .set_modified(std::time::UNIX_EPOCH)
         .unwrap();
-    assert_eq!(pending_requests(home.path()).unwrap(), [request.clone()]);
+    assert_eq!(
+        pending_requests(home.path()).unwrap(),
+        std::slice::from_ref(&request)
+    );
     assert!(!listener_fresh(home.path(), Queue::Unscoped));
     assert_eq!(pending(home.path()).unwrap(), [request]);
     assert!(listener_fresh(home.path(), Queue::Unscoped));

@@ -148,7 +148,7 @@ mod replay_error_tests {
         let other = provider_tag(0);
         let missing = vec![associated_assistant(&other)];
         assert_eq!(
-            replay_compaction_prefix_bound(&missing, &[required.clone()]),
+            replay_compaction_prefix_bound(&missing, std::slice::from_ref(&required)),
             Err(ReplayCheckpointError::MissingRequired)
         );
 
@@ -489,10 +489,10 @@ mod replay_error_tests {
             estimate_seed: Some(armed_seed(vec![evidence_row(&tag, "header-0", Vec::new())])),
             ..LoopReplayInput::default()
         };
-        resolve_replay_evidence(&replay, &[tag.clone()])
+        resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
             .await
             .unwrap();
-        let re_resolved = resolve_replay_evidence(&replay, &[tag.clone()])
+        let re_resolved = resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
             .await
             .unwrap();
         assert_eq!(

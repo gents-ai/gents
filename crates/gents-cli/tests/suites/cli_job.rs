@@ -171,6 +171,10 @@ fn run_job(cwd: &Path, args: &[&str]) -> Result<(Option<i32>, String, String)> {
 
 /// Seeds one plugin job row and returns its doc id. `lifecycle` and `state`
 /// are the row's persisted values (`job_state` reads both).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test seed helper takes the seeded row's fields"
+)]
 pub(crate) async fn seed_job(
     access: &ConfigAccess,
     node_did: &str,

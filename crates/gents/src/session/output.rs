@@ -2313,6 +2313,10 @@ fn is_current_admission_input(
             )))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "independent transcript range filters"
+)]
 pub(super) async fn load_sequenced_messages(
     node: &EmbeddedNode,
     session_id: &str,
@@ -2331,9 +2335,11 @@ pub(super) async fn load_sequenced_messages(
     if let Some(sequence) = through_sequence {
         bounds.push(format!("_le: {sequence}"));
     }
-    let bounds = (!bounds.is_empty())
-        .then(|| format!(", sequence: {{ {} }}", bounds.join(", ")))
-        .unwrap_or_default();
+    let bounds = if !bounds.is_empty() {
+        format!(", sequence: {{ {} }}", bounds.join(", "))
+    } else {
+        Default::default()
+    };
     let query = format!(
         r#"{{
         AgentMessage(filter: {{ {session_scope}{bounds} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }}

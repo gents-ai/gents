@@ -8,7 +8,7 @@ use anyhow::Result;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::admission::AdmissionRegistry;
-use crate::agent::daemon::AgentDaemon;
+use crate::agent::daemon::{AgentDaemon, AgentDaemonInit};
 use crate::completion_factory::build_admitted_model;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
@@ -230,23 +230,23 @@ impl RuntimeContext {
             self.startup_readiness.build_timeout,
         )
         .await?;
-        let mut daemon = AgentDaemon::new(
-            self.node.clone(),
+        let mut daemon = AgentDaemon::new(AgentDaemonInit {
+            node: self.node.clone(),
             agent_config,
             provider_family,
             model,
             preamble,
             loop_tools,
             prompt_builder,
-            self.hook_failure_policy,
-            self.rendered_request_capture_factory.clone(),
+            hook_failure_policy: self.hook_failure_policy,
+            rendered_request_capture_factory: self.rendered_request_capture_factory.clone(),
             background_tool_registry,
-            self.background_execution_registry.clone(),
-            self.startup_barrier.clone(),
-            self.runtime_status.clone(),
+            background_execution_registry: self.background_execution_registry.clone(),
+            startup_barrier: self.startup_barrier.clone(),
+            runtime_status: self.runtime_status.clone(),
             slot_generation,
             request_admission,
-        )?
+        })?
         .with_replay_issuer(replay_issuer)
         .with_approval_home(
             self.tool_runtime

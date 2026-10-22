@@ -284,6 +284,10 @@ fn canonical_live_tool_output(
     (!text.is_empty()).then_some(text)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "projection inputs come from separate stores and request options"
+)]
 pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     store: &ClientStore,
     transcript_store: &ClientStore,
@@ -499,7 +503,6 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let pending_turn = (include_live_tail && latest_request.is_some_and(owner_absent))
         .then_some(latest_request_id.as_deref())
         .flatten()
-        .as_deref()
         .and_then(|request_id| {
             build_pending_turn(store, context_store, node_did, session_id, request_id)
         });
@@ -804,7 +807,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 started_at: normalize_optional(row.started_at.as_deref()),
                 deadline_at: normalize_optional(row.deadline_at.as_deref()),
                 completed_at: normalize_optional(row.completed_at.as_deref()),
-                denial: command_denial_from_row(&row),
+                denial: command_denial_from_row(row),
                 cancel_cause,
                 job_progress,
                 job_handle,
@@ -1156,7 +1159,7 @@ mod canonical_projection_tests {
             &tool,
             &messages,
             &observed_rows,
-            &[args.clone()],
+            std::slice::from_ref(&args),
             &[],
             &[],
             &[],
@@ -1167,7 +1170,7 @@ mod canonical_projection_tests {
             &tool,
             &messages,
             &observed_rows,
-            &[args.clone()],
+            std::slice::from_ref(&args),
             &[],
             &["missing-close".to_string()],
             &[],

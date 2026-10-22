@@ -540,8 +540,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     let big_line = "x".repeat(200);
-    let big_output = std::iter::repeat(big_line)
-        .take(10_000)
+    let big_output = std::iter::repeat_n(big_line, 10_000)
         .collect::<Vec<_>>()
         .join("\n");
     let full_len = big_output.len();

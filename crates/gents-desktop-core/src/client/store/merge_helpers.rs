@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn row_node_matches(row_node_did: Option<&str>, node_did: &str) -> bool {
-    row_node_did.map_or(true, |row_node_did| row_node_did == node_did)
+    row_node_did.is_none_or(|row_node_did| row_node_did == node_did)
 }
 
 pub(super) fn row_is_in_node_scope(
@@ -101,7 +101,7 @@ pub(super) fn upsert_rows_with_sources_by_key<T>(
         })
         .collect::<RapidHashMap<_, _>>();
 
-    for (row, source) in incoming.into_iter().zip(incoming_sources.into_iter()) {
+    for (row, source) in incoming.into_iter().zip(incoming_sources) {
         let key = key_fn(&row, source.as_deref());
         if let Some(index) = indexes.get(&key).copied() {
             target[index] = row;

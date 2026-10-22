@@ -268,6 +268,10 @@ async fn answer_pending_approvals(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the submitted request plus independent CLI polling and rendering options"
+)]
 pub(crate) async fn stream_turn_progress(
     graphql: &GraphqlEndpoint,
     submitted: &SubmittedRequest,

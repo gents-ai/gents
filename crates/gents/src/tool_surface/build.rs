@@ -372,30 +372,6 @@ pub(super) fn dedupe_strings(values: Vec<String>) -> Vec<String> {
     deduped
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn top_bash() -> ToolPolicyBash {
-        ToolPolicyBash::unrestricted()
-    }
-
-    #[test]
-    fn effective_only_empty_allowed_projects_to_deny_all_not_allow_all() {
-        for scope in [
-            EndpointScope::<Vec<String>, ()>::None,
-            EndpointScope::<Vec<String>, ()>::only_units(Vec::<Vec<String>>::new()),
-        ] {
-            let mut eb = top_bash();
-            eb.allowed_argv_prefixes = scope;
-            let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::Unrestricted)
-                .expect("deny-all must synthesize a policy");
-            assert!(out.deny_all_argv(), "Only(empty)/None must be deny-all");
-            assert!(out.allowed_argv_prefixes.is_empty());
-        }
-    }
-}
-
 pub(super) async fn enabled_mcp_service_ids(
     node: &EmbeddedNode,
     node_did: &str,
@@ -536,4 +512,28 @@ fn project_measured_mcp_services(
     available.sort();
     available.dedup();
     Ok(available)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn top_bash() -> ToolPolicyBash {
+        ToolPolicyBash::unrestricted()
+    }
+
+    #[test]
+    fn effective_only_empty_allowed_projects_to_deny_all_not_allow_all() {
+        for scope in [
+            EndpointScope::<Vec<String>, ()>::None,
+            EndpointScope::<Vec<String>, ()>::only_units(Vec::<Vec<String>>::new()),
+        ] {
+            let mut eb = top_bash();
+            eb.allowed_argv_prefixes = scope;
+            let out = constrain_command_policy_to_effective_bash(None, &eb, BashMode::Unrestricted)
+                .expect("deny-all must synthesize a policy");
+            assert!(out.deny_all_argv(), "Only(empty)/None must be deny-all");
+            assert!(out.allowed_argv_prefixes.is_empty());
+        }
+    }
 }

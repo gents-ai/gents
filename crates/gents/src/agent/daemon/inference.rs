@@ -960,6 +960,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
 pub(super) mod tests {
     use super::{stream_failure_reason, AgentDaemon, MaxTurnsProvenance};
     use crate::agent::completion_retry::CompletionRetryProfileFields;
+    use crate::agent::daemon::AgentDaemonInit;
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
     use crate::config::{ResolvedAgent, SamplingConfig};
@@ -1571,27 +1572,29 @@ pub(super) mod tests {
             agent_config.node_did().to_string(),
         );
         let request_identity = agent_config.node_identity().clone();
-        let mut daemon = AgentDaemon::new(
-            node.clone(),
+        let mut daemon = AgentDaemon::new(AgentDaemonInit {
+            node: node.clone(),
             agent_config,
-            None,
-            Arc::new(RoutedReplyModel),
+            provider_family: None,
+            model: Arc::new(RoutedReplyModel),
             preamble,
             loop_tools,
             prompt_builder,
-            FailurePolicy::default(),
-            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-            BackgroundToolRegistry::default(),
-            BackgroundExecutionRegistry::default(),
-            Arc::new(StartupBarrier::ready_for_test()),
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: Some(
+                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            ),
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: BackgroundExecutionRegistry::default(),
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
-        )
+        })
         .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -1747,11 +1750,11 @@ pub(super) mod tests {
         let title_calls = Arc::new(AtomicUsize::new(0));
         let title_shape_mismatches = Arc::new(AtomicUsize::new(0));
         let request_identity = agent_config.node_identity().clone();
-        let mut daemon = AgentDaemon::new(
-            node.clone(),
+        let mut daemon = AgentDaemon::new(AgentDaemonInit {
+            node: node.clone(),
             agent_config,
-            None,
-            Arc::new(WakeInputModel {
+            provider_family: None,
+            model: Arc::new(WakeInputModel {
                 provider_inputs: provider_inputs.clone(),
                 title_calls: title_calls.clone(),
                 title_shape_mismatches: title_shape_mismatches.clone(),
@@ -1759,24 +1762,26 @@ pub(super) mod tests {
                     .map(|request| (node.clone(), request, admission.node_did.clone())),
             }),
             preamble,
-            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+            loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
-            FailurePolicy::default(),
-            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-            BackgroundToolRegistry::default(),
-            BackgroundExecutionRegistry::default(),
-            Arc::new(StartupBarrier::ready_for_test()),
-            crate::runtime_status::RuntimeStatusHandle::new(
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: Some(
+                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            ),
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: BackgroundExecutionRegistry::default(),
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+            runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
                 node.clone(),
                 admission.node_did.clone(),
             ),
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
-        )
+        })
         .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         daemon
@@ -1825,28 +1830,29 @@ pub(super) mod tests {
         );
 
         let diagnostic = persisted_request_by_doc_id(&node, &wake.doc_id).await;
-        let captured = provider_inputs.lock().expect("wake provider input capture");
-        assert_eq!(
-            captured.len(),
-            1,
-            "one deterministic main provider turn must run; title_calls={}, wake={:?}",
-            title_calls.load(Ordering::SeqCst),
-            diagnostic
-        );
-        assert_eq!(title_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            title_shape_mismatches.load(Ordering::SeqCst),
-            0,
-            "title errors must not be hidden by the fallback"
-        );
-        let first_input: serde_json::Value =
-            serde_json::from_str(&captured[0]).expect("decode first provider chat history");
-        assert!(
-            json_contains_text(&first_input, &notification_text),
-            "exact durable notification must reach first provider input: {}",
-            captured[0]
-        );
-        drop(captured);
+        {
+            let captured = provider_inputs.lock().expect("wake provider input capture");
+            assert_eq!(
+                captured.len(),
+                1,
+                "one deterministic main provider turn must run; title_calls={}, wake={:?}",
+                title_calls.load(Ordering::SeqCst),
+                diagnostic
+            );
+            assert_eq!(title_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                title_shape_mismatches.load(Ordering::SeqCst),
+                0,
+                "title errors must not be hidden by the fallback"
+            );
+            let first_input: serde_json::Value =
+                serde_json::from_str(&captured[0]).expect("decode first provider chat history");
+            assert!(
+                json_contains_text(&first_input, &notification_text),
+                "exact durable notification must reach first provider input: {}",
+                captured[0]
+            );
+        }
 
         assert_eq!(
             persisted_request_state(&node, &wake.doc_id).await,
@@ -1880,44 +1886,45 @@ pub(super) mod tests {
             .process_request(successor.clone(), shutdown_rx)
             .await
             .unwrap();
-        let captured = provider_inputs.lock().unwrap();
-        assert_eq!(captured.len(), 2);
-        let input = &captured[1];
-        let answer = input
-            .find("wake handled")
-            .expect("previous wake answer remains in history");
-        let new_notification = input
-            .find("successor native output")
-            .expect("successor notification reaches provider input");
         let contract = crate::lean_vocab_test::lean_contract_snapshot()
             .wake_input_cases
             .iter()
             .find(|case| case.name == "successor_wake_moves_only_new_notification")
             .unwrap();
         let labels = ["notification-a", "notification-b", "answer-0"];
-        let mut observed = [
-            (
-                "notification-a",
-                input.find("durable native output").unwrap(),
-            ),
-            ("notification-b", new_notification),
-            ("answer-0", answer),
-        ];
-        observed.sort_by_key(|(_, position)| *position);
-        let expected = contract
-            .expected_order
-            .iter()
-            .map(String::as_str)
-            .filter(|header| labels.contains(header))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            observed.map(|(header, _)| header).as_slice(),
-            expected,
-            "current wake order must match the model: {input}"
-        );
-        assert_eq!(input.matches("successor native output").count(), 1);
-        assert_eq!(input.matches("durable native output").count(), 1);
-        drop(captured);
+        {
+            let captured = provider_inputs.lock().unwrap();
+            assert_eq!(captured.len(), 2);
+            let input = &captured[1];
+            let answer = input
+                .find("wake handled")
+                .expect("previous wake answer remains in history");
+            let new_notification = input
+                .find("successor native output")
+                .expect("successor notification reaches provider input");
+            let mut observed = [
+                (
+                    "notification-a",
+                    input.find("durable native output").unwrap(),
+                ),
+                ("notification-b", new_notification),
+                ("answer-0", answer),
+            ];
+            observed.sort_by_key(|(_, position)| *position);
+            let expected = contract
+                .expected_order
+                .iter()
+                .map(String::as_str)
+                .filter(|header| labels.contains(header))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                observed.map(|(header, _)| header).as_slice(),
+                expected,
+                "current wake order must match the model: {input}"
+            );
+            assert_eq!(input.matches("successor native output").count(), 1);
+            assert_eq!(input.matches("durable native output").count(), 1);
+        }
         let history = crate::session::load_history(
             &node,
             &wake.session_id,
@@ -2017,27 +2024,29 @@ pub(super) mod tests {
             agent_config.node_did().to_string(),
         );
         let request_identity = agent_config.node_identity().clone();
-        let mut daemon = AgentDaemon::new(
-            node.clone(),
-            agent_config.clone(),
-            None,
-            Arc::new(CountingReplyModel(calls.clone())),
-            prompt_builder.preamble().to_string(),
-            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+        let mut daemon = AgentDaemon::new(AgentDaemonInit {
+            node: node.clone(),
+            agent_config: agent_config.clone(),
+            provider_family: None,
+            model: Arc::new(CountingReplyModel(calls.clone())),
+            preamble: prompt_builder.preamble().to_string(),
+            loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
-            FailurePolicy::default(),
-            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-            BackgroundToolRegistry::default(),
-            BackgroundExecutionRegistry::default(),
-            Arc::new(StartupBarrier::ready_for_test()),
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: Some(
+                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            ),
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: BackgroundExecutionRegistry::default(),
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
-        )
+        })
         .unwrap()
         .with_root_execution_guard(Some(crate::tool_surface::RootExecutionGuard {
             agent_id: agent_config.agent_id.clone(),
@@ -2187,27 +2196,29 @@ pub(super) mod tests {
             agent_config.node_did().to_string(),
         );
         let request_identity = agent_config.node_identity().clone();
-        let mut daemon = AgentDaemon::new(
-            node.clone(),
-            agent_config.clone(),
-            None,
-            Arc::new(CountingReplyModel(calls.clone())),
-            prompt_builder.preamble().to_string(),
-            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+        let mut daemon = AgentDaemon::new(AgentDaemonInit {
+            node: node.clone(),
+            agent_config: agent_config.clone(),
+            provider_family: None,
+            model: Arc::new(CountingReplyModel(calls.clone())),
+            preamble: prompt_builder.preamble().to_string(),
+            loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
-            FailurePolicy::default(),
-            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-            BackgroundToolRegistry::default(),
-            BackgroundExecutionRegistry::default(),
-            Arc::new(StartupBarrier::ready_for_test()),
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: Some(
+                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            ),
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: BackgroundExecutionRegistry::default(),
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 authority_handle,
             ),
-        )
+        })
         .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 

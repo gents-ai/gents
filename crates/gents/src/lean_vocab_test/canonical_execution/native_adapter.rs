@@ -1743,7 +1743,6 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             let prepared = prepared.clone();
                             let generation = generation.clone();
                             let node = Arc::clone(&nested_node);
-                            let now = now.clone();
                             Box::pin(async move {
                                 crate::streaming::canonical::append_provider_segment_at(
                                     &node,

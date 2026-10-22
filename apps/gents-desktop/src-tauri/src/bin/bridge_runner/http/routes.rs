@@ -791,7 +791,7 @@ async fn retained_provider_reasoning(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{logical}" }} }}, limit: 2) {{ _docID }} }}"#
     );
     let response = gents::graphql::graphql_with_transaction_retry(
-        &core.node(),
+        core.node(),
         &request_query,
         "retained reasoning request lookup",
     )
@@ -813,7 +813,7 @@ async fn retained_provider_reasoning(
         r#"{{ AgentOutputSegment(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{physical}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );
     let response = gents::graphql::graphql_with_transaction_retry(
-        &core.node(),
+        core.node(),
         &segment_query,
         "retained reasoning segment lookup",
     )
@@ -945,7 +945,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
     "#;
 
     let response =
-        gents::graphql::graphql_with_transaction_retry(&core.node(), query, "AgentToolCall query")
+        gents::graphql::graphql_with_transaction_retry(core.node(), query, "AgentToolCall query")
             .await
             .map_err(|error| format!("{error:#}"))?;
 

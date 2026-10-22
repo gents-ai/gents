@@ -223,6 +223,10 @@ jobs:
         if: matrix.suite == 'support'
         run: cargo fmt --all --check
 
+      - name: Check clippy
+        if: matrix.suite == 'support'
+        run: make lint
+
       - name: Assert native-e2e excluded from production capabilities
         if: matrix.suite == 'support'
         run: ./scripts/check-native-e2e-capabilities.sh

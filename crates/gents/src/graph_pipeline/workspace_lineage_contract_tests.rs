@@ -177,7 +177,7 @@ impl Fixture {
             self.identity.did(),
             self.identity.did(),
             task["Task"][0]["agent_id"].as_str().unwrap(),
-            &format!("session-{id}"),
+            format!("session-{id}"),
             "review source",
             "scheduled",
             "2026-09-05T00:00:00Z",

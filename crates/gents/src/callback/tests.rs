@@ -659,7 +659,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
         create_EventSource(input: {event_source_id:"events-scan",node_did:"did:key:zWriter",source_collection:"WorkUnit",event_kind:"created"}) {_docID}
         create_CallbackBinding(input: {binding_id:"bind-scan",node_did:"did:key:zWriter",event_source_id:"events-scan",callback_id:"cb-scan",input_fields:["work_unit_id","repository_id","base_sha","branch","owned_files"],enabled:true}) {_docID}
     }"#;
-    let response = node.execute(&binding_mutation).await;
+    let response = node.execute(binding_mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
     let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)

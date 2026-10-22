@@ -188,9 +188,12 @@ fn latest(attempt: &Attempt) -> Result<&Stored> {
         .context("attempt has no spawn request")
 }
 
+/// Prompt and completion token counts of each request's inference calls.
+type UsageByRequest = RapidHashMap<String, Vec<(Option<i64>, Option<i64>)>>;
+
 fn pair(
     attempt: Attempt,
-    usage: &RapidHashMap<String, Vec<(Option<i64>, Option<i64>)>>,
+    usage: &UsageByRequest,
     terminals: &RapidHashMap<String, CausedRequestTerminal>,
     result_bytes: u64,
 ) -> Result<(StepChild, JobChildView)> {
@@ -309,8 +312,8 @@ fn stamp(value: Option<&str>) -> Option<i64> {
 async fn usage_by_request<R: ConfigRead>(
     reader: &R,
     request_ids: &[String],
-) -> Result<RapidHashMap<String, Vec<(Option<i64>, Option<i64>)>>> {
-    let mut grouped: RapidHashMap<String, Vec<(Option<i64>, Option<i64>)>> = RapidHashMap::new();
+) -> Result<UsageByRequest> {
+    let mut grouped: UsageByRequest = RapidHashMap::new();
     if request_ids.is_empty() {
         return Ok(grouped);
     }
@@ -734,6 +737,10 @@ pub(crate) mod tests {
         .unwrap();
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
     pub(crate) async fn request(
         node: &std::sync::Arc<EmbeddedNode>,
         chain: &str,
@@ -1685,7 +1692,7 @@ pub(crate) mod tests {
         job.write_step_state(&root, None).await;
         let (root_input, _) = job.later(&root).await.unwrap();
         assert_eq!(root_input.root_call, None);
-        assert_eq!(root_input.job.chain, [root.clone()]);
+        assert_eq!(root_input.job.chain, std::slice::from_ref(&root));
 
         job.write_step_state(&resumed, Some(&resume_block(&root)))
             .await;
@@ -2148,7 +2155,7 @@ pub(crate) mod tests {
         assert_eq!(input.pin, None);
         assert_eq!(input.origin, None);
         assert_eq!(input.verified_script, None);
-        assert_eq!(input.job.chain, [row.clone()]);
+        assert_eq!(input.job.chain, std::slice::from_ref(&row));
         assert_eq!(input.job.chain_root_doc_id, row);
         job.node.shutdown().await;
 

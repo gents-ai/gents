@@ -182,7 +182,7 @@ impl ClientHost {
             ClientCommand::ConfigApply { request } => {
                 self.require_configured_runtime(&request.document.node.node_did)
                     .await?;
-                crate::commands::apply_config_components(&self.core, request)
+                crate::commands::apply_config_components(&self.core, *request)
                     .await
                     .map_err(backend_error)?;
                 encode(())
@@ -578,7 +578,7 @@ impl ClientHost {
                     .map_err(backend_error)?,
             ),
             ClientCommand::GoalControl { request } => {
-                encode(crate::commands::control_goal(&self.core, request).await?)
+                encode(crate::commands::control_goal(&self.core, *request).await?)
             }
             ClientCommand::SteerPending { request } => encode(
                 crate::commands::steer_pending_message(&self.core, request)

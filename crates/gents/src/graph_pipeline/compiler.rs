@@ -1025,7 +1025,7 @@ pub fn compile_graph(
                 target: resolved[edge.to.node_id.as_str()].target.clone(),
                 correlation_field: source_port.correlation_field.clone(),
                 delivery: edge.delivery.clone(),
-                concurrency: edge.concurrency.clone(),
+                concurrency: edge.concurrency,
                 predicate: edge.predicate.clone(),
             }
         })

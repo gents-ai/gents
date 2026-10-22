@@ -366,7 +366,7 @@ fn collect_message_dependencies(
         }
     }
     for reference in message.message.payload_references() {
-        let closing = retain_reference_extent(&reference, segments, bases, selected)?;
+        let closing = retain_reference_extent(reference, segments, bases, selected)?;
         let tool_call_doc_id = match &closing.segment.source {
             OutputSource::ToolCall { tool_call_doc_id } => Some(tool_call_doc_id),
             OutputSource::Authored { .. } => match &closing.segment.writer {
@@ -702,31 +702,41 @@ mod tests {
                 .iter()
                 .map(u64::to_string)
                 .collect::<Vec<_>>();
-            denied_headers.extend(input.access.iter().filter_map(|access| {
-                (access.peer == peer
-                    && access.requester == requester
-                    && access.node == agent
-                    && access.session == target_session
-                    && access.native_session == request.native_session
-                    && access.state == "denied"
-                    && access.key.collection == "AgentMessage")
-                    .then(|| access.key.id.to_string())
-            }));
+            denied_headers.extend(
+                input
+                    .access
+                    .iter()
+                    .filter(|&access| {
+                        access.peer == peer
+                            && access.requester == requester
+                            && access.node == agent
+                            && access.session == target_session
+                            && access.native_session == request.native_session
+                            && access.state == "denied"
+                            && access.key.collection == "AgentMessage"
+                    })
+                    .map(|access| access.key.id.to_string()),
+            );
             let mut denied_segments = input
                 .denied_segments
                 .iter()
                 .map(u64::to_string)
                 .collect::<Vec<_>>();
-            denied_segments.extend(input.access.iter().filter_map(|access| {
-                (access.peer == peer
-                    && access.requester == requester
-                    && access.node == agent
-                    && access.session == target_session
-                    && access.native_session == request.native_session
-                    && access.state == "denied"
-                    && access.key.collection == "AgentOutputSegment")
-                    .then(|| access.key.id.to_string())
-            }));
+            denied_segments.extend(
+                input
+                    .access
+                    .iter()
+                    .filter(|&access| {
+                        access.peer == peer
+                            && access.requester == requester
+                            && access.node == agent
+                            && access.session == target_session
+                            && access.native_session == request.native_session
+                            && access.state == "denied"
+                            && access.key.collection == "AgentOutputSegment"
+                    })
+                    .map(|access| access.key.id.to_string()),
+            );
             let result = build_canonical_closure(CanonicalClosureInput {
                 root_header_ids: &roots,
                 headers: &headers,

@@ -160,7 +160,7 @@ async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
     .await
     .unwrap();
 
-    let events = lock(&events);
+    let events = std::mem::take(&mut *lock(&events));
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].get("level").map(String::as_str), Some("DEBUG"));
     assert_eq!(
@@ -204,7 +204,7 @@ async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
     );
     drop(held);
 
-    let events = lock(&events);
+    let events = std::mem::take(&mut *lock(&events));
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0].get("outcome").map(String::as_str),
@@ -529,7 +529,7 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
         .expect_err("cancelled begin already removed the registered transaction");
     assert!(matches!(error, query::TransactionError::NotFound(_)));
 
-    let events = lock(&events);
+    let events = std::mem::take(&mut *lock(&events));
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0].get("outcome").map(String::as_str),
@@ -799,7 +799,7 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
     drop(transaction);
     drop(held);
 
-    let events = lock(&events);
+    let events = std::mem::take(&mut *lock(&events));
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0].get("outcome").map(String::as_str),
@@ -965,7 +965,7 @@ async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
         0,
         "ownership rejection must happen before an inner attempt or retry backoff"
     );
-    let events = lock(&events);
+    let events = std::mem::take(&mut *lock(&events));
     let inner_events: Vec<_> = events
         .iter()
         .filter(|event| {
@@ -1603,7 +1603,7 @@ async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
     .unwrap();
 
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
-    let handles = lock(&handles);
+    let handles = std::mem::take(&mut *lock(&handles));
     assert_eq!(handles.len(), 2);
     assert_ne!(handles[0], handles[1], "replay reused a transaction handle");
     assert_eq!(&*lock(&snapshots), &["initial", "racer"]);

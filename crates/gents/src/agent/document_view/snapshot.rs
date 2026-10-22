@@ -16,7 +16,7 @@ use super::DocumentRuntimeView;
 
 use crate::agent::{
     agent_config_from_documents, assemble_node_and_agents, tool_selection_from_document,
-    AgentBuildError, DocumentResolveContext,
+    AgentBuildError, AgentDocumentInputs, AgentFactory, DocumentResolveContext,
 };
 use crate::identity::RuntimeNode;
 use crate::tool_surface::AgentToolConfig;
@@ -101,12 +101,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     }
 
     let mut unavailable_agents = RapidHashMap::new();
-    let mut agent_factories: Vec<
-        Box<
-            dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
-                + Send,
-        >,
-    > = Vec::new();
+    let mut agent_factories: Vec<AgentFactory> = Vec::new();
 
     let all_skills = sorted_skills(view);
 
@@ -227,24 +222,20 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         .into_iter()
                         .cloned()
                         .collect::<Vec<_>>();
-                let factory: Box<
-                    dyn FnOnce(
-                            Arc<RuntimeNode>,
-                        )
-                            -> std::result::Result<ResolvedAgent, AgentBuildError>
-                        + Send,
-                > = Box::new(move |principal| {
+                let factory: AgentFactory = Box::new(move |principal| {
                     agent_config_from_documents(
                         principal,
-                        &behavior_value,
-                        resolved_context.as_ref(),
-                        compaction,
-                        summary,
-                        &inference,
-                        tool_selection,
-                        agent_tools,
-                        &tool_ceiling,
-                        behavior_skills,
+                        AgentDocumentInputs {
+                            agent_config: &behavior_value,
+                            context: resolved_context.as_ref(),
+                            compaction,
+                            compaction_inference: summary,
+                            inference: &inference,
+                            tool_selection,
+                            agent_tools,
+                            tool_ceiling: &tool_ceiling,
+                            skills: behavior_skills,
+                        },
                     )
                     .map_err(|error| AgentBuildError {
                         agent_id: agent_id.clone(),
@@ -543,6 +534,32 @@ fn resolve_inference(
     Ok(resolved)
 }
 
+// Skills are the one value vector embedded in ResolvedAgent's Debug value;
+// canonicalize before both prompt construction and fingerprinting.
+pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Skill> {
+    let mut skills = view
+        .skills
+        .values()
+        .map(|record| skill_from_document(&record.value))
+        .collect::<Vec<_>>();
+    skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
+    skills
+}
+
+fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {
+    crate::skills::Skill {
+        skill_id: doc.skill_id.clone(),
+        node_did: doc.node_did.clone(),
+        name: doc.name.clone().unwrap_or_default(),
+        description: doc.description.clone().unwrap_or_default(),
+        instructions: doc.instructions.clone().unwrap_or_default(),
+        source_directory: doc.source_directory.clone(),
+        tool_refs: doc.tool_refs.clone(),
+        display_name: doc.display_name.clone(),
+        enabled: doc.enabled,
+    }
+}
+
 #[cfg(test)]
 mod advertised_context_override_tests {
     use crate::config::validate_advertised_context_override;
@@ -607,31 +624,5 @@ mod advertised_context_override_tests {
         ] {
             assert!(validate_advertised_context_override(&profile(872_001), &model).is_ok());
         }
-    }
-}
-
-// Skills are the one value vector embedded in ResolvedAgent's Debug value;
-// canonicalize before both prompt construction and fingerprinting.
-pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Skill> {
-    let mut skills = view
-        .skills
-        .values()
-        .map(|record| skill_from_document(&record.value))
-        .collect::<Vec<_>>();
-    skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
-    skills
-}
-
-fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {
-    crate::skills::Skill {
-        skill_id: doc.skill_id.clone(),
-        node_did: doc.node_did.clone(),
-        name: doc.name.clone().unwrap_or_default(),
-        description: doc.description.clone().unwrap_or_default(),
-        instructions: doc.instructions.clone().unwrap_or_default(),
-        source_directory: doc.source_directory.clone(),
-        tool_refs: doc.tool_refs.clone(),
-        display_name: doc.display_name.clone(),
-        enabled: doc.enabled,
     }
 }

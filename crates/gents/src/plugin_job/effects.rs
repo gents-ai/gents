@@ -293,6 +293,10 @@ async fn message_hop(
     ))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fields of the staged AgentRequest"
+)]
 async fn stage_request(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     cause: &SessionMessageCause,
@@ -526,7 +530,7 @@ mod tests {
     fn scratch_rewrite_is_idempotent() {
         let cwd = tempfile::tempdir().unwrap();
         let notes = file("notes.md", "same");
-        write_scratch(cwd.path(), "call-1", &[notes.clone()]).unwrap();
+        write_scratch(cwd.path(), "call-1", std::slice::from_ref(&notes)).unwrap();
         write_scratch(cwd.path(), "call-1", &[notes]).unwrap();
         let path = cwd.path().join(".gents/workflows/runs/call-1/notes.md");
         assert_eq!(read(&path), b"same");
@@ -599,7 +603,7 @@ mod tests {
             requester_did: None,
         };
         assert!(stamp(&node, &child).await.is_none());
-        interrupt_slots(&node, &caller, &[target.clone()])
+        interrupt_slots(&node, &caller, std::slice::from_ref(&target))
             .await
             .unwrap();
         let latched = stamp(&node, &child).await;
@@ -1007,9 +1011,14 @@ mod tests {
         let harness = harness("job-stage-replay").await;
         let kept = spawn("kept", 0, "same", "Kept", None);
         let effects = job_effects(vec![kept.clone()], Vec::new());
-        stage(&harness, &[kept.clone()], &effects, &harness.row)
-            .await
-            .unwrap();
+        stage(
+            &harness,
+            std::slice::from_ref(&kept),
+            &effects,
+            &harness.row,
+        )
+        .await
+        .unwrap();
         let first = by_key(&harness.node, &job_spawn_key("root", "kept", 0)).await;
         stage(&harness, &[kept], &effects, &harness.row)
             .await
@@ -1025,9 +1034,14 @@ mod tests {
         let harness = harness("job-stage-mismatch").await;
         let kept = spawn("kept", 0, "first", "Kept", None);
         let effects = job_effects(vec![kept.clone()], Vec::new());
-        stage(&harness, &[kept.clone()], &effects, &harness.row)
-            .await
-            .unwrap();
+        stage(
+            &harness,
+            std::slice::from_ref(&kept),
+            &effects,
+            &harness.row,
+        )
+        .await
+        .unwrap();
         let changed = spawn("kept", 0, "second", "Kept", None);
         let again = job_effects(vec![changed.clone()], Vec::new());
         let error = stage(&harness, &[changed], &again, &harness.row)

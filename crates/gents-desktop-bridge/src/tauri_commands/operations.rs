@@ -88,7 +88,7 @@ async fn fetch_background_tool_calls(
 ) -> Result<Vec<ToolCallRow>, BridgeError> {
     let query = background_tool_calls_query(node_did);
 
-    let response = graphql_with_transaction_retry(&core.node(), &query, "background tool calls")
+    let response = graphql_with_transaction_retry(core.node(), &query, "background tool calls")
         .await
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
 
@@ -384,7 +384,7 @@ async fn fetch_recent_calls(
         limit = RECENT_CALLS_PER_BACKEND,
     );
 
-    let resp = graphql_with_transaction_retry(&node, &query, "list InferenceCall by backend")
+    let resp = graphql_with_transaction_retry(node, &query, "list InferenceCall by backend")
         .await
         .with_context(|| format!("list InferenceCall for backend {backend_id}"))?;
 

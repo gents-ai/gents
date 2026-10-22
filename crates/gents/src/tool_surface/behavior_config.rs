@@ -449,7 +449,6 @@ impl AgentToolSurfaceConfig {
     }
 
     #[allow(dead_code)]
-
     pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
         &self.background_tools
     }
@@ -573,8 +572,8 @@ impl AgentToolSurfaceConfig {
             } else {
                 self.eth_calls
                     .iter()
-                    .cloned()
                     .filter(|call| effective_policy.eth_call_tools.permits(&call.tool_name))
+                    .cloned()
                     .collect()
             },
             plugin_tools: self

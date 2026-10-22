@@ -440,110 +440,6 @@ pub fn resolve_backend_api_key(
         .map_err(|error| anyhow::anyhow!("backend {}: {error:#}", backend.backend_id))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::identity::KeyIdentity;
-
-    fn stub_node() -> Arc<RuntimeNode> {
-        let identity = Arc::new(
-            KeyIdentity::load_or_create(
-                std::env::temp_dir().join(format!("config-agent-{}.key", uuid::Uuid::new_v4())),
-                None,
-            )
-            .unwrap(),
-        );
-        Arc::new(RuntimeNode {
-            node_did: identity.did().to_string(),
-            identity,
-            default_agent_id: String::new(),
-            display_name: None,
-            enabled: true,
-        })
-    }
-
-    fn agent_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedAgent {
-        ResolvedAgent {
-            agent_id: "general".to_string(),
-            node: stub_node(),
-            backend_id: Some("backend-general".to_string()),
-            backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-            openai_wire_api,
-            backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-            backend_auth: crate::document_config::BackendAuth::Unauthenticated,
-            model_name: DEFAULT_MODEL_NAME.to_string(),
-            service_tier: None,
-            resolved_reasoning_efforts: None,
-            context_window: DEFAULT_CONTEXT_WINDOW,
-            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
-            max_turns: DEFAULT_MAX_TURNS,
-            max_turns_provenance: MaxTurnsProvenance::Default,
-            system_prompt: "system".to_string(),
-            tools: AgentToolSurfaceConfig::meta_only(),
-            compaction: None,
-            compaction_inference: None,
-            max_total_tokens: None,
-            stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
-            stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
-            provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
-            deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
-            completion_retry: CompletionRetryProfileFields::default(),
-            sampling: SamplingConfig::default(),
-            skills: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
-        let mut agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
-        agent.agent_id = "agent-alpha".to_string();
-        agent.backend_auth = crate::document_config::BackendAuth::Environment {
-            variable: "GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".into(),
-        };
-
-        let error = agent
-            .resolve_backend_api_key()
-            .expect_err("a named-but-unset env var must hard error");
-        let message = error.to_string();
-        assert!(
-            message.contains("backend-general"),
-            "error must name the backend: {message}"
-        );
-        assert!(
-            message.contains("agent-alpha"),
-            "error must name the agent: {message}"
-        );
-        assert!(
-            message.contains("GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET"),
-            "error must name the environment variable: {message}"
-        );
-    }
-
-    #[test]
-    fn resolve_backend_api_key_none_when_no_env_var_configured() {
-        let agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
-        assert_eq!(
-            agent
-                .resolve_backend_api_key()
-                .expect("no key configured is not an error"),
-            None
-        );
-    }
-
-    #[test]
-    fn debug_distinguishes_openai_wire_api_for_reconcile_fingerprint() {
-        let chat = format!("{:?}", agent_with_wire(OpenAiWireApi::ChatCompletions));
-        let responses = format!("{:?}", agent_with_wire(OpenAiWireApi::Responses));
-        assert_ne!(
-            chat, responses,
-            "openai_wire_api must be in ResolvedAgent Debug so the runtime fingerprint \
-             changes when the wire API changes"
-        );
-        assert!(chat.contains("ChatCompletions"));
-        assert!(responses.contains("Responses"));
-    }
-}
-
 pub fn validate_advertised_context_override(
     profile: &crate::document_config::InferenceProfile,
     model: &crate::document_config::AdvertisedModel,
@@ -683,4 +579,108 @@ pub fn advertised_model_for_profile(
     }
     validate_advertised_context_override(profile, model)?;
     Ok(Some(model.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::KeyIdentity;
+
+    fn stub_node() -> Arc<RuntimeNode> {
+        let identity = Arc::new(
+            KeyIdentity::load_or_create(
+                std::env::temp_dir().join(format!("config-agent-{}.key", uuid::Uuid::new_v4())),
+                None,
+            )
+            .unwrap(),
+        );
+        Arc::new(RuntimeNode {
+            node_did: identity.did().to_string(),
+            identity,
+            default_agent_id: String::new(),
+            display_name: None,
+            enabled: true,
+        })
+    }
+
+    fn agent_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedAgent {
+        ResolvedAgent {
+            agent_id: "general".to_string(),
+            node: stub_node(),
+            backend_id: Some("backend-general".to_string()),
+            backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api,
+            backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+            backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+            model_name: DEFAULT_MODEL_NAME.to_string(),
+            service_tier: None,
+            resolved_reasoning_efforts: None,
+            context_window: DEFAULT_CONTEXT_WINDOW,
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+            max_turns: DEFAULT_MAX_TURNS,
+            max_turns_provenance: MaxTurnsProvenance::Default,
+            system_prompt: "system".to_string(),
+            tools: AgentToolSurfaceConfig::meta_only(),
+            compaction: None,
+            compaction_inference: None,
+            max_total_tokens: None,
+            stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+            stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+            provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+            deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+            completion_retry: CompletionRetryProfileFields::default(),
+            sampling: SamplingConfig::default(),
+            skills: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
+        let mut agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
+        agent.agent_id = "agent-alpha".to_string();
+        agent.backend_auth = crate::document_config::BackendAuth::Environment {
+            variable: "GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".into(),
+        };
+
+        let error = agent
+            .resolve_backend_api_key()
+            .expect_err("a named-but-unset env var must hard error");
+        let message = error.to_string();
+        assert!(
+            message.contains("backend-general"),
+            "error must name the backend: {message}"
+        );
+        assert!(
+            message.contains("agent-alpha"),
+            "error must name the agent: {message}"
+        );
+        assert!(
+            message.contains("GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET"),
+            "error must name the environment variable: {message}"
+        );
+    }
+
+    #[test]
+    fn resolve_backend_api_key_none_when_no_env_var_configured() {
+        let agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
+        assert_eq!(
+            agent
+                .resolve_backend_api_key()
+                .expect("no key configured is not an error"),
+            None
+        );
+    }
+
+    #[test]
+    fn debug_distinguishes_openai_wire_api_for_reconcile_fingerprint() {
+        let chat = format!("{:?}", agent_with_wire(OpenAiWireApi::ChatCompletions));
+        let responses = format!("{:?}", agent_with_wire(OpenAiWireApi::Responses));
+        assert_ne!(
+            chat, responses,
+            "openai_wire_api must be in ResolvedAgent Debug so the runtime fingerprint \
+             changes when the wire API changes"
+        );
+        assert!(chat.contains("ChatCompletions"));
+        assert!(responses.contains("Responses"));
+    }
 }

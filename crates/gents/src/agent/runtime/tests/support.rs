@@ -274,14 +274,15 @@ impl MockModelEndpoint {
                                 continue;
                             }
                         };
-                        if request.method == "POST" && request.path == "/v1/chat/completions" {
-                            if blocking_chat {
-                                while !stop_for_thread.load(Ordering::Relaxed) {
-                                    thread::sleep(Duration::from_millis(25));
-                                }
-                                let _ = stream.shutdown(Shutdown::Both);
-                                continue;
+                        if request.method == "POST"
+                            && request.path == "/v1/chat/completions"
+                            && blocking_chat
+                        {
+                            while !stop_for_thread.load(Ordering::Relaxed) {
+                                thread::sleep(Duration::from_millis(25));
                             }
+                            let _ = stream.shutdown(Shutdown::Both);
+                            continue;
                         }
 
                         let (status, body) = if request.method == "GET"

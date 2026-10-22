@@ -134,6 +134,22 @@ fn plugin_writes_failed(error: anyhow::Error) -> anyhow::Error {
     error.context(PluginWritesFailed(text))
 }
 
+pub(super) struct RawPresentation<'a> {
+    pub(super) raw: &'a str,
+    pub(super) rendered: &'a str,
+    pub(super) presentation: PayloadPresentation,
+}
+
+struct TerminalizeOptions<'a> {
+    text: &'a str,
+    pending_raw: Option<&'a str>,
+    presentation: Option<PayloadPresentation>,
+    adopt_competing_terminal: bool,
+    publish_native_result: bool,
+    operation: &'static str,
+    fixture_now: Option<DateTime<Utc>>,
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct TerminalFields<'a> {
     pub state: ToolCallState,
@@ -492,7 +508,6 @@ impl ToolCallLifecycle {
                 let stable_id = persisted_stable_id.clone();
                 let stable_key = persisted_stable_key.clone();
                 let selected = persisted_selected.clone();
-                let fixture_now = fixture_now.clone();
                 Box::pin(async move {
                     let parent = escape_graphql_string(&parent_doc_id);
                     let request = escape_graphql_string(&request_doc_id);
@@ -768,15 +783,18 @@ impl ToolCallLifecycle {
                 ToolRowKind::SessionMessage | ToolRowKind::PluginJob
             )
             && !self.is_spawned_background());
-        self.terminalize_with_options(
+        self.terminalize_with_options_at(
             expected,
             fields,
-            text,
-            None,
-            None,
-            false,
-            publish_native_result,
-            operation,
+            TerminalizeOptions {
+                text,
+                pending_raw: None,
+                presentation: None,
+                adopt_competing_terminal: false,
+                publish_native_result,
+                operation,
+                fixture_now: None,
+            },
         )
         .await
     }
@@ -798,13 +816,15 @@ impl ToolCallLifecycle {
         self.terminalize_with_options_at(
             expected,
             fields,
-            text,
-            None,
-            None,
-            true,
-            publish_native_result,
-            operation,
-            None,
+            TerminalizeOptions {
+                text,
+                pending_raw: None,
+                presentation: None,
+                adopt_competing_terminal: true,
+                publish_native_result,
+                operation,
+                fixture_now: None,
+            },
         )
         .await
     }
@@ -902,15 +922,18 @@ impl ToolCallLifecycle {
         presentation: Option<PayloadPresentation>,
         operation: &'static str,
     ) -> Result<bool> {
-        self.terminalize_with_options(
+        self.terminalize_with_options_at(
             expected,
             fields,
-            text,
-            None,
-            presentation,
-            false,
-            true,
-            operation,
+            TerminalizeOptions {
+                text,
+                pending_raw: None,
+                presentation,
+                adopt_competing_terminal: false,
+                publish_native_result: true,
+                operation,
+                fixture_now: None,
+            },
         )
         .await
     }
@@ -924,15 +947,18 @@ impl ToolCallLifecycle {
         presentation: PayloadPresentation,
         operation: &'static str,
     ) -> Result<bool> {
-        self.terminalize_with_options(
+        self.terminalize_with_options_at(
             expected,
             fields,
-            rendered,
-            Some(raw),
-            Some(presentation),
-            true,
-            true,
-            operation,
+            TerminalizeOptions {
+                text: rendered,
+                pending_raw: Some(raw),
+                presentation: Some(presentation),
+                adopt_competing_terminal: true,
+                publish_native_result: true,
+                operation,
+                fixture_now: None,
+            },
         )
         .await
     }
@@ -941,64 +967,46 @@ impl ToolCallLifecycle {
         &mut self,
         expected: ToolCallState,
         fields: TerminalFields<'_>,
-        raw: &str,
-        rendered: &str,
-        presentation: PayloadPresentation,
+        raw_presentation: RawPresentation<'_>,
         operation: &'static str,
         now: DateTime<Utc>,
     ) -> Result<bool> {
+        let RawPresentation {
+            raw,
+            rendered,
+            presentation,
+        } = raw_presentation;
         self.terminalize_with_options_at(
             expected,
             fields,
-            rendered,
-            Some(raw),
-            Some(presentation),
-            true,
-            true,
-            operation,
-            Some(now),
+            TerminalizeOptions {
+                text: rendered,
+                pending_raw: Some(raw),
+                presentation: Some(presentation),
+                adopt_competing_terminal: true,
+                publish_native_result: true,
+                operation,
+                fixture_now: Some(now),
+            },
         )
         .await
     }
 
-    async fn terminalize_with_options(
+    async fn terminalize_with_options_at(
         &mut self,
         expected: ToolCallState,
         fields: TerminalFields<'_>,
-        text: &str,
-        pending_raw: Option<&str>,
-        presentation: Option<PayloadPresentation>,
-        adopt_competing_terminal: bool,
-        publish_native_result: bool,
-        operation: &'static str,
+        options: TerminalizeOptions<'_>,
     ) -> Result<bool> {
-        self.terminalize_with_options_at(
-            expected,
-            fields,
+        let TerminalizeOptions {
             text,
             pending_raw,
             presentation,
             adopt_competing_terminal,
             publish_native_result,
             operation,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn terminalize_with_options_at(
-        &mut self,
-        expected: ToolCallState,
-        fields: TerminalFields<'_>,
-        text: &str,
-        pending_raw: Option<&str>,
-        presentation: Option<PayloadPresentation>,
-        adopt_competing_terminal: bool,
-        publish_native_result: bool,
-        operation: &'static str,
-        fixture_now: Option<DateTime<Utc>>,
-    ) -> Result<bool> {
+            fixture_now,
+        } = options;
         if self.file_changes.is_some() {
             anyhow::ensure!(
                 self.node.node_identity_did() == Some(self.node_did.as_str()),
@@ -1163,13 +1171,15 @@ impl ToolCallLifecycle {
                     return Box::pin(self.terminalize_with_options_at(
                         expected,
                         fields,
-                        &text,
-                        None,
-                        None,
-                        adopt_competing_terminal,
-                        publish_native_result,
-                        operation,
-                        fixture_now,
+                        TerminalizeOptions {
+                            text: &text,
+                            pending_raw: None,
+                            presentation: None,
+                            adopt_competing_terminal,
+                            publish_native_result,
+                            operation,
+                            fixture_now,
+                        },
                     ))
                     .await;
                 }
@@ -1427,13 +1437,15 @@ async fn terminalize_transaction(
     if !publish_native_result && spawned_by_tool_call_doc_id.is_none() && plugin_effect.is_none() {
         ensure_background_receipt_before_bridge_close(
             txn,
-            tool_doc_id,
-            request_doc_id,
-            &node_did,
-            requester_did,
-            session_id,
-            tool_call_id,
-            call_id,
+            BackgroundReceiptKey {
+                tool_call_doc_id: tool_doc_id,
+                request_doc_id,
+                node_did,
+                requester_did,
+                session_id,
+                tool_call_id,
+                call_id,
+            },
         )
         .await?;
     }
@@ -1776,7 +1788,7 @@ async fn terminalize_transaction(
             stream: 0,
             bytes: u32::try_from(suffix.len())
                 .context("tool output exceeds canonical segment size")?,
-            declaration: (extent.segments == 0).then(|| StreamDeclaration {
+            declaration: (extent.segments == 0).then_some(StreamDeclaration {
                 block_index: 0,
                 part_index: 0,
                 payload: StreamPayload::ToolOutput,
@@ -1953,16 +1965,29 @@ async fn terminalize_transaction(
     Ok(true)
 }
 
+struct BackgroundReceiptKey<'a> {
+    tool_call_doc_id: &'a str,
+    request_doc_id: &'a str,
+    node_did: &'a str,
+    requester_did: Option<&'a str>,
+    session_id: &'a str,
+    tool_call_id: &'a str,
+    call_id: Option<&'a str>,
+}
+
 async fn ensure_background_receipt_before_bridge_close(
     txn: &ConfigApplyTxn<'_>,
-    tool_call_doc_id: &str,
-    request_doc_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    session_id: &str,
-    tool_call_id: &str,
-    call_id: Option<&str>,
+    key: BackgroundReceiptKey<'_>,
 ) -> Result<()> {
+    let BackgroundReceiptKey {
+        tool_call_doc_id,
+        request_doc_id,
+        node_did,
+        requester_did,
+        session_id,
+        tool_call_id,
+        call_id,
+    } = key;
     let key = escape_graphql_string(&format!(
         "{session_id}:background-receipt:{tool_call_doc_id}"
     ));
@@ -2179,7 +2204,7 @@ async fn append_tool_output_with_time(
                         stream: 0,
                         bytes: u32::try_from(payload.len())
                             .context("tool output chunk too large")?,
-                        declaration: (ordinal == 0).then(|| StreamDeclaration {
+                        declaration: (ordinal == 0).then_some(StreamDeclaration {
                             block_index: 0,
                             part_index: 0,
                             payload: StreamPayload::ToolOutput,

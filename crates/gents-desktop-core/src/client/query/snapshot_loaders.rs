@@ -205,9 +205,11 @@ pub(super) fn snapshot_rows_with_requests(
 
 const TASK_REQUEST_FIELDS: &str = AGENT_REQUEST_FIELDS;
 
-fn request_head_scopes(
-    data: &Value,
-) -> Result<Vec<(String, String, String, Option<String>, String)>> {
+/// A session head request's doc id, node DID, session id, requester DID and
+/// request id; the field order is the sort order.
+pub(super) type RequestHeadScope = (String, String, String, Option<String>, String);
+
+fn request_head_scopes(data: &Value) -> Result<Vec<RequestHeadScope>> {
     let sessions: Vec<AgentSession> = parse_query_rows(data, "sessions")?;
     let mut scopes = Vec::new();
     for session in sessions {
@@ -231,9 +233,7 @@ fn request_head_scopes(
     Ok(scopes)
 }
 
-pub(super) fn session_head_queries(
-    scopes: &[(String, String, String, Option<String>, String)],
-) -> Vec<String> {
+pub(super) fn session_head_queries(scopes: &[RequestHeadScope]) -> Vec<String> {
     let mut docs = scopes
         .iter()
         .map(|(doc_id, _, _, _, _)| doc_id.as_str())
@@ -255,9 +255,9 @@ pub(super) fn session_head_queries(
 }
 
 fn missing_session_head_scopes(
-    scopes: &[(String, String, String, Option<String>, String)],
+    scopes: &[RequestHeadScope],
     seeds: &[AgentRequestRow],
-) -> Vec<(String, String, String, Option<String>, String)> {
+) -> Vec<RequestHeadScope> {
     let seeded_docs = seeds
         .iter()
         .filter_map(|row| row.doc_id.as_deref())
@@ -367,7 +367,7 @@ fn dedupe_request_seeds(rows: &mut Vec<AgentRequestRow>) {
 
 pub(super) fn scoped_session_heads(
     rows: Vec<AgentRequestRow>,
-    scopes: &[(String, String, String, Option<String>, String)],
+    scopes: &[RequestHeadScope],
 ) -> Vec<AgentRequestRow> {
     let expected = scopes
         .iter()

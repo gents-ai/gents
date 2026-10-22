@@ -432,7 +432,6 @@ async fn prepare_package(
             .filter_map(|capability| {
                 capability
                     .workspace_authority
-                    .clone()
                     .map(|authority| (capability.capability_id.clone(), authority))
             })
             .collect(),

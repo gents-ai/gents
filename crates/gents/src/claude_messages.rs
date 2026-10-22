@@ -110,9 +110,20 @@ fn take_messages_sse_fixture() -> Option<String> {
 }
 
 #[cfg(test)]
-pub(crate) fn lock_fixtures_for_test() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    let guard = LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+static FIXTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Async tests hold the guard across awaits, so the lock is a tokio mutex.
+#[cfg(test)]
+pub(crate) async fn lock_fixtures_for_test() -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = FIXTURE_LOCK.lock().await;
+    install_messages_sse_fixtures(Vec::new());
+    guard
+}
+
+/// For synchronous tests; panics if called inside a Tokio runtime.
+#[cfg(test)]
+pub(crate) fn blocking_lock_fixtures_for_test() -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = FIXTURE_LOCK.blocking_lock();
     install_messages_sse_fixtures(Vec::new());
     guard
 }
@@ -796,7 +807,7 @@ fn stream_sse_body_observed(
         let mut reservation = match audit_sender.as_ref() {
             Some(sender) => match sender.reserve().await {
                 Ok(reservation) => Some(reservation),
-                Err(()) => {
+                Err(_) => {
                     yield Err(audit_queue_closed());
                     return;
                 }
@@ -846,7 +857,7 @@ async fn push_line_observed(
 ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
     let dispatches = line.strip_suffix('\r').unwrap_or(line).is_empty();
     let mut reservation = match (dispatches, audit_sender) {
-        (true, Some(sender)) => Some(sender.reserve().await.map_err(|()| audit_queue_closed())?),
+        (true, Some(sender)) => Some(sender.reserve().await.map_err(|_| audit_queue_closed())?),
         _ => None,
     };
     let parsed = state.push_line(line);
@@ -854,7 +865,7 @@ async fn push_line_observed(
         if let Some(reservation) = reservation.as_mut() {
             reservation
                 .emit(event)
-                .map_err(|()| audit_event_overflow())?;
+                .map_err(|_| audit_event_overflow())?;
         } else if audit_sender.is_some() {
             return Err(audit_event_overflow());
         }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::tool_call_lifecycle::delivery::TerminalFields;
+use crate::tool_call_lifecycle::delivery::{RawPresentation, TerminalFields};
 
 impl ToolCallLifecycle {
     pub(crate) fn selected_tool_fields_fragment(&self) -> String {
@@ -114,9 +114,11 @@ impl ToolCallLifecycle {
             self.terminalize_raw_with_presentation_at(
                 ToolCallState::Running,
                 fields,
-                raw,
-                rendered,
-                presentation,
+                RawPresentation {
+                    raw,
+                    rendered,
+                    presentation,
+                },
                 "tool_call.complete_raw_with_presentation",
                 now,
             )

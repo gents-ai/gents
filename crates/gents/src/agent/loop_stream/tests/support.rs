@@ -195,10 +195,13 @@ pub(super) fn usage_response(
     }
 }
 
+type UsageTurns = VecDeque<Vec<RawStreamingChoice<UsageResponse>>>;
+type SeenDispatch = (u64, Option<u64>);
+
 #[derive(Clone)]
 pub(super) struct UsageScriptedModel {
-    turns: Arc<Mutex<VecDeque<Vec<RawStreamingChoice<UsageResponse>>>>>,
-    seen_dispatches: Arc<Mutex<Vec<(u64, Option<u64>)>>>,
+    turns: Arc<Mutex<UsageTurns>>,
+    seen_dispatches: Arc<Mutex<Vec<SeenDispatch>>>,
 }
 
 impl UsageScriptedModel {

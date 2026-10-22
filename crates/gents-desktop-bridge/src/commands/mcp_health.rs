@@ -24,7 +24,7 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
     core: &ClientCore,
     node_did: &str,
 ) -> Result<Vec<MCPServiceHealthView>> {
-    let escaped_node = escape_graphql_string(&node_did);
+    let escaped_node = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             ToolServiceHealthState(
@@ -49,7 +49,7 @@ pub(crate) async fn load_mcp_services_with_health_for_node(
     );
 
     let response =
-        graphql_with_transaction_retry(&core.node(), &query, "list_mcp_services_with_health query")
+        graphql_with_transaction_retry(core.node(), &query, "list_mcp_services_with_health query")
             .await?;
 
     let raw = response
@@ -220,7 +220,7 @@ async fn load_registry_entry(
         }}"#
     );
     let response =
-        graphql_with_transaction_retry(&core.node(), &query, "probe_mcp_service registry query")
+        graphql_with_transaction_retry(core.node(), &query, "probe_mcp_service registry query")
             .await?;
     let row = response
         .data

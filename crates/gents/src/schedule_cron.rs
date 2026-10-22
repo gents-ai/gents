@@ -120,13 +120,11 @@ impl CronSpec {
             .days_of_week
             .contains(local.weekday().num_days_from_sunday());
 
-        let day_matches = if !self.days_of_month.is_wildcard() && !self.days_of_week.is_wildcard() {
+        if !self.days_of_month.is_wildcard() && !self.days_of_week.is_wildcard() {
             dom_matches || dow_matches
         } else {
             dom_matches && dow_matches
-        };
-
-        day_matches
+        }
     }
 }
 

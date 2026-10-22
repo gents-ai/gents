@@ -1164,9 +1164,9 @@ async fn commit_terminal_in_txn(
     Ok(())
 }
 
-fn terminal_projection(
-    view: &GraphRunView,
-) -> Option<(&'static str, Option<&Value>, Option<Vec<GraphResultRef>>)> {
+type TerminalProjection<'a> = (&'static str, Option<&'a Value>, Option<Vec<GraphResultRef>>);
+
+fn terminal_projection(view: &GraphRunView) -> Option<TerminalProjection<'_>> {
     if view.cancellation_requested_at.is_some() && view.active_request_count == 0 {
         Some(("cancelled", None, None))
     } else if let Some(error) = view

@@ -138,7 +138,7 @@ where
                 changed = store.changed() => {
                     if changed.is_err() { break; }
                     sequence = sequence.checked_add(1).context("client notification sequence exhausted")?;
-                    let payload = ClientUpdateEvent::store(store.borrow_and_update().clone());
+                    let payload = ClientUpdateEvent::store(*store.borrow_and_update());
                     publish(&out, &local_stop, HostMessage::Updated { sequence, payload }).await?;
                 }
                 changed = health.changed() => {

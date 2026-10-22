@@ -97,8 +97,8 @@ async fn probe_account(
         let body = String::from_utf8_lossy(&body);
         if status.as_u16() == 401 || status.as_u16() == 403 {
             let guidance = gents::oauth_credential::classify_chatgpt_auth_error(
-                &node_did,
-                &provider,
+                node_did,
+                provider,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");

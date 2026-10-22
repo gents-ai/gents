@@ -151,12 +151,11 @@ impl RuntimeStatusHandle {
             node.clone(),
             node_did.clone(),
         );
-        let handle = Self {
+        Self {
             node,
             state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
             readiness,
-        };
-        handle
+        }
     }
 
     #[cfg(test)]

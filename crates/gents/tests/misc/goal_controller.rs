@@ -3592,7 +3592,7 @@ async fn operator_resume_retry_after_goal_progress_returns_original_child_withou
         serde_json::to_value(before).unwrap()
     );
     assert_eq!(
-        operator_resume_child_row(&db, &child_before["_docID"].as_str().unwrap()).await,
+        operator_resume_child_row(&db, child_before["_docID"].as_str().unwrap()).await,
         child_before
     );
     assert_eq!(goal_children(&db).await.len(), 1);

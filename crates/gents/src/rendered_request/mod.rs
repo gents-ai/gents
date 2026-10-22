@@ -24,7 +24,7 @@ pub use sink::DefraRenderedRequestSink;
 fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
     let join = crate::admission::current_call_join()?;
     let scope_kind = capture_scope.parse::<CaptureScope>().ok()?.kind;
-    admission_kind_matches_scope(join.call_kind, scope_kind).then(|| AdmissionJoin {
+    admission_kind_matches_scope(join.call_kind, scope_kind).then_some(AdmissionJoin {
         call_id: join.call_id,
         call_seq: join.call_seq,
     })
@@ -633,8 +633,7 @@ mod tests {
             &mut cache,
         )
         .await
-        .err()
-        .expect("the misreferencing turn must fail closed");
+        .expect_err("the misreferencing turn must fail closed");
         assert!(
             error.downcast_ref::<CaptureStoreReadError>().is_none(),
             "a misreferenced block is a verification failure, not a store failure: {error:#}"
@@ -667,8 +666,7 @@ mod tests {
             &mut cache,
         )
         .await
-        .err()
-        .expect("a manifest naming an absent document must fail closed");
+        .expect_err("a manifest naming an absent document must fail closed");
         assert!(
             error.downcast_ref::<CaptureStoreReadError>().is_none(),
             "an absent block is a verification failure, not a store failure: {error:#}"

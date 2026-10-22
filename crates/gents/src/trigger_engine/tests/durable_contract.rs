@@ -791,7 +791,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     let receipt = &receipt;
                     let mutation = &mutation;
                     Box::pin(async move {
-                        durable::stage_fire_request(txn, &receipt, &mutation).await?;
+                        durable::stage_fire_request(txn, receipt, mutation).await?;
                         Ok(())
                     })
                 })
@@ -806,7 +806,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     let receipt = &receipt;
                     let mutation = &mutation;
                     Box::pin(async move {
-                        durable::stage_fire_request(txn, &receipt, &mutation).await?;
+                        durable::stage_fire_request(txn, receipt, mutation).await?;
                         anyhow::ensure!(commit, "injected crash before receipt/request commit");
                         Ok(())
                     })

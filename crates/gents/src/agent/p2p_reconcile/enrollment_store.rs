@@ -775,7 +775,7 @@ impl GraphqlEnrollmentStore {
         response: &query::QueryResponse,
     ) -> Result<EnrollmentProjection> {
         let now = Utc::now();
-        let raw_network_rows = rows::<Value>(&response, "Network")?;
+        let raw_network_rows = rows::<Value>(response, "Network")?;
         let network_id = raw_network_rows
             .first()
             .and_then(|row| row.get("network_id"))
@@ -793,7 +793,7 @@ impl GraphqlEnrollmentStore {
                 return Ok(EnrollmentProjection::conflicted(network_id, error));
             }
         };
-        match self.project_response(&response, &network_rows, now).await {
+        match self.project_response(response, &network_rows, now).await {
             Ok(projection) => {
                 self.fail_closed.record(None);
                 Ok(projection)
@@ -1767,12 +1767,16 @@ impl VerifiedRequest {
             server_peer: self.record.server_peer.clone(),
             candidate_did: self.record.candidate_did.clone(),
             candidate_peer: self.record.candidate_peer.clone(),
-            observed_candidate_peer: terminal_witness
-                .then(|| self.record.candidate_peer.clone())
-                .unwrap_or_default(),
-            resolved_candidate_did: terminal_witness
-                .then(|| self.record.candidate_did.clone())
-                .unwrap_or_default(),
+            observed_candidate_peer: if terminal_witness {
+                self.record.candidate_peer.clone()
+            } else {
+                Default::default()
+            },
+            resolved_candidate_did: if terminal_witness {
+                self.record.candidate_did.clone()
+            } else {
+                Default::default()
+            },
             candidate_ticket_peer: self.record.candidate_peer.clone(),
             owner_node: self.record.owner_agent.clone(),
             profile: self.record.profile.clone(),

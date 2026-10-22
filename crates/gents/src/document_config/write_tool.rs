@@ -493,36 +493,6 @@ pub(crate) fn reject_tool_name_surface_collisions(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn eval_and_optimization_collections_are_never_exposed() {
-        for name in super::PROTECTED_DATASTORE_COLLECTIONS {
-            let error = super::reject_protected_collection_name(name).unwrap_err();
-            assert!(format!("{error:#}").contains("protected"), "{error:#}");
-        }
-        for name in [
-            gents_protocol::schemas::EVAL_DEFINITION_NAME,
-            gents_protocol::schemas::EVAL_RUN_NAME,
-            gents_protocol::schemas::EVAL_TRIAL_NAME,
-            gents_protocol::schemas::EVAL_VERDICT_NAME,
-            gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
-        ] {
-            assert!(
-                super::PROTECTED_DATASTORE_COLLECTIONS.contains(&name),
-                "{name}"
-            );
-        }
-        assert!(super::reject_protected_collection_name("Notes").is_ok());
-        assert!(
-            super::PROTECTED_DATASTORE_COLLECTIONS
-                .iter()
-                .all(|name| gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(name)),
-            "every protected name must be a registered collection"
-        );
-    }
-}
-
 /// Refusal for a model-supplied value on a runtime-filled field. It names the
 /// declaring surface entry because the fix belongs to whoever configured it,
 /// not to the calling model.
@@ -569,4 +539,34 @@ fn surface_recovery(tool_name: &str, surface_id: Option<&str>) -> String {
     format!(
         "{read} Changes take effect next request; retrying in this request uses the old definition."
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn eval_and_optimization_collections_are_never_exposed() {
+        for name in super::PROTECTED_DATASTORE_COLLECTIONS {
+            let error = super::reject_protected_collection_name(name).unwrap_err();
+            assert!(format!("{error:#}").contains("protected"), "{error:#}");
+        }
+        for name in [
+            gents_protocol::schemas::EVAL_DEFINITION_NAME,
+            gents_protocol::schemas::EVAL_RUN_NAME,
+            gents_protocol::schemas::EVAL_TRIAL_NAME,
+            gents_protocol::schemas::EVAL_VERDICT_NAME,
+            gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
+        ] {
+            assert!(
+                super::PROTECTED_DATASTORE_COLLECTIONS.contains(&name),
+                "{name}"
+            );
+        }
+        assert!(super::reject_protected_collection_name("Notes").is_ok());
+        assert!(
+            super::PROTECTED_DATASTORE_COLLECTIONS
+                .iter()
+                .all(|name| gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(name)),
+            "every protected name must be a registered collection"
+        );
+    }
 }

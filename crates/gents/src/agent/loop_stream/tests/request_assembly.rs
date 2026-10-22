@@ -31,7 +31,7 @@ fn generated_steering_prepared_prompt(
     assert!(matches!(&payload.presentation, LeanPresentation::Full));
     assert_eq!(payload.reference.close_id, segment.id);
     assert_eq!(payload.reference.stream, 0);
-    assert_eq!(message.header.refs.as_slice(), [payload.reference.clone()]);
+    assert_eq!(message.header.refs.as_slice(), std::slice::from_ref(&payload.reference));
     let flush = segment.flush.as_ref().expect("prepared text lacks a flush");
     assert_eq!(flush.ordinal, 0);
     let [run] = flush.runs.as_slice() else {

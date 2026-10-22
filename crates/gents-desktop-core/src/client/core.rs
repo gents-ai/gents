@@ -298,6 +298,9 @@ enum P2PSupervisorCommand {
     RepairNow,
 }
 
+/// A finished shutdown's result, with the error rendered for every waiter.
+type ShutdownOutcome = std::result::Result<(), String>;
+
 pub struct ClientCore {
     store_access: Mutex<Option<ConfigAccess>>,
     paths: DesktopPaths,
@@ -313,7 +316,7 @@ pub struct ClientCore {
     observation_scope: observation_scope::ObservationScope,
     request_patch_signatures: tokio::sync::Mutex<RapidHashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
-    shutdown_completion: Mutex<Option<watch::Receiver<Option<std::result::Result<(), String>>>>>,
+    shutdown_completion: Mutex<Option<watch::Receiver<Option<ShutdownOutcome>>>>,
     #[cfg(test)]
     shutdown_test_pause: Mutex<Option<Arc<ShutdownTestPause>>>,
     last_mutation_error: StdRwLock<Option<String>>,

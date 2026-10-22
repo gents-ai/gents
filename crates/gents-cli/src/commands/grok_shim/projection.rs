@@ -154,7 +154,7 @@ impl ProjectionSequencer {
             .as_ref()
             .map(|order| sample.order.cmp(order))
         {
-            Some(std::cmp::Ordering::Less) => return,
+            Some(std::cmp::Ordering::Less) => (),
             Some(std::cmp::Ordering::Equal) => {
                 sequence.total_tokens = sequence.total_tokens.max(sample.used)
             }
@@ -627,13 +627,11 @@ impl ProjectionEngine {
                     continue;
                 };
                 let (rail, text) = match update {
-                    messages::MessageUpdate::AgentMessageChunk { text } => {
-                        (EvidenceRail::Content, text)
-                    }
-                    messages::MessageUpdate::AgentThoughtChunk { text } => {
+                    messages::MessageUpdate::AgentMessage { text } => (EvidenceRail::Content, text),
+                    messages::MessageUpdate::AgentThought { text } => {
                         (EvidenceRail::Reasoning, text)
                     }
-                    messages::MessageUpdate::UserMessageChunk { .. } => continue,
+                    messages::MessageUpdate::UserMessage { .. } => continue,
                 };
                 let Some(key) = messages.update_keys.get(index) else {
                     continue;
@@ -664,7 +662,7 @@ impl ProjectionEngine {
                     continue;
                 }
                 let chronology = messages.chronology.get(index).copied().flatten();
-                if let messages::MessageUpdate::UserMessageChunk { text } = update {
+                if let messages::MessageUpdate::UserMessage { text } = update {
                     let is_notification = durable_message_key(key, update.session_update_kind())
                         .is_some_and(gents::background_completion::is_background_completion_notification_message_key);
                     if is_notification {
@@ -696,13 +694,11 @@ impl ProjectionEngine {
                     continue;
                 }
                 let (rail, text) = match update {
-                    messages::MessageUpdate::AgentMessageChunk { text } => {
-                        (EvidenceRail::Content, text)
-                    }
-                    messages::MessageUpdate::AgentThoughtChunk { text } => {
+                    messages::MessageUpdate::AgentMessage { text } => (EvidenceRail::Content, text),
+                    messages::MessageUpdate::AgentThought { text } => {
                         (EvidenceRail::Reasoning, text)
                     }
-                    messages::MessageUpdate::UserMessageChunk { .. } => continue,
+                    messages::MessageUpdate::UserMessage { .. } => continue,
                 };
                 let live = match rail {
                     EvidenceRail::Reasoning => &planned_live.reasoning,
@@ -789,7 +785,7 @@ impl ProjectionEngine {
             }
         }
 
-        merged.sort_by(|a, b| family_sort_key(a).cmp(&family_sort_key(b)));
+        merged.sort_by_key(family_sort_key);
         let events: Vec<NovelProjectionEvent> = merged.into_iter().map(|item| item.event).collect();
         let mut trailing_advances = durable_trailing;
         if let Some(sequence) = messages.message_sequence_high_water {
@@ -972,9 +968,9 @@ fn durable_row_views(messages: &messages::MessageProjection) -> Vec<DurableRowVi
                 ..DurableRowView::default()
             });
         match update {
-            messages::MessageUpdate::AgentMessageChunk { text } => row.content.push_str(text),
-            messages::MessageUpdate::AgentThoughtChunk { text } => row.reasoning.push_str(text),
-            messages::MessageUpdate::UserMessageChunk { .. } => {}
+            messages::MessageUpdate::AgentMessage { text } => row.content.push_str(text),
+            messages::MessageUpdate::AgentThought { text } => row.reasoning.push_str(text),
+            messages::MessageUpdate::UserMessage { .. } => {}
         }
     }
     rows.into_values().collect()

@@ -689,7 +689,7 @@ impl GoalSource {
                     {signed_fields}
                 }}
             }}"#,
-            signed_fields = format!(
+            signed_fields = format_args!(
                 "{} failure_reason terminalized_at",
                 crate::request_admission::SIGNED_REQUEST_FIELDS
             ),

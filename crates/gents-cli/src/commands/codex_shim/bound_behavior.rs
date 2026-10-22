@@ -60,10 +60,9 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let first =
-            gents::KeyIdentity::load_or_create(&dir.path().join("first.key"), None).unwrap();
+        let first = gents::KeyIdentity::load_or_create(dir.path().join("first.key"), None).unwrap();
         let second =
-            gents::KeyIdentity::load_or_create(&dir.path().join("second.key"), None).unwrap();
+            gents::KeyIdentity::load_or_create(dir.path().join("second.key"), None).unwrap();
         for (identity, model, window) in [
             (&first, "first-model", 32000),
             (&second, "second-model", 64000),

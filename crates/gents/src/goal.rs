@@ -2934,6 +2934,28 @@ fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
         .unwrap_or_else(|| format!("{name}: null,"))
 }
 
+pub(crate) async fn fence_goal_continuation_claim_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &crate::watcher::AgentRequest,
+    now: &str,
+) -> Result<bool> {
+    if request.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
+        return Ok(true);
+    }
+    let Some(goal) =
+        load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?
+    else {
+        return Ok(true);
+    };
+    request_head::retire_stale_assignment_continuations_in_txn(
+        txn,
+        &goal,
+        Some(&request.doc_id),
+        now,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3075,26 +3097,4 @@ mod tests {
             .unwrap();
         assert_eq!(unchanged.auto_resume_at_reset, Some(true));
     }
-}
-
-pub(crate) async fn fence_goal_continuation_claim_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    request: &crate::watcher::AgentRequest,
-    now: &str,
-) -> Result<bool> {
-    if request.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
-        return Ok(true);
-    }
-    let Some(goal) =
-        load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?
-    else {
-        return Ok(true);
-    };
-    request_head::retire_stale_assignment_continuations_in_txn(
-        txn,
-        &goal,
-        Some(&request.doc_id),
-        now,
-    )
-    .await
 }

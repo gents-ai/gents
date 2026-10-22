@@ -207,6 +207,10 @@ async fn submit_chat_turn_with_goal(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "request fields plus the CLI's timeout and poll settings"
+)]
 async fn submit_chat_turn_json(
     graphql: &GraphqlEndpoint,
     node_did: &str,

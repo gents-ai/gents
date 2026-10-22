@@ -316,7 +316,7 @@ pub fn decode_revert_data(hex: &str) -> Option<String> {
     if hex.len() < 8 + 64 + 64 || !hex.to_ascii_lowercase().starts_with("08c379a0") {
         return None;
     }
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     let bytes = (0..hex.len())

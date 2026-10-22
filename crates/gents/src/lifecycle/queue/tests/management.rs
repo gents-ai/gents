@@ -239,9 +239,11 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             &access,
             db.identity.as_ref(),
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(caller_did),
-            db.node_did(),
-            &session_id,
-            caller_did,
+            PendingEditActor {
+                node_did: db.node_did(),
+                session_id: &session_id,
+                requester_did: caller_did,
+            },
             edit,
             &replacements
                 .iter()

@@ -1857,7 +1857,7 @@ pub(crate) mod tests {
         assert_eq!(step.state, JobState::Running);
         let derived = crate::plugin_job::input::derive_children(
             &job.access,
-            &[row.clone()],
+            std::slice::from_ref(&row),
             pin.ceiling_at_pin.result_bytes,
         )
         .await

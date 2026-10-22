@@ -43,13 +43,11 @@ pub fn action_journal_prefix_legal(entries: &[ActionJournalEntry]) -> bool {
                 | ActionJournalState::EffectObserved
                 | ActionJournalState::ResultDocsWritten
                 | ActionJournalState::Interrupted
+        ) && !matches!(
+            by_index.get(idx - 1).copied().flatten(),
+            Some(ActionJournalState::ResultDocsWritten)
         ) {
-            if !matches!(
-                by_index.get(idx - 1).copied().flatten(),
-                Some(ActionJournalState::ResultDocsWritten)
-            ) {
-                return false;
-            }
+            return false;
         }
     }
     true

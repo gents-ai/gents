@@ -355,7 +355,7 @@ pub(crate) fn validate_tree_delta(
         bail!("malformed Git raw delta");
     }
     let mut changed_paths = Vec::new();
-    for pair in fields.chunks_exact(2) {
+    for pair in fields.as_chunks::<2>().0 {
         let header: Vec<_> = pair[0].split_ascii_whitespace().collect();
         if header.len() != 5 {
             bail!("malformed Git raw delta header");
@@ -634,7 +634,7 @@ fn apply_integrate_commit_paths(trunk: &Path, commit: &str) -> Result<()> {
     if fields.len() % 2 != 0 {
         bail!("malformed Git name-status output");
     }
-    for pair in fields.chunks_exact(2) {
+    for pair in fields.as_chunks::<2>().0 {
         match pair[0].as_str() {
             "A" | "M" | "T" => checkout_from_commit(trunk, commit, &pair[1])?,
             "D" => remove_from_trunk(trunk, &pair[1])?,

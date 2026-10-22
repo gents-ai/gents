@@ -1,0 +1,5 @@
+# Pin Clippy's default complexity thresholds so a toolchain bump cannot loosen
+# the `-D warnings` gate silently (as DefraDB does). Fix flagged code; do not
+# raise these to admit it.
+cognitive-complexity-threshold = 25
+type-complexity-threshold = 250

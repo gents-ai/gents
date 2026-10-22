@@ -26,7 +26,7 @@ enum Subject {
         is_dir: bool,
         access: BindAccess,
     },
-    Workspace(workspace::Binding),
+    Workspace(Box<workspace::Binding>),
 }
 
 pub struct FilesystemApproval<'a> {
@@ -63,7 +63,7 @@ impl Request {
     }
 
     pub(crate) fn for_binding(binding: workspace::Binding, session_id: Option<String>) -> Self {
-        Self::with_subject(Subject::Workspace(binding), session_id)
+        Self::with_subject(Subject::Workspace(Box::new(binding)), session_id)
     }
 
     fn with_subject(subject: Subject, session_id: Option<String>) -> Self {
@@ -221,7 +221,7 @@ impl TryFrom<WireRequest> for Request {
                     && wire.access.is_none(),
                 "a workspace approval cannot contain a second filesystem target"
             );
-            Subject::Workspace(binding)
+            Subject::Workspace(Box::new(binding))
         } else {
             let plugin = wire.plugin.context("the approval question has no plugin")?;
             let path = wire.path.context("the approval question has no path")?;
@@ -266,7 +266,7 @@ impl From<Request> for WireRequest {
             access: None,
         };
         match request.subject {
-            Subject::Workspace(binding) => wire.binding = Some(binding),
+            Subject::Workspace(binding) => wire.binding = Some(*binding),
             Subject::Plugin {
                 plugin,
                 path,

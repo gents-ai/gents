@@ -6,6 +6,9 @@ use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 
+pub(crate) type AgentFactory =
+    Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
+
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
@@ -185,12 +188,7 @@ impl GentsBuilder {
             );
         }
 
-        let mut agent_factories: Vec<
-            Box<
-                dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
-                    + Send,
-            >,
-        > = Vec::with_capacity(self.agents.len());
+        let mut agent_factories: Vec<AgentFactory> = Vec::with_capacity(self.agents.len());
         for agent_config in self.agents {
             let factory = agent_config
                 .into_factory(
@@ -534,12 +532,7 @@ impl PendingAgent {
         node_did: &str,
         tool_ceiling: &ToolCeiling,
         backend_health: &crate::backend_health::BackendHealthMap,
-    ) -> Result<
-        Box<
-            dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
-                + Send,
-        >,
-    > {
+    ) -> Result<AgentFactory> {
         let backend_id = self
             .backend_id
             .as_deref()

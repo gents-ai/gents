@@ -1420,7 +1420,7 @@ mod tests {
         let elsewhere = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(elsewhere.path().join("eval").join("jobs")).unwrap();
         let other_home = crate::commands::eval::EvalContext {
-            access: gents::ConfigAccess::local(node.clone()).into(),
+            access: gents::ConfigAccess::local(node.clone()),
             home_dir: elsewhere.path().to_path_buf(),
             owner: fixture.ctx.owner.clone(),
         };

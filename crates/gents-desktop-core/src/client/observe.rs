@@ -29,7 +29,7 @@ const FETCH_RETRY_LIMIT: u32 = 3;
 const SESSION_HYDRATION_REQUEST: &str = "SessionHydrationRequest";
 
 fn resync_retry_ready(retry_not_before: Option<Instant>, now: Instant) -> bool {
-    retry_not_before.map_or(true, |deadline| now >= deadline)
+    retry_not_before.is_none_or(|deadline| now >= deadline)
 }
 
 enum ObserverWake {
@@ -286,15 +286,14 @@ pub fn spawn_observer_with_selection(
                         let row_count = patch.observed_documents;
                         // A scoped deletion reload cannot recover surviving rows
                         // for other nodes in this batch.
-                        if patch.store.row_count() > 0 {
-                            if store
+                        if patch.store.row_count() > 0
+                            && store
                                 .merge_observer_patch_at_read(&captured_snapshot, patch.store)
                                 .is_none()
-                            {
-                                store.enqueue_resync_request(None);
-                                resync_pending = true;
-                                continue;
-                            }
+                        {
+                            store.enqueue_resync_request(None);
+                            resync_pending = true;
+                            continue;
                         }
                         let reload_scopes = match patch.missing_doc_ids.as_deref() {
                             Some(missing_doc_ids) if !missing_doc_ids.is_empty() => {
@@ -384,6 +383,10 @@ pub fn spawn_observer_with_selection(
 
 /// Branchable collections emit a collection-head update with an empty document
 /// ID; only the document update identifies a row to read.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "observer loop state borrowed from separate owners"
+)]
 async fn accumulate_dirty(
     dirty: &mut RapidHashMap<&'static str, RapidHashSet<String>>,
     resolver: &CollectionResolver,

@@ -775,11 +775,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     #[cfg(unix)]
     let mut grok_shim_handle = None;
     let serve_result: Result<()> = async {
-        if let Err(error) =
-            wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await
-        {
-            return Err(error);
-        }
+        wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
         if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
             return Err(gents::storage_backend::classify_store_error(
                 error, &data_dir,

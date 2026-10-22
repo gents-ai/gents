@@ -926,6 +926,10 @@ impl Drop for RollbackOnDrop {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "ownership handles moved into the transaction owner task"
+)]
 async fn begin_embedded_owned<F, Fut>(
     node: Arc<EmbeddedNode>,
     native_gate: Arc<MutationWriteGate>,

@@ -365,7 +365,7 @@ impl AcpService {
         request: AcpRequest,
         prompt_sender: &PromptSender,
     ) -> AcpDispatch {
-        let id = request.id.clone().unwrap_or_else(|| Value::Null);
+        let id = request.id.clone().unwrap_or(Value::Null);
         let method = request.method.clone();
         match self.handle_request(&request, prompt_sender).await {
             Ok(outcome) => {
@@ -510,7 +510,7 @@ impl AcpService {
             "x.ai/task/kill" => {
                 let params: super::task_control::KillTaskRequest =
                     serde_json::from_value(request.params.clone())
-                        .map_err(|error| invalid_params(&format!("invalid task kill: {error}")))?;
+                        .map_err(|error| invalid_params(format!("invalid task kill: {error}")))?;
                 if params.session_id.trim().is_empty() || params.task_id.trim().is_empty() {
                     return Err(invalid_params(
                         "task kill requires non-empty sessionId and taskId",
@@ -586,7 +586,7 @@ impl AcpService {
             .and_then(Value::as_str)
             .unwrap_or_default();
         if method_id != GENTS_AUTH_METHOD_ID {
-            return Err(invalid_params(&format!(
+            return Err(invalid_params(format!(
                 "unsupported auth method {method_id:?}; the Grok shim advertises only \
                  {GENTS_AUTH_METHOD_ID:?}"
             )));
@@ -629,7 +629,7 @@ impl AcpService {
 
         if let Some(requested) = requested_model.map(str::trim).filter(|v| !v.is_empty()) {
             if requested != self.config.current_model.model_id {
-                return Err(invalid_params(&format!(
+                return Err(invalid_params(format!(
                     "model {requested:?} is not in the bound catalog; the Grok shim serves \
                      {:?} from the bound Agent/InferenceProfile",
                     self.config.current_model.model_id
@@ -778,7 +778,7 @@ impl AcpService {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| invalid_params("session/set_model requires a non-empty modelId"))?;
         if requested != self.config.current_model.model_id {
-            return Err(invalid_params(&format!(
+            return Err(invalid_params(format!(
                 "model {requested:?} is not in the bound catalog; the Grok shim serves \
                  {:?} from the bound Agent/InferenceProfile",
                 self.config.current_model.model_id
@@ -789,7 +789,7 @@ impl AcpService {
             .get("_meta")
             .and_then(|meta| meta.get("reasoningEffort"))
         {
-            return Err(invalid_params(&format!(
+            return Err(invalid_params(format!(
                 "session/set_model does not support _meta.reasoningEffort {effort:?}: the \
                  advertised catalog is text-only with supportsReasoningEffort=false, and a \
                  selected effort is not plumbed into SubmitRequestOptions or provider \
@@ -992,7 +992,7 @@ impl AcpService {
                     return Err(invalid_params("subagent request requires a subagentId"));
                 }
                 Some(value) if !value.is_string() => {
-                    return Err(invalid_params(&format!(
+                    return Err(invalid_params(format!(
                         "subagent request requires a string subagentId, got {value:?}"
                     )));
                 }

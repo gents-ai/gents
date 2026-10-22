@@ -17,9 +17,11 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_HEADER_BYTES: usize = 8 * 1024;
 
+type PendingMap = Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>>;
+
 pub(crate) struct LspClient {
     stdin: Arc<Mutex<ChildStdin>>,
-    pending: Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: PendingMap,
     next_id: AtomicI64,
     pub server_name: String,
     process: Arc<Mutex<ManagedProcess>>,
@@ -60,8 +62,7 @@ impl LspClient {
         let stdin = process.stdin.take().ok_or("process stdin missing")?;
         let stdout = process.stdout.take().ok_or("process stdout missing")?;
         let stderr = process.stderr.take();
-        let pending: Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>> =
-            Arc::new(Mutex::new(RapidHashMap::new()));
+        let pending: PendingMap = Arc::new(Mutex::new(RapidHashMap::new()));
         let pending_reader = pending.clone();
         let stdin = Arc::new(Mutex::new(stdin));
         let stdin_reader = stdin.clone();
@@ -533,7 +534,7 @@ impl LspClient {
 
 struct InflightRequest {
     stdin: Arc<Mutex<ChildStdin>>,
-    pending: Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: PendingMap,
     id: i64,
     completed: Arc<AtomicBool>,
 }
@@ -626,7 +627,7 @@ async fn fail_pending(
 }
 
 struct ReaderShared {
-    pending: Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: PendingMap,
     stdin: Arc<Mutex<ChildStdin>>,
     diagnostics: Arc<Mutex<RapidHashMap<String, Value>>>,
     workspace: std::path::PathBuf,

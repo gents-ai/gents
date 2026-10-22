@@ -1856,7 +1856,9 @@ fn query_decls_for_runtime_drops_tool_when_filled_filter_would_be_stripped() {
     policy.query_tools = EndpointScope::Only(grants);
 
     assert!(
-        policy.query_decls_for_runtime(&[decl.clone()]).is_empty(),
+        policy
+            .query_decls_for_runtime(std::slice::from_ref(&decl))
+            .is_empty(),
         "narrowing away a correlation filter must drop the tool, not un-scope the read"
     );
 
@@ -1874,7 +1876,7 @@ fn query_decls_for_runtime_drops_tool_when_filled_filter_would_be_stripped() {
         ]),
     );
     lossless.query_tools = EndpointScope::Only(full);
-    let kept = lossless.query_decls_for_runtime(&[decl.clone()]);
+    let kept = lossless.query_decls_for_runtime(std::slice::from_ref(&decl));
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].filter_fields.len(), 1);
 

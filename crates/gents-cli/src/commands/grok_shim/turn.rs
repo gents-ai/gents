@@ -369,7 +369,7 @@ impl CancelBeforeIdLatch {
 struct PendingPrompt {
     response_tx: Option<oneshot::Sender<Result<Value>>>,
     request: Option<gents_protocol::row::AgentRequestRow>,
-    cancel_before_id: Arc<Mutex<CancelBeforeIdLatch>>,
+    cancel_before_id: CancelLatch,
     drained: bool,
 }
 
@@ -382,10 +382,14 @@ impl PendingPrompt {
     }
 }
 
+/// A pending prompt's session id and prompt id.
+type PromptKey = (String, String);
+type CancelLatch = Arc<Mutex<CancelBeforeIdLatch>>;
+
 #[derive(Default)]
 struct ConnectionState {
     closed: bool,
-    entries: RapidHashMap<(String, String), PendingPrompt>,
+    entries: RapidHashMap<PromptKey, PendingPrompt>,
 }
 
 struct ObservedRequest {
@@ -1176,7 +1180,7 @@ impl TurnManager {
             "Grok shim received session/cancel"
         );
         let target_prompt_id = notification.prompt_id.clone();
-        let targets: Vec<((String, String), Arc<Mutex<CancelBeforeIdLatch>>)> = {
+        let targets: Vec<(PromptKey, CancelLatch)> = {
             let state = self.state.lock().await;
             state
                 .entries
@@ -1272,8 +1276,8 @@ impl TurnManager {
         let mut state = self.state.lock().await;
         state.closed = true;
         let drained: Vec<(
-            (String, String),
-            Arc<Mutex<CancelBeforeIdLatch>>,
+            PromptKey,
+            CancelLatch,
             Option<gents_protocol::row::AgentRequestRow>,
         )> = std::mem::take(&mut state.entries)
             .into_iter()
@@ -1675,6 +1679,10 @@ impl TurnManager {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "per-prompt stream state borrowed from separate owners"
+    )]
     async fn stream_projection_updates(
         &self,
         session_id: &str,
@@ -1702,6 +1710,10 @@ impl TurnManager {
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "per-prompt stream state borrowed from separate owners"
+    )]
     async fn stream_projection_updates_mode(
         &self,
         session_id: &str,
@@ -1799,6 +1811,10 @@ impl TurnManager {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "per-prompt stream state borrowed from separate owners"
+    )]
     async fn send_projection_event(
         &self,
         session_id: &str,
@@ -5562,7 +5578,7 @@ mod tests {
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            if buffer.lock().await.len() >= 1 {
+            if !buffer.lock().await.is_empty() {
                 break;
             }
             assert!(

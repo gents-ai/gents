@@ -205,7 +205,6 @@ impl DefraStreamWriter {
         let attempt = tail.attempt;
         let capture_scope = tail
             .capture_scope
-            .clone()
             .context("provider attempt omitted capture scope")?;
         let ordinal = tail.next_ordinal;
         let delta = provider_flush_delta(&tail.streams, &encoded)?;
@@ -328,7 +327,6 @@ impl DefraStreamWriter {
             .context("provider acceptance has no exact active attempt")?;
         let capture_scope = tail
             .capture_scope
-            .clone()
             .context("provider acceptance omitted capture scope")?;
         let source = OutputSource::ProviderTurn {
             scope: capture_scope,

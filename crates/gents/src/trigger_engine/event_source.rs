@@ -1219,7 +1219,7 @@ impl EventSource {
             "docs": docs,
             "complete": complete,
         });
-        let owner_for_callback = Self::delivery(snapshot, &trigger).ok()?.owner().to_owned();
+        let owner_for_callback = Self::delivery(snapshot, trigger).ok()?.owner().to_owned();
         let trigger_id_for_callback = trigger.trigger_id.clone();
         let source_doc_id_for_callback = source_doc_id.clone();
         let node_for_callback = self.node.clone();
@@ -1280,10 +1280,7 @@ impl EventSource {
         else {
             return RapidHashSet::new();
         };
-        let delivery = Delivery::Trigger {
-            node_did: node_did,
-            trigger,
-        };
+        let delivery = Delivery::Trigger { node_did, trigger };
         let keys = correlations
             .iter()
             .map(|correlation| {
@@ -1919,7 +1916,7 @@ impl EventSource {
                 args_vars: None,
                 durable_fire_key: crate::trigger_engine::durable_fire_key(
                     "event-document",
-                    &[&trigger.trigger_id, &source_doc_id],
+                    &[&trigger.trigger_id, source_doc_id],
                 ),
                 pre_materialized_request_id: None,
                 on_result: Box::new(move |result| {

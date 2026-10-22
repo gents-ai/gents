@@ -43,6 +43,7 @@ help:
 	@echo "Checks:"
 	@echo "  make fmt                   Format Rust and desktop UI code"
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
+	@echo "  make lint                  Run clippy on all workspace targets (-D warnings)"
 	@echo "  make check-cli-headless    Check CLI without embedded Codex TUI"
 	@echo "  make proofs                Build Lean proofs"
 	@echo
@@ -155,7 +156,7 @@ dist-cli: release-cli
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
 	@ls -lh "$(DIST_DIR)/$(RELEASE_ARTIFACT).tar.gz"*
 
-.PHONY: fmt fmt-check check-cli-headless proofs
+.PHONY: fmt fmt-check lint check-cli-headless proofs
 fmt:
 	$(CARGO) fmt --all
 	$(NPM) --prefix $(DESKTOP_DIR) run format
@@ -163,6 +164,9 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all --check
 	$(NPM) --prefix $(DESKTOP_DIR) run format:check
+
+lint:
+	$(CARGO) clippy --workspace --all-targets $(CARGO_PROFILE_FLAG) -- -D warnings
 
 check-cli-headless:
 	$(CARGO) check -p gents-cli --no-default-features $(CARGO_PROFILE_FLAG)

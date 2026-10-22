@@ -103,8 +103,8 @@ async fn existing_goal_resume_receipt<'a>(
         .transact_readonly("goal.resume_existing_receipt", move |txn| {
             Box::pin(async move {
                 let (goal, _, parent_row) =
-                    resume_context_in_txn(txn, &node_did, &session_id, &from_request_id).await?;
-                existing_resume_receipt_in_txn(txn, &goal, &parent_row, &from_request_id).await
+                    resume_context_in_txn(txn, node_did, session_id, from_request_id).await?;
+                existing_resume_receipt_in_txn(txn, &goal, &parent_row, from_request_id).await
             })
         })
         .await

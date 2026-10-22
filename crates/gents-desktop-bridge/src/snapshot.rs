@@ -154,7 +154,7 @@ async fn build_bootstrap_summary_raw(
     desktop_paths: &DesktopPaths,
     node_home: Option<&Path>,
 ) -> Result<DesktopBootstrapSummary, String> {
-    let peer_records = load_peer_records(&desktop_paths.peer_directory_path())
+    let peer_records = load_peer_records(desktop_paths.peer_directory_path())
         .await
         .map_err(|error| error.to_string())?;
     let (init, init_config_status) = node_home

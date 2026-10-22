@@ -77,6 +77,11 @@ pub struct HostFacts {
     pub ceiling_at_pin: JobCeiling,
 }
 
+/// A resume target's owner scope, same-plugin flag, prior row and chain root.
+pub type ResumeChain = (ProcessControlScope, bool, StepRow, StepRow);
+/// A listed doc id, its chain-head flag and its target, if any.
+pub type ResumeTarget = (String, bool, Option<ResumeChain>);
+
 /// Lean `PluginJob.StepContext`: the facts re-read in the step transaction.
 /// Lean's function-valued facts are finite tables over the values a step names.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,11 +104,7 @@ pub struct StepContext {
     pub adoption_facts: HostFacts,
     pub caller_scope: ProcessControlScope,
     pub control_targets: Vec<(String, Option<(ProcessControlScope, bool)>)>,
-    pub resume_targets: Vec<(
-        String,
-        bool,
-        Option<(ProcessControlScope, bool, StepRow, StepRow)>,
-    )>,
+    pub resume_targets: Vec<ResumeTarget>,
     pub resume_facts: HostFacts,
 }
 
@@ -143,7 +144,7 @@ impl Refusal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmitRefusal {
     pub refusal: Refusal,
-    closed_row: StepRow,
+    closed_row: Box<StepRow>,
     kills: Vec<String>,
 }
 
@@ -246,15 +247,15 @@ pub fn admit_step(
     admit(ctx, job, out).map_err(|refusal| match refusal {
         Refusal::Terminal => AdmitRefusal {
             refusal,
-            closed_row: job.clone(),
+            closed_row: Box::new(job.clone()),
             kills: Vec::new(),
         },
         _ => AdmitRefusal {
             refusal,
-            closed_row: StepRow {
+            closed_row: Box::new(StepRow {
                 state: JobState::Failed,
                 ..job.clone()
-            },
+            }),
             kills: live_own_children(job)
                 .map(|child| child.retry_key.clone())
                 .collect(),
@@ -451,10 +452,7 @@ fn resume_placed(job: &StepRow, out: &JobStepOutput) -> bool {
 fn resume_listed<'a>(
     ctx: &'a StepContext,
     doc_id: &str,
-) -> Option<(
-    bool,
-    Option<&'a (ProcessControlScope, bool, StepRow, StepRow)>,
-)> {
+) -> Option<(bool, Option<&'a ResumeChain>)> {
     ctx.resume_targets
         .iter()
         .find(|(id, _, _)| id == doc_id)

@@ -198,6 +198,10 @@ impl WorkspaceDocuments for MemoryWorkspaceDocuments {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fields of the IsolatedWorkspace document"
+)]
 pub(crate) fn new_isolated_workspace(
     identity: &LogicalWorkspaceIdentity,
     creation_policy: CreationPolicy,

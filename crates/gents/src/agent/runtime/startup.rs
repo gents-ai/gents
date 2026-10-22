@@ -964,14 +964,16 @@ async fn run_agent_owned(
         background_tasks.spawn(async move {
             BackgroundTaskResult::Control(
                 super::control_watcher::run_control_watcher(
-                    control_node,
-                    control_subscription,
-                    control_node_did,
-                    control_context,
-                    control_tx,
-                    control_runtime_status,
-                    backend_health_events_rx,
-                    control_shutdown,
+                    super::control_watcher::ControlWatcherInputs {
+                        node: control_node,
+                        subscription: control_subscription,
+                        node_did: control_node_did,
+                        resolve_context: control_context,
+                        proposals_tx: control_tx,
+                        runtime_status: control_runtime_status,
+                        health_events_rx: backend_health_events_rx,
+                        shutdown: control_shutdown,
+                    },
                 )
                 .await,
             )

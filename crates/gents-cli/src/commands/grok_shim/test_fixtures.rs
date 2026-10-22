@@ -511,7 +511,7 @@ pub(crate) async fn seed_canonical_tool_call(
                     role: MessageRole::Assistant,
                     native_id: None,
                     blocks: vec![MessageBlock::ToolCall {
-                        tool_call_doc_id: tool_doc_id.clone().into(),
+                        tool_call_doc_id: tool_doc_id.clone(),
                         id: tool_call_id_for_header,
                         call_id: None,
                         name: tool_name_for_header,
@@ -544,10 +544,10 @@ pub(crate) async fn seed_canonical_tool_call(
             session_id: session_id.into(),
             request_doc_id: request_doc_id.into(),
             source: OutputSource::ToolCall {
-                tool_call_doc_id: tool_doc_id.clone().into(),
+                tool_call_doc_id: tool_doc_id.clone(),
             },
             writer: OutputWriter::ToolExecution {
-                tool_call_doc_id: tool_doc_id.clone().into(),
+                tool_call_doc_id: tool_doc_id.clone(),
             },
             ordinal: Some(0),
             runs: vec![SegmentRun {
@@ -577,14 +577,14 @@ pub(crate) async fn seed_canonical_tool_call(
                 requester_did,
                 request_doc_id: Some(request_doc_id.into()),
                 publication: MessagePublication::ToolDelivery {
-                    tool_call_doc_id: tool_doc_id.clone().into(),
+                    tool_call_doc_id: tool_doc_id.clone(),
                 },
                 outcome: OutputOutcome::Complete,
                 sequence: delivery_sequence,
                 role: MessageRole::User,
                 native_id: None,
                 blocks: vec![MessageBlock::ToolResult {
-                    tool_call_doc_id: tool_doc_id.clone().into(),
+                    tool_call_doc_id: tool_doc_id.clone(),
                     id: tool_call_id.into(),
                     call_id: None,
                     parts: vec![ToolResultPart::Text {

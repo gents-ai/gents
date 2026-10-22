@@ -347,7 +347,7 @@ async fn run_claude_fixture_turns(
     use crate::claude_subscription::{ClaudeSubscriptionClient, StaticBearer};
     use rig::client::CompletionClient;
 
-    let _guard = lock_fixtures_for_test();
+    let _guard = lock_fixtures_for_test().await;
     install_messages_sse_fixtures(vec![first_turn, sse_fixture_final_text("done")]);
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
@@ -425,12 +425,12 @@ async fn run_claude_fixture_turns(
 #[test]
 fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
     use crate::claude_messages::{
-        install_messages_sse_fixtures, lock_fixtures_for_test, sse_fixture_final_text,
+        blocking_lock_fixtures_for_test, install_messages_sse_fixtures, sse_fixture_final_text,
     };
     use crate::llm::backend_client::{build_backend_client, BackendClient};
     use rig::client::CompletionClient;
 
-    let _guard = lock_fixtures_for_test();
+    let _guard = blocking_lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

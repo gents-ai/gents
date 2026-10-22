@@ -34,7 +34,7 @@ fn verified_entry_belongs_to_goal(goal: &GoalDocument, entry: &AgentRequestRow) 
 pub(crate) enum RequestAssignmentObservation {
     None,
     Unknown,
-    Assigned(GoalDocument),
+    Assigned(Box<GoalDocument>),
 }
 
 pub(super) fn observe_request_assignment(
@@ -49,7 +49,7 @@ pub(super) fn observe_request_assignment(
     });
     if let Some(goal) = candidates.next() {
         return if candidates.next().is_none() {
-            RequestAssignmentObservation::Assigned(goal.clone())
+            RequestAssignmentObservation::Assigned(Box::new(goal.clone()))
         } else {
             RequestAssignmentObservation::Unknown
         };

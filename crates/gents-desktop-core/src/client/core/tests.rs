@@ -562,7 +562,7 @@ async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
     assert!(error.to_string().contains("route is not ready"));
     assert!(!core.sync_state.records()[0].pairing_ready);
     assert!(core.store().snapshot().requests.is_empty());
-    let persisted = crate::client::load_peer_records(&core.paths().peer_directory_path())
+    let persisted = crate::client::load_peer_records(core.paths().peer_directory_path())
         .await
         .unwrap();
     assert!(!persisted[0].pairing_ready);

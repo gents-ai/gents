@@ -20,9 +20,11 @@ pub async fn write_manual_agent_request(
     write_manual_agent_request_with_conversation_title(
         node,
         actor,
-        node_did,
-        agent_id,
-        task_id,
+        ManualRequestTarget {
+            node_did,
+            agent_id,
+            task_id,
+        },
         prompt_template,
         args,
         None,
@@ -30,16 +32,25 @@ pub async fn write_manual_agent_request(
     .await
 }
 
+pub struct ManualRequestTarget<'a> {
+    pub node_did: &'a str,
+    pub agent_id: &'a str,
+    pub task_id: &'a str,
+}
+
 pub async fn write_manual_agent_request_with_conversation_title(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
-    node_did: &str,
-    agent_id: &str,
-    task_id: &str,
+    target: ManualRequestTarget<'_>,
     prompt_template: &str,
     args: Value,
     conversation_title: Option<&str>,
 ) -> Result<String> {
+    let ManualRequestTarget {
+        node_did,
+        agent_id,
+        task_id,
+    } = target;
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) = task_node_ctx(node_did, agent_id, &now);
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -102,7 +113,10 @@ mod tests {
     use defra_node::EmbeddedNode;
     use serde_json::Value;
 
-    use super::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
+    use super::{
+        write_manual_agent_request, write_manual_agent_request_with_conversation_title,
+        ManualRequestTarget,
+    };
     use crate::identity::{KeyIdentity, NodeIdentity};
     use crate::schema::ensure_runtime_schemas;
 
@@ -276,9 +290,11 @@ mod tests {
         let doc_id = write_manual_agent_request_with_conversation_title(
             &node,
             actor,
-            &node_did,
-            "behavior-1",
-            "task-1",
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_id: "behavior-1",
+                task_id: "task-1",
+            },
             "hello {{ args.name }}",
             serde_json::json!({"name": "Amy"}),
             Some("mini-host-health-20260430t180405z"),

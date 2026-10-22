@@ -379,11 +379,9 @@ impl<'a> Selection<'a> {
     }
 }
 
-fn locate_turns(
-    offset: usize,
-    body: &[FlatItem],
-    counts: &[usize],
-) -> Option<Vec<(Vec<Vec<u8>>, Vec<(usize, Vec<u8>)>)>> {
+type LocatedTurn = (Vec<Vec<u8>>, Vec<(usize, Vec<u8>)>);
+
+fn locate_turns(offset: usize, body: &[FlatItem], counts: &[usize]) -> Option<Vec<LocatedTurn>> {
     let positions = body
         .iter()
         .enumerate()

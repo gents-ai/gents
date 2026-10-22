@@ -162,12 +162,12 @@ async fn observe_managed_server_status<R: Runtime>(
     state: &DesktopAppState,
 ) -> Result<ManagedServerStatus, BridgeError> {
     let stored = load_bound_preference(state).await?;
-    let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
     let last_exit = if (native.job_loaded || native.failed)
         && !native.running
         && !native.requires_approval
     {
-        match run_native(native_service(&app, &state)?, |service| service.last_exit()).await {
+        match run_native(native_service(app, state)?, |service| service.last_exit()).await {
             Ok(reason) => reason,
             Err(error) => {
                 tracing::debug!(target: "gents_desktop::managed_server", error = %error.message, "could not read the native service exit record");
@@ -644,7 +644,7 @@ async fn start_managed_server<'a, R: Runtime>(
             core.refresh_local_standard_peer(&node_home, &target.node_name)
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
-            start_managed_runtime_pairing(&state, core, node_home, target).await;
+            start_managed_runtime_pairing(state, core, node_home, target).await;
         }
         external.pairing_ready = pairing_is_ready(state, external.node_did.as_deref()).await;
         return Ok(external);
@@ -733,7 +733,7 @@ async fn start_managed_server<'a, R: Runtime>(
         }),
     };
 
-    let _lifecycle = match launched {
+    match launched {
         Ok(lifecycle) => {
             finish_start_wait(state, &token).await;
             state.managed_server.lock().await.incompatible_store = None;
@@ -2233,7 +2233,7 @@ async fn stop_managed_server_locked<R: Runtime>(
     };
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
     ensure_native_owns_running_endpoint(&port, native.job_loaded)?;
-    drain_managed_runtime_pairing(&state).await;
+    drain_managed_runtime_pairing(state).await;
     if let Err(error) = run_native(native_service(app, state)?, move |service| {
         service.stop(disable_auto_start)
     })
@@ -5856,8 +5856,7 @@ mod tests {
         )
         .await
         .expect("an unobservable refusal is not retried in a loop")
-        .err()
-        .expect("the start fails");
+        .expect_err("the start fails");
         assert!(
             failure.error.to_string().contains("Input/output error"),
             "{}",
@@ -5952,8 +5951,7 @@ mod tests {
         let lifecycle = state.managed_server_lifecycle.lock().await;
         let failure = launch_managed_server(&state, &token, lifecycle, &launch)
             .await
-            .err()
-            .expect("start fails");
+            .expect_err("start fails");
         assert!(failure.error.to_string().contains("kickstart failed"));
         assert!(failure.attempted_start);
         assert!(failure.lifecycle.is_some());
@@ -6004,7 +6002,7 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(1), async { tokio::join!(start, stop) })
                 .await
                 .expect("start ends promptly after stop");
-        let failure = failure.err().expect("a cancelled start fails");
+        let failure = failure.expect_err("a cancelled start fails");
         assert!(failure.error.to_string().contains("cancelled"));
         assert!(!failure.attempted_start);
         assert_eq!(launch.starts(), 0);
@@ -6036,7 +6034,7 @@ mod tests {
         })
         .await
         .expect("start ends promptly after restart");
-        let failure = failure.err().expect("the superseded start fails");
+        let failure = failure.expect_err("the superseded start fails");
         assert!(failure.attempted_start);
         assert!(failure.lifecycle.is_none(), "restart owns the lifecycle");
         assert!(
@@ -6201,8 +6199,7 @@ mod tests {
         let launch = FakeLaunch::default();
         let failure = launch_managed_server(&state, &token, lifecycle, &launch)
             .await
-            .err()
-            .expect("a start cancelled while it held the lock does not launch");
+            .expect_err("a start cancelled while it held the lock does not launch");
         assert!(failure.error.to_string().contains("stopped"));
         assert_eq!(launch.starts(), 0);
         drop(failure);
@@ -6261,7 +6258,7 @@ mod tests {
         })
         .await
         .expect("restart ends promptly after stop");
-        let failure = failure.err().expect("the stopped restart fails");
+        let failure = failure.expect_err("the stopped restart fails");
         assert!(failure.error.to_string().contains("stopped"));
         assert!(failure.attempted_start);
         assert!(failure.lifecycle.is_none());
@@ -6293,7 +6290,7 @@ mod tests {
         })
         .await
         .expect("restart ends promptly");
-        let failure = failure.err().expect("the restart is cancelled");
+        let failure = failure.expect_err("the restart is cancelled");
         assert!(failure.error.to_string().contains("stopped"));
         assert!(failure.lifecycle.is_none());
         assert!(token.is_cancelled());
@@ -6367,7 +6364,7 @@ mod tests {
         })
         .await
         .expect("restart ends promptly after stop");
-        let failure = failure.err().expect("the stopped restart fails");
+        let failure = failure.expect_err("the stopped restart fails");
         assert!(failure.error.to_string().contains("stopped"));
         assert!(!failure.attempted_start);
         assert!(failure.lifecycle.is_none());
@@ -6652,8 +6649,7 @@ mod tests {
             &launch,
         )
         .await
-        .err()
-        .expect("a failed install fails the launch");
+        .expect_err("a failed install fails the launch");
         assert!(!failure.attempted_start);
         assert_eq!(launch.starts(), 0);
 
@@ -6663,7 +6659,6 @@ mod tests {
             Ok(())
         })
         .await
-        .ok()
         .expect("an uncancelled failure is recorded");
         assert!(message.contains("copying the Gents runtime failed"));
         assert!(

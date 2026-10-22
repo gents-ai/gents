@@ -45,7 +45,7 @@ impl Fixture {
         let pack = dirs.path().join("subject");
         write_pack(&pack);
         let ctx = EvalContext {
-            access: ConfigAccess::local(home.node.clone()).into(),
+            access: ConfigAccess::local(home.node.clone()),
             home_dir: dirs.path().join("home"),
             owner: owner.clone(),
         };

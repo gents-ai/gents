@@ -57,6 +57,10 @@ fn configured_context_window(
     .map_err(|error| error.to_string())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "projection inputs come from separate stores and request options"
+)]
 pub(super) fn build_session_context_view(
     store: &gents_desktop_core::client::ClientStore,
     context_store: &gents_desktop_core::client::ClientStore,
@@ -275,6 +279,47 @@ pub(super) fn build_session_context_from_stores(
     )
 }
 
+pub fn attach_last_request_context(
+    snapshot: &mut DesktopSessionSnapshot,
+    request_id: String,
+    call_id: String,
+    call_sequence: i64,
+    accounting: gents_protocol::rendered_request::ContextAccounting,
+) {
+    use crate::types::{SessionContextComponentsView, SessionRequestContextView};
+
+    let reason = serde_json::to_value(accounting.compaction_reason)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_string());
+    snapshot.context.last_request = Some(SessionRequestContextView {
+        request_id,
+        call_id,
+        call_sequence,
+        turn_index: usize_to_i64(accounting.turn_index),
+        attempt: i64::from(accounting.attempt),
+        estimator: accounting.estimator,
+        estimated_input_tokens: usize_to_i64(accounting.estimated_input_tokens),
+        context_window: usize_to_i64(accounting.context_window),
+        compaction_threshold_tokens: usize_to_i64(accounting.compaction_threshold_tokens),
+        configured_max_output_tokens: accounting
+            .configured_max_output_tokens
+            .and_then(|value| i64::try_from(value).ok()),
+        effective_max_output_tokens: accounting
+            .effective_max_output_tokens
+            .and_then(|value| i64::try_from(value).ok()),
+        compaction_reason: reason,
+        pre_compaction_input_tokens: accounting.pre_compaction_input_tokens.map(usize_to_i64),
+        components: SessionContextComponentsView {
+            messages: usize_to_i64(accounting.components.messages),
+            documents: usize_to_i64(accounting.components.documents),
+            tool_schemas: usize_to_i64(accounting.components.tool_schemas),
+            additional_parameters: usize_to_i64(accounting.components.additional_parameters),
+            output_schema: usize_to_i64(accounting.components.output_schema),
+        },
+    });
+}
+
 #[cfg(test)]
 mod order_profile_tests {
     use super::*;
@@ -368,45 +413,4 @@ mod order_profile_tests {
             native.estimated_conversation_tokens
         );
     }
-}
-
-pub fn attach_last_request_context(
-    snapshot: &mut DesktopSessionSnapshot,
-    request_id: String,
-    call_id: String,
-    call_sequence: i64,
-    accounting: gents_protocol::rendered_request::ContextAccounting,
-) {
-    use crate::types::{SessionContextComponentsView, SessionRequestContextView};
-
-    let reason = serde_json::to_value(accounting.compaction_reason)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| "unknown".to_string());
-    snapshot.context.last_request = Some(SessionRequestContextView {
-        request_id,
-        call_id,
-        call_sequence,
-        turn_index: usize_to_i64(accounting.turn_index),
-        attempt: i64::from(accounting.attempt),
-        estimator: accounting.estimator,
-        estimated_input_tokens: usize_to_i64(accounting.estimated_input_tokens),
-        context_window: usize_to_i64(accounting.context_window),
-        compaction_threshold_tokens: usize_to_i64(accounting.compaction_threshold_tokens),
-        configured_max_output_tokens: accounting
-            .configured_max_output_tokens
-            .and_then(|value| i64::try_from(value).ok()),
-        effective_max_output_tokens: accounting
-            .effective_max_output_tokens
-            .and_then(|value| i64::try_from(value).ok()),
-        compaction_reason: reason,
-        pre_compaction_input_tokens: accounting.pre_compaction_input_tokens.map(usize_to_i64),
-        components: SessionContextComponentsView {
-            messages: usize_to_i64(accounting.components.messages),
-            documents: usize_to_i64(accounting.components.documents),
-            tool_schemas: usize_to_i64(accounting.components.tool_schemas),
-            additional_parameters: usize_to_i64(accounting.components.additional_parameters),
-            output_schema: usize_to_i64(accounting.components.output_schema),
-        },
-    });
 }

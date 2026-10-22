@@ -9,7 +9,7 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use serde_json::json;
 
 use super::inference::tests::InterruptionCapture;
-use super::AgentDaemon;
+use super::{AgentDaemon, AgentDaemonInit};
 use crate::agent::runtime::StartupBarrier;
 use crate::config::ResolvedAgent;
 use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -324,36 +324,36 @@ impl Harness {
             false,
             &[],
         );
-        AgentDaemon::new(
-            self.node.clone(),
-            self.agent_config.clone(),
-            None,
-            Arc::new(ScriptedModel {
+        AgentDaemon::new(AgentDaemonInit {
+            node: self.node.clone(),
+            agent_config: self.agent_config.clone(),
+            provider_family: None,
+            model: Arc::new(ScriptedModel {
                 calls: self.calls.clone(),
                 fail,
                 hang,
             }),
-            prompt_builder.preamble().to_string(),
-            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+            preamble: prompt_builder.preamble().to_string(),
+            loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
-            FailurePolicy::default(),
-            Some(
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: Some(
                 crate::rendered_request::defra_rendered_request_capture_factory(self.node.clone()),
             ),
-            BackgroundToolRegistry::default(),
-            executions,
-            Arc::new(StartupBarrier::ready_for_test()),
-            crate::runtime_status::RuntimeStatusHandle::new(
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: executions,
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+            runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
                 self.node.clone(),
                 self.owner().to_string(),
             ),
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
                 self.agent_config.node_identity().clone(),
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
-        )
+        })
         .unwrap()
     }
 

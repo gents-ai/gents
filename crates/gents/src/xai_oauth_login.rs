@@ -200,7 +200,7 @@ pub async fn poll_device_token(
             "expired_token" => {
                 anyhow::bail!("xAI device-code expired before approval");
             }
-            other if other.is_empty() => {
+            "" => {
                 anyhow::bail!("xAI device-code token poll failed with HTTP {status}: {body}");
             }
             other => {

@@ -163,15 +163,15 @@ pub(crate) fn sink(
                 }
                 AuxiliaryOutputEvent::ClosePartial => close = Some(ProviderAttemptClose::Partial),
             }
-            if !matches!(close, Some(ProviderAttemptClose::AuxiliaryComplete)) {
-                if close.is_some() || writer.mark_pending_output(&request.doc_id).await? {
-                    if let Some(message) = state.content.message_snapshot() {
-                        writer
-                            .flush_owned_partial(&request, &generation, &message)
-                            .await?;
-                    }
-                    writer.flush_pending(&request.doc_id).await?;
+            if !matches!(close, Some(ProviderAttemptClose::AuxiliaryComplete))
+                && (close.is_some() || writer.mark_pending_output(&request.doc_id).await?)
+            {
+                if let Some(message) = state.content.message_snapshot() {
+                    writer
+                        .flush_owned_partial(&request, &generation, &message)
+                        .await?;
                 }
+                writer.flush_pending(&request.doc_id).await?;
             }
             if let Some(close) = close {
                 writer

@@ -47,6 +47,10 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) request_id: Option<String>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the gents-loop scope entry point; called from toolset, hook, plugin and workspace tests"
+)]
 pub(crate) async fn scope_request_tool_execution_with_workspace_overlay<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,

@@ -780,10 +780,15 @@ async fn run_stages(
         }
         let stage = &reviewed;
         spec.progress.stage_started(&stage.stage_id);
-        let evidence = run_stage(
-            spec, cancel, home, runtime, locator, workspace, stage, ready,
-        )
-        .await;
+        let env = StageEnv {
+            cancel,
+            home,
+            runtime,
+            locator,
+            workspace,
+            ready,
+        };
+        let evidence = run_stage(spec, &env, stage).await;
         let mut summary = spec.review.summarize(&evidence);
         summary["usage"] =
             serde_json::to_value(usage_of(&evidence.inference_calls)).unwrap_or(Value::Null);
@@ -798,16 +803,25 @@ async fn run_stages(
     stages
 }
 
-async fn run_stage(
-    spec: &TrialSpec,
-    cancel: &CancellationToken,
-    home: &EmbeddedHome,
-    runtime: &RunningRuntime,
-    locator: &TrialLocator,
-    workspace: &Path,
-    stage: &StageSpec,
-    ready: &watch::Receiver<Reconciled>,
-) -> StageEvidence {
+#[derive(Clone, Copy)]
+struct StageEnv<'a> {
+    cancel: &'a CancellationToken,
+    home: &'a EmbeddedHome,
+    runtime: &'a RunningRuntime,
+    locator: &'a TrialLocator,
+    workspace: &'a Path,
+    ready: &'a watch::Receiver<Reconciled>,
+}
+
+async fn run_stage(spec: &TrialSpec, env: &StageEnv<'_>, stage: &StageSpec) -> StageEvidence {
+    let StageEnv {
+        cancel,
+        home,
+        runtime,
+        locator,
+        workspace,
+        ready,
+    } = *env;
     let observed = submit_and_observe(spec, cancel, home, runtime, locator, stage, ready).await;
     StageEvidence {
         stage_id: stage.stage_id.clone(),
@@ -3124,13 +3138,15 @@ mod tests {
         let runtime = exited_runtime();
         let evidence = run_stage(
             &spec,
-            &CancellationToken::new(),
-            &home,
-            &runtime,
-            &locator,
-            &workspace,
+            &StageEnv {
+                cancel: &CancellationToken::new(),
+                home: &home,
+                runtime: &runtime,
+                locator: &locator,
+                workspace: &workspace,
+                ready: &watch::channel(None).1,
+            },
             &stage,
-            &watch::channel(None).1,
         )
         .await;
 
@@ -3184,13 +3200,15 @@ mod tests {
                     agent_id: "subject".to_string(),
                     ..TrialSpec::empty_for_tests("t1")
                 },
-                &CancellationToken::new(),
-                &home,
-                &runtime,
-                &locator,
-                &workspace,
+                &StageEnv {
+                    cancel: &CancellationToken::new(),
+                    home: &home,
+                    runtime: &runtime,
+                    locator: &locator,
+                    workspace: &workspace,
+                    ready: &watch::channel(None).1,
+                },
                 &stage,
-                &watch::channel(None).1,
             ),
         )
         .await
@@ -3337,13 +3355,15 @@ mod tests {
             Duration::from_secs(30),
             run_stage(
                 &spec,
-                &CancellationToken::new(),
-                &home,
-                &runtime,
-                &locator,
-                &workspace,
+                &StageEnv {
+                    cancel: &CancellationToken::new(),
+                    home: &home,
+                    runtime: &runtime,
+                    locator: &locator,
+                    workspace: &workspace,
+                    ready: &ready,
+                },
                 &stage,
-                &ready,
             ),
         )
         .await;

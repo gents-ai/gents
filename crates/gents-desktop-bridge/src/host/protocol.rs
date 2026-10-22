@@ -65,7 +65,7 @@ pub enum ClientCommand {
     },
     #[serde(rename = "client_config_apply")]
     ConfigApply {
-        request: crate::types::ConfigComponentsApplyRequest,
+        request: Box<crate::types::ConfigComponentsApplyRequest>,
     },
     #[serde(rename = "client_provider_accounts_list")]
     AccountsList {
@@ -224,7 +224,7 @@ pub enum ClientCommand {
     SessionGoal(SessionGoalArgs),
     #[serde(rename = "desktop_goal_control")]
     GoalControl {
-        request: crate::types::GoalControlRequest,
+        request: Box<crate::types::GoalControlRequest>,
     },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },

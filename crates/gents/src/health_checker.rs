@@ -284,6 +284,10 @@ pub struct McpHealthCheckService {
     pub updated_at: Option<String>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public signature called from other crates"
+)]
 pub fn spawn_health_checker(
     node: Arc<EmbeddedNode>,
     mcp_pool: McpPool,
@@ -388,6 +392,10 @@ async fn run_health_check(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public signature called from other crates"
+)]
 pub async fn run_health_check_cycle(
     services: Vec<McpHealthCheckService>,
     now: DateTime<Utc>,
@@ -425,12 +433,14 @@ pub async fn run_health_check_cycle(
             apply_probe_failure(
                 mcp_pool,
                 health_map,
-                &service_id,
-                previous_model,
-                previous_last_seen,
-                previous_endpoint,
-                previous_tool_count,
-                "registry entry missing mcp_port".to_string(),
+                ProbeFailure {
+                    service_id: &service_id,
+                    previous_model,
+                    previous_last_seen,
+                    endpoint: previous_endpoint,
+                    tool_count: previous_tool_count,
+                    error: "registry entry missing mcp_port".to_string(),
+                },
                 now,
                 options,
             )
@@ -445,12 +455,14 @@ pub async fn run_health_check_cycle(
             apply_probe_failure(
                 mcp_pool,
                 health_map,
-                &service_id,
-                previous_model,
-                previous_last_seen,
-                previous_endpoint,
-                previous_tool_count,
-                "registry entry missing address fields".to_string(),
+                ProbeFailure {
+                    service_id: &service_id,
+                    previous_model,
+                    previous_last_seen,
+                    endpoint: previous_endpoint,
+                    tool_count: previous_tool_count,
+                    error: "registry entry missing address fields".to_string(),
+                },
                 now,
                 options,
             )
@@ -519,12 +531,14 @@ pub async fn run_health_check_cycle(
                 apply_probe_failure(
                     mcp_pool,
                     health_map,
-                    &service_id,
-                    previous_model,
-                    previous_last_seen,
-                    Some(endpoint.clone()),
-                    previous_tool_count,
-                    error.to_string(),
+                    ProbeFailure {
+                        service_id: &service_id,
+                        previous_model,
+                        previous_last_seen,
+                        endpoint: Some(endpoint.clone()),
+                        tool_count: previous_tool_count,
+                        error: error.to_string(),
+                    },
                     now,
                     options,
                 )
@@ -539,12 +553,14 @@ pub async fn run_health_check_cycle(
                 apply_probe_failure(
                     mcp_pool,
                     health_map,
-                    &service_id,
-                    previous_model,
-                    previous_last_seen,
-                    Some(endpoint.clone()),
-                    previous_tool_count,
-                    "probe timed out".to_string(),
+                    ProbeFailure {
+                        service_id: &service_id,
+                        previous_model,
+                        previous_last_seen,
+                        endpoint: Some(endpoint.clone()),
+                        tool_count: previous_tool_count,
+                        error: "probe timed out".to_string(),
+                    },
                     now,
                     options,
                 )
@@ -580,18 +596,30 @@ pub async fn run_health_check_cycle(
     Ok(())
 }
 
-async fn apply_probe_failure(
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    service_id: &str,
+struct ProbeFailure<'a> {
+    service_id: &'a str,
     previous_model: ServiceModelInternal,
     previous_last_seen: DateTime<Utc>,
     endpoint: Option<String>,
     tool_count: Option<i64>,
     error: String,
+}
+
+async fn apply_probe_failure(
+    mcp_pool: &McpPool,
+    health_map: &ServiceHealthMap,
+    failure: ProbeFailure<'_>,
     now: DateTime<Utc>,
     options: &HealthCheckerOptions,
 ) {
+    let ProbeFailure {
+        service_id,
+        previous_model,
+        previous_last_seen,
+        endpoint,
+        tool_count,
+        error,
+    } = failure;
     let next_model = step_service(previous_model, ProbeEvent::ProbeFail, now, options)
         .expect("probeFail must preserve the service model");
     if next_model.state == HealthStateInternal::Evicted {

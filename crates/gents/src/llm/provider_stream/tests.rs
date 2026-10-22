@@ -133,6 +133,10 @@ struct FakeProviderHttp {
 }
 
 impl rig::http_client::HttpClientExt for FakeProviderHttp {
+    #[expect(
+        clippy::manual_async_fn,
+        reason = "the trait requires a 'static Send future; async fn would capture &self and the request generics"
+    )]
     fn send<T, U>(
         &self,
         _req: http_client::Request<T>,
@@ -146,6 +150,10 @@ impl rig::http_client::HttpClientExt for FakeProviderHttp {
     {
         async { Err(http_client::Error::StreamEnded) }
     }
+    #[expect(
+        clippy::manual_async_fn,
+        reason = "the trait requires a 'static Send future; async fn would capture &self and the request generics"
+    )]
     fn send_multipart<U>(
         &self,
         _req: http_client::Request<http_client::MultipartForm>,

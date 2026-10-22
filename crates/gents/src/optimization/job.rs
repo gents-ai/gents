@@ -575,12 +575,12 @@ mod tests {
             proposed(1, "one"),
             decided(1, Decision::Accept),
         ];
-        for entry in entries.iter().cloned() {
+        for entry in entries.iter() {
             let before = job.journal.clone();
             append(&access, &mut job, entry.clone()).await.unwrap();
             assert_eq!(job.journal.len(), before.len() + 1);
             assert_eq!(&job.journal[..before.len()], &before[..]);
-            assert_eq!(job.journal.last(), Some(&entry));
+            assert_eq!(job.journal.last(), Some(entry));
         }
         let loaded = load_job(&access, OWNER, "job-2").await.unwrap().unwrap();
         assert_eq!(loaded.journal, entries.to_vec());

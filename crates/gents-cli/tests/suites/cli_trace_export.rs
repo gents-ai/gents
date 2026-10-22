@@ -1179,7 +1179,8 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     let openai_full = trace_project_json(tempdir.path(), home, "openai-codex", "full")?;
     assert_projection_json_matches_schema("openai_codex_run_trace", &openai_full)?;
     let openai_full_serialized = serde_json::to_string(&openai_full)?;
-    for expected_child_text in ["reviewer private child message"] {
+    {
+        let expected_child_text = "reviewer private child message";
         assert!(
             openai_full_serialized.contains(expected_child_text),
             "unscoped full projection should include child-agent content {expected_child_text:?}: {openai_full:#}"
@@ -2383,8 +2384,6 @@ fn projection_mock_agent_requests(query: &str) -> Value {
             projection_mock_child_request(),
             projection_mock_forged_child_request()
         ])
-    } else if query.contains("filter: { session_id") {
-        json!([projection_mock_root_request()])
     } else {
         json!([projection_mock_root_request()])
     }

@@ -1148,7 +1148,8 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         );
     }
     let data = response.data.context("requester route query data")?;
-    for collection in ["AgentSession"] {
+    {
+        let collection = "AgentSession";
         assert!(
             data.get(collection)
                 .and_then(serde_json::Value::as_array)

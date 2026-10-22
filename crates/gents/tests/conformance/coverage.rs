@@ -315,7 +315,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
             boundary
                 .accepted_failure_mode
                 .as_deref()
-                .map_or(true, |text| !text.trim().is_empty()),
+                .is_none_or(|text| !text.trim().is_empty()),
             "boundary accepted_failure_mode must be omitted or non-empty: {:?}",
             boundary
         );
@@ -323,7 +323,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
             boundary
                 .accepted_follow_up
                 .as_deref()
-                .map_or(true, |text| !text.trim().is_empty()),
+                .is_none_or(|text| !text.trim().is_empty()),
             "boundary accepted_follow_up must be omitted or non-empty: {:?}",
             boundary
         );

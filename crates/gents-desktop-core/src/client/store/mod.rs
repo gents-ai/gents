@@ -270,7 +270,7 @@ impl ClientStore {
             return StoreScope::All;
         };
         let mut scope = self.merge_scope(incoming);
-        scope.insert_node(&node_did);
+        scope.insert_node(node_did);
         scope
     }
 
@@ -309,12 +309,6 @@ impl ClientStore {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    mod observer_projection;
-    mod store_semantics;
-}
-
 pub fn source_matches_node(
     sources: &[Option<String>],
     row_index: usize,
@@ -325,4 +319,10 @@ pub fn source_matches_node(
         Some(source_node_did) => source_node_did == node_did,
         None => !require_source_scope,
     }
+}
+
+#[cfg(test)]
+mod tests {
+    mod observer_projection;
+    mod store_semantics;
 }

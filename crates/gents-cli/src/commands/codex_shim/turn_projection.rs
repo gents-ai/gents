@@ -691,9 +691,11 @@ fn reasoning_item(item_id: &str, text: &str) -> codex::ThreadItem {
     codex::ThreadItem::Reasoning {
         id: item_id.to_string(),
         summary: Vec::new(),
-        content: (!text.is_empty())
-            .then(|| vec![text.to_string()])
-            .unwrap_or_default(),
+        content: if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![text.to_string()]
+        },
     }
 }
 
@@ -712,8 +714,7 @@ fn observe_latest_response_completion(current: &mut Option<i64>, observed: Optio
 }
 
 #[cfg(test)]
-#[path = "../../../../gents/src/lean_vocab_test/support.rs"]
-pub(super) mod lean_reasoning_contracts;
+pub(super) use crate::lean_vocab_test as lean_reasoning_contracts;
 
 #[cfg(test)]
 pub(in crate::commands::codex_shim) mod tests {
@@ -1025,7 +1026,7 @@ pub(in crate::commands::codex_shim) mod tests {
         gents::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
-        let state = ShimState {
+        ShimState {
             codex_home: directory.to_path_buf(),
             trace_path: directory.join("notifications.jsonl"),
             cwd: directory.to_path_buf(),
@@ -1040,9 +1041,7 @@ pub(in crate::commands::codex_shim) mod tests {
             poll_interval: Duration::from_millis(10),
             sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
             auth_token: None,
-        };
-
-        state
+        }
     }
 
     #[tokio::test]

@@ -86,11 +86,9 @@ impl MediaPcmClip {
     }
 
     pub fn samples(&self) -> anyhow::Result<Vec<i16>> {
-        Ok(self
-            .bytes()?
-            .chunks_exact(2)
-            .map(|value| i16::from_le_bytes([value[0], value[1]]))
-            .collect())
+        let bytes = self.bytes()?;
+        let (pairs, _) = bytes.as_chunks::<2>();
+        Ok(pairs.iter().map(|pair| i16::from_le_bytes(*pair)).collect())
     }
 }
 

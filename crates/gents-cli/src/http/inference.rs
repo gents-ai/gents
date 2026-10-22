@@ -43,10 +43,7 @@ async fn inference_settings(state: RuntimeHttpState, identity: ExtractIdentity) 
             "The runtime identity is unavailable. Reconnect the runtime.",
         );
     }
-    match runtime
-        .client_observation_authorized(&member.to_string())
-        .await
-    {
+    match runtime.client_observation_authorized(member.as_ref()).await {
         Ok(true) => {}
         Ok(false) => {
             return failure(

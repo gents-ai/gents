@@ -469,11 +469,7 @@ pub(crate) async fn resume_target_in_txn(
     txn: &ConfigApplyTxn<'_>,
     plugin: &str,
     row_doc_id: &str,
-) -> Result<(
-    String,
-    bool,
-    Option<(ProcessControlScope, bool, StepRow, StepRow)>,
-)> {
+) -> Result<super::admit::ResumeTarget> {
     let response = txn
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did }} }}"#,
@@ -1482,11 +1478,7 @@ mod tests {
         }
     }
 
-    type Target = (
-        String,
-        bool,
-        Option<(ProcessControlScope, bool, StepRow, StepRow)>,
-    );
+    type Target = crate::plugin_job::admit::ResumeTarget;
 
     async fn target(job: &Job, plugin: &str, row: &str) -> Target {
         job.access

@@ -959,7 +959,7 @@ mod tests {
             let (fixture, request_owner) =
                 crate::tool_call_lifecycle::admission_fixture::published_admission_with_owner(
                     crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
-                        name: (&format!("effect-terminal-{index}")).to_owned(),
+                        name: format!("effect-terminal-{index}"),
                         ..Default::default()
                     },
                 )

@@ -591,6 +591,94 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+pub fn supports_foreground_backgrounding(name: &str) -> bool {
+    crate::toolset::is_bash_tool_name(name)
+}
+
+/// Requests a handoff of one exact native invocation. The runtime publishes
+/// its background receipt only after assuming responsibility for completion.
+pub async fn request_foreground_backgrounding(
+    access: &crate::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    request_id: &str,
+    tool_call_id: &str,
+) -> Result<bool> {
+    let node = escape_graphql_string(node_did);
+    let session = escape_graphql_string(session_id);
+    let request = escape_graphql_string(request_id);
+    let tool = escape_graphql_string(tool_call_id);
+    let scope = format!(
+        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{request}" }}, tool_call_id: {{ _eq: "{tool}" }}"#
+    );
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{{scope}}}, limit: 2) {{
+        _docID request_doc_id tool_name lifecycle_state await_mode plugin_parent_tool_call_doc_id
+        background_requested_at started_at deadline_at
+    }} }}"#
+        ))
+        .await?;
+    let rows = response
+        .pointer("/data/AgentToolCall")
+        .and_then(serde_json::Value::as_array)
+        .context("background request lookup omitted tool rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "background request requires one exact tool invocation"
+    );
+    let row = &rows[0];
+    anyhow::ensure!(
+        row["tool_name"]
+            .as_str()
+            .is_some_and(crate::toolset::is_bash_tool_name)
+            && row["plugin_parent_tool_call_doc_id"].is_null(),
+        "only a direct native Bash command can be backgrounded"
+    );
+    if row["lifecycle_state"].as_str() != Some("running") {
+        return Ok(false);
+    }
+    if row["await_mode"].as_str() == Some("background") || !row["background_requested_at"].is_null()
+    {
+        return Ok(true);
+    }
+    anyhow::ensure!(
+        crate::hook::persistence::count_live_backgrounded_rows_in(
+            access,
+            row["request_doc_id"]
+                .as_str()
+                .context("background request missing request document identity")?,
+        )
+        .await?
+            < crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
+        "background process limit reached; wait for a background process to finish"
+    );
+    let doc = escape_graphql_string(
+        row["_docID"]
+            .as_str()
+            .context("tool missing physical identity")?,
+    );
+    let started = escape_graphql_string(
+        row["started_at"]
+            .as_str()
+            .context("tool missing start time")?,
+    );
+    let deadline = escape_graphql_string(
+        row["deadline_at"]
+            .as_str()
+            .context("tool missing deadline")?,
+    );
+    let now = escape_graphql_string(&Utc::now().to_rfc3339());
+    let result = access.write("tool.request_background", &format!(r#"mutation {{ update_AgentToolCall(
+        docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, {scope}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "foreground" }} }},
+        input: {{ background_requested_at: "{now}", started_at: "{started}", deadline_at: "{deadline}" }}
+    ) {{ _docID }} }}"#)).await?;
+    Ok(result
+        .pointer("/data/update_AgentToolCall")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -712,92 +800,4 @@ mod tests {
             );
         }
     }
-}
-
-pub fn supports_foreground_backgrounding(name: &str) -> bool {
-    crate::toolset::is_bash_tool_name(name)
-}
-
-/// Requests a handoff of one exact native invocation. The runtime publishes
-/// its background receipt only after assuming responsibility for completion.
-pub async fn request_foreground_backgrounding(
-    access: &crate::config_client::ConfigAccess,
-    node_did: &str,
-    session_id: &str,
-    request_id: &str,
-    tool_call_id: &str,
-) -> Result<bool> {
-    let node = escape_graphql_string(node_did);
-    let session = escape_graphql_string(session_id);
-    let request = escape_graphql_string(request_id);
-    let tool = escape_graphql_string(tool_call_id);
-    let scope = format!(
-        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{request}" }}, tool_call_id: {{ _eq: "{tool}" }}"#
-    );
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{{scope}}}, limit: 2) {{
-        _docID request_doc_id tool_name lifecycle_state await_mode plugin_parent_tool_call_doc_id
-        background_requested_at started_at deadline_at
-    }} }}"#
-        ))
-        .await?;
-    let rows = response
-        .pointer("/data/AgentToolCall")
-        .and_then(serde_json::Value::as_array)
-        .context("background request lookup omitted tool rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "background request requires one exact tool invocation"
-    );
-    let row = &rows[0];
-    anyhow::ensure!(
-        row["tool_name"]
-            .as_str()
-            .is_some_and(crate::toolset::is_bash_tool_name)
-            && row["plugin_parent_tool_call_doc_id"].is_null(),
-        "only a direct native Bash command can be backgrounded"
-    );
-    if row["lifecycle_state"].as_str() != Some("running") {
-        return Ok(false);
-    }
-    if row["await_mode"].as_str() == Some("background") || !row["background_requested_at"].is_null()
-    {
-        return Ok(true);
-    }
-    anyhow::ensure!(
-        crate::hook::persistence::count_live_backgrounded_rows_in(
-            access,
-            row["request_doc_id"]
-                .as_str()
-                .context("background request missing request document identity")?,
-        )
-        .await?
-            < crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
-        "background process limit reached; wait for a background process to finish"
-    );
-    let doc = escape_graphql_string(
-        row["_docID"]
-            .as_str()
-            .context("tool missing physical identity")?,
-    );
-    let started = escape_graphql_string(
-        row["started_at"]
-            .as_str()
-            .context("tool missing start time")?,
-    );
-    let deadline = escape_graphql_string(
-        row["deadline_at"]
-            .as_str()
-            .context("tool missing deadline")?,
-    );
-    let now = escape_graphql_string(&Utc::now().to_rfc3339());
-    let result = access.write("tool.request_background", &format!(r#"mutation {{ update_AgentToolCall(
-        docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, {scope}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "foreground" }} }},
-        input: {{ background_requested_at: "{now}", started_at: "{started}", deadline_at: "{deadline}" }}
-    ) {{ _docID }} }}"#)).await?;
-    Ok(result
-        .pointer("/data/update_AgentToolCall")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|rows| !rows.is_empty()))
 }

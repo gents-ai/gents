@@ -391,7 +391,7 @@ fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<Strin
 enum InlineCodexLoginState {
     Unauthenticated,
     ExistingCredential,
-    Completed(crate::commands::codex_login::CodexLoginOutcome),
+    Completed(Box<crate::commands::codex_login::CodexLoginOutcome>),
 }
 
 impl InlineCodexLoginState {
@@ -401,7 +401,7 @@ impl InlineCodexLoginState {
 
     fn outcome(&self) -> Option<&crate::commands::codex_login::CodexLoginOutcome> {
         match self {
-            Self::Completed(outcome) => Some(outcome),
+            Self::Completed(outcome) => Some(outcome.as_ref()),
             Self::Unauthenticated | Self::ExistingCredential => None,
         }
     }
@@ -410,7 +410,7 @@ impl InlineCodexLoginState {
 enum InlineGrokLoginState {
     Unauthenticated,
     ExistingCredential,
-    Completed(crate::commands::grok_login::GrokLoginOutcome),
+    Completed(Box<crate::commands::grok_login::GrokLoginOutcome>),
 }
 
 impl InlineGrokLoginState {
@@ -420,7 +420,7 @@ impl InlineGrokLoginState {
 
     fn outcome(&self) -> Option<&crate::commands::grok_login::GrokLoginOutcome> {
         match self {
-            Self::Completed(outcome) => Some(outcome),
+            Self::Completed(outcome) => Some(outcome.as_ref()),
             Self::Unauthenticated | Self::ExistingCredential => None,
         }
     }
@@ -470,7 +470,7 @@ async fn maybe_inline_grok_login(
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
-            InlineGrokLoginState::Completed(outcome)
+            InlineGrokLoginState::Completed(Box::new(outcome))
         }
         Err(error) => {
             eprintln!("Grok login failed: {error:#}");
@@ -482,7 +482,7 @@ async fn maybe_inline_grok_login(
 enum InlineClaudeLoginState {
     Unauthenticated,
     ExistingCredential,
-    Completed(crate::commands::claude_login::ClaudeLoginOutcome),
+    Completed(Box<crate::commands::claude_login::ClaudeLoginOutcome>),
 }
 
 impl InlineClaudeLoginState {
@@ -492,7 +492,7 @@ impl InlineClaudeLoginState {
 
     fn outcome(&self) -> Option<&crate::commands::claude_login::ClaudeLoginOutcome> {
         match self {
-            Self::Completed(outcome) => Some(outcome),
+            Self::Completed(outcome) => Some(outcome.as_ref()),
             Self::Unauthenticated | Self::ExistingCredential => None,
         }
     }
@@ -546,7 +546,7 @@ async fn maybe_inline_claude_login(
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
-            InlineClaudeLoginState::Completed(outcome)
+            InlineClaudeLoginState::Completed(Box::new(outcome))
         }
         Err(error) => {
             eprintln!("Claude login failed: {error:#}");
@@ -601,7 +601,7 @@ async fn maybe_inline_codex_login(
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
-            InlineCodexLoginState::Completed(outcome)
+            InlineCodexLoginState::Completed(Box::new(outcome))
         }
         Err(error) => {
             eprintln!(
@@ -975,12 +975,8 @@ async fn initialize_runtime_home(
     let inference_profile_id = default_inference_profile_id_for_agent(&default_agent_id);
     let inference_execution_id = default_inference_execution_id_for_profile(&inference_profile_id);
     let inference_execution = standard_inference_execution(node_did, &inference_execution_id);
-    let mut inference_profile = standard_inference_profile(
-        node_did,
-        &inference_profile_id,
-        &backend_id,
-        &model_name.to_string(),
-    );
+    let mut inference_profile =
+        standard_inference_profile(node_did, &inference_profile_id, &backend_id, model_name);
     inference_profile.execution_id = Some(inference_execution_id);
     let agent = Agent {
         agent_id: default_agent_id.clone(),
@@ -1331,14 +1327,13 @@ fn validate_init_tool_flags(args: &InitArgs, tool_package: ToolPackageArg) -> Re
             "--enable-memory, --enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no Tools document is written"
         );
     }
-    if !args.defra_query_collections.is_empty() {
-        if args.disable_defra_query
-            || !(package_enables_defra_query(tool_package) || args.enable_defra_query)
-        {
-            anyhow::bail!(
+    if !args.defra_query_collections.is_empty()
+        && (args.disable_defra_query
+            || !(package_enables_defra_query(tool_package) || args.enable_defra_query))
+    {
+        anyhow::bail!(
                 "--defra-query-collection requires defra_query to be enabled — pass --enable-defra-query or a tool package that enables it, and do not combine with --disable-defra-query"
             );
-        }
     }
     Ok(())
 }

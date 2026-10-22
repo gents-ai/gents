@@ -2063,7 +2063,7 @@ mod tests {
         assert!(trials.iter().all(|trial| trial
             .completion
             .as_ref()
-            .is_some_and(|completion| completion_is_not_evidence(completion))));
+            .is_some_and(completion_is_not_evidence)));
 
         let recovered = ScriptedExecutor::new().with_default(passed());
         let outcome = resume(

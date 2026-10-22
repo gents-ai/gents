@@ -59,13 +59,15 @@ pub(crate) async fn enqueue_steering_request(
                 let mutation = session_request_create_mutation_at_hop(
                     parent,
                     hop,
-                    agent_id,
-                    content,
-                    ExecutionOrigin::Interactive,
-                    input.clone(),
-                    request_id,
-                    now,
-                    None,
+                    SessionRequestFields {
+                        agent_id,
+                        content,
+                        execution_origin: ExecutionOrigin::Interactive,
+                        input: input.clone(),
+                        request_id,
+                        created_at: now,
+                        retry_key: None,
+                    },
                 )
                 .await?;
                 steering_transaction_attempt(txn, parent, request_id, &mutation).await

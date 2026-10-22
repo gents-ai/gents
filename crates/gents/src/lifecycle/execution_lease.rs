@@ -243,16 +243,18 @@ impl RequestLifecycle {
         let generation = self.execution_generation()?.to_owned();
         let result = terminalize_execution_with_time(
             &self.node,
-            &self.request.doc_id,
-            TerminalAuthority::Owner(&generation),
-            RequestTerminalOutcome::Completed,
-            Some(TerminalOutput::Message {
-                message_doc_id: message_doc_id.to_owned(),
-            }),
-            "",
-            None,
-            None,
-            Some((pending_request_doc_ids, self.claimed_deadline_at)),
+            TerminalizeSpec {
+                request_doc_id: &self.request.doc_id,
+                authority: TerminalAuthority::Owner(&generation),
+                outcome: RequestTerminalOutcome::Completed,
+                selection: Some(TerminalOutput::Message {
+                    message_doc_id: message_doc_id.to_owned(),
+                }),
+                reason: "",
+                fixture_now: None,
+                fixture_fresh_generation: None,
+                pending_fence: Some((pending_request_doc_ids, self.claimed_deadline_at)),
+            },
         )
         .await;
         match result {
@@ -365,20 +367,22 @@ pub(crate) async fn revoke_execution_preserving_output_at(
 ) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
-        row.doc_id.as_deref().context("missing request document")?,
-        TerminalAuthority::Revocation {
-            generation: expected_generation,
-            expiry: row
-                .execution_lease_expires_at
-                .as_deref()
-                .context("missing execution expiry")?,
+        TerminalizeSpec {
+            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            authority: TerminalAuthority::Revocation {
+                generation: expected_generation,
+                expiry: row
+                    .execution_lease_expires_at
+                    .as_deref()
+                    .context("missing execution expiry")?,
+            },
+            outcome,
+            selection: None,
+            reason,
+            fixture_now: Some(now),
+            fixture_fresh_generation: Some(fresh_generation),
+            pending_fence: None,
         },
-        outcome,
-        None,
-        reason,
-        Some(now),
-        Some(fresh_generation),
-        None,
     )
     .await
 }
@@ -393,14 +397,16 @@ async fn terminalize_execution(
 ) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
-        request_doc_id,
-        authority,
-        outcome,
-        selection,
-        reason,
-        None,
-        None,
-        None,
+        TerminalizeSpec {
+            request_doc_id,
+            authority,
+            outcome,
+            selection,
+            reason,
+            fixture_now: None,
+            fixture_fresh_generation: None,
+            pending_fence: None,
+        },
     )
     .await
 }
@@ -416,53 +422,48 @@ pub(crate) async fn terminalize_owned_at(
 ) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
-        request_doc_id,
-        TerminalAuthority::Owner(generation),
-        outcome,
-        Some(selection),
-        "",
-        Some(now),
-        None,
-        None,
+        TerminalizeSpec {
+            request_doc_id,
+            authority: TerminalAuthority::Owner(generation),
+            outcome,
+            selection: Some(selection),
+            reason: "",
+            fixture_now: Some(now),
+            fixture_fresh_generation: None,
+            pending_fence: None,
+        },
     )
     .await
 }
 
-async fn terminalize_execution_with_time(
-    node: &std::sync::Arc<EmbeddedNode>,
-    request_doc_id: &str,
-    authority: TerminalAuthority<'_>,
+struct TerminalizeSpec<'a> {
+    request_doc_id: &'a str,
+    authority: TerminalAuthority<'a>,
     outcome: RequestTerminalOutcome,
     selection: Option<TerminalOutput>,
-    reason: &str,
+    reason: &'a str,
     fixture_now: Option<DateTime<Utc>>,
-    fixture_fresh_generation: Option<&str>,
-    pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
+    fixture_fresh_generation: Option<&'a str>,
+    pending_fence: Option<(&'a [String], Option<DateTime<Utc>>)>,
+}
+
+async fn terminalize_execution_with_time(
+    node: &std::sync::Arc<EmbeddedNode>,
+    spec: TerminalizeSpec<'_>,
 ) -> Result<TerminalizeResult> {
-    let fresh_generation = fixture_fresh_generation
+    let fresh_generation = spec
+        .fixture_fresh_generation
         .map_or_else(ExecutionGeneration::fresh, |generation| {
             ExecutionGeneration(generation.to_owned())
         });
     let fresh_generation = &fresh_generation;
-    let selection = &selection;
+    let spec = &spec;
     crate::config_client::ConfigAccess::transact_local_idempotent(
         node,
         None,
         crate::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.terminalize_execution",
-        move |txn| {
-            Box::pin(terminalize_execution_in_txn(
-                txn,
-                request_doc_id,
-                authority,
-                outcome,
-                selection,
-                reason,
-                fixture_now,
-                fresh_generation,
-                pending_fence,
-            ))
-        },
+        move |txn| Box::pin(terminalize_execution_in_txn(txn, spec, fresh_generation)),
     )
     .await
 }
@@ -475,38 +476,42 @@ pub(super) async fn stage_revoke_execution_preserving_output(
 ) -> Result<TerminalizeResult> {
     terminalize_execution_in_txn(
         txn,
-        row.doc_id.as_deref().context("missing request document")?,
-        TerminalAuthority::Revocation {
-            generation: row
-                .execution_generation
-                .as_deref()
-                .context("missing execution generation")?,
-            expiry: row
-                .execution_lease_expires_at
-                .as_deref()
-                .context("missing execution expiry")?,
+        &TerminalizeSpec {
+            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            authority: TerminalAuthority::Revocation {
+                generation: row
+                    .execution_generation
+                    .as_deref()
+                    .context("missing execution generation")?,
+                expiry: row
+                    .execution_lease_expires_at
+                    .as_deref()
+                    .context("missing execution expiry")?,
+            },
+            outcome,
+            selection: None,
+            reason,
+            fixture_now: None,
+            fixture_fresh_generation: None,
+            pending_fence: None,
         },
-        outcome,
-        &None,
-        reason,
-        None,
         &ExecutionGeneration::fresh(),
-        None,
     )
     .await
 }
 
 async fn terminalize_execution_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    request_doc_id: &str,
-    authority: TerminalAuthority<'_>,
-    outcome: RequestTerminalOutcome,
-    selection: &Option<TerminalOutput>,
-    reason: &str,
-    fixture_now: Option<DateTime<Utc>>,
+    spec: &TerminalizeSpec<'_>,
     fresh_generation: &ExecutionGeneration,
-    pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
 ) -> Result<TerminalizeResult> {
+    let request_doc_id = spec.request_doc_id;
+    let authority = spec.authority;
+    let outcome = spec.outcome;
+    let selection = &spec.selection;
+    let reason = spec.reason;
+    let fixture_now = spec.fixture_now;
+    let pending_fence = spec.pending_fence;
     use super::execution_policy::{
         authorize_execution_revocation, authorize_finalize, LeaseObservation,
     };

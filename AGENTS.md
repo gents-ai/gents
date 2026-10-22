@@ -201,6 +201,6 @@ metadata.
   stale artifacts, and remove a worktree (`git worktree remove`) once its
   branch merges.
 
-Before pushing, run `cargo test -p gents` and
-`cargo check --workspace --all-targets`. Run `lake build` for proof changes and
+Before pushing, run `cargo test -p gents`, `cargo check --workspace --all-targets`
+and `make lint` (clippy, `-D warnings`). Run `lake build` for proof changes and
 the relevant CLI or desktop suites for affected consumers.

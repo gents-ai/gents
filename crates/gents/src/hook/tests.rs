@@ -1986,7 +1986,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         let args = r#"{"objective":"revised while active"}"#;
         accept_hook_tool_call(
             &hook,
-            &call_id,
+            call_id,
             crate::goal::UPDATE_GOAL_TOOL_NAME,
             args,
             None,
@@ -1995,7 +1995,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         let ToolCallHookAction::Skip {
             reason: tool_result,
         } = hook
-            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, call_id, args)
             .await
         else {
             panic!("expected hook-managed skip for {call_id}");

@@ -74,36 +74,52 @@ pub async fn run_openai_oneshot_with_tools(
         run_oneshot_with_completion_client(
             node,
             agent,
-            provider_family,
-            replay_issuer,
-            prompt,
-            prompt_builder,
-            &output_obligations,
-            tools,
-            background_tool_registry,
-            lsp_pool.clone(),
+            OneshotInputs {
+                provider_family,
+                replay_issuer,
+                prompt,
+                prompt_builder,
+                output_obligations: &output_obligations,
+                tools,
+                background_tool_registry,
+                lsp_pool: lsp_pool.clone(),
+            },
             client,
         )
         .await
     })
 }
 
-async fn run_oneshot_with_completion_client<C>(
-    node: Arc<EmbeddedNode>,
-    agent: &ResolvedAgent,
+struct OneshotInputs<'a> {
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
-    prompt: &str,
+    prompt: &'a str,
     prompt_builder: LayeredPromptBuilder,
-    output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
+    output_obligations: &'a [(String, crate::document_config::WriteToolOutputObligation)],
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     background_tool_registry: BackgroundToolRegistry,
     lsp_pool: crate::toolset::lsp::LspPool,
+}
+
+async fn run_oneshot_with_completion_client<C>(
+    node: Arc<EmbeddedNode>,
+    agent: &ResolvedAgent,
+    inputs: OneshotInputs<'_>,
     client: C,
 ) -> Result<OneshotRunResult>
 where
     C: ProviderClient,
 {
+    let OneshotInputs {
+        provider_family,
+        replay_issuer,
+        prompt,
+        prompt_builder,
+        output_obligations,
+        tools,
+        background_tool_registry,
+        lsp_pool,
+    } = inputs;
     let model = client.completion_model(&agent.model_name);
     let mut config = loop_config(
         agent,

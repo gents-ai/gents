@@ -947,9 +947,8 @@ impl DefraSessionHook {
             let mut map = self.in_flight_lifecycles.lock().await;
             let expired_ids = map
                 .iter()
-                .filter_map(|(id, lifecycle)| {
-                    lifecycle.is_deadline_expired(now).then(|| id.clone())
-                })
+                .filter(|&(_, lifecycle)| lifecycle.is_deadline_expired(now))
+                .map(|(id, _)| id.clone())
                 .collect::<Vec<_>>();
 
             expired_ids

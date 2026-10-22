@@ -124,6 +124,10 @@ pub fn install_pack_plugins<'a>(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "install inputs and policies supplied by each install entry point"
+)]
 pub fn install_pack_plugins_with_bindings<'a>(
     home: &Path,
     manifest: &PackManifest,

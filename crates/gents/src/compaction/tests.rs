@@ -2935,7 +2935,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         "did:test:test",
         "request-compaction-test",
         &request_doc_id,
-        &summary,
+        summary,
         &result.files_read,
         &result.files_modified,
         reduction.messages_compacted().unwrap(),

@@ -35,6 +35,10 @@ pub(crate) fn goal_continuation_identity(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "called from goal, watcher, graph_pipeline and agent tests with this shape"
+)]
 pub(crate) fn prepare_goal_continuation(
     parent: &AgentRequest,
     agent_id: String,
@@ -86,7 +90,6 @@ pub(crate) fn prepare_goal_continuation(
             correlation: parent.caused_by_correlation.clone(),
             trigger_context: parent.caused_by_trigger_context.clone(),
             source_doc_id: parent.caused_by_source_doc_id.clone(),
-            ..Default::default()
         },
         workspace: Some(WorkspaceLineage {
             workspace_id: parent.workspace_id.clone(),
