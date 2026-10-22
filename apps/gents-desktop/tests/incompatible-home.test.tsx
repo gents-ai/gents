@@ -13,7 +13,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 import App from "../src/App";
-import { SettingsMenu } from "../src/ui/app/SettingsMenu";
+import { DeveloperPanel } from "../src/ui/screens/settings/DeveloperPanel";
 import { IncompatibleHomeScreen } from "../src/components/IncompatibleHomeScreen";
 import { useStartup } from "../src/ui/hooks/useClient";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
@@ -424,7 +424,7 @@ function ResetSettings() {
   return startup.incompatibleHome.report ? (
     <IncompatibleHomeScreen home={startup.incompatibleHome} error={startup.error} />
   ) : (
-    <SettingsMenu variant="row" showNav={false} />
+    <DeveloperPanel />
   );
 }
 
@@ -437,10 +437,7 @@ describe("user-invoked desktop reset", () => {
     const quitDesktop = vi.fn();
     const app = testApp({ api: { resetManagedServer, quitDesktop } });
     renderIn(app, <ResetSettings />);
-    await user.click(screen.getByRole("button", { name: "Settings" }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Reset Gents on this Mac" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Reset…" }));
     expect(resetManagedServer).toHaveBeenCalledExactlyOnceWith(
       undefined,
       undefined,
@@ -460,7 +457,7 @@ describe("user-invoked desktop reset", () => {
       BROWSER,
     );
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reset…" })).toBeInTheDocument();
     expect(resetManagedServer).toHaveBeenCalledTimes(1);
     expect(quitDesktop).not.toHaveBeenCalled();
   });
@@ -472,10 +469,7 @@ describe("user-invoked desktop reset", () => {
     );
     const app = testApp({ api: { resetManagedServer } });
     renderIn(app, <ResetSettings />);
-    await user.click(screen.getByRole("button", { name: "Settings" }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Reset Gents on this Mac" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Reset…" }));
     await user.click(
       await screen.findByRole("button", { name: "Back up and start fresh" }),
     );
@@ -504,10 +498,7 @@ describe("user-invoked desktop reset", () => {
       );
       const app = testApp({ api: { resetManagedServer } });
       renderIn(app, <ResetSettings />);
-      await user.click(screen.getByRole("button", { name: "Settings" }));
-      await user.click(
-        await screen.findByRole("menuitem", { name: "Reset Gents on this Mac" }),
-      );
+      await user.click(await screen.findByRole("button", { name: "Reset…" }));
       if (disposition === "delete") {
         await user.click(
           await screen.findByRole("button", { name: "Delete and start fresh" }),
