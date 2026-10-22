@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::pack_archive::{pack_dir, PackArchive};
+use gents::NodeIdentity;
 use serde::Serialize;
 use serde_json::json;
 
@@ -110,7 +111,14 @@ async fn check_filters(
     {
         return Ok(());
     }
-    let node = std::sync::Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
+    let directory = tempfile::tempdir()?;
+    let identity = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
+    let node = std::sync::Arc::new(
+        gents::defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await?,
+    );
     gents::ensure_runtime_schemas(node.as_ref()).await?;
     let access = gents::config_client::ConfigAccess::local(node.clone());
     crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;
@@ -159,6 +167,19 @@ pub(crate) fn write_topology(dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn event_filters_validate_with_owner_bound_runtime_schemas() {
+        let directory = super::super::test_support::fixture_dir("documents_fixture");
+        let (bytes, _) = pack_dir(&directory).unwrap();
+        let archive = PackArchive::from_bytes(&bytes).unwrap();
+        let config = load_config(&archive).unwrap();
+        let mut problems = Vec::new();
+        check_filters(&directory, &config, &mut problems)
+            .await
+            .unwrap();
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
 
     #[tokio::test]
     async fn every_fixture_pack_passes_the_check() {

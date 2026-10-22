@@ -6,9 +6,6 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::serde_helpers::first_row_with_doc_id;
 
-/// Default admission bound on a request's causal hop.
-pub const DEFAULT_MAX_REQUEST_HOP: u32 = 8;
-
 /// DefraDB DID identity for the runtime node. One active instance is an
 /// operating convention; runtime enforcement is deferred to #1435. No host identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,8 +32,7 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_by: Option<String>,
-    /// Admission bound on a request's causal hop; absent uses
-    /// [`DEFAULT_MAX_REQUEST_HOP`].
+    /// Optional admission bound on a request's causal hop; absent disables the cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_request_hop: Option<u32>,
@@ -93,6 +89,7 @@ pub(crate) async fn upsert_node(
     display_name: Option<&str>,
     default_agent_id: Option<&str>,
     enabled: bool,
+    max_request_hop: Option<u32>,
 ) -> Result<()> {
     use super::serde_helpers::{default_display_name_for_did, normalize_optional_string};
     let escaped_node_did = escape_graphql_string(node_did);
@@ -103,6 +100,7 @@ pub(crate) async fn upsert_node(
     let default_agent_id = normalize_optional_string(default_agent_id)
         .map(|id| format!("\"{}\"", escape_graphql_string(id)))
         .unwrap_or_else(|| "null".to_string());
+    let max_request_hop = max_request_hop.map_or_else(|| "null".to_string(), |hop| hop.to_string());
     let escaped_created_by = escape_graphql_string(node_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
@@ -114,13 +112,15 @@ pub(crate) async fn upsert_node(
                     display_name: "{escaped_display_name}",
                     default_agent_id: {default_agent_id},
                     enabled: {enabled},
+                    max_request_hop: {max_request_hop},
                     created_at: "{created_at}",
                     created_by: "{escaped_created_by}"
                 }},
                 update: {{
                     display_name: "{escaped_display_name}",
                     default_agent_id: {default_agent_id},
-                    enabled: {enabled}
+                    enabled: {enabled},
+                    max_request_hop: {max_request_hop}
                 }}
             ) {{ _docID }}
         }}"#

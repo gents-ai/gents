@@ -29,7 +29,8 @@ def orphanedBackgroundRecoveryCase
     (deadlineExpired parentLive parentInterrupted
       parentTerminal executionRegistered : Bool)
     (process : ManagedExec.StopOutcome := .stopped)
-    (ownerTaskDeleted : Bool := false) : RecoverySweepCase :=
+    (ownerTaskDeleted : Bool := false)
+    (ownerSessionStopped : Bool := false) : RecoverySweepCase :=
   let row : OrphanedBackgroundToolRow :=
     { call := r6NativeToolFixture
     , deadlineExpired := deadlineExpired
@@ -38,6 +39,7 @@ def orphanedBackgroundRecoveryCase
     , parentTerminal := parentTerminal
     , executionRegistered := executionRegistered
     , process := process
+    , ownerSessionStopped := ownerSessionStopped
     , ownerTaskDeleted := ownerTaskDeleted
     }
   let recovered := orphanedBackgroundToolRecover row
@@ -61,6 +63,7 @@ def orphanedBackgroundRecoveryCase
     parentTerminal := some row.parentTerminal
     executionRegistered := some row.executionRegistered
     processOutcome := some row.process.toContract
+    ownerSessionStopped := some row.ownerSessionStopped
     ownerTaskDeleted := some row.ownerTaskDeleted
     recoveryCause := cause.map ToolRecoveryCause.toContract
     notificationReason := notificationReason
@@ -94,7 +97,8 @@ def sessionMessageRecoveryCase
 def pluginJobRecoveryCase (c : Conformance.PluginJob.RecoveryCase) : RecoverySweepCase :=
   let after := Conformance.PluginJob.recoveryTick c.row
   let state := fun (row : PluginJobRow) =>
-    (if row.running then ToolExecution.ToolCallState.running else .failed).toDefraDB
+    (if row.running then ToolExecution.ToolCallState.running
+      else if row.sessionStopped then .cancelled else .failed).toDefraDB
   { (recoveryCase
       pluginJobRecoverySweep
       c.name
@@ -207,6 +211,16 @@ def recoverySweepCases : List RecoverySweepCase :=
       "registered_background_tool_task_deleted_to_cancelled"
       false true false false true (ownerTaskDeleted := true)
   , orphanedBackgroundRecoveryCase
+      "registered_background_tool_session_stopped_to_cancelled"
+      false true false false true (ownerSessionStopped := true)
+  , orphanedBackgroundRecoveryCase
+      "registered_background_tool_session_stop_still_running_deferred"
+      false true false false true (process := .stillRunning)
+      (ownerSessionStopped := true)
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_session_stopped_to_cancelled"
+      false false false true false (ownerSessionStopped := true)
+  , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_interrupted_parent_to_cancelled"
       false false true false false
   , recoveryCase
@@ -231,6 +245,9 @@ def recoverySweepCases : List RecoverySweepCase :=
   , sessionMessageRecoveryCase
       "session_message_request_completed_blocked_goal_to_completed" .requestCompleted
       (.live "blocked")
+  , sessionMessageRecoveryCase
+      "session_message_request_completed_stopped_goal_to_completed" .requestCompleted
+      .stopped
   , sessionMessageRecoveryCase
       "session_message_request_failed_to_failed" .requestFailed
   , sessionMessageRecoveryCase

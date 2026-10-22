@@ -169,26 +169,159 @@ pub async fn load_session_goal_observation(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<SessionGoalObservation>> {
-    access
-        .transact_readonly("goal.read_observation", |txn| {
-            Box::pin(async move {
-                let Some(session) = crate::session::load_agent_session_row_in_txn(
-                    txn,
-                    node_did,
-                    session_id,
-                    requester_did,
-                )
-                .await?
-                else {
-                    return Ok(None);
-                };
-                match rows_in_txn(txn, &session).await?.first() {
-                    Some(row) => verified(verifier, &session, row).await,
-                    None => Ok(None),
+    Ok(
+        match load_session_goal_observation_state(
+            access,
+            verifier,
+            node_did,
+            session_id,
+            requester_did,
+        )
+        .await?
+        {
+            SessionGoalObservationState::Observed(observation) => Some(*observation),
+            SessionGoalObservationState::NoReadableSession
+            | SessionGoalObservationState::Unknown => None,
+        },
+    )
+}
+
+/// A missing projection for an existing readable session must not be treated
+/// as a verified absence when capturing signed request intent.
+#[derive(Debug)]
+pub enum SessionGoalObservationState {
+    NoReadableSession,
+    Unknown,
+    Observed(Box<SessionGoalObservation>),
+}
+
+pub fn bind_goal_input(
+    input: gents_protocol::request_input::RequestInput,
+    state: SessionGoalObservationState,
+) -> Result<gents_protocol::request_input::RequestInput> {
+    if input.goal_assignment.is_some() {
+        return Ok(input);
+    }
+    let reference = match state {
+        SessionGoalObservationState::NoReadableSession => None,
+        SessionGoalObservationState::Unknown => {
+            anyhow::bail!("Goal state is still syncing. Refresh this chat before sending.")
+        }
+        SessionGoalObservationState::Observed(observation) => observation.goal.and_then(|goal| {
+            goal.assignment_root_request_doc_id.map(|root| {
+                gents_protocol::request_input::GoalAssignmentInput {
+                    goal_id: goal.snapshot.goal_id,
+                    root_request_doc_id: Some(root),
                 }
             })
+        }),
+    };
+    Ok(bind_goal_reference(input, reference))
+}
+
+fn bind_goal_reference(
+    mut input: gents_protocol::request_input::RequestInput,
+    reference: Option<gents_protocol::request_input::GoalAssignmentInput>,
+) -> gents_protocol::request_input::RequestInput {
+    if input.goal_assignment.is_none() {
+        input.goal_assignment = reference;
+    }
+    input
+}
+
+pub async fn prepare_goal_input(
+    access: &ConfigAccess,
+    verifier: &dyn NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    input: gents_protocol::request_input::RequestInput,
+) -> Result<gents_protocol::request_input::RequestInput> {
+    if input.goal_assignment.is_some() {
+        return Ok(input);
+    }
+    let state =
+        load_session_goal_observation_state(access, verifier, node_did, session_id, requester_did)
+            .await?;
+    bind_goal_input(input, state)
+}
+
+/// Canonical reads require a locally owned destination. Remote destination
+/// capture uses its runtime-signed observation through the same transaction.
+pub async fn prepare_goal_input_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    agent_id: &str,
+    requester_did: Option<&str>,
+    input: gents_protocol::request_input::RequestInput,
+) -> Result<gents_protocol::request_input::RequestInput> {
+    if input.goal_assignment.is_some() {
+        return Ok(input);
+    }
+    let Some(session) =
+        crate::session::load_agent_session_row_in_txn(txn, node_did, session_id, requester_did)
+            .await?
+    else {
+        return Ok(input);
+    };
+    anyhow::ensure!(
+        session.session.agent_id == agent_id,
+        "Goal input target Agent differs from its canonical session"
+    );
+    let reference = load_canonical_goal_in_txn(txn, node_did, session_id)
+        .await?
+        .and_then(|goal| {
+            goal.assignment_root_request_doc_id.map(|root| {
+                gents_protocol::request_input::GoalAssignmentInput {
+                    goal_id: goal.goal_id,
+                    root_request_doc_id: Some(root),
+                }
+            })
+        });
+    Ok(bind_goal_reference(input, reference))
+}
+
+pub async fn load_session_goal_observation_state(
+    access: &ConfigAccess,
+    verifier: &dyn NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<SessionGoalObservationState> {
+    access
+        .transact_readonly("goal.read_observation", |txn| {
+            Box::pin(load_session_goal_observation_state_in_txn(
+                txn,
+                verifier,
+                node_did,
+                session_id,
+                requester_did,
+            ))
         })
         .await
+}
+
+pub async fn load_session_goal_observation_state_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    verifier: &dyn NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<SessionGoalObservationState> {
+    let Some(session) =
+        crate::session::load_agent_session_row_in_txn(txn, node_did, session_id, requester_did)
+            .await?
+    else {
+        return Ok(SessionGoalObservationState::NoReadableSession);
+    };
+    match rows_in_txn(txn, &session).await?.first() {
+        Some(row) => Ok(match verified(verifier, &session, row).await? {
+            Some(observation) => SessionGoalObservationState::Observed(Box::new(observation)),
+            None => SessionGoalObservationState::Unknown,
+        }),
+        None => Ok(SessionGoalObservationState::Unknown),
+    }
 }
 
 pub(crate) async fn project_session_goal(
@@ -211,6 +344,7 @@ pub(crate) async fn project_session_goal(
                     txn, &goal.doc_id, "goal.project_observation",
                 ).await?.context("goal has no unambiguous composite revision")?;
                 Some(ObservedGoal {
+                    assignment_root_request_doc_id: goal.assignment_root_request_doc_id.clone(),
                     revision: GoalRevision { document: goal.doc_id.clone(), composite: commit.cid },
                     snapshot: snapshot(&goal, Utc::now()),
                 })
@@ -223,7 +357,9 @@ pub(crate) async fn project_session_goal(
                 "goal observation immutable scope differs from canonical session");
             if let Some(previous) = verified(identity.as_ref(), &session, row).await? {
                 if previous.goal.as_ref().map(|goal| &goal.revision)
-                    == goal.as_ref().map(|goal| &goal.revision) {
+                    == goal.as_ref().map(|goal| &goal.revision)
+                    && previous.goal.as_ref().and_then(|goal| goal.assignment_root_request_doc_id.as_ref())
+                        == goal.as_ref().and_then(|goal| goal.assignment_root_request_doc_id.as_ref()) {
                     return Ok(());
                 }
             }

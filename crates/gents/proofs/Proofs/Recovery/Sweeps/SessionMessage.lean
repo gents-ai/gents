@@ -82,6 +82,7 @@ assignment reason, which is why this vocabulary lives here rather than in
 /-- The assignment handoff a session-message settlement may name. -/
 inductive AssignmentHandoff where
   | complete
+  | stopped
   | absent
   | unknown
   | live (status : String)
@@ -89,6 +90,7 @@ inductive AssignmentHandoff where
 
 def AssignmentHandoff.toReason : AssignmentHandoff → String
   | .complete => "assignment_complete"
+  | .stopped => "assignment_stopped"
   | .absent => "assignment_absent"
   | .unknown => "assignment_unknown"
   | .live status => s!"assignment_{status}"
@@ -97,7 +99,7 @@ def AssignmentHandoff.toReason : AssignmentHandoff → String
 a non-completed turn keeps its terminal reason and never reads as
 assignment evidence. A complete assignment is the reasonless success form
 (`assignment_complete` names the status, it is not emitted as a reason), so
-only absent, unknown and live observations surface as reasons. -/
+only stopped, absent, unknown and live observations surface as reasons. -/
 def sessionMessageHandoffReason
     (turnCompleted : Bool) (handoff : AssignmentHandoff) : Option String :=
   match turnCompleted, handoff with
@@ -120,6 +122,10 @@ theorem completed_turn_unknown_handoff_is_reason :
 
 theorem completed_turn_complete_handoff_is_reasonless :
     sessionMessageHandoffReason true .complete = none := by
+  rfl
+
+theorem completed_turn_stopped_handoff_does_not_report_success :
+    sessionMessageHandoffReason true .stopped = some "assignment_stopped" := by
   rfl
 
 theorem noncompleted_turn_handoff_is_none (handoff : AssignmentHandoff) :

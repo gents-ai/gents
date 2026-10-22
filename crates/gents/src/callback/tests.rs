@@ -631,7 +631,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
 }
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node
 }

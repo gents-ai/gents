@@ -11,6 +11,8 @@ fn rendered_timeline_item_key(item: &crate::types::RenderedTimelineItem) -> &str
         | RenderedTimelineItem::AutomatedInput { item_key, .. }
         | RenderedTimelineItem::AssistantMessage { item_key, .. }
         | RenderedTimelineItem::ToolGroup { item_key, .. }
+        | RenderedTimelineItem::RequestContextReductionSummary { item_key, .. }
+        | RenderedTimelineItem::SessionCompaction { item_key, .. }
         | RenderedTimelineItem::PendingUserTurn { item_key, .. }
         | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key,
     }
@@ -28,9 +30,29 @@ fn rendered_timeline_durable_sequence(
         RenderedTimelineItem::ToolGroup {
             message_sequence, ..
         } => Some(*message_sequence),
+        RenderedTimelineItem::RequestContextReductionSummary { sequence, .. } => {
+            Some(Some(*sequence))
+        }
+        RenderedTimelineItem::SessionCompaction { sequence, .. } => Some(Some(*sequence)),
         RenderedTimelineItem::PendingUserTurn { .. }
         | RenderedTimelineItem::LiveAssistant { .. } => None,
     }
+}
+
+pub(super) fn insert_timeline_item_by_sequence(
+    items: &mut Vec<crate::types::RenderedTimelineItem>,
+    item: crate::types::RenderedTimelineItem,
+    sequence: i64,
+) {
+    let index = items
+        .iter()
+        .position(|existing| {
+            rendered_timeline_durable_sequence(existing)
+                .flatten()
+                .is_none_or(|existing| existing > sequence)
+        })
+        .unwrap_or(items.len());
+    items.insert(index, item);
 }
 
 pub fn apply_session_timeline_page(

@@ -163,6 +163,10 @@ fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, S
         ),
         Refusal::TimedOut => ("the job ran past its max_wall_secs", inspect),
         Refusal::StepFailed => ("three consecutive job steps failed", inspect),
+        Refusal::BackgroundBudgetExceeded => (
+            "the parent request has reached its concurrent background capacity ceiling",
+            "Next: wait for a background completion notification, then retry".to_owned(),
+        ),
         Refusal::Terminal => ("the job already ended", inspect),
     }
 }
@@ -251,6 +255,7 @@ enum Stepped {
         row: Box<StepRow>,
         refusal: Refusal,
     },
+    Stopped(Box<StepRow>),
     Committed(Option<PluginJobTerminal>),
 }
 
@@ -259,10 +264,29 @@ enum Stepped {
 /// the step in one revision-checked transaction.
 pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutcome> {
     let access = ConfigAccess::local(runtime.node.clone());
+    let mut lifecycle = load_lifecycle(&access, row_doc_id).await?;
+    let row_running = lifecycle.is_running();
+    // The precheck avoids invoking a guest for an already-stopped session;
+    // `step_transaction` repeats this exact-scope read at the write boundary.
+    let session_stopped = row_running
+        && crate::session::session_is_stopped(
+            &runtime.node,
+            lifecycle.node_did(),
+            lifecycle.session_id(),
+            lifecycle.requester_did(),
+        )
+        .await?;
+    if !super::recovery::step_invocation_allowed(row_running, session_stopped) {
+        if !row_running {
+            return Ok(StepOutcome::Refused(Refusal::Terminal));
+        }
+        let row = read_step_row(&access, row_doc_id).await?;
+        kill(&access, &mut lifecycle, &row, KillCause::Stop).await?;
+        return Ok(StepOutcome::Settled);
+    }
     let pin = read_pin(&access, row_doc_id)
         .await?
         .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
-    let mut lifecycle = load_lifecycle(&access, row_doc_id).await?;
     let (namespace, name) = parse_coordinate(&pin.plugin_ref)?;
     let installed = match read_record(&runtime.home, namespace, name) {
         Ok(record) if record.digest == pin.engine_digest => record,
@@ -444,6 +468,11 @@ async fn step_on(
             kill(&access, lifecycle, &row, KillCause::FailClosed(refusal)).await?;
             Ok(StepOutcome::Refused(refusal))
         }
+        Stepped::Stopped(row) => {
+            lifecycle.stage_plugin_receipt(Some(receipt));
+            kill(&access, lifecycle, &row, KillCause::Stop).await?;
+            Ok(StepOutcome::Settled)
+        }
         Stepped::Committed(Some(terminal)) => {
             lifecycle.finish_plugin_job_row(terminal).await?;
             Ok(StepOutcome::Settled)
@@ -493,6 +522,16 @@ async fn step_transaction(
     }
     // (c)
     let row = read_step_row_in_txn(txn, row_doc_id).await?;
+    if crate::session::session_stopped_in_txn(
+        txn,
+        lifecycle.node_did(),
+        lifecycle.session_id(),
+        lifecycle.requester_did(),
+    )
+    .await?
+    {
+        return Ok(Stepped::Stopped(Box::new(row)));
+    }
     let (ctx, installed) = step_context(txn, runtime, input, pin, output, lifecycle).await?;
     let admitted = match admit_step(&ctx, &row, output) {
         Ok(admitted) => admitted,
@@ -718,19 +757,27 @@ pub(super) async fn step_context_for(
     Ok((ctx, installed))
 }
 
-/// The target node's `max_request_hop`, defaulted when unset, read through `txn`.
-async fn max_request_hop_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<u32> {
+/// The target node's optional `max_request_hop`, read through `txn`.
+async fn max_request_hop_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Option<u32>> {
     let response = txn
         .execute(&format!(
-            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ max_request_hop }} }}"#,
+            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ max_request_hop }} }}"#,
             escape_graphql_string(node_did)
         ))
         .await?;
-    Ok(response
-        .pointer("/data/Node/0/max_request_hop")
-        .and_then(Value::as_u64)
-        .and_then(|hop| u32::try_from(hop).ok())
-        .unwrap_or(crate::document_config::DEFAULT_MAX_REQUEST_HOP))
+    let rows = response
+        .pointer("/data/Node")
+        .and_then(Value::as_array)
+        .context("Node hop-cap query returned no row array")?;
+    anyhow::ensure!(rows.len() <= 1, "multiple Node rows matched a DID");
+    match rows.first().map(|row| &row["max_request_hop"]) {
+        None | Some(Value::Null) => Ok(None),
+        Some(hop) => hop
+            .as_u64()
+            .and_then(|hop| u32::try_from(hop).ok())
+            .map(Some)
+            .context("Node.max_request_hop must be a nonnegative u32"),
+    }
 }
 
 async fn read_lifecycle_state(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<String> {
@@ -901,6 +948,15 @@ impl JobDriver {
     /// The handles every step of this runtime runs on.
     pub fn runtime(&self) -> &JobRuntime {
         &self.runtime
+    }
+
+    pub(crate) fn in_flight_row_ids(&self) -> Vec<String> {
+        self.in_flight
+            .lock()
+            .expect("in-flight rows lock")
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Wakes the row: starts its step, or marks it dirty when one is in flight.
@@ -1858,7 +1914,7 @@ pub(crate) mod tests {
     use crate::plugin::store;
     use crate::plugin::tests::constant_output_wat;
     use crate::plugin::tests::executor::installed_plugin;
-    use crate::plugin_job::input::tests::{insert, Job, NODE_DID};
+    use crate::plugin_job::input::tests::{insert, node_did, Job};
     use gents_protocol::job::{
         DynamicMode, JobChildState, JobOrigin, PluginJobDeclaration, PluginJobSettings,
     };
@@ -1890,12 +1946,12 @@ pub(crate) mod tests {
         let documents = [
             (
                 crate::Collection::InferenceProfile,
-                json!({"node_did": NODE_DID, "profile_id": "inference", "backend_id": "backend",
+                json!({"node_did": node_did(), "profile_id": "inference", "backend_id": "backend",
                        "model_name": "test-model"}),
             ),
             (
                 crate::Collection::InferenceBackend,
-                json!({"node_did": NODE_DID, "backend_id": "backend", "name": "Test inference",
+                json!({"node_did": node_did(), "backend_id": "backend", "name": "Test inference",
                        "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
                        "auth": {"kind": "unauthenticated"}}),
             ),
@@ -1919,7 +1975,7 @@ pub(crate) mod tests {
     pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSettings>) {
         let tools: crate::document_config::Tools = serde_json::from_value(json!({
             "tools_id": "tools",
-            "node_did": NODE_DID,
+            "node_did": node_did(),
             "agents": {"enabled": true, "target_ids": ["t-a", "t-b"]},
             "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
@@ -1972,7 +2028,7 @@ pub(crate) mod tests {
 
     pub(crate) async fn start_running(job: &Job, row: &str) {
         let mut lifecycle =
-            ToolCallLifecycle::load_by_doc_id(job.node.clone(), row, NODE_DID, "session-1", None)
+            ToolCallLifecycle::load_by_doc_id(job.node.clone(), row, node_did(), "session-1", None)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2069,15 +2125,15 @@ pub(crate) mod tests {
             insert(
                 &job.node,
                 "Agent",
-                json!({"agent_id": agent, "node_did": NODE_DID, "context_id": "context",
+                json!({"agent_id": agent, "node_did": node_did(), "context_id": "context",
                        "inference_profile_id": "inference", "enabled": true}),
             )
             .await;
             insert(
                 &job.node,
                 "AgentTarget",
-                json!({"target_id": format!("t-{agent}"), "node_did": NODE_DID,
-                       "target_node_did": NODE_DID, "agent_id": agent, "name": agent}),
+                json!({"target_id": format!("t-{agent}"), "node_did": node_did(),
+                       "target_node_did": node_did(), "agent_id": agent, "name": agent}),
             )
             .await;
         }
@@ -2465,7 +2521,16 @@ pub(crate) mod tests {
             .join(".gents/workflows/runs")
             .join(&input.caller.tool_call_id)
             .join("notes.md");
-        assert_eq!(std::fs::read_to_string(file).unwrap(), "hello");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello");
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(
+            step.run(&step.row).await,
+            StepOutcome::Refused(Refusal::Terminal)
+        );
+        assert!(
+            !file.exists(),
+            "a stale kick of a terminal row must not invoke the guest and recreate scratch"
+        );
         step.close().await;
     }
 
@@ -2746,10 +2811,10 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn step_failures_without_a_remembered_row_read_it_and_settle_on_the_third() {
         let step = stepper(json!({"effects": {}})).await;
-        let child = live_child(&step, NODE_DID).await;
+        let child = live_child(&step, node_did()).await;
         let driver = JobDriver::new(step.job.runtime.clone());
         let before = read_step_row(&step.job.access, &step.row).await.unwrap();
-        let observed = observe_live_children(&step.job.access, &before, NODE_DID)
+        let observed = observe_live_children(&step.job.access, &before, node_did())
             .await
             .unwrap();
         let expected = kill_decision(&before, KillCause::Stop, &|key: &str| observed[key]).killed;

@@ -118,7 +118,7 @@ async fn settle_row(node: &Arc<EmbeddedNode>, row: &SessionMessageRow) -> Result
 /// canonical Goal document rather than the tool turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AssignmentObservation {
-    /// No Goal document exists in the caused session.
+    /// Native history contains no assignment bound to the caused request.
     None,
     /// The Goal's durable status is the authoritative assignment state.
     Assigned(crate::goal::GoalStatus),
@@ -130,7 +130,7 @@ pub(crate) enum AssignmentObservation {
 /// Turn-versus-assignment completion metadata for a session-message
 /// child-result handoff. `turn_completed` comes from the caused request's
 /// durable lifecycle state (via `CausedRequestTerminal`); the assignment
-/// comes from the canonical Goal of the session that request runs in. A
+/// comes from the Goal version bound to its signed physical assignment. A
 /// completed tool turn never implies assignment success: a live or blocked
 /// assignment is named in the handoff so the continuation owner cannot read a
 /// finished turn as a finished goal.
@@ -171,10 +171,11 @@ fn assignment_status_reason(status: crate::goal::GoalStatus) -> &'static str {
         crate::goal::GoalStatus::UsageLimited => "assignment_usage_limited",
         crate::goal::GoalStatus::BudgetLimited => "assignment_budget_limited",
         crate::goal::GoalStatus::Complete => "assignment_complete",
+        crate::goal::GoalStatus::Stopped => "assignment_stopped",
     }
 }
 
-async fn turn_assignment_handoff(
+pub(crate) async fn turn_assignment_handoff(
     node: &Arc<EmbeddedNode>,
     caused: &AgentRequestRow,
     terminal: &crate::tool_call_lifecycle::CausedRequestTerminal,
@@ -193,12 +194,17 @@ async fn turn_assignment_handoff(
             (Some(node_did), Some(session_id))
                 if !node_did.trim().is_empty() && !session_id.trim().is_empty() =>
             {
-                match crate::goal::load_canonical_goal(node, node_did, session_id).await {
-                    Ok(Some(goal)) => goal
+                match crate::goal::load_request_assignment(node, caused).await {
+                    Ok(crate::goal::RequestAssignmentObservation::Assigned(goal)) => goal
                         .parsed_status()
                         .map(AssignmentObservation::Assigned)
                         .unwrap_or(AssignmentObservation::Unknown),
-                    Ok(None) => AssignmentObservation::None,
+                    Ok(crate::goal::RequestAssignmentObservation::None) => {
+                        AssignmentObservation::None
+                    }
+                    Ok(crate::goal::RequestAssignmentObservation::Unknown) => {
+                        AssignmentObservation::Unknown
+                    }
                     Err(error) => {
                         tracing::warn!(
                             caused_request_id = %caused.request_id,
@@ -456,6 +462,7 @@ mod turn_assignment_tests {
         )
         .await
         .expect("persist an active Goal in the caused session");
+        bind_caused_assignment(node, did, &caused_request_doc_id).await;
         crate::tool_call_lifecycle::admission_fixture::complete_child(
             node,
             &caused_request_id,
@@ -583,6 +590,7 @@ mod turn_assignment_tests {
         )
         .await
         .expect("persist a complete Goal in the caused session");
+        bind_caused_assignment(node, did, &caused_request_doc_id).await;
         crate::tool_call_lifecycle::admission_fixture::complete_child(
             node,
             &caused_request_id,
@@ -648,6 +656,7 @@ mod turn_assignment_tests {
         )
         .await
         .expect("persist an active Goal in the caused session");
+        bind_caused_assignment(node, did, &caused_request_doc_id).await;
         crate::tool_call_lifecycle::admission_fixture::complete_child(
             node,
             &caused_request_id,
@@ -805,9 +814,17 @@ mod turn_assignment_tests {
         notifications
     }
 
-    /// The caused session of the fixture's session message, where Goal state is
-    /// observed: `turn_assignment_handoff` reads the Goal of the session the
-    /// caused request runs in, read from the caused AgentRequest row itself.
+    async fn bind_caused_assignment(node: &Arc<EmbeddedNode>, did: &str, request_doc: &str) {
+        let session = caused_session_id(node, request_doc).await;
+        let goal = crate::goal::load_canonical_goal(node, did, &session)
+            .await
+            .unwrap()
+            .unwrap();
+        crate::config_client::ConfigAccess::local(node.clone()).write("test.bind_caused_assignment",
+            &format!("mutation {{update_Goal(docID: \"{}\", input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
+                escape_graphql_string(&goal.doc_id), escape_graphql_string(request_doc))).await.unwrap();
+    }
+
     async fn caused_session_id(node: &Arc<EmbeddedNode>, caused_request_doc_id: &str) -> String {
         let doc_id = escape_graphql_string(caused_request_doc_id);
         let response = node

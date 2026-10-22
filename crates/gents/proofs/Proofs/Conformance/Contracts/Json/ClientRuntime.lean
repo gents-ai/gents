@@ -2,6 +2,7 @@ import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 import Proofs.StreamingResponse.Executable
 import Proofs.StreamingResponse.ReasoningAudit
+import Proofs.StreamingResponse.ReasoningDeltas
 import Proofs.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Compaction.Executable
 import Proofs.Recovery.ContractCases
@@ -325,6 +326,21 @@ def reasoningSignatureCaseJson
     ",\"signature\":" ++ optionalStringJson witness.signature ++
     ",\"accepted\":" ++ boolString witness.accepted ++ "}"
 
+def reasoningDeltaPartJson : StreamingResponse.ReasoningDeltas.Part → String
+  | .reasoning id signature bytes =>
+      "{\"kind\":\"reasoning\",\"id\":" ++ optionalNatJson id ++
+      ",\"signature\":" ++ optionalNatJson signature ++
+      ",\"bytes\":" ++ jsonArray (bytes.map toString) ++ "}"
+  | .text bytes =>
+      "{\"kind\":\"text\",\"bytes\":" ++ jsonArray (bytes.map toString) ++ "}"
+
+def reasoningDeltaCaseJson (witness : StreamingResponse.ReasoningDeltas.Case) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"before\":" ++ jsonArray (witness.before.map reasoningDeltaPartJson) ++
+    ",\"id\":" ++ optionalNatJson witness.id ++
+    ",\"fragment\":" ++ jsonArray (witness.fragment.map toString) ++
+    ",\"expected\":" ++ jsonArray (witness.expected.map reasoningDeltaPartJson) ++ "}"
+
 def auxiliaryOutputCaseJson
     (witness : CanonicalOutput.Execution.AuxiliaryCases.Case) : String :=
   let kind := witness.kind
@@ -460,6 +476,8 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ "\"process_outcome\":" ++ jsonOptionalString witness.processOutcome ++ ","
     ++ "\"owner_task_deleted\":"
       ++ jsonOptionalBool witness.ownerTaskDeleted ++ ","
+    ++ "\"owner_session_stopped\":"
+      ++ jsonOptionalBool witness.ownerSessionStopped ++ ","
     ++ "\"recovery_cause\":" ++ jsonOptionalString witness.recoveryCause ++ ","
     ++ "\"notification_reason\":"
       ++ jsonOptionalString witness.notificationReason ++ ","

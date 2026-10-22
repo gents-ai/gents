@@ -3,6 +3,10 @@ import type { ToolDiffLineView } from "./ToolDiffLineView.js";
 
 export type ToolPresentationView = { "kind": "command", command: string, exitCode: number | null, timedOut: boolean, failed: boolean, durationMs: number | null, cwd: string | null, executionMode: string | null, networkMode: string | null, stdout: string, stderr: string, fallbackOutput: string | null, } | { "kind": "fileRead", operation: string, target: string | null, returnedCount: number | null, totalCount: number | null, truncated: boolean, body: string, fallbackOutput: string | null, } | { "kind": "fileEdit", operation: string, path: string | null,
 /**
+ * Only a successful, non-preview native file result confirms a mutation.
+ */
+applied?: boolean | null,
+/**
  * Execution-node path; reveal only when that node is local.
  */
 revealPath?: string | null, created: boolean | null, replacementsApplied: number | null, diff: Array<ToolDiffLineView>, fallbackOutput: string | null, } | { "kind": "agent", action: string, name: string | null, sessionId: string | null, description: string | null, output: string | null, } | { "kind": "process", action: string, target: string | null, description: string | null, output: string | null, } | { "kind": "mcp", serviceId: string | null, selectedToolName: string | null, arguments: string | null, output: string | null, } | { "kind": "generic", summary: string | null, input: string | null, output: string | null, };

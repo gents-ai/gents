@@ -123,13 +123,13 @@ async fn read<T: serde::de::DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use defra_node::EmbeddedNode;
+
     use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn replacement_preserves_other_owner_and_clears_optional_selection() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node);
         for owner in ["did:key:owner", "did:key:other"] {
@@ -218,7 +218,7 @@ mod tests {
             AccountPick,
         };
         let did = "did:key:z6MkTestProfileEvents";
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::local(node);
@@ -359,7 +359,7 @@ mod tests {
     async fn agent_accounts_follow_profile_and_compaction() -> Result<()> {
         use crate::oauth_credential::{set_account_enabled, store_sign_in, AccountState};
         let did = "did:key:z6MkTestAgentAccounts";
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::local(node);

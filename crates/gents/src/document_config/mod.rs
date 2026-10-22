@@ -33,7 +33,7 @@ mod write_tool;
 
 #[cfg(test)]
 pub(crate) use principal::upsert_node;
-pub use principal::{load_node, Node, DEFAULT_MAX_REQUEST_HOP};
+pub use principal::{load_node, Node};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,

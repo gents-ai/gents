@@ -37,6 +37,7 @@ inductive ToolRecoveryCause where
   | terminalizeBackgroundedAsInterrupted
   | processLost
   | taskDeleted
+  | sessionStopped
   | causedRequestUnbound
   | requestCompleted
   | requestFailed
@@ -53,6 +54,7 @@ def toContract : ToolRecoveryCause → String
   | .parentTerminal => "parentTerminal"
   | .terminalizeBackgroundedAsInterrupted => "TerminalizeBackgroundedAsInterrupted"
   | .processLost => "processLost"
+  | .sessionStopped => "sessionStopped"
   | .taskDeleted => "taskDeleted"
   | .causedRequestUnbound => "causedRequestUnbound"
   | .requestCompleted => "requestCompleted"
@@ -67,6 +69,7 @@ def terminalState : ToolRecoveryCause → ToolCallState
   | .parentTerminal => .failed
   | .terminalizeBackgroundedAsInterrupted => .cancelled
   | .processLost => .failed
+  | .sessionStopped => .cancelled
   | .taskDeleted => .cancelled
   | .causedRequestUnbound => .failed
   | .requestCompleted => .completed
@@ -82,6 +85,7 @@ def notificationReason : ToolRecoveryCause → Option String
   | .parentTerminal => some "parent_terminal"
   | .terminalizeBackgroundedAsInterrupted => some "interrupted_on_restart"
   | .processLost => some "process_lost"
+  | .sessionStopped => some "session_stopped"
   | .taskDeleted => some "task_deleted"
   | .causedRequestUnbound => some "caused_request_unbound"
   | .requestCompleted => none
@@ -189,6 +193,7 @@ structure OrphanedBackgroundToolRow where
   executionRegistered : Bool
   process : ManagedExec.StopOutcome
   ownerTaskDeleted : Bool
+  ownerSessionStopped : Bool := false
   deriving Repr
 
 def OrphanedBackgroundToolRow.parentResolvable
@@ -196,17 +201,23 @@ def OrphanedBackgroundToolRow.parentResolvable
   row.parentLive || row.parentInterrupted || row.parentTerminal
 
 /-! The periodic orphan sweep uses the same precedence as startup recovery.
-A live registered worker is proven ownership: its terminal cause is persisted
-before the worker is signalled, so the worker cannot replace it. A stopped
-process is never attributed to its parent's interrupt or terminal state: that
-state does not stop background work. -/
+Session-stop recovery signals a registered process first and only records a
+terminal cause after observing it stopped or no longer owned. Task deletion
+retains its existing registered-worker ordering. Parent interruption and
+terminal state do not stop background work. -/
 
 def orphanedBackgroundToolCause
     (row : OrphanedBackgroundToolRow) : Option ToolRecoveryCause :=
   if !row.parentResolvable then
     none
   else if row.executionRegistered then
-    if row.ownerTaskDeleted then some .taskDeleted else none
+    if row.ownerSessionStopped then
+      match row.process with
+      | .stillRunning => none
+      | .notOwned => some .processLost
+      | .alreadyExited => some .processLost
+      | .stopped => some .sessionStopped
+    else if row.ownerTaskDeleted then some .taskDeleted else none
   else
     match row.process with
     | .stillRunning => none
@@ -215,6 +226,8 @@ def orphanedBackgroundToolCause
     | .stopped =>
       if row.deadlineExpired then
         some .deadlineExceeded
+      else if row.ownerSessionStopped then
+        some .sessionStopped
       else if row.ownerTaskDeleted then
         some .taskDeleted
       else
@@ -235,6 +248,7 @@ theorem orphanedBackgroundTool_unstopped_settles_lost
   unfold orphanedBackgroundToolCause at h_cause
   cases h_resolvable : row.parentResolvable <;>
     cases h_registered : row.executionRegistered <;>
+    cases h_stopped : row.ownerSessionStopped <;>
     cases h_deleted : row.ownerTaskDeleted <;>
     cases h_p : row.process <;>
     simp_all
@@ -242,15 +256,17 @@ theorem orphanedBackgroundTool_unstopped_settles_lost
 theorem orphanedBackgroundTool_registered_live_worker_untouched
     (row : OrphanedBackgroundToolRow)
     (h_registered : row.executionRegistered = true)
-    (h_deleted : row.ownerTaskDeleted = false) :
+    (h_deleted : row.ownerTaskDeleted = false)
+    (h_stopped : row.ownerSessionStopped = false) :
     orphanedBackgroundToolCause row = none := by
-  simp [orphanedBackgroundToolCause, h_registered, h_deleted]
+  simp [orphanedBackgroundToolCause, h_registered, h_deleted, h_stopped]
 
 def orphanedBackgroundToolStale (row : OrphanedBackgroundToolRow) : Prop :=
   row.call.state = .running ∧
   row.call.awaitMode = .background ∧
   ¬ isDetachedCall row.call ∧
-  (row.executionRegistered = false ∨ row.ownerTaskDeleted = true) ∧
+  (row.executionRegistered = false ∨ row.ownerTaskDeleted = true ∨
+    row.ownerSessionStopped = true) ∧
   (orphanedBackgroundToolCause row).isSome = true
 
 instance (row : OrphanedBackgroundToolRow) :

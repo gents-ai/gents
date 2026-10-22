@@ -153,6 +153,7 @@ impl GoalCursor {
         }
         let observed = goal
             .as_ref()
+            .filter(|goal| goal.parsed_status() != Some(GoalStatus::Stopped))
             .map(|goal| project(goal, Utc::now()))
             .transpose()?;
         if observed == self.delivered {
@@ -217,6 +218,7 @@ fn project(goal: &GoalDocument, now: DateTime<Utc>) -> Result<Value> {
         GoalStatus::UsageLimited => "usage_limited",
         GoalStatus::BudgetLimited => "budget_limited",
         GoalStatus::Complete => "complete",
+        GoalStatus::Stopped => "cleared",
     };
     let elapsed_ms = (goal.current_active_time_seconds(now) as u64).saturating_mul(1000);
     let mut update = base_update(
@@ -301,7 +303,7 @@ mod tests {
         use std::sync::Arc;
         let directory = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(directory.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

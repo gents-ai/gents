@@ -21,12 +21,12 @@ structure StepCase where
   name : String
   cause : CausalHop.Cause
   ownPredecessorHop : Nat
-  maxRequestHop : Nat
+  maxRequestHop : Option Nat
 
 
 structure ChainCase where
   name : String
-  maxRequestHop : Nat
+  maxRequestHop : Option Nat
   steps : List CausalHop.Step
 
 def stepCases : List StepCase :=
@@ -36,20 +36,22 @@ def stepCases : List StepCase :=
       CausalHop.defaultMaxRequestHop⟩
   , ⟨"cross_session_keeps_a_higher_own_hop", .crossSession 1, 5, CausalHop.defaultMaxRequestHop⟩
   , ⟨"continuation_copies_hop", .continuation, 3, CausalHop.defaultMaxRequestHop⟩
-  , ⟨"cross_session_reaching_bound_is_admitted", .crossSession 7, 0,
-      CausalHop.defaultMaxRequestHop⟩
-  , ⟨"cross_session_beyond_bound_is_refused", .crossSession 8, 0,
-      CausalHop.defaultMaxRequestHop⟩
+  , ⟨"cross_session_reaching_configured_bound_is_admitted", .crossSession 7, 0,
+      some 8⟩
+  , ⟨"cross_session_beyond_configured_bound_is_refused", .crossSession 8, 0,
+      some 8⟩
   , ⟨"completion_wake_keeps_caller_hop", .returnEdge, 3, CausalHop.defaultMaxRequestHop⟩
   , ⟨"completion_wake_at_bound_stays_admitted", .returnEdge, 8,
       CausalHop.defaultMaxRequestHop⟩
   , ⟨"completion_wake_into_refused_session_is_refused", .returnEdge, 9,
-      CausalHop.defaultMaxRequestHop⟩
+      some 8⟩
   , ⟨"continuation_at_bound_stays_admitted", .continuation, 8, CausalHop.defaultMaxRequestHop⟩
   , ⟨"plugin_job_completion", .continuation, 4, CausalHop.defaultMaxRequestHop⟩
-  , ⟨"zero_bound_admits_root", .root, 0, 0⟩
-  , ⟨"zero_bound_refuses_first_send", .crossSession 0, 0, 0⟩
-  , ⟨"configured_bound_refuses_past_target_limit", .crossSession 2, 0, 2⟩ ]
+  , ⟨"zero_bound_admits_root", .root, 0, some 0⟩
+  , ⟨"zero_bound_refuses_first_send", .crossSession 0, 0, some 0⟩
+  , ⟨"configured_bound_refuses_past_target_limit", .crossSession 2, 0, some 2⟩
+  , ⟨"unlimited_default_admits_deep_hop", .crossSession 99, 0,
+      CausalHop.defaultMaxRequestHop⟩ ]
 
 
 def pingPongSteps (n : Nat) : List CausalHop.Step :=
@@ -58,16 +60,18 @@ def pingPongSteps (n : Nat) : List CausalHop.Step :=
 
 
 def chainCases : List ChainCase :=
-  [ ⟨"ping_pong_is_cut_at_default_bound", CausalHop.defaultMaxRequestHop, pingPongSteps 9⟩
-  , ⟨"message_loop_is_cut_at_default_bound", CausalHop.defaultMaxRequestHop,
+  [ ⟨"ping_pong_is_cut_at_configured_bound", some 8, pingPongSteps 9⟩
+  , ⟨"message_loop_is_cut_at_configured_bound", some 8,
       [.cross 0, .cont, .cross 0, .cross 1, .cont, .cross 2, .cross 0, .cross 3,
         .cont, .cross 4, .cross 5, .cross 6]⟩
-  , ⟨"continuations_never_extend_a_chain", 1, [.cross 0, .cont, .cont, .cont]⟩ ]
+  , ⟨"continuations_never_extend_a_chain", some 1, [.cross 0, .cont, .cont, .cont]⟩
+  , ⟨"unlimited_default_admits_open_chain", CausalHop.defaultMaxRequestHop,
+      pingPongSteps 100⟩ ]
 
 
 structure CallCase where
   name : String
-  maxRequestHop : Nat
+  maxRequestHop : Option Nat
   events : List CausalHop.Event
 
 
@@ -77,8 +81,8 @@ def pingPongWithReturns : Nat → List CausalHop.Event
       (if n % 2 == 0 then [.aSendsB, .returnToA] else [.bSendsA, .returnToB])
 
 def callCases : List CallCase :=
-  [ ⟨"sequential_calls_to_one_callee_stay_at_depth_one", 1, CausalHop.sequentialCalls 12⟩
-  , ⟨"ping_pong_with_returns_is_cut_at_default_bound", CausalHop.defaultMaxRequestHop,
+  [ ⟨"sequential_calls_to_one_callee_stay_at_depth_one", some 1, CausalHop.sequentialCalls 12⟩
+  , ⟨"ping_pong_with_returns_is_cut_at_configured_bound", some 8,
       pingPongWithReturns 9⟩ ]
 
 
@@ -92,10 +96,14 @@ def eventString : CausalHop.Event → String
   | .returnToA => "return_to_a"
   | .returnToB => "return_to_b"
 
+def optionalNatJson : Option Nat → String
+  | none => "null"
+  | some value => toString value
+
 def callCaseJson (c : CallCase) : String :=
   let hops := callHops ⟨0, 0⟩ c.events
   "{\"name\":" ++ jsonString c.name
-    ++ ",\"max_request_hop\":" ++ toString c.maxRequestHop
+    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
     ++ ",\"events\":" ++ jsonArray (c.events.map (jsonString ∘ eventString))
     ++ ",\"expected_hops\":" ++ jsonArray (hops.map toString)
     ++ ",\"expected_admitted\":"
@@ -107,7 +115,7 @@ def stepCaseJson (c : StepCase) : String :=
     ++ ",\"cause\":" ++ jsonString (causeString c.cause)
     ++ ",\"cause_hop\":" ++ causeHopJson c.cause
     ++ ",\"own_predecessor_hop\":" ++ toString c.ownPredecessorHop
-    ++ ",\"max_request_hop\":" ++ toString c.maxRequestHop
+    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
     ++ ",\"expected_hop\":" ++ toString hop
     ++ ",\"expected_admitted\":" ++ toString (CausalHop.admitHop c.maxRequestHop hop) ++ "}"
 
@@ -125,7 +133,7 @@ def stepJson : CausalHop.Step → String
 def chainCaseJson (c : ChainCase) : String :=
   let hops := chainHops 0 c.steps
   "{\"name\":" ++ jsonString c.name
-    ++ ",\"max_request_hop\":" ++ toString c.maxRequestHop
+    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
     ++ ",\"steps\":" ++ jsonArray (c.steps.map stepJson)
     ++ ",\"expected_hops\":" ++ jsonArray (hops.map toString)
     ++ ",\"expected_admitted\":"
@@ -209,7 +217,7 @@ def sessionTargetCaseJson (c : SessionTargetCase) : String :=
       c.sameRequester c.sameNode c.caused c.allowedTarget) ++ "}"
 
 def contractJson : String :=
-  "{\"default_max_request_hop\":" ++ toString CausalHop.defaultMaxRequestHop
+  "{\"default_max_request_hop\":" ++ optionalNatJson CausalHop.defaultMaxRequestHop
     ++ ",\"step_cases\":" ++ jsonArray (stepCases.map stepCaseJson)
     ++ ",\"chain_cases\":" ++ jsonArray (chainCases.map chainCaseJson)
     ++ ",\"call_cases\":" ++ jsonArray (callCases.map callCaseJson)
@@ -244,8 +252,8 @@ theorem ping_pong_fixture_matches_model :
 theorem call_fixtures_match_the_bound :
     (callHops ⟨0, 0⟩ (CausalHop.sequentialCalls 12)).all (· ≤ 1) = true ∧
     (callHops ⟨0, 0⟩ (pingPongWithReturns 9)).filter
-        (fun hop => !CausalHop.admitHop CausalHop.defaultMaxRequestHop hop) =
-      [CausalHop.defaultMaxRequestHop + 1] := by
+        (fun hop => !CausalHop.admitHop (some 8) hop) =
+      [9] := by
   native_decide
 
 

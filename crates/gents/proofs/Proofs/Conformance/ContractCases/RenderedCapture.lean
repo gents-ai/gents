@@ -69,6 +69,7 @@ structure RenderedCaptureStorageCase where
   /-- The block references the row's manifest document (ref 1 / witness 10)
   names, read out of the row's store; empty for the other encodings. -/
   manifestBlocks : List RenderedCaptureManifestBlock
+  manifestRoot : Option RenderedCaptureManifestBlock
   decodedRequest : Option Nat
   sendPermitted : Bool
   deriving Repr
@@ -84,8 +85,17 @@ private def storageCase (name encoding : String) (store : ArtifactStore)
     (request : Nat) (baseWitness : Option Nat) (baseDepth maxDepth : Nat)
     (baseVerified : Bool) : RenderedCaptureStorageCase :=
   let decoded := resolveRequest store (maxDepth + 1) 1 10
+  let root := if encoding == "manifest_tree" then
+    match manifestBlocks store with
+    | [root] => some root
+    | _ => none
+    else none
+  let children := match root with
+    | some block => manifestBlocks (fun ref => if ref = 1 then store block.ref else store ref)
+    | none => manifestBlocks store
   { name, encoding, request, baseWitness, baseDepth, maxDepth, baseVerified
-  , manifestBlocks := manifestBlocks store
+  , manifestBlocks := children
+  , manifestRoot := root
   , decodedRequest := decoded.map CanonicalRequest.value
   , sendPermitted := decoded == some { value := request }
   }
@@ -131,6 +141,23 @@ def renderedCaptureStorageCases : List RenderedCaptureStorageCase :=
         else if ref = 2 then some ⟨43, .full [109]⟩
         else if ref = 3 then some ⟨44, .full []⟩ else none)
       109 none 0 2 false
+  , storageCase "shared_manifest_tree_is_lossless" "manifest_tree"
+      (fun ref => if ref = 1 then some ⟨10, .manifest [(4, 44)]⟩
+        else if ref = 4 then some ⟨44, .manifest [(2, 41), (3, 42)]⟩
+        else if ref = 2 then some ⟨41, .full [110]⟩
+        else if ref = 3 then some ⟨42, .full []⟩ else none)
+      110 none 0 8 false
+  , storageCase "shared_manifest_changed_node_blocks_send" "manifest_tree"
+      (fun ref => if ref = 1 then some ⟨10, .manifest [(4, 44)]⟩
+        else if ref = 4 then some ⟨999, .manifest [(2, 41), (3, 42)]⟩
+        else if ref = 2 then some ⟨41, .full [111]⟩
+        else if ref = 3 then some ⟨42, .full []⟩ else none)
+      111 none 0 8 false
+  , storageCase "shared_manifest_missing_leaf_blocks_send" "manifest_tree"
+      (fun ref => if ref = 1 then some ⟨10, .manifest [(4, 44)]⟩
+        else if ref = 4 then some ⟨44, .manifest [(2, 41), (3, 42)]⟩
+        else if ref = 2 then some ⟨41, .full [112]⟩ else none)
+      112 none 0 8 false
   ]
 
 theorem renderedCaptureStorageCases_pinned :
@@ -146,6 +173,9 @@ theorem renderedCaptureStorageCases_pinned :
       , ("manifest_block_witness_mismatch_blocks_send", none, false)
       , ("empty_manifest_decode_fails_blocks_send", none, false)
       , ("manifest_over_fuel_blocks_send", none, false)
+      , ("shared_manifest_tree_is_lossless", some 110, true)
+      , ("shared_manifest_changed_node_blocks_send", none, false)
+      , ("shared_manifest_missing_leaf_blocks_send", none, false)
       ] := by
   rfl
 

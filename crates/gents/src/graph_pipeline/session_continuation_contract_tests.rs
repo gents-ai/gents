@@ -331,7 +331,13 @@ async fn native_same_behavior_graph_continues_session_with_distinct_stage_roots(
     use crate::identity::NodeIdentity;
     let identity = super::super::runtime::graph_test_identity();
     let owner = identity.did();
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     for collection in [
         "ContinueInput",

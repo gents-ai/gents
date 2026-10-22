@@ -118,6 +118,18 @@ theorem full_resolves_exactly (store : ArtifactStore) (ref witness : Nat)
     resolveRequest store 1 ref witness = some request := by
   simp [resolveRequest, resolveBytes, h]
 
+/-- This witness covers two manifest levels and one leaf; it is not a general
+height theorem for the native reader’s eight-level bound. -/
+theorem nested_manifest_resolves_exactly (store : ArtifactStore)
+    (root rootWitness branch branchWitness leaf leafWitness : Nat)
+    (request : CanonicalRequest)
+    (hRoot : store root = some ⟨rootWitness, .manifest [(branch, branchWitness)]⟩)
+    (hBranch : store branch = some ⟨branchWitness, .manifest [(leaf, leafWitness)]⟩)
+    (hLeaf : store leaf = some ⟨leafWitness, .full (canonicalBytes request)⟩) :
+    resolveRequest store 5 root rootWitness = some request := by
+  simp [resolveRequest, resolveBytes, resolveBlocks, hRoot, hBranch, hLeaf,
+    canonical_bytes_roundtrip]
+
 theorem witness_mismatch_fails_closed (store : ArtifactStore) (ref expected actual : Nat)
     (encoded : StoredRequest) (hNe : actual ≠ expected)
     (h : store ref = some { commit := actual, encoded }) :

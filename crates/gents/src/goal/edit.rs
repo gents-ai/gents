@@ -65,8 +65,7 @@ pub(super) async fn stage_goal_edit(
         return Ok(None);
     };
     let status = current.parsed_status();
-    if current.doc_id != observed.doc_id
-        || current.goal_id != observed.goal_id
+    if !same_goal_assignment(&current, observed)
         || !status.is_some_and(|status| origin.can_edit_status(status))
         || observed.parsed_status() != status
         || current.continuation_sequence() != observed.continuation_sequence()

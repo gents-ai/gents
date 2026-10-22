@@ -75,6 +75,8 @@ export function applySessionLiveDelta(
     delta.outcome === "snapshotRequired" ||
     delta.requestId !== current.latestRequestId ||
     !current.projectionRevision ||
+    delta.revision.provenanceVersion !==
+      current.projectionRevision.provenanceVersion ||
     !acceptsLiveCursor(
       current.liveCursor,
       delta.liveCursor,

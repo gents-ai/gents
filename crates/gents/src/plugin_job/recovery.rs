@@ -17,9 +17,11 @@ use crate::graphql::escape_graphql_string;
 use crate::plugin::store::{parse_coordinate, read_record};
 use crate::request_binding::load_agent_request_by_doc_id;
 
-/// Lean `PluginJobRow` for one running job row, less `running`.
+/// Lean `PluginJobRow` for one job row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryFacts {
+    pub running: bool,
+    pub session_stopped: bool,
     pub terminal_children: u32,
     pub observed: u32,
     pub live: u32,
@@ -28,7 +30,7 @@ pub struct RecoveryFacts {
     pub available: Result<(), Refusal>,
 }
 
-/// What one application of Lean's `pluginJobRecover` does to a running row.
+/// What one application of Lean's `pluginJobRecover` does to a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickAction {
     Untouched,
@@ -36,10 +38,17 @@ pub enum TickAction {
     Step,
 }
 
-/// Lean `pluginJobRecover`, first application: a row past its deadline,
-/// unavailable or stalled is killed and fails closed; one with unobserved
-/// terminals is re-driven one step; any other row is left alone.
+/// Lean `pluginJobRecover`, first application: a row that is no longer running
+/// is left alone; a stopped session cancels its job; a row past its deadline,
+/// unavailable or stalled is failed closed; one with unobserved terminals is
+/// re-driven one step; any other row is left alone.
 pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
+    if !facts.running {
+        return TickAction::Untouched;
+    }
+    if facts.session_stopped {
+        return TickAction::Kill(KillCause::Stop);
+    }
     if facts.deadline_expired {
         return TickAction::Kill(KillCause::Deadline);
     }
@@ -59,6 +68,12 @@ pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
     } else {
         TickAction::Untouched
     }
+}
+
+/// Lean `pluginJobStepInvocationAllowed`: stale observers do not invoke a
+/// guest after the canonical job row has already reached a terminal state.
+pub fn step_invocation_allowed(row_running: bool, session_stopped: bool) -> bool {
+    row_running && !session_stopped
 }
 
 /// Lean `pluginJobRecoverySweep`: one tick per running local job row, that is
@@ -161,27 +176,43 @@ async fn facts_of(
 ) -> Result<(StepRow, RecoveryFacts)> {
     let runtime = driver.runtime();
     let row = read_step_row(access, row_doc_id).await?;
-    let caller = load_agent_request_by_doc_id(&runtime.node, request_doc_id)
-        .await?
-        .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?;
-    let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
-    let available = match parse_coordinate(&pin.plugin_ref)
-        .ok()
-        .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok())
-    {
-        Some(installed)
-            if settings.is_some() && engine_guard(&runtime.home, &installed).is_ok() =>
+    let lifecycle = load_lifecycle(access, row_doc_id).await?;
+    let session_stopped = crate::session::session_is_stopped(
+        &runtime.node,
+        lifecycle.node_did(),
+        lifecycle.session_id(),
+        lifecycle.requester_did(),
+    )
+    .await?;
+    let available = if session_stopped {
+        Err(Refusal::NotAvailable)
+    } else {
+        let caller = load_agent_request_by_doc_id(&runtime.node, request_doc_id)
+            .await?
+            .with_context(|| {
+                format!("the caller request of job row {row_doc_id} does not exist")
+            })?;
+        let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
+        match parse_coordinate(&pin.plugin_ref)
+            .ok()
+            .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok())
         {
-            if installed.digest == pin.engine_digest {
-                Ok(())
-            } else {
-                Err(Refusal::EngineChanged)
+            Some(installed)
+                if settings.is_some() && engine_guard(&runtime.home, &installed).is_ok() =>
+            {
+                if installed.digest == pin.engine_digest {
+                    Ok(())
+                } else {
+                    Err(Refusal::EngineChanged)
+                }
             }
+            _ => Err(Refusal::NotAvailable),
         }
-        _ => Err(Refusal::NotAvailable),
     };
     let deadline = pin.adopted_at + u64::from(pin.ceiling_at_pin.max_wall_secs) * 1000;
     let facts = RecoveryFacts {
+        running: lifecycle.is_running(),
+        session_stopped,
         terminal_children: terminal_count(&row) as u32,
         observed: row.observed_terminal,
         live: live_count(&row) as u32,
@@ -251,7 +282,7 @@ mod tests {
     use super::*;
     use crate::plugin_job::driver::tests::{start_running, stepper, write_step_tools, Stepper};
     use crate::plugin_job::driver::StepOutcome;
-    use crate::plugin_job::input::tests::{request, NODE_DID};
+    use crate::plugin_job::input::tests::{node_did, request};
     use crate::plugin_job::keys::{job_session_id, job_spawn_key};
     use crate::plugin_job::records::read_pin;
     use gents_protocol::job::JobState;
@@ -497,9 +528,13 @@ mod tests {
         let driver = driver_of(&step);
         assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 0);
         let registry = crate::hook::BackgroundExecutionRegistry::default();
-        crate::periodic_recovery::run_periodic_recovery_sweeps(&step.job.node, NODE_DID, &registry)
-            .await
-            .unwrap();
+        crate::periodic_recovery::run_periodic_recovery_sweeps(
+            &step.job.node,
+            node_did(),
+            &registry,
+        )
+        .await
+        .unwrap();
         settle_time().await;
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         assert_eq!(step.progress(&step.row).await.revision, 1);

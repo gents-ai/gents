@@ -90,6 +90,16 @@ pub mod xai_oauth_refresh;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    /// Fixtures that reopen a store must retain its original signing identity.
+    pub(crate) fn node_builder() -> defra_node::NodeBuilder {
+        use crate::NodeIdentity as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let identity =
+            crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
+    }
+
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
         crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
         crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,
@@ -507,9 +517,9 @@ pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use openai_wire::OpenAiWireApi;
 pub use p2p_observability::{
-    JsonP2pSyncStatusAdapter, P2pPeerBacklogSnapshot, P2pPushBacklogSnapshot,
-    P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot, P2pSyncStatusAdapter,
-    P2pSyncStatusSnapshot,
+    JsonP2pSyncStatusAdapter, P2pInboundClassSnapshot, P2pPeerBacklogSnapshot,
+    P2pPeerFetchSnapshot, P2pPushBacklogSnapshot, P2pPushRetryMarkerSnapshot,
+    P2pRequestDispatchSnapshot, P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
 pub use periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,

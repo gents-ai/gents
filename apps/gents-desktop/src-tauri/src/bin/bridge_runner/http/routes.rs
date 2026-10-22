@@ -738,6 +738,21 @@ pub(super) fn handle_request(
                 runtime.block_on(run_task_config(fixture.desktop_core().as_ref(), request))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
+        ("POST", "/desktop/tool/background") => {
+            let background: gents_desktop_bridge::types::DesktopBackgroundToolRequest =
+                decode(&request.body, "decoding background tool request")?;
+            let core = fixture.desktop_core();
+            let result = runtime
+                .block_on(gents::background_tools::request_foreground_backgrounding(
+                    &gents::config_client::ConfigAccess::local(core.node_arc()),
+                    &background.node_did,
+                    &background.session_id,
+                    &background.request_id,
+                    &background.tool_call_id,
+                ))
+                .map_err(|error| anyhow!("{error}"))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
         ("POST", "/desktop/interrupt/request") => {
             let request =
                 decode::<DesktopInterruptRequest>(&request.body, "decoding interrupt request")?;

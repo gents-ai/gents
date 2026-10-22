@@ -1507,6 +1507,7 @@ mod tests {
                     agent_id: "projection-behavior".into(),
                     created_at: "2026-01-01T00:00:00Z".into(),
                     closed_at: None,
+                    stopped_at: None,
                     title: None,
                     tags: Vec::new(),
                     provenance: None,

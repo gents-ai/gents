@@ -7,6 +7,8 @@ use crate::session::SessionTitle;
 
 mod captured_context;
 pub use captured_context::*;
+#[cfg(test)]
+mod tests;
 
 pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 1;
 pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
@@ -36,6 +38,9 @@ pub struct RequestInput {
     /// Goal/parent identities remain in the existing signed request lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_continuation: Option<GoalContinuationInput>,
+    /// Signed assignment attribution; authorization remains with admission and ACP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_assignment: Option<GoalAssignmentInput>,
     /// Submitted snapshots, distinct from authored prose and configuration grants.
     #[serde(
         default,
@@ -53,8 +58,34 @@ impl RequestInput {
             || runtime_version == Some(u64::from(REQUEST_INPUT_CONTRACT_VERSION))
     }
 
+    pub fn goal_assignment_compatible(&self, runtime_version: Option<u64>) -> bool {
+        self.goal_assignment.is_none()
+            || runtime_version == Some(u64::from(crate::goal_control::GOAL_STOP_CONTRACT_VERSION))
+    }
+
     pub fn has_authored_input(&self, prose: &str) -> bool {
         !prose.trim().is_empty() || !self.captured_context.is_empty()
+    }
+
+    /// A retry or queue edit is a new physical request in the same session.
+    /// Resolve an opening request's self reference before signing the successor.
+    pub fn reissued(&self, source_doc_id: &str) -> Self {
+        Self {
+            goal_assignment: self
+                .goal_assignment
+                .as_ref()
+                .map(|reference| reference.continuation(source_doc_id)),
+            ..self.clone()
+        }
+    }
+
+    pub fn for_fresh_session(&self) -> Self {
+        Self {
+            queue: None,
+            goal_continuation: None,
+            goal_assignment: None,
+            ..self.clone()
+        }
     }
 
     pub fn authored_message(&self, prose: &str) -> anyhow::Result<crate::message::Message> {
@@ -75,12 +106,41 @@ impl RequestInput {
         &self,
         queue: RequestQueue,
         goal_continuation: Option<GoalContinuationInput>,
+        parent_doc_id: &str,
     ) -> Self {
         Self {
             cwd: self.cwd.clone(),
             queue: Some(queue),
             goal_continuation,
+            goal_assignment: self
+                .goal_assignment
+                .as_ref()
+                .map(|reference| reference.continuation(parent_doc_id)),
             ..Self::default()
+        }
+    }
+}
+
+/// The opening invocation uses no root to denote itself without a recursive
+/// document hash. Later invocations name the authenticated opening document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalAssignmentInput {
+    pub goal_id: String,
+    #[serde(default)]
+    pub root_request_doc_id: Option<String>,
+}
+
+impl GoalAssignmentInput {
+    pub fn continuation(&self, parent_doc_id: &str) -> Self {
+        Self {
+            goal_id: self.goal_id.clone(),
+            root_request_doc_id: Some(
+                self.root_request_doc_id
+                    .as_deref()
+                    .unwrap_or(parent_doc_id)
+                    .to_owned(),
+            ),
         }
     }
 }

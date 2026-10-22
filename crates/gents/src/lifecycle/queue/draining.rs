@@ -18,6 +18,28 @@ pub(crate) async fn drain_automated_wakeups_in_txn(
     .await
 }
 
+pub(crate) async fn drain_all_pending_session_requests_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    reason: &str,
+) -> Result<Vec<String>> {
+    drain_pending_session_requests_where_in_txn(
+        txn,
+        session_id,
+        node_did,
+        requester_did,
+        reason,
+        is_any_pending_request,
+    )
+    .await
+}
+
+fn is_any_pending_request(_: &AgentRequestRow) -> bool {
+    true
+}
+
 fn is_scheduled_automated_wakeup(row: &AgentRequestRow) -> bool {
     row.execution_origin.as_deref() == Some("scheduled") && row_is_automated_wakeup(row)
 }

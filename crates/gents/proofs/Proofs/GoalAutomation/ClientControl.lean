@@ -22,6 +22,7 @@ inductive Operation where
   | edit (fields : Edit.Fields)
   | pause
   | resume
+  | stop
   deriving DecidableEq, Repr
 
 structure Facts where
@@ -58,6 +59,7 @@ def apply? (s : Snapshot) (expected : Revision) (nextComposite : String) (operat
           objective := edited.objective
           execution := { s.execution with tokenBudget := edited.budget.map Int.toNat } }
   | .pause => (Goals.step? s.execution.goal .pause).map (withGoal s next)
+  | .stop => (Goals.step? s.execution.goal .stop).map (withGoal s next)
   | .resume =>
       if facts.unfinishedRequest then
         if s.execution.goal.status = .paused then
@@ -114,6 +116,23 @@ theorem pause_preserves_request_owner (s post : Snapshot) (expected : Revision) 
       cases h
       exact ⟨rfl, rfl, rfl⟩
 
+theorem stop_preserves_request_owner (s post : Snapshot) (expected : Revision) (next : String)
+    (facts : Facts) (h : apply? s expected next .stop facts = some post) :
+    post.execution.latestRequest = s.execution.latestRequest ∧
+      post.execution.sequence = s.execution.sequence ∧
+      post.execution.children = s.execution.children ∧
+      post.execution.tokensUsed = s.execution.tokensUsed ∧
+      post.execution.tokenBudget = s.execution.tokenBudget := by
+  unfold apply? at h
+  split at h
+  · contradiction
+  · cases hg : Goals.step? s.execution.goal .stop with
+    | none => simp [hg] at h
+    | some goal =>
+      simp only [hg, Option.map_some, Option.some.injEq] at h
+      cases h
+      exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+
 theorem busy_resume_preserves_request_owner (s post : Snapshot)
     (expected : Revision) (next : String) (facts : Facts) (active : facts.unfinishedRequest = true)
     (h : apply? s expected next .resume facts = some post) :
@@ -161,6 +180,14 @@ theorem preserves_document_identity (s post : Snapshot) (expected : Revision) (n
       | none => simp [hp] at h
       | some goal =>
         simp only [hp, Option.map_some, Option.some.injEq] at h
+        cases h
+        rfl
+    | stop =>
+      dsimp at h
+      cases hs : Goals.step? s.execution.goal .stop with
+      | none => simp [hs] at h
+      | some goal =>
+        simp only [hs, Option.map_some, Option.some.injEq] at h
         cases h
         rfl
     | resume =>

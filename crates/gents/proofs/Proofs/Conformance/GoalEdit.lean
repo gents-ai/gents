@@ -48,13 +48,15 @@ private def commonCases : List Case :=
       ⟨some "ship", some 100⟩⟩
   , ⟨"complete_observation", {base with status := .complete}, {base with status := .complete},
       ⟨some "verify", none⟩⟩
-  ] ++ ([Goals.Status.paused, .blocked, .usageLimited, .budgetLimited, .complete].map fun status =>
+  , ⟨"stopped_observation", {base with status := .stopped}, {base with status := .stopped},
+      ⟨some "verify", none⟩⟩
+  ] ++ ([Goals.Status.paused, .blocked, .usageLimited, .budgetLimited, .complete, .stopped].map fun status =>
     ⟨"inactive_" ++ status.toDefraDB, base, {base with status}, ⟨some "verify", none⟩⟩)
 
 def cases : List (Origin × Case) :=
   [Origin.agent, .client].flatMap fun origin => commonCases.map (origin, ·)
 
-example : cases.length = 62 := by native_decide
+example : cases.length = 66 := by native_decide
 
 example : apply? base base ⟨some "verify", none⟩ = some {base with objective := "verify"} := by native_decide
 example : apply? base base ⟨some "  ship  ", some 100⟩ = some base := by native_decide

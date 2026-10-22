@@ -1,6 +1,5 @@
 use super::super::*;
 use crate::client::schema::ensure_runtime_schemas;
-use defra_node::NodeBuilder;
 use gents_protocol::schemas::AGENT_MESSAGE_NAME;
 use std::sync::Arc;
 
@@ -126,7 +125,12 @@ fn snapshot_request_seeds_use_bounded_trigger_and_physical_head_queries() {
 
 #[tokio::test]
 async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(&node).await.expect("schemas");
     let mut docs = Vec::new();
     for index in 0..24 {
@@ -597,7 +601,12 @@ fn access_query_data_preserves_response_errors_and_null_data() {
 
 #[tokio::test]
 async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -611,7 +620,12 @@ async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
 
 #[tokio::test]
 async fn fetch_doc_patch_empty_input_is_no_op() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -625,7 +639,12 @@ async fn fetch_doc_patch_empty_input_is_no_op() {
 
 #[tokio::test]
 async fn trigger_patch_counts_physical_documents_for_mixed_present_and_missing_ids() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -670,7 +689,12 @@ async fn trigger_patch_counts_physical_documents_for_mixed_present_and_missing_i
 
 #[tokio::test]
 async fn fetch_doc_patch_unknown_collection_errors() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -716,7 +740,12 @@ fn node_runtime_queries_cannot_reintroduce_readiness_authority() {
 
 #[tokio::test]
 async fn load_node_runtimes_hydrates_executor_capacity_and_queue_depth() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -747,7 +776,12 @@ async fn load_node_runtimes_hydrates_executor_capacity_and_queue_depth() {
 
 #[tokio::test]
 async fn load_agent_tool_calls_hydrates_background_projection_fields() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -787,7 +821,12 @@ async fn load_agent_tool_calls_hydrates_job_pin_and_progress() {
     use gents::config_client::ConfigAccess;
     use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress, JobState};
 
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
@@ -872,7 +911,12 @@ async fn load_agent_tool_calls_hydrates_job_pin_and_progress() {
 
 #[tokio::test]
 async fn load_node_scoped_snapshot_excludes_other_nodes() {
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");

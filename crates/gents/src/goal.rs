@@ -10,18 +10,31 @@ mod claimed_publication;
 mod client_control;
 mod client_submission;
 mod edit;
+mod first_request_binding;
+mod history;
 mod observation;
 mod operator_resume;
 mod readiness_gate;
+mod request_assignment;
 mod request_head;
 mod reset_resume;
+mod tool_context;
 pub(crate) use claimed_publication::{
     publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
 };
 pub(crate) use client_control::{prepare_goal_control, stage_goal_control};
 pub use client_submission::submit_session_goal_control;
 pub(crate) use edit::{edit_active_goal, GoalEdit};
-pub use observation::load_session_goal_observation;
+pub use first_request_binding::task_assignment_goal_id;
+pub(crate) use first_request_binding::{
+    bind_goal_first_request_in_txn, validate_task_goal_identity_in_txn,
+};
+pub(crate) use history::{load_goal_versions_for_session, GoalVersion};
+pub use observation::{
+    bind_goal_input, load_session_goal_observation, load_session_goal_observation_state,
+    load_session_goal_observation_state_in_txn, prepare_goal_input, prepare_goal_input_in_txn,
+    SessionGoalObservationState,
+};
 pub(crate) use observation::{reconcile_goal_observations, SOURCES as GOAL_OBSERVATION_SOURCES};
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
@@ -33,6 +46,10 @@ pub use readiness_gate::{
     GoalClaimedDecision, GoalContinuationFacts, GoalFailureCause, GoalGatedDecision,
     ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX,
 };
+pub(crate) use request_assignment::{
+    latest_assignment_goals, load_request_assignment, load_request_assignment_in_txn,
+    load_request_assignments_in_txn, RequestAssignmentObservation, RequestAssignmentScope,
+};
 #[cfg(test)]
 pub(crate) use request_head::assignment_allows;
 pub(crate) use request_head::{
@@ -40,6 +57,39 @@ pub(crate) use request_head::{
     latest_authenticated_session_request, latest_goal_request, verify_goal_continuation_edge,
 };
 pub use reset_resume::resume_at_reset;
+pub(crate) use tool_context::load_goal_tool_context;
+use tool_context::same_goal_assignment;
+
+/// Resume only a paused Goal; an interrupted/claimed execution must settle
+/// before a fresh continuation can be staged.
+pub(crate) async fn stage_session_resume_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    identity: &dyn crate::identity::NodeIdentity,
+    node_did: &str,
+    session_id: &str,
+) -> Result<()> {
+    let requests = request_head::load_session_requests(txn, node_did, session_id).await?;
+    anyhow::ensure!(
+        !requests
+            .iter()
+            .any(|row| row.lifecycle_state.is_some_and(|state| matches!(
+                state,
+                RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+            ))),
+        "session work is still settling; retry resume after the interrupted request terminates"
+    );
+    let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
+        return Ok(());
+    };
+    let state = goal.state().context("Goal has an unknown status")?;
+    if state.status != GoalStatus::Paused {
+        return Ok(());
+    }
+    let prepared = client_control::prepare_goal_resume(goal, state, &requests)
+        .map_err(|error| anyhow::anyhow!("{error}; resume was not applied"))?;
+    client_control::stage_goal_control(txn, identity, prepared).await?;
+    Ok(())
+}
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
@@ -233,6 +283,7 @@ pub enum GoalStatus {
     UsageLimited,
     BudgetLimited,
     Complete,
+    Stopped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +333,7 @@ pub enum GoalAuditObservation {
 pub enum GoalAction {
     Pause,
     Resume,
+    Stop,
     Complete,
     BlockedAudit(GoalAuditObservation),
     OperatorBlock,
@@ -310,10 +362,14 @@ impl GoalState {
 
     pub fn step(self, action: GoalAction) -> Option<Self> {
         match action {
-            GoalAction::Pause if self.status == GoalStatus::Active => Some(Self {
-                status: GoalStatus::Paused,
-                ..self
-            }),
+            GoalAction::Pause
+                if matches!(self.status, GoalStatus::Active | GoalStatus::BudgetLimited) =>
+            {
+                Some(Self {
+                    status: GoalStatus::Paused,
+                    ..self
+                })
+            }
             GoalAction::Resume
                 if matches!(
                     self.status,
@@ -321,16 +377,32 @@ impl GoalState {
                 ) =>
             {
                 Some(Self {
-                    status: GoalStatus::Active,
+                    status: if self.wrapup_requested && !self.wrapup_completed {
+                        GoalStatus::BudgetLimited
+                    } else {
+                        GoalStatus::Active
+                    },
                     blocked_audits: 0,
                     ..self
                 })
             }
-            GoalAction::Complete if self.status != GoalStatus::Complete => Some(Self {
-                status: GoalStatus::Complete,
-                wrapup_completed: true,
-                ..self
-            }),
+            GoalAction::Complete
+                if !matches!(self.status, GoalStatus::Complete | GoalStatus::Stopped) =>
+            {
+                Some(Self {
+                    status: GoalStatus::Complete,
+                    wrapup_completed: true,
+                    ..self
+                })
+            }
+            GoalAction::Stop
+                if !matches!(self.status, GoalStatus::Complete | GoalStatus::Stopped) =>
+            {
+                Some(Self {
+                    status: GoalStatus::Stopped,
+                    ..self
+                })
+            }
             GoalAction::BlockedAudit(observation) if self.status == GoalStatus::Active => {
                 let blocked_audits = match observation {
                     GoalAuditObservation::SameRequest => self.blocked_audits.max(0),
@@ -458,10 +530,10 @@ pub fn decide_goal_continuation(
             } else {
                 match terminal {
                     GoalRequestTerminal::Completed => GoalDecision::None,
-                    GoalRequestTerminal::Failed
-                    | GoalRequestTerminal::Dead
-                    | GoalRequestTerminal::Interrupted
-                    | GoalRequestTerminal::Superseded => {
+                    GoalRequestTerminal::Interrupted | GoalRequestTerminal::Superseded => {
+                        GoalDecision::Pause
+                    }
+                    GoalRequestTerminal::Failed | GoalRequestTerminal::Dead => {
                         if infrastructure_retries.max(0) < MAX_INFRASTRUCTURE_RETRIES {
                             GoalDecision::Retry
                         } else {
@@ -474,7 +546,8 @@ pub fn decide_goal_continuation(
         GoalStatus::Paused
         | GoalStatus::Blocked
         | GoalStatus::UsageLimited
-        | GoalStatus::Complete => GoalDecision::None,
+        | GoalStatus::Complete
+        | GoalStatus::Stopped => GoalDecision::None,
     }
 }
 
@@ -487,6 +560,7 @@ impl GoalStatus {
             Self::UsageLimited => "usage_limited",
             Self::BudgetLimited => "budget_limited",
             Self::Complete => "complete",
+            Self::Stopped => "stopped",
         }
     }
 
@@ -498,6 +572,7 @@ impl GoalStatus {
             "usage_limited" | "usageLimited" => Some(Self::UsageLimited),
             "budget_limited" | "budgetLimited" => Some(Self::BudgetLimited),
             "complete" => Some(Self::Complete),
+            "stopped" => Some(Self::Stopped),
             _ => None,
         }
     }
@@ -518,6 +593,7 @@ fn operator_action_for_status(current: GoalStatus, target: GoalStatus) -> Option
         GoalStatus::UsageLimited => GoalAction::UsageLimit,
         GoalStatus::BudgetLimited => GoalAction::BudgetExhausted,
         GoalStatus::Complete => GoalAction::Complete,
+        GoalStatus::Stopped => GoalAction::Stop,
     })
 }
 
@@ -936,6 +1012,33 @@ async fn fence_opened_graph_goal_in_txn(
     Ok(())
 }
 
+#[doc(hidden)]
+pub struct GoalCreationIdentity {
+    pub goal_id: String,
+    pub creation_key: String,
+}
+
+/// IDs may contain separators; each component is framed by its UTF-8 byte
+/// length so the client and transaction owner name the same fresh assignment.
+#[doc(hidden)]
+pub fn replacement_goal_identity(
+    node_did: &str,
+    session_id: &str,
+    command_id: &str,
+) -> GoalCreationIdentity {
+    let scope = format!(
+        "{}:{node_did}:{}:{session_id}:{}:{command_id}",
+        node_did.len(),
+        session_id.len(),
+        command_id.len()
+    );
+    GoalCreationIdentity {
+        goal_id: format!("goal-assignment:{scope}"),
+        creation_key: format!("goal-assignment-create:{scope}"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn stage_goal_and_claim(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -944,6 +1047,7 @@ async fn stage_goal_and_claim(
     token_budget: Option<i64>,
     initial_state: GoalState,
     now: &str,
+    identity: Option<&GoalCreationIdentity>,
 ) -> Result<StagedGoal> {
     let create_request = GoalCreateRequest {
         caller: node_did.to_string(),
@@ -962,8 +1066,12 @@ async fn stage_goal_and_claim(
     );
     let fingerprint = goal_creation_fingerprint(&create_request);
     let objective = fingerprint.objective.as_str();
-    let goal_id = deterministic_goal_id(node_did, session_id);
-    let creation_key = deterministic_goal_creation_key(node_did, session_id);
+    let goal_id = identity
+        .map(|identity| identity.goal_id.clone())
+        .unwrap_or_else(|| deterministic_goal_id(node_did, session_id));
+    let creation_key = identity
+        .map(|identity| identity.creation_key.clone())
+        .unwrap_or_else(|| deterministic_goal_creation_key(node_did, session_id));
     let escaped_did = escape_graphql_string(node_did);
     let escaped_session = escape_graphql_string(session_id);
     let response = txn
@@ -1059,7 +1167,7 @@ async fn stage_goal_and_claim(
         "active_started_at",
         status.accrues_active_time().then_some(now),
     );
-    txn.execute(&format!(
+    let created = txn.execute(&format!(
         r#"mutation {{ create_Goal(input: {{
             goal_id: "{}", creation_key: "{}",
             session_id: "{escaped_session}", node_did: "{escaped_did}",
@@ -1081,10 +1189,11 @@ async fn stage_goal_and_claim(
         escape_graphql_string(now),
     ))
     .await?;
+    let doc_id = crate::graphql::created_doc_id(&created, "Goal")?;
     let staged = StagedGoal {
         disposition: StagedGoalDisposition::Created,
         goal: GoalDocument {
-            doc_id: String::new(),
+            doc_id,
             goal_id,
             session_id: session_id.to_string(),
             node_did: node_did.to_string(),
@@ -1124,6 +1233,32 @@ pub async fn create_goal_for_session(
     objective: &str,
     token_budget: Option<i64>,
 ) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
+    create_goal_for_session_inner(node, node_did, session_id, objective, token_budget, None).await
+}
+
+pub(crate) async fn create_goal_for_request(
+    node: &std::sync::Arc<EmbeddedNode>,
+    caller: &gents_protocol::row::AgentRequestRow,
+    objective: &str,
+    token_budget: Option<i64>,
+) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
+    let owner = caller.node_did.as_deref().ok_or_else(|| {
+        CreateGoalForSessionError::Storage(anyhow::anyhow!("Goal tool caller has no owner"))
+    })?;
+    let session = caller.session_id.as_deref().ok_or_else(|| {
+        CreateGoalForSessionError::Storage(anyhow::anyhow!("Goal tool caller has no session"))
+    })?;
+    create_goal_for_session_inner(node, owner, session, objective, token_budget, Some(caller)).await
+}
+
+async fn create_goal_for_session_inner(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    session_id: &str,
+    objective: &str,
+    token_budget: Option<i64>,
+    caller: Option<&gents_protocol::row::AgentRequestRow>,
+) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
     let create_request = GoalCreateRequest {
         caller: node_did.to_string(),
         current_session: session_id.to_string(),
@@ -1152,7 +1287,23 @@ pub async fn create_goal_for_session(
         "goal.create_for_session",
         move |txn| {
             Box::pin(async move {
-                stage_goal_and_claim(
+                let context = if let Some(caller) = caller {
+                    let context = tool_context::load_goal_tool_context_in_txn(
+                        txn, node_did, session_id,
+                        &caller.request_id,
+                        caller.doc_id.as_deref().context("Goal tool caller has no physical identity")?,
+                    ).await?;
+                    anyhow::ensure!(context.can_create(), "Goal creation requires an unassigned caller with no current Goal, or the exact current assignment");
+                    Some(context)
+                } else { None };
+                let identity = if let Some(tool_context::GoalToolContext { assignment: RequestAssignmentObservation::Assigned(goal), .. }) = &context {
+                    let response = txn.execute(&format!(r#"{{ Goal(filter: {{ _docID: {{_eq: "{}"}} }}) {{creation_key}} }}"#,
+                        escape_graphql_string(&goal.doc_id))).await?;
+                    let creation_key = response.pointer("/data/Goal/0/creation_key").and_then(serde_json::Value::as_str)
+                        .filter(|value| !value.is_empty()).context("assigned Goal has no creation identity")?;
+                    Some(GoalCreationIdentity { goal_id: goal.goal_id.clone(), creation_key: creation_key.to_string() })
+                } else { None };
+                let mut staged = stage_goal_and_claim(
                     txn,
                     node_did,
                     session_id,
@@ -1165,8 +1316,21 @@ pub async fn create_goal_for_session(
                         wrapup_completed: false,
                     },
                     &Utc::now().to_rfc3339(),
-                )
-                .await
+                    identity.as_ref(),
+                ).await?;
+                if let Some(context) = context {
+                    if matches!(staged.disposition, StagedGoalDisposition::Created) {
+                        let goal = load_canonical_goal_in_txn(txn, node_did, session_id).await?
+                            .context("created Goal row disappeared before caller binding")?;
+                        bind_goal_first_request_in_txn(txn, &goal,
+                            context.request.doc_id.as_deref().context("Goal tool caller has no physical identity")?,
+                            context.request.input.as_ref().and_then(|input| input.goal_assignment.as_ref()),
+                        ).await?;
+                        staged.goal = load_canonical_goal_in_txn(txn, node_did, session_id).await?
+                            .context("bound Goal row disappeared")?;
+                    }
+                }
+                Ok(staged)
             })
         },
     )
@@ -1174,16 +1338,24 @@ pub async fn create_goal_for_session(
 
     match result {
         Ok(outcome) => {
-            let goal = load_canonical_goal(node, node_did, session_id)
-                .await
-                .map_err(CreateGoalForSessionError::Storage)?
-                .context("committed Goal row not found")
-                .map_err(CreateGoalForSessionError::Storage)?;
+            let goal = if caller.is_some() {
+                outcome.goal
+            } else {
+                load_canonical_goal(node, node_did, session_id)
+                    .await
+                    .map_err(CreateGoalForSessionError::Storage)?
+                    .context("committed Goal row not found")
+                    .map_err(CreateGoalForSessionError::Storage)?
+            };
             Ok(match outcome.disposition {
                 StagedGoalDisposition::Created => CreateGoalForSessionOutcome::Created(goal),
                 StagedGoalDisposition::Idempotent => CreateGoalForSessionOutcome::Idempotent(goal),
             })
         }
+        Err(error) if caller.is_some() => match error.downcast::<CreateGoalForSessionError>() {
+            Ok(error) => Err(error),
+            Err(error) => Err(CreateGoalForSessionError::Storage(error)),
+        },
         Err(error) => {
             if let Some(existing) = load_canonical_goal(node, node_did, session_id)
                 .await
@@ -1417,6 +1589,7 @@ async fn stage_goal_backed_request(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
+    identity: Option<&GoalCreationIdentity>,
 ) -> Result<StagedGoalBackedRequest> {
     let objective = objective.trim();
     anyhow::ensure!(!objective.is_empty(), "goal objective must be non-empty");
@@ -1447,6 +1620,7 @@ async fn stage_goal_backed_request(
             wrapup_completed: false,
         },
         &Utc::now().to_rfc3339(),
+        identity,
     )
     .await?;
     let mut submission_state = goal_submission_step(
@@ -1461,7 +1635,7 @@ async fn stage_goal_backed_request(
     let existing = txn
         .execute(&format!(
             r#"{{
-                    AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
+                    AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{ _docID
                         {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
                     }}
                 }}"#,
@@ -1482,6 +1656,15 @@ async fn stage_goal_backed_request(
             persisted == GoalBackedRequestFingerprint::from_create(request)?,
             "goal request retry key conflicts with different immutable request fields"
         );
+        bind_goal_first_request_in_txn(
+            txn,
+            &staged_goal.goal,
+            existing_request["_docID"]
+                .as_str()
+                .context("persisted Goal request lacks physical identity")?,
+            request.input.goal_assignment.as_ref(),
+        )
+        .await?;
         submission_state =
             goal_submission_step(submission_state, GoalSubmissionAction::StageRequest);
         anyhow::ensure!(
@@ -1499,9 +1682,18 @@ async fn stage_goal_backed_request(
     );
     crate::graph_pipeline::fence_graph_root_request_in_txn(txn, request).await?;
     let request_fields = request.graphql_input_fields().map_err(anyhow::Error::msg)?;
-    txn.execute(&format!(
-        "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
-    ))
+    let created = txn
+        .execute(&format!(
+            "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
+        ))
+        .await?;
+    let request_doc_id = crate::graphql::created_doc_id(&created, "AgentRequest")?;
+    bind_goal_first_request_in_txn(
+        txn,
+        &staged_goal.goal,
+        &request_doc_id,
+        request.input.goal_assignment.as_ref(),
+    )
     .await?;
     submission_state = goal_submission_step(submission_state, GoalSubmissionAction::StageRequest);
     anyhow::ensure!(
@@ -1532,6 +1724,7 @@ pub async fn submit_goal_backed_request(
                     objective,
                     token_budget,
                     request,
+                    None,
                 )
                 .await
                 .and_then(authorize_goal_submission_commit)
@@ -1804,9 +1997,38 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
-    stage_goal_backed_request(txn, node_did, session_id, objective, token_budget, request)
-        .await
-        .and_then(authorize_goal_submission_commit)?;
+    stage_goal_backed_request_with_identity_in_txn(
+        txn,
+        node_did,
+        session_id,
+        objective,
+        token_budget,
+        request,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    objective: &str,
+    token_budget: Option<i64>,
+    request: &gents_protocol::request_admission::AgentRequestCreate,
+    identity: Option<&GoalCreationIdentity>,
+) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
+    stage_goal_backed_request(
+        txn,
+        node_did,
+        session_id,
+        objective,
+        token_budget,
+        request,
+        identity,
+    )
+    .await
+    .and_then(authorize_goal_submission_commit)?;
     let retry_key = request
         .retry_key
         .as_deref()
@@ -1857,6 +2079,7 @@ pub async fn submit_goal_backed_request_local(
                     objective,
                     token_budget,
                     request,
+                    None,
                 )
                 .await
                 .and_then(authorize_goal_submission_commit)
@@ -1939,6 +2162,7 @@ pub async fn load_goal_by_id(
         r#"{{
             Goal(
                 filter: {{ node_did: {{ _eq: "{node_did}" }}, goal_id: {{ _eq: "{goal_id}" }} }},
+                showDeleted: true,
                 order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
             ) {{ {GOAL_FIELDS} }}
         }}"#
@@ -2014,7 +2238,7 @@ pub async fn set_goal_from_access(
         .await
 }
 
-pub(crate) async fn load_canonical_goal_in_txn(
+pub async fn load_canonical_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
@@ -2037,6 +2261,30 @@ pub(crate) async fn load_canonical_goal_in_txn(
     .context("decoding transactional Goal rows")?;
     sort_goals_canonical(&mut goals);
     Ok(goals.into_iter().next())
+}
+
+pub(crate) async fn pause_goal_for_interrupt_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<()> {
+    let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
+        return Ok(());
+    };
+    let state = goal.state().context("Goal has an unknown status")?;
+    if state.step(GoalAction::Pause).is_some() {
+        set_goal_in_txn(
+            txn,
+            node_did,
+            session_id,
+            None,
+            Some(GoalStatus::Paused),
+            None,
+            None,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn apply_claimed_task_goal_in_txn(
@@ -2077,11 +2325,17 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         assignment.session_id == request.session_id,
         "Task receipt session differs from claimed request"
     );
-    anyhow::ensure!(
-        assignment.goal_id.as_deref()
-            == Some(deterministic_goal_id(&request.node_did, &request.session_id).as_str()),
-        "Task receipt has a noncanonical Goal identity"
-    );
+    validate_task_goal_identity_in_txn(
+        txn,
+        &request.node_did,
+        &request.session_id,
+        assignment
+            .goal_id
+            .as_deref()
+            .context("Task assignment lost Goal identity")?,
+        request.input.goal_assignment.as_ref(),
+    )
+    .await?;
     let objective = assignment
         .goal_objective
         .as_deref()
@@ -2454,6 +2708,14 @@ pub async fn update_goal_fields_if_status(
         "goal.update_controller_fields",
         |txn| {
             Box::pin(async {
+                let current =
+                    load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id).await?;
+                if !current
+                    .as_ref()
+                    .is_some_and(|current| same_goal_assignment(current, goal))
+                {
+                    return Ok(false);
+                }
                 let response = txn.execute(&mutation).await?;
                 let won = response
                     .pointer("/data/update_Goal")
@@ -2678,7 +2940,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_token_usage_breakdown_sums_to_the_total() {
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
         let owner = "did:key:z6MkTestOwner";
         let request = format!(
@@ -2745,7 +3007,7 @@ mod tests {
 
     #[tokio::test]
     async fn auto_resume_field_round_trips_through_the_live_schema() {
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
         let owner = "did:key:z6MkTestOwner";
         let goal = set_goal(&node, owner, "session", Some("ship"), None, None)
@@ -2768,7 +3030,7 @@ mod tests {
     }
 
     async fn auto_resume_access() -> crate::ConfigAccess {
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
         crate::ConfigAccess::local(node)
     }

@@ -253,8 +253,8 @@ async fn overlapping_native_graph_publication_and_closure_conflict_atomically() 
             .await
             .unwrap();
         let child = prepare_signed_child(&node, &identity, &goal, "valid").await;
-        let publication = node.runner().begin_txn(false).await.unwrap();
-        let closure = node.runner().begin_txn(false).await.unwrap();
+        let publication = node.begin_transaction(false).await.unwrap();
+        let closure = node.begin_transaction(false).await.unwrap();
         let read = format!(
             r#"{{ GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}) {{ _docID status update_generation }} }}"#,
             run.run_id
@@ -305,10 +305,9 @@ async fn overlapping_native_graph_publication_and_closure_conflict_atomically() 
         } else {
             (&closure, &publication)
         };
-        node.runner().commit_txn(winner).await.unwrap();
+        node.commit_transaction(winner).await.unwrap();
         let conflict = node
-            .runner()
-            .commit_txn(loser)
+            .commit_transaction(loser)
             .await
             .expect_err("overlapping native writes must not both commit");
         assert!(

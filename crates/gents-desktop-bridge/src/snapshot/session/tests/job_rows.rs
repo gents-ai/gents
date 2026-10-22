@@ -48,6 +48,7 @@ async fn snapshot_of(
     .expect("transcript page");
     build_session_snapshot_for_node_with_transcript(
         core.as_ref(),
+        &access,
         Some(OPERATOR),
         session_id,
         None,

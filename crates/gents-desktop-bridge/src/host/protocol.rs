@@ -134,6 +134,20 @@ pub enum ClientCommand {
         #[serde(rename = "scheduleId")]
         schedule_id: String,
     },
+    #[serde(rename = "desktop_tool_file_changes")]
+    ToolFileChanges {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "toolCallDocId")]
+        tool_call_doc_id: String,
+        #[serde(rename = "retryId", default)]
+        #[ts(optional)]
+        retry_id: Option<String>,
+    },
     #[serde(rename = "desktop_request_output")]
     RequestOutput {
         #[serde(rename = "nodeDid")]
@@ -259,6 +273,7 @@ impl ClientCommand {
         "client_start_task",
         "client_run_schedule",
         "desktop_request_output",
+        "desktop_tool_file_changes",
         "client_speech_services",
         "client_speech_tools",
         "client_speech_recognize",
@@ -300,6 +315,7 @@ impl ClientCommand {
                 | Self::ConfigRead { .. }
                 | Self::ActionCatalog { .. }
                 | Self::RequestOutput { .. }
+                | Self::ToolFileChanges { .. }
                 | Self::SpeechServices { .. }
                 | Self::SpeechTools { .. }
                 | Self::SpeechRecognize { .. }

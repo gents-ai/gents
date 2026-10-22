@@ -1032,12 +1032,7 @@ fn rule_documents(
 async fn canonical_replacement_preserves_revocation_and_attested_creation() {
     use crate::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
     use std::sync::Arc;
-    let node = Arc::new(
-        crate::defra_node::EmbeddedNode::builder()
-            .build()
-            .await
-            .unwrap(),
-    );
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
     let original: crate::document_config::PackConfig = serde_json::from_value(serde_json::json!({
@@ -1940,7 +1935,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
 
 #[tokio::test]
 async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     node.add_schema(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
@@ -2130,7 +2125,7 @@ fn every_fire_template_is_judged_with_its_field_named() -> Result<()> {
 #[tokio::test]
 async fn publication_applies_native_route_template_fields_the_schema_does_not_declare() -> Result<()>
 {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     let owner = "did:key:native-route-owner";

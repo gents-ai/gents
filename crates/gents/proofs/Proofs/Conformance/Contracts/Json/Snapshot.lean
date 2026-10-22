@@ -27,6 +27,7 @@ import Proofs.Conformance.MailboxHandoff
 import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
+import Proofs.Conformance.FileImageHydration
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
@@ -78,7 +79,16 @@ import Proofs.Conformance.GraphPipeline
 import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
+import Proofs.Conformance.GoalWakeAncestry
+import Proofs.Conformance.GoalWakeReceipt
+import Proofs.Conformance.GoalWakeCoalescing
+import Proofs.Conformance.GoalRequestAncestry
+import Proofs.Conformance.GoalQueueAssignment
+import Proofs.Conformance.GoalFirstRequestBinding
 import Proofs.Conformance.GoalRequestHead
+import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.GoalDeliveryInput
+import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
@@ -93,6 +103,7 @@ import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.Contracts.Json.ExecutionGate
 import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.InterruptQueue
+import Proofs.Conformance.Contracts.Json.SessionControl
 import Proofs.Conformance.Contracts.Json.FoldQueue
 import Proofs.Conformance.Contracts.Json.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.CausalHop
@@ -124,6 +135,32 @@ def snapshotJson : String :=
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"graph_failure_attribution_traces\":"
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
+    ++ "\"session_message_goal_input_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
+    ++ "\"goal_delivery_input_cases\":"
+      ++ Conformance.GoalDeliveryInput.json ++ ","
+    ++ "\"goal_first_request_binding_cases\":"
+      ++ Conformance.GoalFirstRequestBinding.json ++ ","
+    ++ "\"goal_input_binding_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.inputCasesJson ++ ","
+    ++ "\"goal_fresh_session_input_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.freshSessionCasesJson ++ ","
+    ++ "\"goal_assignment_history_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.historyCasesJson ++ ","
+    ++ "\"goal_request_assignment_cases\":"
+      ++ Conformance.GoalRequestAssignmentContracts.casesJson ++ ","
+    ++ "\"goal_wake_receipt_cases\":"
+      ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
+    ++ "\"goal_wake_coalescing_cases\":"
+      ++ Conformance.GoalWakeCoalescingContracts.casesJson ++ ","
+    ++ "\"goal_wake_ancestry_cases\":"
+      ++ Conformance.GoalWakeAncestryContracts.casesJson ++ ","
+    ++ "\"goal_tool_context_cases\":"
+      ++ Conformance.GoalToolContextContracts.casesJson ++ ","
+    ++ "\"goal_request_ancestry_cases\":"
+      ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
+    ++ "\"goal_queue_assignment_cases\":"
+      ++ Conformance.GoalQueueAssignmentContracts.casesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
     ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
@@ -176,6 +213,8 @@ def snapshotJson : String :=
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"interrupt_queue_cases\":"
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
+    ++ "\"session_control_cases\":"
+      ++ Conformance.SessionControlContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
     ++ "\"session_input_edit_client_observation_cases\":"
       ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
@@ -497,6 +536,20 @@ def snapshotJson : String :=
       ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
+    ++ "\"file_image_hydration_cases\":"
+      ++ Conformance.FileImageHydrationContracts.casesJson ++ ","
+    ++ "\"file_image_hydration_route_cases\":"
+      ++ Conformance.FileImageHydrationContracts.routeCasesJson ++ ","
+    ++ "\"file_review_subscription_cases\":"
+      ++ Conformance.FileImageHydrationContracts.subscriptionCasesJson ++ ","
+    ++ "\"file_image_hydration_completion_cases\":"
+      ++ Conformance.FileImageHydrationContracts.completionCasesJson ++ ","
+    ++ "\"file_image_attempt_cases\":"
+      ++ Conformance.FileImageHydrationContracts.attemptCasesJson ++ ","
+    ++ "\"stored_file_image_access_cases\":"
+      ++ Conformance.FileImageHydrationContracts.storageCasesJson ++ ","
+    ++ "\"file_image_read_grant_cases\":"
+      ++ Conformance.FileImageHydrationContracts.readGrantCasesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
     ++ "\"workspace_cases\":"
@@ -522,6 +575,8 @@ def snapshotJson : String :=
       (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
     ++ "\"reasoning_signature_cases\":" ++ jsonArray
       (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
+    ++ "\"reasoning_delta_cases\":" ++ jsonArray
+      (StreamingResponse.ReasoningDeltas.cases.map reasoningDeltaCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
     ++ "\"prompt_assembly_claude_wire_start_cases\":" ++

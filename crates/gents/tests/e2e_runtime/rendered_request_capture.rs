@@ -303,6 +303,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
     let mut old_bytes = 0usize;
     let mut new_bytes = 0usize;
     let mut referenced_blocks = 0usize;
+    let mut leaf_keys = std::collections::BTreeSet::new();
     let mut previous_body_bytes = 0usize;
     let mut last_turn_new_content_bytes = 0usize;
     let mut last_turn_row_bytes = 0usize;
@@ -353,13 +354,18 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         let response = db.node.execute(&query).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let row = response.data.unwrap()["RenderedRequest"][0].clone();
-        assert_eq!(row["capture_version"].as_u64(), Some(3));
+        assert_eq!(
+            row["capture_version"].as_u64(),
+            Some(u64::from(gents::rendered_request::CAPTURE_VERSION))
+        );
         let stored = row["request_json"].as_str().unwrap();
         let container: Value = serde_json::from_str(stored).unwrap();
         for payload in ["request_body", "provenance_payload"] {
             let record = stored_payload_record(&container, payload);
-            assert_eq!(record["kind"], "manifest", "payload {payload}");
-            referenced_blocks += record["blocks"].as_array().unwrap().len();
+            assert_eq!(record["kind"], "tree", "payload {payload}");
+            referenced_blocks += record["tree"]["leaves"].as_u64().unwrap() as usize;
+            assert!(record["tree"]["height"].as_u64().unwrap() <= 1);
+            leaf_keys.extend(manifest_payload_keys(db.node.as_ref(), &container, payload).await);
         }
         let decoded = gents::rendered_request::decode_capture_json_embedded(
             db.node.as_ref(),
@@ -408,12 +414,12 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
          anything"
     );
     assert!(
-        block_rows < 4 * turns,
+        leaf_keys.len() < 4 * turns && block_rows <= leaf_keys.len() + 2 * turns,
         "{block_rows} stored blocks for {turns} turns: storage must grow linearly, not with \
          the conversation"
     );
     assert!(
-        block_rows * 2 < referenced_blocks,
+        leaf_keys.len() * 2 < referenced_blocks,
         "{block_rows} stored blocks against {referenced_blocks} referenced: turns must reuse \
          blocks rather than re-store them"
     );
@@ -516,22 +522,33 @@ fn stored_payload_record(container: &Value, payload: &str) -> Value {
     record
 }
 
-fn manifest_payload_keys(container: &Value, payload: &str) -> Vec<String> {
+async fn manifest_payload_keys(
+    node: &EmbeddedNode,
+    container: &Value,
+    payload: &str,
+) -> Vec<String> {
     let record = stored_payload_record(container, payload);
-    assert_eq!(
-        record["kind"], "manifest",
-        "payload {payload} must stay a block manifest"
-    );
-    record["blocks"]
-        .as_array()
-        .expect("manifest block references")
+    assert_eq!(record["kind"], "tree");
+    let mut entries = vec![record["tree"]["root"].clone()];
+    for _ in 0..record["tree"]["height"].as_u64().unwrap() {
+        let mut children = Vec::new();
+        for entry in entries {
+            let id = escape_graphql_string(entry["doc_id"].as_str().unwrap());
+            let response = node
+                .execute(&format!(
+                    r#"{{ RenderedRequestBlock(docIDs:["{id}"]) {{ payload }} }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            let data = response.data.unwrap();
+            let payload = data["RenderedRequestBlock"][0]["payload"].as_str().unwrap();
+            children.extend(serde_json::from_str::<Vec<Value>>(payload).unwrap());
+        }
+        entries = children;
+    }
+    entries
         .iter()
-        .map(|entry| {
-            entry["content_key"]
-                .as_str()
-                .expect("manifest entry content key")
-                .to_string()
-        })
+        .map(|entry| entry["content_key"].as_str().unwrap().to_owned())
         .collect()
 }
 
@@ -604,7 +621,8 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     let pre_edit_container: Value =
         serde_json::from_str(&stored_capture_request_json(db.node.as_ref(), &pre_edit_key).await)
             .unwrap();
-    let pre_edit_body = manifest_payload_keys(&pre_edit_container, "request_body");
+    let pre_edit_body =
+        manifest_payload_keys(db.node.as_ref(), &pre_edit_container, "request_body").await;
     assert!(
         pre_edit_body.len() >= 16,
         "the pre-edit body must span many blocks for tail reuse to mean anything: {}",
@@ -628,8 +646,9 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
 
     let edited_stored = stored_capture_request_json(db.node.as_ref(), &edited_key).await;
     let edited_container: Value = serde_json::from_str(&edited_stored).unwrap();
-    let post_edit_body = manifest_payload_keys(&edited_container, "request_body");
-    manifest_payload_keys(&edited_container, "provenance_payload");
+    let post_edit_body =
+        manifest_payload_keys(db.node.as_ref(), &edited_container, "request_body").await;
+    manifest_payload_keys(db.node.as_ref(), &edited_container, "provenance_payload").await;
 
     assert!(
         !post_edit_body.contains(&pre_edit_body[0]),

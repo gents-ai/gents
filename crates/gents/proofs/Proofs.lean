@@ -20,6 +20,7 @@ import Proofs.SessionHydration
 import Proofs.Session.Properties
 import Proofs.Session.Interrupt
 import Proofs.Session.InterruptCases
+import Proofs.Session.Control
 import Proofs.Session.Fold
 import Proofs.Session.FoldCases
 import Proofs.Transcript
@@ -63,6 +64,7 @@ import Proofs.P2PBackpressure
 import Proofs.StreamingResponse
 import Proofs.Background
 import Proofs.Workspace
+import Proofs.Conformance.FileImageHydration
 import Proofs.Callback
 import Proofs.Migration
 import Proofs.CodexShim

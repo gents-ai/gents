@@ -16,6 +16,7 @@ import type { ConfigComponentsApplyRequest } from "./ConfigComponentsApplyReques
 import type { ConfigComponentsPatchRequest } from "./ConfigComponentsPatchRequest.js";
 import type { ContextDeleteRequest } from "./ContextDeleteRequest.js";
 import type { DefaultAgentSetRequest } from "./DefaultAgentSetRequest.js";
+import type { DesktopBackgroundToolRequest } from "./DesktopBackgroundToolRequest.js";
 import type { DesktopBootstrapSummary } from "./DesktopBootstrapSummary.js";
 import type { DesktopClientSnapshot } from "./DesktopClientSnapshot.js";
 import type { DesktopInitRequest } from "./DesktopInitRequest.js";
@@ -132,6 +133,7 @@ export type DesktopCommands = {
   desktop_app_quit: { args: Record<string, never>; result: void };
   desktop_backend_delete: { args: { request: BackendDeleteRequest }; result: DesktopClientSnapshot };
   desktop_backend_save: { args: { request: BackendSaveRequest }; result: DesktopClientSnapshot };
+  desktop_background_tool: { args: { request: DesktopBackgroundToolRequest }; result: boolean };
   desktop_bootstrap_summary: { args: Record<string, never>; result: DesktopBootstrapSummary };
   desktop_chat_send: { args: { request: ChatSendRequest }; result: ChatSendResult };
   desktop_claude_login: { args: { request: ClaudeLoginRequest }; result: ClaudeLoginResult };

@@ -21,8 +21,8 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
     use crate::llm::message::ReasoningContent;
 
     let mut accumulator = AssistantTurnAccumulator::default();
-    accumulator.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "考");
-    accumulator.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "慮");
+    accumulator.push_reasoning_delta(None, "考");
+    accumulator.push_reasoning_delta(None, "慮");
     accumulator
         .push_provider_reasoning(
             ProviderInputProfile::ClaudeMessages,
@@ -50,7 +50,7 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
     );
 
     let mut mismatch = AssistantTurnAccumulator::default();
-    mismatch.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "prefix");
+    mismatch.push_reasoning_delta(None, "prefix");
     assert!(mismatch
         .push_provider_reasoning(
             ProviderInputProfile::ClaudeMessages,
@@ -65,7 +65,7 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
         .is_err());
 
     let mut other = AssistantTurnAccumulator::default();
-    other.push_provider_reasoning_delta(ProviderInputProfile::OpenAiChatCompletions, None, "first");
+    other.push_reasoning_delta(None, "first");
     other
         .push_provider_reasoning(
             ProviderInputProfile::OpenAiChatCompletions,
@@ -89,6 +89,63 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
         2,
         "non-Claude final remains append-only"
     );
+}
+
+#[test]
+fn generated_reasoning_delta_cases_coalesce_native_parts() {
+    use crate::lean_vocab_test::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
+    use crate::llm::message::ReasoningContent;
+
+    for case in lean_reasoning_delta_cases() {
+        let mut accumulator = AssistantTurnAccumulator::default();
+        for part in &case.before {
+            match part {
+                Part::Reasoning {
+                    id,
+                    signature,
+                    bytes,
+                } => accumulator.push_reasoning(Reasoning {
+                    id: id.map(|id| id.to_string()),
+                    content: vec![ReasoningContent::Text {
+                        text: String::from_utf8(bytes.clone()).unwrap(),
+                        signature: signature.map(|signature| signature.to_string()),
+                    }],
+                }),
+                Part::Text { bytes } => accumulator.push_text(std::str::from_utf8(bytes).unwrap()),
+            }
+        }
+        accumulator.push_reasoning_delta(
+            case.id.map(|id| id.to_string()),
+            std::str::from_utf8(&case.fragment).unwrap(),
+        );
+        let Some(Message::Assistant { content, .. }) = accumulator.take_message() else {
+            panic!("{}: missing assistant message", case.name);
+        };
+        let actual = content
+            .into_iter()
+            .flat_map(|part| match part {
+                AssistantContent::Text(text) => vec![Part::Text {
+                    bytes: text.text.into_bytes(),
+                }],
+                AssistantContent::Reasoning(reasoning) => reasoning
+                    .content
+                    .into_iter()
+                    .map(|part| {
+                        let ReasoningContent::Text { text, signature } = part else {
+                            panic!("{}: unexpected reasoning type", case.name);
+                        };
+                        Part::Reasoning {
+                            id: reasoning.id.as_ref().map(|id| id.parse().unwrap()),
+                            signature: signature.map(|signature| signature.parse().unwrap()),
+                            bytes: text.into_bytes(),
+                        }
+                    })
+                    .collect(),
+                _ => panic!("{}: unexpected content type", case.name),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, case.expected, "{}", case.name);
+    }
 }
 
 fn user_text_message(text: &str) -> Message {
@@ -145,7 +202,7 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
     let data_path =
         std::env::temp_dir().join(format!("processor-cadence-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -269,7 +326,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -369,7 +426,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     let data_path =
         std::env::temp_dir().join(format!("agent-stream-processor-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -728,21 +785,34 @@ struct PersistedMessageShape {
     content: String,
 }
 
-async fn load_message_shapes(
+async fn load_message_shapes_in_scope(
     node: &defra_node::EmbeddedNode,
     session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
 ) -> Vec<PersistedMessageShape> {
+    let scope_node_did = crate::graphql::escape_graphql_string(node_did);
+    let scope_requester = requester_did.map_or_else(
+        || "null".to_owned(),
+        |did| format!("\"{}\"", crate::graphql::escape_graphql_string(did)),
+    );
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }},
-                    node_did: {{ _eq: "did:test:test" }}, requester_did: {{ _eq: null }} }},
+                    node_did: {{ _eq: "{scope_node_did}" }}, requester_did: {{ _eq: {scope_requester} }} }},
                 order: {{ sequence: ASC }}
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "test.stream_processor.message_shapes",
+    )
+    .await
+    .unwrap();
     assert!(
         !response.has_errors(),
         "AgentMessage shape query failed: {:?}",
@@ -755,7 +825,7 @@ async fn load_message_shapes(
     for row in rows {
         let doc_id = row["_docID"].as_str().expect("physical message identity");
         let (header, message) =
-            crate::session::load_canonical_message_from_node(node, doc_id, "did:test:test", None)
+            crate::session::load_canonical_message_from_node(node, doc_id, node_did, requester_did)
                 .await
                 .expect("exact canonical message reconstructs");
         shapes.push(PersistedMessageShape {
@@ -853,7 +923,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1049,8 +1119,12 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         "agent-stream-processor-inline-tool-result-{}",
         uuid::Uuid::new_v4()
     ));
+    use crate::identity::NodeIdentity;
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
             .data_path(&data_path)
             .build()
             .await
@@ -1059,41 +1133,38 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     ensure_runtime_schemas(&node).await.unwrap();
 
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default());
+    hook.set_active_request_binding(None, None, Some(identity.did().to_owned()))
+        .await;
     assert!(matches!(
-        hook.on_completion_call(&user_text_message("read the source"), &[])
+        hook.on_completion_call(&user_text_message("spawn"), &[])
             .await,
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
 
     let request_id = uuid::Uuid::new_v4().to_string();
-    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
-    hook.set_active_request_lineage(Some(request_id.clone()), None)
+    let mut lifecycle = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request(
+        &node,
+        &request_id,
+        &session_id,
+        &identity,
+        None,
+    )
+    .await;
+    hook.set_active_request_lineage(Some(request_id.clone()), Some(identity.did().to_owned()))
         .await
         .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let request =
-        fixture_agent_request(request_doc_id, &request_id, &session_id, "read the source");
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        "general",
-        "did:test:test",
-        request,
-        30,
-        ExecutionOrigin::Interactive,
-        "test-backend",
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
+        DefraStreamWriter::new(node.clone(), identity.did(), Duration::from_millis(0));
     lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
     stream_writer
-        .publish_authored_message(&lifecycle, "prompt", &user_text_message("read the source"))
+        .publish_authored_message(&lifecycle, "prompt", &user_text_message("spawn"))
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
@@ -1146,10 +1217,6 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         crate::llm::ToolCallHookAction::Continue
     ));
 
-    // The streamed tool-call envelope already owns its durable assistant row,
-    // so a concurrent background completion allocates the following sequence
-    // instead of colliding. Seed an already-admitted pending wake so the real
-    // publisher exercises coalescing rather than asking the fixture to sign.
     let queue = gents_protocol::request_input::RequestQueue {
         delivery: Default::default(),
         position: None,
@@ -1160,16 +1227,34 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         interrupted_request_id: None,
         background_completion_wake_version: None,
     };
-    create_pending_request_with_input(
-        &node,
+    let mut wake = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "concurrent-notification-wake",
+        identity.did(),
+        identity.did(),
+        "general",
         &session_id,
-        Some(&gents_protocol::request_input::RequestInput {
-            queue: Some(queue.clone()),
-            ..Default::default()
-        }),
-    )
-    .await;
+        "Review background completion",
+        "scheduled",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+            identity.did(),
+            &request_id,
+        ),
+    );
+    wake.input.queue = Some(queue.clone());
+    wake.caused_by_parent_request_id = Some(request_id.clone());
+    wake.caused_by_parent_request_doc_id = Some(notification_request.doc_id.clone());
+    crate::sign_agent_request_create(&identity, &mut wake)
+        .await
+        .unwrap();
+    crate::config_client::ConfigAccess::local(node.clone())
+        .write(
+            "test.stream_processor.pending_wake",
+            &wake.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
     crate::lifecycle::queue::persist_background_completion_with_message(
         &node,
         &notification_request,
@@ -1204,9 +1289,10 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .await
         .unwrap();
 
-    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
-        .await
-        .unwrap();
+    let history =
+        crate::session::load_history(&node, &session_id, identity.did(), Some(identity.did()))
+            .await
+            .unwrap();
     assert_eq!(history.len(), 4);
     assert!(matches!(&history[1], Message::Assistant { content, .. }
         if matches!(content.first(), Some(AssistantContent::ToolCall(tool_call))
@@ -1218,7 +1304,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         if matches!(content.first(), Some(UserContent::ToolResult(tool_result))
             if tool_result.call_id.as_deref() == Some("call-1"))));
 
-    let shapes = load_message_shapes(&node, &session_id).await;
+    let shapes =
+        load_message_shapes_in_scope(&node, &session_id, identity.did(), Some(identity.did()))
+            .await;
     assert_eq!(
         shapes
             .iter()
@@ -1255,7 +1343,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1415,7 +1503,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1584,7 +1672,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1774,7 +1862,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1923,4 +2011,39 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
 
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[test]
+fn coalesced_reasoning_fragments_encode_as_one_native_stream() {
+    use crate::llm::message::ReasoningContent;
+    use crate::streaming::native_encoding::encode_native_message;
+
+    let mut accumulator = AssistantTurnAccumulator::default();
+    for _ in 0..128 {
+        accumulator.push_reasoning_delta(Some("reasoning".into()), "fragment 🦀 ");
+    }
+    let fragmented = Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::Reasoning(Reasoning {
+            id: Some("reasoning".into()),
+            content: (0..128)
+                .map(|_| ReasoningContent::Text {
+                    text: "fragment 🦀 ".into(),
+                    signature: None,
+                })
+                .collect(),
+        })],
+    };
+    let before = encode_native_message(&fragmented).unwrap();
+    let after = encode_native_message(&accumulator.take_message().unwrap()).unwrap();
+    assert_eq!((before.streams.len(), after.streams.len()), (128, 1));
+    let before =
+        serde_json::to_vec(&before.build_blocks("closing-document", &[]).unwrap()).unwrap();
+    let after = serde_json::to_vec(&after.build_blocks("closing-document", &[]).unwrap()).unwrap();
+    assert!(
+        after.len() * 32 < before.len(),
+        "{} vs {}",
+        after.len(),
+        before.len()
+    );
 }

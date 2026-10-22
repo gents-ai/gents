@@ -735,7 +735,12 @@ mod tests {
 
     #[tokio::test]
     async fn apply_model_to_bound_agent_rejects_an_unadvertised_model() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let node_did = "did:test:codex-shim";
         let access = ConfigAccess::local(node.clone());
@@ -775,7 +780,12 @@ mod tests {
 
     #[tokio::test]
     async fn apply_model_to_bound_agent_accepts_an_advertised_model() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let node_did = "did:test:codex-shim";
         let access = ConfigAccess::local(node.clone());
@@ -863,7 +873,12 @@ mod tests {
 
     #[tokio::test]
     async fn model_change_copies_controls_and_preserves_shared_profiles_and_noop() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         let owner = "did:test:codex-shim";
@@ -1015,7 +1030,12 @@ mod tests {
     }
     #[tokio::test]
     async fn model_list_scope_excludes_foreign_malformed_backend_before_decode() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         write_inference_backend_document(&access, &backend("same"))

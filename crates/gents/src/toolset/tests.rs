@@ -96,7 +96,8 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     let bash_tool = UnrestrictedBashTool::new(
         ToolContext::new(root, false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
-    );
+    )
+    .with_background_lifetime(Duration::from_secs(7_200));
     let bash_def = crate::llm::tool::Tool::definition(&bash_tool, String::new()).await;
     assert_eq!(
         bash_def.parameters["required"],
@@ -118,8 +119,8 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         .as_str()
         .unwrap();
     assert!(
-        timeout_description.contains(&BACKGROUND_COMMAND_TIMEOUT_SECS.to_string()),
-        "schema must state the background lifetime budget: {timeout_description}"
+        timeout_description.contains("7200"),
+        "schema must state the configured background lifetime: {timeout_description}"
     );
 }
 
@@ -174,6 +175,8 @@ fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
         [
             "agent_message",
             "agent_interrupt",
+            "agent_stop",
+            "agent_resume",
             "agent_list",
             "agent_session_list",
             "agent_session_read"
@@ -319,7 +322,7 @@ async fn session_message_tool_definitions_register_expected_surface() {
         interrupt.parameters["required"],
         serde_json::json!(["session_id"])
     );
-    let list = tools[3].definition(String::new()).await;
+    let list = tools[5].definition(String::new()).await;
     assert_eq!(list.parameters["properties"], serde_json::json!({}));
 }
 
@@ -2465,7 +2468,7 @@ fn command_timeout_resolution_matches_advertised_schema() {
     assert_eq!(
         resolve_command_timeout(None, foreground_default, foreground_max, true),
         budget,
-        "background omission uses the background lifetime budget"
+        "background command timeout omission uses the command budget"
     );
     assert_eq!(
         resolve_command_timeout(Some(7_200), foreground_default, foreground_max, true),

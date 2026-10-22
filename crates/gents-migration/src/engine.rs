@@ -38,7 +38,11 @@ pub async fn ensure_migrations_with_registry(
 
     let started = Instant::now();
     reject_unknown_lineage(node, registry).await?;
+    let file_image_owner = register_file_image_policy(node, registry).await?;
     register_baseline(node, registry, &mut report).await?;
+    if let Some(owner) = file_image_owner.filter(|_| manages_file_images(registry)) {
+        register_file_image_owner(node, owner).await?;
+    }
     let baseline_ready = Instant::now();
     apply_steps(node, registry, &mut report).await?;
     let steps_ready = Instant::now();
@@ -86,6 +90,106 @@ pub async fn ensure_migrations_with_registry(
     );
 
     Ok(report)
+}
+
+fn manages_file_images(registry: &Registry<'_>) -> bool {
+    registry
+        .managed_names()
+        .any(|name| name == gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+}
+
+async fn register_file_image_policy<'n>(
+    node: &'n EmbeddedNode,
+    registry: &Registry<'_>,
+) -> Result<Option<&'n str>> {
+    if !manages_file_images(registry)
+        && !registry
+            .managed_names()
+            .any(|name| name == gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+    {
+        return Ok(None);
+    }
+    if let Some(collection) = node
+        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .map_err(|error| Error::Node(error.into()))?
+    {
+        validate_file_image_policy(&collection, true)?;
+    }
+    if let Some(collection) = node
+        .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
+        .map_err(|error| Error::Node(error.into()))?
+    {
+        validate_file_image_policy(&collection, false)?;
+    }
+    let owner = node.node_identity_did().ok_or_else(|| {
+        Error::Node(anyhow::anyhow!(
+            "retained file image storage requires the configured node identity"
+        ))
+    })?;
+    let policy = node
+        .add_dac_policy_with_counter(owner, gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY, 0)
+        .await
+        .map_err(|error| Error::Node(error.into()))?;
+    if policy != gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID {
+        return Err(Error::Node(anyhow::anyhow!(
+            "retained file image policy does not match its schema binding"
+        )));
+    }
+    Ok(Some(owner))
+}
+
+/// Policy bindings are outside the pinned schema version; lineage validation
+/// alone cannot establish the retained images' document permissions.
+fn validate_file_image_policy(collection: &CollectionVersion, branchable: bool) -> Result<()> {
+    if collection.is_branchable != branchable
+        || !collection.policy.as_ref().is_some_and(|policy| {
+            policy.id == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID
+                && policy.resource_name == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
+        })
+    {
+        return Err(Error::Node(anyhow::anyhow!(
+            "retained file image collection has an incompatible document policy"
+        )));
+    }
+    Ok(())
+}
+
+/// DefraDB's branchable read guard falls back to the collection object when a
+/// document has no local ACP registration. That fallback must remain private.
+async fn register_file_image_owner(node: &EmbeddedNode, owner: &str) -> Result<()> {
+    let owner = owner
+        .parse()
+        .map_err(|error| Error::Node(anyhow::anyhow!("invalid image owner DID: {error}")))?;
+    let collection = node
+        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+        .map_err(|error| Error::Node(error.into()))?
+        .ok_or_else(|| Error::CollectionMissing {
+            collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.into(),
+        })?;
+    validate_file_image_policy(&collection, true)?;
+    let acp = node.document_acp();
+    let policy = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID;
+    let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;
+    if acp
+        .is_doc_registered(policy, resource, &collection.collection_id)
+        .await
+        .map_err(|error| Error::Node(error.into()))?
+    {
+        let existing_owner = acp
+            .get_doc_owner(policy, resource, &collection.collection_id)
+            .await
+            .map_err(|error| Error::Node(error.into()))?;
+        if existing_owner.as_ref() != Some(&owner) {
+            return Err(Error::Node(anyhow::anyhow!(
+                "retained file image collection belongs to a different node"
+            )));
+        }
+    } else {
+        acp.register_object(&owner, policy, resource, &collection.collection_id)
+            .await
+            .map_err(|error| Error::Node(error.into()))?;
+    }
+    Ok(())
 }
 
 fn versioned_step_collections<'a>(registry: &Registry<'a>) -> Vec<&'a str> {

@@ -584,7 +584,9 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
         serde_json::to_string_pretty(&removed).unwrap()
     );
     let dir = tempfile::tempdir().unwrap();
+    let identity = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
     let node = gents::defra_node::EmbeddedNode::builder()
+        .with_node_identity_did(gents::NodeIdentity::did(&identity))
         .data_path(dir.path().join("db"))
         .build()
         .await

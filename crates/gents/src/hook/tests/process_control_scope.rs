@@ -1,4 +1,49 @@
 use super::*;
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unowned_live_process_group_keeps_the_retained_owner_record() {
+    use crate::lean_vocab_test::lean_process_stop_cases;
+    use crate::managed_exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
+
+    // The current test process proves the group is live; the impossible pid
+    // models a recorded leader that exited or was reused. No signal is sent.
+    let pgid = unsafe { libc::getpgid(0) };
+    assert!(pgid > 0);
+    let identity = ProcessIdentity {
+        pid: i32::MAX,
+        pgid,
+        start: "gone-leader".to_owned(),
+    };
+    let observed = identity.observe();
+    let case = lean_process_stop_cases()
+        .iter()
+        .find(|case| case.after == observed.as_str())
+        .expect("Lean has a process observation case");
+    assert_eq!(observed, ProcessObservation::Unowned);
+    assert!(
+        case.retain_record,
+        "Lean requires unverified ownership to persist"
+    );
+    assert_eq!(observed.retain_process_record(), case.retain_record);
+
+    let registry = BackgroundExecutionRegistry::default();
+    registry
+        .process_records
+        .write(&ProcessRecord {
+            tool_call_id: "stale-call".to_owned(),
+            tool_call_doc_id: "stale-doc".to_owned(),
+            identity,
+        })
+        .unwrap();
+    registry
+        .release_process_record("stale-call", "stale-doc")
+        .await;
+    assert!(registry.process_record("stale-call", "stale-doc").is_some());
+    registry.forget_process_record("stale-call");
+    assert!(registry.process_record("stale-call", "stale-doc").is_some());
+    registry.process_records.remove("stale-call");
+}
 use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 
@@ -513,20 +558,17 @@ mod job_control {
                 &["slow_tool".into()],
             ))
             .with_background_execution_registry(executions.clone());
+            let session_id = owner.session_id().await.unwrap();
+            let request_id = format!("job-control-{}", uuid::Uuid::new_v4());
+            bind_signed_hook_request(
+                &owner,
+                &request_id,
+                Utc::now() + chrono::Duration::minutes(5),
+            )
+            .await;
             owner
                 .on_completion_call(&user_text_message("run job control work"), &[])
                 .await;
-            let session_id = owner.session_id().await.unwrap();
-            let request_id = format!("job-control-{}", uuid::Uuid::new_v4());
-            bind_interruptible_request_with_requester(
-                &node,
-                &owner,
-                &request_id,
-                &session_id,
-                Utc::now() + chrono::Duration::minutes(5),
-                None,
-            )
-            .await;
             Self {
                 _dir: dir,
                 node,
@@ -542,7 +584,7 @@ mod job_control {
                 request_id: self.request_id.clone(),
                 session_id: self.session_id.clone(),
                 node_did: self.owner.node_did.clone(),
-                requester_did: requester_did.map(str::to_owned),
+                requester_did: Some(requester_did.unwrap_or(&self.owner.node_did).to_owned()),
             }
         }
 
@@ -683,7 +725,7 @@ mod job_control {
                     "request_id": "child-slot-a",
                     "purpose": "normal",
                     "node_did": self.owner.node_did,
-                    "requester_did": null,
+                    "requester_did": self.owner.node_did,
                     "session_id": "child-session-slot-a",
                     "agent_id": "general",
                     "lifecycle_state": "processing",
@@ -947,7 +989,7 @@ mod job_control {
             hook.node.clone(),
             &hook.executions,
             &hook.owner.node_did,
-            None,
+            Some(&hook.owner.node_did),
             &hook.session_id,
             "job-client",
         )

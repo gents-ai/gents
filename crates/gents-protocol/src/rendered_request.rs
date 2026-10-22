@@ -4,7 +4,7 @@ use crate::message::{Message, ToolResultContent, UserContent};
 
 /// Capture format version. A reader that does not know it must report the row
 /// as unsupported rather than guessing.
-pub const CAPTURE_VERSION: u32 = 3;
+pub const CAPTURE_VERSION: u32 = 4;
 
 /// Provenance manifest version. A reader that does not know this number must
 /// report `UnsupportedManifest` rather than guessing.

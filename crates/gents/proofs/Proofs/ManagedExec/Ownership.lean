@@ -12,7 +12,8 @@ exit of a proven-owned running group — may be reported as a cancellation.
 namespace ManagedExec
 
 /-- A proven-owned running group, or a recorded leader whose start identity
-matches; `running` means a non-zombie member remains. -/
+matches; `running` means a non-zombie member remains. `exited` means the
+recorded group has no live member, whatever now holds the leader pid. -/
 inductive ProcessObservation where
   | running
   | exited
@@ -36,6 +37,17 @@ end ProcessObservation
 def mayTerminate : ProcessObservation → Bool
   | .running => true
   | _ => false
+
+/-- Keep process ownership evidence until the group is positively observed
+exited. An unknown leader/group observation is not proof that descendants are
+gone. -/
+def retainProcessRecord : ProcessObservation → Bool
+  | .exited => false
+  | .running | .unowned => true
+
+theorem retainProcessRecord_iff_not_exited (o : ProcessObservation) :
+    retainProcessRecord o = true ↔ o ≠ .exited := by
+  cases o <;> simp [retainProcessRecord]
 
 theorem mayTerminate_iff_running (o : ProcessObservation) :
     mayTerminate o = true ↔ o = .running := by

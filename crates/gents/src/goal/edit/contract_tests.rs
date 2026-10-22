@@ -41,9 +41,9 @@ async fn durable_rows(node: &EmbeddedNode) -> Value {
 #[tokio::test]
 async fn generated_goal_edit_cases_drive_real_transactions() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_edit_cases.len(), 62);
+    assert_eq!(contracts.goal_edit_cases.len(), 66);
     for case in contracts.goal_edit_cases {
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let created =
             create_goal_for_session(&node, "did:test:goal-edit", "session", "ship", Some(100))
@@ -150,7 +150,7 @@ fn generated_goal_objective_whitespace_matches_native_character_classification()
 
 #[tokio::test]
 async fn edited_fields_match_operator_updates_without_changing_goal_identity() {
-    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let owner = "did:test:goal-edit";
     let initial = set_goal(&node, owner, "model", Some("ship"), None, Some(Some(100)))

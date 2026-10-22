@@ -750,7 +750,7 @@ mod tests {
     async fn one_call_that_started_two_sessions_spawns_one_subagent_each() {
         let dir = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .build()
                 .await
@@ -782,7 +782,7 @@ mod tests {
 
     async fn embedded_node(dir: &tempfile::TempDir) -> Arc<EmbeddedNode> {
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .build()
                 .await

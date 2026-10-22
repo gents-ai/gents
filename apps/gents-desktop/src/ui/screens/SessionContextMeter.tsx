@@ -12,6 +12,21 @@ function formatTokens(value: number) {
   return `${amount >= 10 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, "")}k`;
 }
 
+function compactionReason(reason: string) {
+  switch (reason) {
+    case "compacted":
+      return "Reduced before dispatch";
+    case "provider_view_repaired":
+      return "Provider history repaired";
+    case "below_threshold":
+      return "Below the reduction threshold";
+    case "compactor_unavailable":
+      return "Reducer unavailable";
+    default:
+      return "Context reduction status unavailable";
+  }
+}
+
 function ContextRing({
   used,
   window,
@@ -69,7 +84,17 @@ export function SessionContext({
   const windowError = context.contextWindowError ?? null;
   const window = Math.max(1, context.contextWindow);
   const threshold = Math.max(0, context.compactionThresholdTokens);
+  const sessionCompactionCount = context.sessionCompactionCount;
+  const contextLabel = windowError
+    ? `Context ~${formatTokens(used)}, window unavailable`
+    : `Context ~${formatTokens(used)} of ${formatTokens(window)}`;
+  const compactionLabel =
+    sessionCompactionCount == null
+      ? "Session compactions unavailable"
+      : `${sessionCompactionCount} session ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`;
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* A press pins the details open; only hover previews close on pointer exit */
+  const pinned = useRef(false);
   const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
   const hoverOpen = () => {
     if (!canHover()) return;
@@ -77,14 +102,18 @@ export function SessionContext({
     hoverTimer.current = setTimeout(() => popover.onOpenChange(true), 150);
   };
   const hoverClose = () => {
-    if (!canHover()) return;
+    if (!canHover() || pinned.current) return;
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => popover.onOpenChange(false), 200);
+    hoverTimer.current = setTimeout(() => onOpenChange(false), 200);
+  };
+  const onOpenChange = (next: boolean) => {
+    if (!next) pinned.current = false;
+    popover.onOpenChange(next);
   };
   return (
     <Popover
       open={popover.open}
-      onOpenChange={popover.onOpenChange}
+      onOpenChange={onOpenChange}
       onOpenChangeComplete={popover.onOpenChangeComplete}
     >
       <PopoverTrigger
@@ -92,13 +121,10 @@ export function SessionContext({
           compact ? (
             <Button
               variant="ghost"
-              size="icon-xs"
+              size="xs"
               data-testid="context-meter-compact"
-              aria-label={
-                windowError
-                  ? `Context ~${formatTokens(used)}, window unavailable`
-                  : `Context ~${formatTokens(used)} of ${formatTokens(window)}`
-              }
+              className="gap-1 px-1.5"
+              aria-label={`${contextLabel}; ${compactionLabel}`}
             />
           ) : (
             <Button
@@ -109,6 +135,10 @@ export function SessionContext({
             />
           )
         }
+        onClick={() => {
+          if (hoverTimer.current) clearTimeout(hoverTimer.current);
+          pinned.current = true;
+        }}
         onMouseEnter={hoverOpen}
         onMouseLeave={hoverClose}
       >
@@ -122,6 +152,17 @@ export function SessionContext({
             {windowError
               ? `~${formatTokens(used)} / window unavailable`
               : `~${formatTokens(used)} / ${formatTokens(window)}`}
+          </span>
+        )}
+        {compact ? (
+          <span className="text-xs tabular-nums" title={compactionLabel}>
+            {sessionCompactionCount ?? "?"}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground" title={compactionLabel}>
+            {sessionCompactionCount == null
+              ? "compactions unavailable"
+              : `${sessionCompactionCount} ${sessionCompactionCount === 1 ? "compaction" : "compactions"}`}
           </span>
         )}
       </PopoverTrigger>
@@ -153,7 +194,7 @@ export function SessionContext({
             variant="ghost"
             size="icon-xs"
             aria-label="Close context details"
-            onClick={() => popover.onOpenChange(false)}
+            onClick={() => onOpenChange(false)}
           >
             <X />
           </Button>
@@ -172,6 +213,62 @@ export function SessionContext({
             {context.estimatedDurableTokens.toLocaleString()}
           </dd>
         </dl>
+        {context.lastRequest && (
+          <section
+            className="mt-4 border-t border-border pt-3"
+            data-testid="last-context-dispatch"
+          >
+            <p className="text-sm font-medium text-heading">Latest model input</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {compactionReason(context.lastRequest.compactionReason)}
+            </p>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-5 gap-y-1 text-sm">
+              <dt className="text-muted-foreground">Input estimate</dt>
+              <dd className="text-right font-mono text-xs">
+                {context.lastRequest.preCompactionInputTokens == null
+                  ? `${context.lastRequest.estimatedInputTokens.toLocaleString()} tokens`
+                  : `${context.lastRequest.preCompactionInputTokens.toLocaleString()} → ${context.lastRequest.estimatedInputTokens.toLocaleString()} tokens`}
+              </dd>
+              <dt className="text-muted-foreground">Dispatch threshold</dt>
+              <dd className="text-right font-mono text-xs">
+                {context.lastRequest.compactionThresholdTokens.toLocaleString()} tokens
+              </dd>
+            </dl>
+          </section>
+        )}
+        {!context.requestReductionHistoryLoaded && (
+          <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">
+            Per-request model-input history is unavailable for this view.
+          </p>
+        )}
+        {context.compactions.length > 0 && (
+          <section
+            className="mt-4 border-t border-border pt-3"
+            data-testid="session-compactions"
+          >
+            <p className="text-sm font-medium text-heading">Session compactions</p>
+            <ul className="mt-2 space-y-2 text-sm">
+              {context.compactions
+                .slice(-5)
+                .reverse()
+                .map((entry) => (
+                  <li key={entry.compactionKey} className="flex justify-between gap-3">
+                    <span className="text-muted-foreground">
+                      {entry.createdAt ? `${entry.createdAt} · ` : ""}
+                      {entry.messagesCompacted == null
+                        ? "Message count unavailable"
+                        : `${entry.messagesCompacted.toLocaleString()} messages`}
+                    </span>
+                    <span className="text-right font-mono text-xs">
+                      {entry.originalTokens == null || entry.compactedTokens == null
+                        ? "Token estimates unavailable"
+                        : `${entry.originalTokens.toLocaleString()} → ${entry.compactedTokens.toLocaleString()}`}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+          </section>
+        )}
       </PopoverContent>
     </Popover>
   );

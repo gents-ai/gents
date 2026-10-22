@@ -45,6 +45,7 @@ pub enum GoalControlAction {
     },
     Pause {},
     Resume {},
+    Stop {},
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

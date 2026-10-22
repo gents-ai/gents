@@ -73,6 +73,30 @@ def r6BudgetCase (name : String) (preLiveCount : Nat) :
     none none
     (if legal then none else some "background_tool_budget_exceeded")
 
+def r6BatchCasesFrom (rows : List Background.BackgroundRowState)
+    (attemptsRemaining : Nat) (attempt : Nat := 0) : List R6BackgroundingCase :=
+  match attemptsRemaining with
+  | 0 => []
+  | remaining + 1 =>
+    let live := Background.admittedBackgroundRows rows
+    match Background.admitFirstPending rows with
+    | none => []
+    | some (updated, admitted) =>
+      r6Case
+        ("background_batch_attempt_" ++ toString attempt)
+        "budget_batch"
+        "spawn_process"
+        admitted
+        live
+        (if admitted then "running" else "rejected")
+        none
+        none
+        (if admitted then none else some "background_tool_budget_exceeded")
+      :: r6BatchCasesFrom updated remaining (attempt + 1)
+
+def r6BatchCases : List R6BackgroundingCase :=
+  r6BatchCasesFrom (Background.pendingBackgroundRows 10) 10
+
 def r6RestartCase : R6BackgroundingCase :=
   let row : Recovery.RestartRow :=
     { awaitMode := .background
@@ -372,7 +396,8 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6BudgetCase
       "background_tool_budget_count_8_rejects_spawn"
       8
-  , r6NativeStepCase
+  ] ++ r6BatchCases ++ [
+    r6NativeStepCase
       "tool_kind_background_mode_executes"
       "background"
       (r6NativeToolFixture .foreground)
@@ -525,6 +550,16 @@ theorem r6BackgroundingCases_pinned :
           "running", none, none)
       , ("background_tool_budget_count_8_rejects_spawn", false, "background",
           "rejected", none, none)
+      , ("background_batch_attempt_0", true, "background", "running", none, none)
+      , ("background_batch_attempt_1", true, "background", "running", none, none)
+      , ("background_batch_attempt_2", true, "background", "running", none, none)
+      , ("background_batch_attempt_3", true, "background", "running", none, none)
+      , ("background_batch_attempt_4", true, "background", "running", none, none)
+      , ("background_batch_attempt_5", true, "background", "running", none, none)
+      , ("background_batch_attempt_6", true, "background", "running", none, none)
+      , ("background_batch_attempt_7", true, "background", "running", none, none)
+      , ("background_batch_attempt_8", false, "background", "rejected", none, none)
+      , ("background_batch_attempt_9", false, "background", "rejected", none, none)
       , ("tool_kind_background_mode_executes", true, "background",
           "running", none, none)
       , ("tool_kind_bridge_complete_persists_result", true, "background",

@@ -122,6 +122,87 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     assert_background_rows(&node, &request_id, witness.numeric_bound, "cancelled").await;
+    let batch = crate::lean_vocab_test::lean_r6_backgrounding_cases()
+        .iter()
+        .filter(|case| case.group == "budget_batch")
+        .collect::<Vec<_>>();
+    assert!(!batch.is_empty(), "modeled concurrent admission schedule");
+    let ids = (0..batch.len())
+        .map(|index| format!("concurrent-budget-{index}"))
+        .collect::<Vec<_>>();
+    let calls = ids.iter().map(|id| (id.as_str(), None)).collect::<Vec<_>>();
+    let message = Message::Assistant {
+        id: Some("concurrent-budget-turn".into()),
+        content: ids
+            .iter()
+            .zip(&batch)
+            .map(|(id, case)| {
+                AssistantContent::ToolCall(ToolCall {
+                    id: id.clone(),
+                    call_id: None,
+                    function: ToolFunction {
+                        name: case.action.clone(),
+                        arguments: serde_json::from_str(args).unwrap(),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
+    };
+    publish_and_adopt_tool_turns(&hook, &calls, message).await;
+    let results = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        futures::future::join_all(
+            ids.iter()
+                .zip(&batch)
+                .map(|(id, case)| hook.on_tool_call(&case.action, None, id, args)),
+        ),
+    )
+    .await
+    .expect("concurrent admissions must settle while their children remain running");
+    let mut admitted = Vec::new();
+    let mut rejected = 0;
+    for result in results {
+        let ToolCallHookAction::Skip { reason } = result else {
+            panic!("accepted spawn must return a receipt: {result:?}");
+        };
+        let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        if receipt["status"] == "running" {
+            admitted.push(receipt["tool_call_id"].as_str().unwrap().to_owned());
+        } else {
+            assert_eq!(
+                receipt["code"],
+                witness.kind_field("error_code_on_violation")
+            );
+            rejected += 1;
+        }
+    }
+    assert_eq!(
+        admitted.len(),
+        batch.iter().filter(|case| case.legal).count()
+    );
+    assert_eq!(rejected, batch.iter().filter(|case| !case.legal).count());
+    let data = crate::ConfigAccess::local(node.clone()).execute(&format!(
+        r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}}, lifecycle_state: {{_eq: "running"}} }}) {{ _docID tool_call_id }} }}"#,
+        crate::graphql::escape_graphql_string(&request_id),
+    )).await.unwrap();
+    assert_eq!(
+        data["data"]["AgentToolCall"].as_array().unwrap().len(),
+        admitted.len()
+    );
+    for (index, child) in admitted.iter().enumerate() {
+        let args = json!({"tool_call_id": child}).to_string();
+        let result = invoke(
+            &hook,
+            &format!("cancel-concurrent-{index}"),
+            "cancel_process",
+            &args,
+        )
+        .await;
+        assert_eq!(result["status"], "cancelled");
+        executions.wait_for_completion(child).await;
+    }
     hook_execution_fixtures().lock().await.remove(&request_id);
     node.shutdown().await;
 }
@@ -217,6 +298,11 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         let args = json!({"tool_name": tool, "args": {}}).to_string();
         let receipt = invoke(&hook, &format!("timed-{index}"), "spawn_process", &args).await;
         assert_eq!(receipt["status"], "running", "{receipt}");
+        assert_eq!(
+            receipt["effective_timeout_secs"],
+            json!(lifetime),
+            "{receipt}"
+        );
         let child = receipt["tool_call_id"].as_str().unwrap().to_owned();
         let row = fetch_tool_call_row(&node, &session, &child).await;
         let deadline = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
@@ -247,6 +333,12 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         "configured 1s wait took {:?}",
         started.elapsed()
     );
+
+    let args = json!({"tool_name": "bash", "args": {"timeout_secs": 0}}).to_string();
+    let receipt = invoke(&hook, "timed-zero", "spawn_process", &args).await;
+    assert_eq!(receipt["status"], "running", "{receipt}");
+    assert_eq!(receipt["effective_timeout_secs"], json!(1), "{receipt}");
+    children.push(receipt["tool_call_id"].as_str().unwrap().to_owned());
 
     for (index, child) in children.iter().enumerate() {
         let args = json!({"tool_call_id": child}).to_string();
@@ -330,21 +422,16 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
                 &["bash".into()],
             ))
             .with_background_execution_registry(executions.clone());
-    hook.on_completion_call(&user_text_message("budgeted background"), &[])
-        .await;
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session, identity.did(), "general")
-        .await
-        .unwrap();
     let request_id = format!("budgeted-{}", uuid::Uuid::new_v4());
-    bind_interruptible_request(
-        &node,
+    bind_signed_hook_request(
         &hook,
         &request_id,
-        &session,
         Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    hook.on_completion_call(&user_text_message("budgeted background"), &[])
+        .await;
     let receipt = invoke(
         &hook,
         "budgeted-spawn",
@@ -357,9 +444,10 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     let row = fetch_tool_call_row(&node, &session, &child).await;
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
 
-    let history = crate::session::load_history(&node, &session, identity.did(), None)
-        .await
-        .unwrap();
+    let history =
+        crate::session::load_history(&node, &session, identity.did(), Some(identity.did()))
+            .await
+            .unwrap();
     let marker = format!("<tool-completion tool_call_id=\"{child}\"");
     let notification = history
         .iter()
@@ -414,9 +502,10 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
     )
     .await
     .expect("redrive after a budget change replays the published notice");
-    let history = crate::session::load_history(&node, &session, identity.did(), None)
-        .await
-        .unwrap();
+    let history =
+        crate::session::load_history(&node, &session, identity.did(), Some(identity.did()))
+            .await
+            .unwrap();
     let notices = history
         .iter()
         .filter_map(|message| match message {

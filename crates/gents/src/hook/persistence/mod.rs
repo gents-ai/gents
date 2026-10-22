@@ -26,13 +26,16 @@ pub(crate) const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
 
 mod background_control;
 mod background_tools;
+mod foreground_handoff;
 mod goal_tools;
 mod helpers;
 mod prompt_hook;
 mod session_message;
 
 pub(crate) use helpers::count_live_backgrounded_rows_in;
+pub(crate) use helpers::BackgroundCapacityExceeded;
 use helpers::*;
+pub(crate) use helpers::{reserve_background_slot_in_txn, BackgroundSlot};
 pub(crate) use prompt_hook::HookOwnedTool;
 
 impl DefraSessionHook {

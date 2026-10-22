@@ -6,7 +6,6 @@
  */
 export type Node = { node_did: string, display_name?: string | null, default_agent_id?: string | null, enabled?: boolean | null, created_at?: string | null, created_by?: string | null,
 /**
- * Admission bound on a request's causal hop; absent uses
- * [`DEFAULT_MAX_REQUEST_HOP`].
+ * Optional admission bound on a request's causal hop; absent disables the cap.
  */
 max_request_hop?: number | null, tags?: Array<string> | null, };

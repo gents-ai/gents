@@ -646,6 +646,10 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             json!(gents_protocol::request_input::REQUEST_INPUT_CONTRACT_VERSION),
         );
         map.insert(
+            gents_protocol::goal_control::STATUS_GOAL_STOP_CONTRACT_FIELD.to_owned(),
+            json!(gents_protocol::goal_control::GOAL_STOP_CONTRACT_VERSION),
+        );
+        map.insert(
             gents::plugin::approval::workspace::STATUS_SUPPORT_FIELD.to_owned(),
             json!(gents::plugin::approval::workspace::support()),
         );
@@ -1231,7 +1235,7 @@ mod tests {
         };
         let (identity, other) = (key("runtime.key"), key("other.key"));
         let node = Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .build()
                 .await
                 .unwrap(),

@@ -452,7 +452,12 @@ mod tests {
 
     async fn seeded() -> (ConfigAccess, String, String) {
         use gents::oauth_credential::{set_account_enabled, store_sign_in};
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node);
         for value in [

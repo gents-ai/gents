@@ -297,6 +297,7 @@ fn diff_line(kind: ToolDiffLineKind, text: &str) -> ToolDiffLineView {
     ToolDiffLineView {
         kind,
         text: text.trim_end_matches('\r').to_string(),
+        line_number: None,
     }
 }
 
@@ -323,7 +324,9 @@ fn applied_diff(body: &str) -> Vec<ToolDiffLineView> {
             if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
                 return None;
             }
-            Some(diff_line(kind, text.strip_prefix(' ').unwrap_or(text)))
+            let mut line = diff_line(kind, text.strip_prefix(' ').unwrap_or(text));
+            line.line_number = number.parse().ok();
+            Some(line)
         })
         .collect();
     while lines
@@ -410,6 +413,13 @@ fn project_file_edit(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
     ToolPresentationView::FileEdit {
         operation: operation.to_string(),
         path: string_field(args.as_ref(), "path").or_else(|| string_field(meta.as_ref(), "path")),
+        applied: meta.as_ref().map(|meta| {
+            bool_field(Some(meta), "ok") == Some(true)
+                && string_field(Some(meta), "status").as_deref() == Some("success")
+                && string_field(Some(meta), "tool").as_deref() == Some(operation)
+                && bool_field(Some(meta), "dry_run") != Some(true)
+                && matches!(tool.lifecycle_state.as_deref(), Some("completed"))
+        }),
         reveal_path: string_field(meta.as_ref(), "resolved_path"),
         created: bool_field(meta.as_ref(), "created"),
         replacements_applied: i64_field(meta.as_ref(), "replacements_applied"),
@@ -526,6 +536,8 @@ mod tests {
 
     fn tool(name: &str, args: &str, result: &str, state: &str) -> ToolCallView {
         ToolCallView {
+            background_available: None,
+            tool_call_doc_id: None,
             tool_call_key: "tool-1".into(),
             request_id: Some("request-1".into()),
             message_sequence: Some(2),
@@ -601,6 +613,73 @@ write_file: wrote 4 bytes to file.txt"#,
             panic!("expected file edit");
         };
         assert_eq!(reveal_path, None);
+    }
+
+    #[test]
+    fn file_edit_observation_requires_a_completed_native_mutation() {
+        for (state, result, expected) in [
+            (
+                "completed",
+                r#"{"ok":true,"status":"success","tool":"edit_file","dry_run":false}"#,
+                Some(true),
+            ),
+            (
+                "completed",
+                r#"{"ok":true,"status":"success","tool":"edit_file","dry_run":true}"#,
+                Some(false),
+            ),
+            (
+                "completed",
+                r#"{"ok":false,"status":"failed","tool":"edit_file"}"#,
+                Some(false),
+            ),
+            (
+                "completed",
+                r#"{"ok":true,"status":"success","tool":"read_file"}"#,
+                Some(false),
+            ),
+            (
+                "failed",
+                r#"{"ok":true,"status":"success","tool":"edit_file"}"#,
+                Some(false),
+            ),
+            (
+                "running",
+                r#"{"ok":true,"status":"success","tool":"edit_file"}"#,
+                Some(false),
+            ),
+            ("completed", "edited file.txt", None),
+        ] {
+            let ToolPresentationView::FileEdit { applied, .. } = project_file_edit(
+                &tool(
+                    "edit_file",
+                    r#"{"path":"file.txt","old_text":"old","new_text":"new"}"#,
+                    result,
+                    state,
+                ),
+                "edit_file",
+            ) else {
+                panic!("expected file edit");
+            };
+            assert_eq!(applied, expected, "{state}: {result}");
+        }
+    }
+
+    #[test]
+    fn applied_diff_retains_reported_numbers_without_numbering_requested_text() {
+        let lines = applied_diff("@@ line 41\n    41 | before\n-   42 | old\n+   42 | new\n+   43 | extra\n    43 | after");
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.line_number)
+                .collect::<Vec<_>>(),
+            vec![Some(41), Some(42), Some(42), Some(43), Some(43)]
+        );
+        assert_eq!(lines[1].kind, ToolDiffLineKind::Removed);
+        assert_eq!(lines[2].text, "new");
+        assert!(requested_diff("old", "new", None)
+            .iter()
+            .all(|line| line.line_number.is_none()));
     }
 
     #[test]

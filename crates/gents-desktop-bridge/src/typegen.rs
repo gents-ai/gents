@@ -185,6 +185,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::host::settings::ConfigEditorEntry,
         gents_desktop_core::client::ConfigEditorDocument,
         RequestOutputView,
+        gents_protocol::file_changes::ToolFileChanges,
         gents_protocol::client_media::MediaCall,
         gents_protocol::client_media::MediaOperation,
         gents_protocol::client_media::MediaPcmClip,
@@ -255,6 +256,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopOperationsSnapshotRequest,
         DesktopSessionProvenanceRequest,
         DesktopInterruptRequest,
+        DesktopBackgroundToolRequest,
         DesktopJobControlRequest,
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
@@ -703,4 +705,29 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn retained_file_image_discriminants_match_native_serialization() {
+    use gents_protocol::file_changes::{FileImage, FilePermissions, ImageFailure};
+    let declaration = FileImage::decl();
+    for image in [
+        FileImage::Missing,
+        FileImage::File {
+            content_hash: String::new(),
+            data: String::new(),
+            permissions: FilePermissions {
+                readonly: false,
+                unix_mode: None,
+            },
+            links: None,
+        },
+        FileImage::Unavailable {
+            reason: ImageFailure::MutationIncomplete,
+        },
+    ] {
+        let value = serde_json::to_value(image).unwrap();
+        let discriminator = format!(r#""kind": "{}""#, value["kind"].as_str().unwrap());
+        assert!(declaration.contains(&discriminator), "{declaration}");
+    }
 }

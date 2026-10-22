@@ -11,6 +11,7 @@ mod cli_tool;
 mod context_budget;
 pub mod edit_match;
 mod file_tools;
+pub(crate) use file_tools::change_capture::FileChanges;
 mod goal;
 pub(crate) mod lsp;
 #[cfg(feature = "agent-memory")]
@@ -32,9 +33,9 @@ use bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
 use cli_tool::CliTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use session_message::{
-    AgentInterruptTool, AgentListTool, AgentMessageTool, AgentNewTool, AgentSessionListTool,
-    AgentSessionReadTool, CancelProcessTool, ListProcessesTool, ReadProcessTool, SpawnProcessTool,
-    WaitProcessTool,
+    AgentInterruptTool, AgentListTool, AgentMessageTool, AgentNewTool, AgentResumeTool,
+    AgentSessionListTool, AgentSessionReadTool, AgentStopTool, CancelProcessTool,
+    ListProcessesTool, ReadProcessTool, SpawnProcessTool, WaitProcessTool,
 };
 
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
@@ -58,6 +59,13 @@ pub(crate) fn write_capable_bash_for_test(
     Box::new(UnrestrictedBashTool::new(
         ToolContext::new(root.to_path_buf(), false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    ))
+}
+
+#[cfg(test)]
+pub(crate) fn write_file_for_test(root: &std::path::Path) -> Box<dyn ToolDyn> {
+    Box::new(WriteFileTool::new(
+        ToolContext::new(root.to_path_buf(), false).unwrap(),
     ))
 }
 
@@ -94,6 +102,7 @@ pub use session_history::{
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;
+pub(crate) use shared::background_command_timeout;
 #[cfg(test)]
 pub(crate) use shared::run_command_for_test;
 pub(crate) use shared::shell_join;
@@ -125,13 +134,17 @@ pub(crate) const BACKGROUND_COMMAND_TIMEOUT_SECS: u64 = 36_000;
 pub const AGENT_NEW_TOOL_NAME: &str = "agent_new";
 pub const AGENT_MESSAGE_TOOL_NAME: &str = "agent_message";
 pub const AGENT_INTERRUPT_TOOL_NAME: &str = "agent_interrupt";
+pub const AGENT_STOP_TOOL_NAME: &str = "agent_stop";
+pub const AGENT_RESUME_TOOL_NAME: &str = "agent_resume";
 pub const AGENT_LIST_TOOL_NAME: &str = "agent_list";
 pub const AGENT_SESSION_LIST_TOOL_NAME: &str = "agent_session_list";
 pub const AGENT_SESSION_READ_TOOL_NAME: &str = "agent_session_read";
-pub const AGENT_TOOL_NAMES: [&str; 6] = [
+pub const AGENT_TOOL_NAMES: [&str; 8] = [
     AGENT_NEW_TOOL_NAME,
     AGENT_MESSAGE_TOOL_NAME,
     AGENT_INTERRUPT_TOOL_NAME,
+    AGENT_STOP_TOOL_NAME,
+    AGENT_RESUME_TOOL_NAME,
     AGENT_LIST_TOOL_NAME,
     AGENT_SESSION_LIST_TOOL_NAME,
     AGENT_SESSION_READ_TOOL_NAME,
@@ -686,6 +699,8 @@ pub(crate) fn build_agent_tools(config: AgentToolConfig) -> Vec<Box<dyn ToolDyn>
     }
     tools.push(Box::new(AgentMessageTool));
     tools.push(Box::new(AgentInterruptTool));
+    tools.push(Box::new(AgentStopTool));
+    tools.push(Box::new(AgentResumeTool));
     tools.push(Box::new(AgentListTool));
     tools.push(Box::new(AgentSessionListTool));
     tools.push(Box::new(AgentSessionReadTool));

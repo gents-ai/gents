@@ -35,16 +35,20 @@ pub(super) fn resolve_command_timeout(
     background: bool,
 ) -> std::time::Duration {
     if background {
-        let budget = std::time::Duration::from_secs(super::BACKGROUND_COMMAND_TIMEOUT_SECS);
-        return match requested_secs {
-            Some(secs) => std::time::Duration::from_secs(secs.max(1)).min(budget),
-            None => budget,
-        };
+        return background_command_timeout(requested_secs);
     }
     let ceiling = foreground_max.max(foreground_default);
     match requested_secs {
         Some(secs) => std::time::Duration::from_secs(secs.max(1)).min(ceiling),
         None => foreground_default,
+    }
+}
+
+pub(crate) fn background_command_timeout(requested_secs: Option<u64>) -> std::time::Duration {
+    let budget = std::time::Duration::from_secs(super::BACKGROUND_COMMAND_TIMEOUT_SECS);
+    match requested_secs {
+        Some(secs) => std::time::Duration::from_secs(secs.max(1)).min(budget),
+        None => budget,
     }
 }
 

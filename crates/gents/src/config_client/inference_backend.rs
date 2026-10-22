@@ -139,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn serving_accounts_reads_backends_and_accounts() -> Result<()> {
         let did = "did:key:z6MkTestServing";
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
+        let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node);
         let oauth = |account_ref: Option<&str>| BackendAuth::NodeOAuth {

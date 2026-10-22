@@ -264,7 +264,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             uuid::Uuid::new_v4()
         ));
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(&path)
                 .build()
                 .await
@@ -622,7 +622,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             uuid::Uuid::new_v4()
         ));
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::test_support::node_builder()
                 .data_path(&path)
                 .build()
                 .await

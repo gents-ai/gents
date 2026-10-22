@@ -680,7 +680,13 @@ pub(crate) mod tests {
     use crate::plugin_job::keys::{job_message_key, job_session_id, job_spawn_key};
 
     pub(crate) async fn open() -> Arc<EmbeddedNode> {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(node_did())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         node
     }
@@ -1299,7 +1305,17 @@ pub(crate) mod tests {
     };
     use crate::tool_call_lifecycle::AwaitMode;
 
-    pub(crate) const NODE_DID: &str = "did:key:z6MkJobFixtureNode";
+    pub(crate) fn node_did() -> &'static str {
+        use crate::NodeIdentity as _;
+
+        static IDENTITY: std::sync::OnceLock<crate::KeyIdentity> = std::sync::OnceLock::new();
+        IDENTITY
+            .get_or_init(|| {
+                let directory = tempfile::tempdir().unwrap();
+                crate::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap()
+            })
+            .did()
+    }
     const SCRIPT: &[u8] = b"fn step(input) { input }";
 
     fn sha(bytes: &[u8]) -> String {
@@ -1428,7 +1444,7 @@ pub(crate) mod tests {
         crate::plugin::store::write_record(home.path(), &plugin()).unwrap();
         let tools: Tools = serde_json::from_value(json!({
             "tools_id": "tools",
-            "node_did": NODE_DID,
+            "node_did": node_did(),
             "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
         .unwrap();
@@ -1439,13 +1455,13 @@ pub(crate) mod tests {
         insert(
             &node,
             "AgentContext",
-            json!({"context_id": "context", "node_did": NODE_DID, "tools_id": "tools"}),
+            json!({"context_id": "context", "node_did": node_did(), "tools_id": "tools"}),
         )
         .await;
         insert(
             &node,
             "Agent",
-            json!({"agent_id": "general", "node_did": NODE_DID, "context_id": "context",
+            json!({"agent_id": "general", "node_did": node_did(), "context_id": "context",
                    "inference_profile_id": "inference", "enabled": true}),
         )
         .await;
@@ -1453,12 +1469,12 @@ pub(crate) mod tests {
         insert(
             &node,
             "AgentSession",
-            json!({"session_id": "session-1", "node_did": NODE_DID, "requester_did": null,
+            json!({"session_id": "session-1", "node_did": node_did(), "requester_did": null,
                    "agent_id": "general", "created_at": now}),
         )
         .await;
         let mut value = json!({
-            "request_id": "request-1", "purpose": "normal", "node_did": NODE_DID,
+            "request_id": "request-1", "purpose": "normal", "node_did": node_did(),
             "agent_id": "general", "session_id": "session-1",
             "retry_parent_request": "", "retry_root_request": "request-1",
             "superseded_by_request": "", "content": "spawn", "lifecycle_state": "pending",
@@ -1482,7 +1498,7 @@ pub(crate) mod tests {
         let mut request = RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
-            NODE_DID,
+            node_did(),
             row.try_into().unwrap(),
             60,
         );
@@ -1512,7 +1528,7 @@ pub(crate) mod tests {
             let call = publish_accepted_on_claimed_request(
                 self.node.clone(),
                 &mut self.request,
-                NODE_DID,
+                node_did(),
                 self.turn,
                 tool,
                 call_id,
@@ -1845,7 +1861,7 @@ pub(crate) mod tests {
         assert_eq!(input.pin, Some(pin.clone()));
         assert_eq!(input.origin, Some(pin.origin));
         assert_eq!(input.caller.cwd, pin.cwd);
-        assert_eq!(input.caller.node_did, NODE_DID);
+        assert_eq!(input.caller.node_did, node_did());
         assert_eq!(input.ceiling.max_live, 2);
         assert!(input.mounts.is_empty());
         assert_eq!(input.verified_script, None);

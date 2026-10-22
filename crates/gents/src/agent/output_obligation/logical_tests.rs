@@ -151,7 +151,7 @@ async fn terminalize_accepted_tool(
 #[tokio::test]
 async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
     for interrupted in [true, false] {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
@@ -247,7 +247,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().logical_output_obligation_cases;
     assert_eq!(cases.len(), 11);
     for case in cases {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
@@ -471,7 +471,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             "a negative count is not a canonical positive integer",
         ),
     ] {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
@@ -533,7 +533,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
 
 #[tokio::test]
 async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();

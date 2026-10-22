@@ -42,6 +42,8 @@ function session(
       durableMessageCount: keys.length,
       providerMessageCount: keys.length,
       totalCompactedMessages: 0,
+      sessionCompactionCount: null,
+      requestReductionHistoryLoaded: false,
       compactions: [],
       lastRequest: null,
     },

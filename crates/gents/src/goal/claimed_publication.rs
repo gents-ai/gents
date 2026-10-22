@@ -340,16 +340,22 @@ async fn stop_claimed_continuation_in_txn(
         String::new()
     };
     let updated_at = escape_graphql_string(&now.to_rfc3339());
-    let fields = if let Some(post) = state.step(GoalAction::Pause) {
+    let action = if state.status == GoalStatus::Active {
+        GoalAction::Pause
+    } else {
+        GoalAction::WrapupAbandoned
+    };
+    let Some(post) = state.step(action) else {
+        return Ok(None);
+    };
+    let fields = if action == GoalAction::Pause {
         format!(
             r#"status: "{}", active_time_seconds: {}, active_started_at: null{failure_field}, updated_at: "{updated_at}""#,
             post.status.as_str(),
             goal.current_active_time_seconds(now),
         )
-    } else if state.step(GoalAction::WrapupAbandoned).is_some() {
-        format!(r#"wrapup_completed: true{failure_field}, updated_at: "{updated_at}""#)
     } else {
-        return Ok(None);
+        format!(r#"wrapup_completed: true{failure_field}, updated_at: "{updated_at}""#)
     };
     let doc_id = escape_graphql_string(&goal.doc_id);
     let did = escape_graphql_string(&goal.node_did);

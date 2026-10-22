@@ -1,9 +1,8 @@
-# One content-defined block of a rendered-request capture body (#2333). A v3
-# RenderedRequest stores its body as an ordered manifest of these blocks and
-# re-references shared blocks. The two collections are one sync unit: a
-# manifest without its blocks is undecodable and a block without a referencing
-# manifest is inert, so neither is delivered, backed up or pruned without the
-# other. `@branchable` is deliberate and irreversible. `content_key` (sha256
+# Immutable capture or reduction content, or an ordered manifest of child
+# references. Captures, provider-context reductions and their blocks are one
+# sync unit: a manifest without its blocks is undecodable and a block without a
+# referencing manifest is inert, so neither is delivered, backed up or pruned
+# without the other. `@branchable` is deliberate and irreversible. `content_key` (sha256
 # over the payload bytes) is dedupe/lookup only, never integrity evidence:
 # integrity rides on the DefraDB field commit CID of `payload`, pinned in the
 # referencing manifest and re-checked at read time. A reference never broadens
@@ -13,8 +12,8 @@
 # blocks are the highest-volume collection.
 type RenderedRequestBlock @branchable {
     content_key: String @index(unique: true) @immutable
-    # Encoded body bytes for this block, exactly as chunked from one capture
-    # payload. Raw UTF-8; not parsed, never rewritten.
+    # UTF-8 content bytes or encoded child references, never rewritten.
+    # The capture tree height distinguishes leaves from manifest nodes.
     payload: String @immutable
     # Left unset: DefraDB derives the document id from the fields written, so
     # deleted block documents can never be recreated with the same bytes.

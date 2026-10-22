@@ -250,7 +250,7 @@ mod tests {
     }
 
     async fn tool() -> CompileGraphTool {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
         super::super::runtime::install_graph_test_tasks(

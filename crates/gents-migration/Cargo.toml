@@ -21,7 +21,10 @@ sha2.workspace = true
 hex = "0.4"
 
 [dev-dependencies]
+crypto.workspace = true
+defra-core.workspace = true
 defra-node.workspace = true
+identity.workspace = true
 gents-lens-fixture-add-label = { path = "../gents-lenses/fixture_add_label", default-features = false }
 tempfile = "3"
 tokio = { workspace = true, features = ["full", "test-util"] }

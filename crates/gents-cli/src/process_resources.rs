@@ -1,5 +1,30 @@
 use anyhow::Result;
 
+/// macOS applies this setting to the process, not a Keychain item or its ACL.
+/// The CLI owns this guard from before credential loading until server exit;
+/// an inherited prohibition must remain in force when the guard is dropped.
+#[cfg(target_os = "macos")]
+pub(crate) fn prevent_keychain_prompts(
+    prevent: bool,
+) -> Result<Option<security_framework::os::macos::keychain::KeychainUserInteractionLock>> {
+    use anyhow::Context;
+    use security_framework::os::macos::keychain::SecKeychain;
+
+    if !prevent
+        || !SecKeychain::user_interaction_allowed().context("read process Keychain UI policy")?
+    {
+        return Ok(None);
+    }
+    SecKeychain::disable_user_interaction()
+        .map(Some)
+        .context("disable process Keychain access dialogs")
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn prevent_keychain_prompts(_prevent: bool) -> Result<()> {
+    Ok(())
+}
+
 /// Embedded DefraDB runtimes need a usable descriptor budget when launched
 /// from GUI terminals with a low inherited soft limit. Raise only this process
 /// limit, retaining the hard limit and system policy.
@@ -39,6 +64,62 @@ pub(crate) fn prepare() -> Result<()> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[test]
+    fn server_keychain_dialog_prevention_is_opt_in() {
+        use crate::cli::{Cli, Command};
+        use clap::Parser;
+
+        for (arguments, expected) in [
+            (vec!["gents", "server"], false),
+            (vec!["gents", "server", "--no-keychain-prompts"], true),
+        ] {
+            let cli = Cli::try_parse_from(arguments).unwrap();
+            let Command::Server(args) = cli.command else {
+                panic!("expected server command");
+            };
+            assert_eq!(args.no_keychain_prompts, expected);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn server_keychain_prompt_guard_restores_only_its_process_policy() {
+        const CHILD: &str = "GENTS_KEYCHAIN_UI_POLICY_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            use security_framework::os::macos::keychain::SecKeychain;
+
+            assert!(SecKeychain::user_interaction_allowed().unwrap());
+            let unchanged = super::prevent_keychain_prompts(false).unwrap();
+            assert!(SecKeychain::user_interaction_allowed().unwrap());
+            drop(unchanged);
+            let guard = super::prevent_keychain_prompts(true).unwrap();
+            assert!(!SecKeychain::user_interaction_allowed().unwrap());
+            for prevent in [false, true] {
+                let inherited = super::prevent_keychain_prompts(prevent).unwrap();
+                assert!(!SecKeychain::user_interaction_allowed().unwrap());
+                drop(inherited);
+                assert!(!SecKeychain::user_interaction_allowed().unwrap());
+            }
+            drop(guard);
+            assert!(SecKeychain::user_interaction_allowed().unwrap());
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process_resources::tests::server_keychain_prompt_guard_restores_only_its_process_policy",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn raises_inherited_soft_limit_without_changing_hard_limit() {
         const CHILD: &str = "GENTS_PROCESS_FD_LIMIT_TEST_CHILD";

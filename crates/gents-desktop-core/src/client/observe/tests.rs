@@ -11,7 +11,7 @@ mod mixed_batch;
 mod overflow;
 
 use crate::client::schema::ensure_runtime_schemas;
-use defra_node::{EventName, NodeBuilder};
+use defra_node::EventName;
 use std::sync::Arc;
 
 async fn build_observer_fixture() -> (
@@ -32,7 +32,12 @@ async fn build_observer_fixture_for_selection(
     ObserverHandle,
 ) {
     let tempdir = tempfile::tempdir().expect("observer peer directory");
-    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .build()
+            .await
+            .expect("node"),
+    );
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");

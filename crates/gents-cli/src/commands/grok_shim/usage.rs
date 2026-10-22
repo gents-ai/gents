@@ -57,7 +57,7 @@ fn context_info(
 }
 
 pub(super) async fn session_info(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     session: &str,

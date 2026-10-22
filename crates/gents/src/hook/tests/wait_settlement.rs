@@ -10,7 +10,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
     );
     assert!(expected.legal);
     for during_completion in [false, true] {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let agent = "did:test:wait-settlement";
         let hook = DefraSessionHook::with_identity(node.clone(), agent, FailurePolicy::FailClosed);
@@ -145,7 +145,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
 
 #[tokio::test]
 async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let agent = "did:test:wait-job-row";
     let hook = DefraSessionHook::with_identity(node.clone(), agent, FailurePolicy::FailClosed);

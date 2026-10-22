@@ -9,6 +9,7 @@ const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
   "localHistoryLocked",
   "notFound",
   "projectionPending",
+  "goalControlRejected",
   "invalidArgument",
   "unsupported",
   "endpointUnreachable",

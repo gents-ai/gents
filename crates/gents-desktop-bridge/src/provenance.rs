@@ -239,7 +239,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use gents::defra_node::EmbeddedNode;
     use gents::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
 
@@ -444,7 +443,7 @@ mod tests {
         for case in cases {
             let dir = tempfile::tempdir().unwrap();
             let node = Arc::new(
-                EmbeddedNode::builder()
+                crate::tests::support::node_builder()
                     .data_path(dir.path().join("node"))
                     .build()
                     .await

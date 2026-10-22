@@ -2048,7 +2048,7 @@ mod tests {
                 "runtime visibility for {trigger_id}"
             );
         }
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             r#"type PipelineInput {
@@ -2390,7 +2390,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_run_refuses_operator_origin_when_the_entry_declares_prepare() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
@@ -2440,7 +2440,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_run_refuses_prepared_origin_when_the_entry_has_no_prepare() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
@@ -2486,7 +2486,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_run_validates_operator_input_against_the_entry_schema() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
@@ -2559,7 +2559,7 @@ mod tests {
 
     #[tokio::test]
     async fn graph_run_view_commits_exact_terminal_result_refs_and_reloads_them() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             r#"type PipelineInput {
@@ -2755,7 +2755,7 @@ mod tests {
 
     #[tokio::test]
     async fn grouped_delivery_reuses_canonical_event_source_and_trigger_contract() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
         let plan = grouped_test_plan();
@@ -2892,7 +2892,7 @@ mod tests {
     pub(in crate::graph_pipeline) async fn attribution_test_fixture(
         max_invocations: u32,
     ) -> (Arc<EmbeddedNode>, GraphRunReceipt, String) {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",

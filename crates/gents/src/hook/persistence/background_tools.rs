@@ -122,18 +122,6 @@ impl DefraSessionHook {
             .await;
         };
 
-        let live_count = count_live_backgrounded_rows(&self.node, &request_id).await?;
-        if live_count >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return complete_spawn_process_failure(
-                self,
-                &mut parent_lifecycle,
-                FailureClass::ArgumentInvalid,
-                background_budget_exceeded_payload(live_count),
-                None,
-            )
-            .await;
-        }
-
         let target_tool_name = target_name.to_string();
         let target_args = serde_json::to_string(&parsed.args)?;
         if let Err(error) = target_tool.admit(&target_args) {
@@ -176,14 +164,21 @@ impl DefraSessionHook {
                 "running spawn_process parent lacks physical identity"
             ))?
         );
+        let effective_timeout = if crate::toolset::is_bash_tool_name(target_name) {
+            let requested = parsed.args.get("timeout_secs").and_then(|v| v.as_u64());
+            crate::toolset::background_command_timeout(requested).min(lifetime)
+        } else {
+            lifetime
+        };
         let receipt = json_string(json!({
             "ok": true,
             "tool_call_id": background_tool_call_id,
             "tool_name": target_tool_name,
             "await_mode": "background",
-            "status": "running"
+            "status": "running",
+            "effective_timeout_secs": effective_timeout.as_secs()
         }));
-        let mut lifecycle = parent_lifecycle
+        let admission = parent_lifecycle
             .admit_spawned_background(
                 crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
                     tool_name: target_tool_name.clone(),
@@ -192,33 +187,44 @@ impl DefraSessionHook {
                 },
                 &receipt,
             )
-            .await?;
+            .await;
+        let mut lifecycle = match admission {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
+                    return complete_spawn_process_failure(
+                        self,
+                        &mut parent_lifecycle,
+                        FailureClass::ServiceUnavailable,
+                        background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, capacity.0),
+                        None,
+                    )
+                    .await;
+                }
+                return Err(error);
+            }
+        };
         anyhow::ensure!(
             lifecycle.tool_call_id() == background_tool_call_id,
             "spawned admission returned an unexpected stable process handle"
         );
         let cancellation_token = tokio_util::sync::CancellationToken::new();
-        let execution_reservation = self
-            .background_executions
-            .reserve(background_tool_call_id.clone(), cancellation_token.clone());
+        let execution_tool_doc_id = lifecycle
+            .doc_id()
+            .ok_or_else(|| anyhow::anyhow!("spawned background lifecycle lacks physical identity"))?
+            .to_owned();
+        let execution_reservation = self.background_executions.reserve(
+            background_tool_call_id.clone(),
+            execution_tool_doc_id.clone(),
+            cancellation_token.clone(),
+        );
         lifecycle.start_running().await?;
 
         let node = self.node.clone();
         let live_outputs = self.background_live_outputs.clone();
         let execution_call_id = background_tool_call_id.clone();
-        let execution_tool_doc_id = lifecycle
-            .doc_id()
-            .ok_or_else(|| anyhow::anyhow!("spawned background lifecycle lacks physical identity"))?
-            .to_owned();
         let execution_session_id = session_id.clone();
         let execution_request_id = request_id.clone();
-        let execution_request_doc_id = lifecycle
-            .request_doc_id()
-            .ok_or_else(|| anyhow::anyhow!("spawned background lifecycle lacks request binding"))?
-            .to_owned();
-        let execution_node_did = lifecycle.node_did().to_owned();
-        let execution_requester_did = lifecycle.requester_did().map(str::to_owned);
-        let execution_tool_name = target_tool_name.clone();
         let live_output_writer = live_outputs
             .canonical_writer_for(lifecycle.tool_output_binding()?)
             .await;
@@ -285,284 +291,15 @@ impl DefraSessionHook {
             .catch_unwind()
             .await;
 
-            lifecycle.stage_plugin_receipt(
-                live_outputs
-                    .registry
-                    .plugin_receipt(&execution_tool_doc_id)
-                    .await,
-            );
-            lifecycle.stage_plugin_writes(
-                live_outputs
-                    .registry
-                    .deferred_writes(&execution_tool_doc_id)
-                    .await,
-            );
-
-            match execution {
-                Ok(outcome) => match outcome {
-                    crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
-                        let won_terminal_compare = match lifecycle.timeout().await {
-                            Ok(updated) => updated,
-                            Err(error) => {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to terminalize timed-out background tool"
-                                );
-                                false
-                            }
-                        };
-                        if let Some(Err(error)) = project_background_completion_if_owned(
-                            won_terminal_compare,
-                            crate::background_completion::append_background_tool_completion(
-                                &node,
-                                &execution_session_id,
-                                &execution_request_id,
-                                &execution_tool_doc_id,
-                                &execution_tool_name,
-                                BACKGROUND_TIMEOUT_NOTIFICATION.0,
-                                "",
-                                Some(BACKGROUND_TIMEOUT_NOTIFICATION.1),
-                                crate::lifecycle::RequestHopCause::Continuation,
-                            ),
-                        )
-                        .await
-                        {
-                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append timed-out background tool notification");
-                        }
-                    }
-                    crate::tool_call_lifecycle::ToolOutcome::Cancelled => {
-                        let won_terminal_compare = match lifecycle
-                            .cancel_during_run_owned(CancelCause::UserCancelled, "explicit_cancel")
-                            .await
-                        {
-                            Ok(updated) => updated,
-                            Err(error) => {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to terminalize cancelled background tool"
-                                );
-                                false
-                            }
-                        };
-                        if let Some(Err(error)) = project_background_completion_if_owned(
-                            won_terminal_compare,
-                            crate::background_completion::append_background_tool_completion(
-                                &node,
-                                &execution_session_id,
-                                &execution_request_id,
-                                &execution_tool_doc_id,
-                                &execution_tool_name,
-                                "cancelled",
-                                "",
-                                Some("explicit_cancel"),
-                                crate::lifecycle::RequestHopCause::Continuation,
-                            ),
-                        )
-                        .await
-                        {
-                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append cancelled background tool notification");
-                        }
-                    }
-                    crate::tool_call_lifecycle::ToolOutcome::Completed(output) => {
-                        let presentation = match live_outputs
-                            .registry
-                            .take_prepared_presentation(&execution_tool_doc_id, &output)
-                            .await
-                        {
-                            Ok(presentation) => presentation,
-                            Err(error) => {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to resolve background tool presentation"
-                                );
-                                None
-                            }
-                        };
-                        let won_terminal_compare = match lifecycle
-                            .complete_owned(output.as_str(), presentation)
-                            .await
-                        {
-                            Ok(updated) => updated,
-                            Err(error) => {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to complete background tool"
-                                );
-                                false
-                            }
-                        };
-                        let notification_result = if won_terminal_compare {
-                            match crate::background_tools::canonical_tool_output(
-                                node.as_ref(),
-                                &execution_tool_doc_id,
-                                &execution_request_doc_id,
-                                &execution_session_id,
-                                &execution_node_did,
-                                execution_requester_did.as_deref(),
-                            )
-                            .await
-                            {
-                                Ok(output) => output,
-                                Err(error) => {
-                                    tracing::warn!(
-                                        tool_call_id = %execution_call_id,
-                                        error = %error,
-                                        "failed to reconstruct completed background tool output"
-                                    );
-                                    String::new()
-                                }
-                            }
-                        } else {
-                            String::new()
-                        };
-                        if let Some(Err(error)) = project_background_completion_if_owned(
-                            won_terminal_compare,
-                            crate::background_completion::append_background_tool_completion(
-                                &node,
-                                &execution_session_id,
-                                &execution_request_id,
-                                &execution_tool_doc_id,
-                                &execution_tool_name,
-                                "completed",
-                                &notification_result,
-                                None,
-                                crate::lifecycle::RequestHopCause::Continuation,
-                            ),
-                        )
-                        .await
-                        {
-                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append completed background tool notification");
-                        }
-                    }
-                    crate::tool_call_lifecycle::ToolOutcome::Failed {
-                        class: failure_class,
-                        text: reason,
-                        ..
-                    } => {
-                        let presentation = match live_outputs
-                            .registry
-                            .take_prepared_presentation(&execution_tool_doc_id, &reason)
-                            .await
-                        {
-                            Ok(presentation) => presentation,
-                            Err(error) => {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to resolve failed background tool presentation"
-                                );
-                                None
-                            }
-                        };
-                        let won_terminal_compare = match lifecycle
-                            .fail_owned(&reason, failure_class, presentation)
-                            .await
-                        {
-                            Ok(updated) => updated,
-                            Err(error) => {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to fail background tool"
-                                );
-                                false
-                            }
-                        };
-                        let notification_result = if won_terminal_compare {
-                            match crate::background_tools::canonical_tool_output(
-                                node.as_ref(),
-                                &execution_tool_doc_id,
-                                &execution_request_doc_id,
-                                &execution_session_id,
-                                &execution_node_did,
-                                execution_requester_did.as_deref(),
-                            )
-                            .await
-                            {
-                                Ok(output) => output,
-                                Err(error) => {
-                                    tracing::warn!(
-                                        tool_call_id = %execution_call_id,
-                                        error = %error,
-                                        "failed to reconstruct failed background tool output"
-                                    );
-                                    String::new()
-                                }
-                            }
-                        } else {
-                            String::new()
-                        };
-                        if let Some(Err(error)) = project_background_completion_if_owned(
-                            won_terminal_compare,
-                            crate::background_completion::append_background_tool_completion(
-                                &node,
-                                &execution_session_id,
-                                &execution_request_id,
-                                &execution_tool_doc_id,
-                                &execution_tool_name,
-                                "failed",
-                                &notification_result,
-                                Some("tool_failed"),
-                                crate::lifecycle::RequestHopCause::Continuation,
-                            ),
-                        )
-                        .await
-                        {
-                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append failed background tool notification");
-                        }
-                    }
-                },
-                Err(panic) => {
-                    let panic = panic_payload_message(panic.as_ref());
-                    let reason = format!("background tool panicked: {panic}");
-                    let won_terminal_compare = match lifecycle
-                        .fail_owned(&reason, FailureClass::External, None)
-                        .await
-                    {
-                        Ok(updated) => updated,
-                        Err(error) => {
-                            tracing::warn!(
-                                tool_call_id = %execution_call_id,
-                                error = %error,
-                                "failed to terminalize panicking background tool"
-                            );
-                            false
-                        }
-                    };
-                    if let Some(Err(error)) = project_background_completion_if_owned(
-                        won_terminal_compare,
-                        crate::background_completion::append_background_tool_completion(
-                            &node,
-                            &execution_session_id,
-                            &execution_request_id,
-                            &execution_tool_doc_id,
-                            &execution_tool_name,
-                            "failed",
-                            &reason,
-                            Some("tool_panicked"),
-                            crate::lifecycle::RequestHopCause::Continuation,
-                        ),
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            tool_call_id = %execution_call_id,
-                            error = %error,
-                            "failed to append panicking background tool notification"
-                        );
-                    }
-                }
-            }
-
-            live_outputs.remove(&execution_tool_doc_id).await;
-            executions
-                .release_process_record(&execution_call_id, &execution_tool_doc_id)
-                .await;
-            drop(execution_reservation);
+            finish_background_execution(
+                lifecycle,
+                node,
+                live_outputs,
+                executions,
+                execution_reservation,
+                execution,
+            )
+            .await;
         }));
 
         Ok(self.skip_tool_result(SPAWN_PROCESS_TOOL_NAME, receipt))
@@ -1160,3 +897,306 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 const BACKGROUND_TIMEOUT_NOTIFICATION: (&str, &str) = ("failed", "deadline_exceeded");
+
+pub(super) async fn finish_background_execution(
+    mut lifecycle: ToolCallLifecycle,
+    node: std::sync::Arc<defra_node::EmbeddedNode>,
+    live_outputs: crate::hook::BackgroundLiveOutputState,
+    executions: crate::hook::BackgroundExecutionRegistry,
+    execution_reservation: crate::hook::BackgroundExecutionReservation,
+    execution: Result<crate::tool_call_lifecycle::ToolOutcome, Box<dyn std::any::Any + Send>>,
+) {
+    let execution_call_id = lifecycle.tool_call_id().to_owned();
+    let execution_tool_doc_id = lifecycle
+        .doc_id()
+        .expect("registered execution identity")
+        .to_owned();
+    let execution_session_id = lifecycle.session_id().to_owned();
+    let execution_request_id = lifecycle.request_id().to_owned();
+    let execution_tool_name = lifecycle.tool_name().to_owned();
+    let execution_request_doc_id = lifecycle
+        .request_doc_id()
+        .expect("registered request identity")
+        .to_owned();
+    let execution_node_did = lifecycle.node_did().to_owned();
+    let execution_requester_did = lifecycle.requester_did().map(str::to_owned);
+
+    lifecycle.stage_plugin_receipt(
+        live_outputs
+            .registry
+            .plugin_receipt(&execution_tool_doc_id)
+            .await,
+    );
+    lifecycle.stage_deferred_writes(
+        live_outputs
+            .registry
+            .deferred_writes(&execution_tool_doc_id)
+            .await,
+    );
+
+    match execution {
+        Ok(outcome) => match outcome {
+            crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
+                let won_terminal_compare = match lifecycle.timeout().await {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            tool_call_id = %execution_call_id,
+                            error = %error,
+                            "failed to terminalize timed-out background tool"
+                        );
+                        false
+                    }
+                };
+                if let Some(Err(error)) = project_background_completion_if_owned(
+                    won_terminal_compare,
+                    crate::background_completion::append_background_tool_completion(
+                        &node,
+                        &execution_session_id,
+                        &execution_request_id,
+                        &execution_tool_doc_id,
+                        &execution_tool_name,
+                        BACKGROUND_TIMEOUT_NOTIFICATION.0,
+                        "",
+                        Some(BACKGROUND_TIMEOUT_NOTIFICATION.1),
+                        crate::lifecycle::RequestHopCause::Continuation,
+                    ),
+                )
+                .await
+                {
+                    tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append timed-out background tool notification");
+                }
+            }
+            crate::tool_call_lifecycle::ToolOutcome::Cancelled => {
+                let won_terminal_compare = match lifecycle
+                    .cancel_during_run_owned(CancelCause::UserCancelled, "explicit_cancel")
+                    .await
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            tool_call_id = %execution_call_id,
+                            error = %error,
+                            "failed to terminalize cancelled background tool"
+                        );
+                        false
+                    }
+                };
+                if let Some(Err(error)) = project_background_completion_if_owned(
+                    won_terminal_compare,
+                    crate::background_completion::append_background_tool_completion(
+                        &node,
+                        &execution_session_id,
+                        &execution_request_id,
+                        &execution_tool_doc_id,
+                        &execution_tool_name,
+                        "cancelled",
+                        "",
+                        Some("explicit_cancel"),
+                        crate::lifecycle::RequestHopCause::Continuation,
+                    ),
+                )
+                .await
+                {
+                    tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append cancelled background tool notification");
+                }
+            }
+            crate::tool_call_lifecycle::ToolOutcome::Completed(output) => {
+                let presentation = match live_outputs
+                    .registry
+                    .take_prepared_presentation(&execution_tool_doc_id, &output)
+                    .await
+                {
+                    Ok(presentation) => presentation,
+                    Err(error) => {
+                        tracing::warn!(
+                            tool_call_id = %execution_call_id,
+                            error = %error,
+                            "failed to resolve background tool presentation"
+                        );
+                        None
+                    }
+                };
+                let won_terminal_compare = match lifecycle
+                    .complete_owned(output.as_str(), presentation)
+                    .await
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            tool_call_id = %execution_call_id,
+                            error = %error,
+                            "failed to complete background tool"
+                        );
+                        false
+                    }
+                };
+                let notification_result = if won_terminal_compare {
+                    match crate::background_tools::canonical_tool_output(
+                        node.as_ref(),
+                        &execution_tool_doc_id,
+                        &execution_request_doc_id,
+                        &execution_session_id,
+                        &execution_node_did,
+                        execution_requester_did.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(output) => output,
+                        Err(error) => {
+                            tracing::warn!(
+                                tool_call_id = %execution_call_id,
+                                error = %error,
+                                "failed to reconstruct completed background tool output"
+                            );
+                            String::new()
+                        }
+                    }
+                } else {
+                    String::new()
+                };
+                if let Some(Err(error)) = project_background_completion_if_owned(
+                    won_terminal_compare,
+                    crate::background_completion::append_background_tool_completion(
+                        &node,
+                        &execution_session_id,
+                        &execution_request_id,
+                        &execution_tool_doc_id,
+                        &execution_tool_name,
+                        "completed",
+                        &notification_result,
+                        None,
+                        crate::lifecycle::RequestHopCause::Continuation,
+                    ),
+                )
+                .await
+                {
+                    tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append completed background tool notification");
+                }
+            }
+            crate::tool_call_lifecycle::ToolOutcome::Failed {
+                class: failure_class,
+                text: reason,
+                ..
+            } => {
+                let presentation = match live_outputs
+                    .registry
+                    .take_prepared_presentation(&execution_tool_doc_id, &reason)
+                    .await
+                {
+                    Ok(presentation) => presentation,
+                    Err(error) => {
+                        tracing::warn!(
+                            tool_call_id = %execution_call_id,
+                            error = %error,
+                            "failed to resolve failed background tool presentation"
+                        );
+                        None
+                    }
+                };
+                let won_terminal_compare = match lifecycle
+                    .fail_owned(&reason, failure_class, presentation)
+                    .await
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(
+                            tool_call_id = %execution_call_id,
+                            error = %error,
+                            "failed to fail background tool"
+                        );
+                        false
+                    }
+                };
+                let notification_result = if won_terminal_compare {
+                    match crate::background_tools::canonical_tool_output(
+                        node.as_ref(),
+                        &execution_tool_doc_id,
+                        &execution_request_doc_id,
+                        &execution_session_id,
+                        &execution_node_did,
+                        execution_requester_did.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(output) => output,
+                        Err(error) => {
+                            tracing::warn!(
+                                tool_call_id = %execution_call_id,
+                                error = %error,
+                                "failed to reconstruct failed background tool output"
+                            );
+                            String::new()
+                        }
+                    }
+                } else {
+                    String::new()
+                };
+                if let Some(Err(error)) = project_background_completion_if_owned(
+                    won_terminal_compare,
+                    crate::background_completion::append_background_tool_completion(
+                        &node,
+                        &execution_session_id,
+                        &execution_request_id,
+                        &execution_tool_doc_id,
+                        &execution_tool_name,
+                        "failed",
+                        &notification_result,
+                        Some("tool_failed"),
+                        crate::lifecycle::RequestHopCause::Continuation,
+                    ),
+                )
+                .await
+                {
+                    tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append failed background tool notification");
+                }
+            }
+        },
+        Err(panic) => {
+            let panic = panic_payload_message(panic.as_ref());
+            let reason = format!("background tool panicked: {panic}");
+            let won_terminal_compare = match lifecycle
+                .fail_owned(&reason, FailureClass::External, None)
+                .await
+            {
+                Ok(updated) => updated,
+                Err(error) => {
+                    tracing::warn!(
+                        tool_call_id = %execution_call_id,
+                        error = %error,
+                        "failed to terminalize panicking background tool"
+                    );
+                    false
+                }
+            };
+            if let Some(Err(error)) = project_background_completion_if_owned(
+                won_terminal_compare,
+                crate::background_completion::append_background_tool_completion(
+                    &node,
+                    &execution_session_id,
+                    &execution_request_id,
+                    &execution_tool_doc_id,
+                    &execution_tool_name,
+                    "failed",
+                    &reason,
+                    Some("tool_panicked"),
+                    crate::lifecycle::RequestHopCause::Continuation,
+                ),
+            )
+            .await
+            {
+                tracing::warn!(
+                    tool_call_id = %execution_call_id,
+                    error = %error,
+                    "failed to append panicking background tool notification"
+                );
+            }
+        }
+    }
+
+    live_outputs.remove(&execution_tool_doc_id).await;
+    executions
+        .release_process_record(&execution_call_id, &execution_tool_doc_id)
+        .await;
+    drop(execution_reservation);
+}

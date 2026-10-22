@@ -1,7 +1,7 @@
 use super::*;
 
 async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionMaterializer) {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
         snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
@@ -12,7 +12,7 @@ async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionM
 
 #[tokio::test]
 async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let node_did = behavior.node_did().to_string();
@@ -59,23 +59,40 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         "failed materialization must not leave a Goal"
     );
 
-    let first = materializer
-        .materialize(
-            &task,
-            Some("release-trigger"),
-            TriggerKind::Event,
-            Some("release-trigger-doc"),
-            Some("release-42"),
-            Some("batch-7"),
-            Some(r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#),
-            "implement release",
-            Some("ship release"),
-            fire_key,
-            None,
-            None,
+    let (first, mutation_count) =
+        crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
+            || async {
+                materializer
+                    .materialize(
+                        &task,
+                        Some("release-trigger"),
+                        TriggerKind::Event,
+                        Some("release-trigger-doc"),
+                        Some("release-42"),
+                        Some("batch-7"),
+                        Some(r#"{"version":1,"source_fields":{"requester_did":"did:key:z-requester"}}"#),
+                        "implement release",
+                        Some("ship release"),
+                        fire_key,
+                        None,
+                        None,
+                    )
+                    .await
+            },
+            || async {
+                crate::config_client::ConfigAccess::local(node.clone())
+                    .execute(
+                        "{ Goal {_docID assignment_root_request_doc_id} GoalCreationClaim {_docID} AgentRequest {_docID input} }",
+                    )
+                    .await
+                    .unwrap()
+            },
         )
-        .await
-        .expect("goal-backed Task fire");
+        .await;
+    assert!(
+        mutation_count >= 4,
+        "Goal, creation claim, signed request, and physical root share one commit"
+    );
     let retry = materializer
         .materialize(
             &task,
@@ -114,7 +131,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
-                request_id node_did session_id retry_key lifecycle_state content
+                _docID request_id node_did session_id retry_key lifecycle_state content input
                 caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
                 caused_by_source_doc_id caused_by_correlation admission_kind
                 runtime_source_request_id runtime_source_kind
@@ -150,6 +167,12 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     assert_eq!(requests.len(), 1, "retry must not duplicate requests");
     assert_eq!(claims.len(), 1, "retry must not duplicate creation claims");
     let request = &requests[0];
+    assert_eq!(
+        goal.assignment_root_request_doc_id.as_deref(),
+        request["_docID"].as_str()
+    );
+    assert_eq!(request["input"]["goal_assignment"]["goal_id"], goal.goal_id);
+    assert!(request["input"]["goal_assignment"]["root_request_doc_id"].is_null());
     assert_eq!(
         request["request_id"].as_str(),
         Some(identity.request_id.as_str())
@@ -206,8 +229,153 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
 }
 
 #[tokio::test]
+async fn durable_goal_task_replay_retains_its_admitted_assignment() {
+    let snapshot =
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
+    let owner = snapshot.local_did.clone();
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(&owner)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let session = "replaced-task-goal-session";
+    crate::session::ensure_session_with_agent_id_and_requester_did(
+        &node,
+        session,
+        &owner,
+        "general",
+        Some(&owner),
+    )
+    .await
+    .unwrap();
+    let initial = crate::goal::deterministic_goal_id(&owner, session);
+    let selected = crate::goal::replacement_goal_identity(&owner, session, "first-replacement");
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    access
+        .write(
+            "test.replay_current_goal",
+            &format!(
+                r#"mutation {{create_Goal(input: {{
+        node_did: "{}", session_id: "{}", goal_id: "{}", creation_key: "{}",
+        objective: "Finish the task", status: "active", created_at: "2030-01-01T00:00:00Z"
+    }}) {{_docID}}}}"#,
+                escape_graphql_string(&owner),
+                escape_graphql_string(session),
+                escape_graphql_string(&selected.goal_id),
+                escape_graphql_string(&selected.creation_key)
+            ),
+        )
+        .await
+        .unwrap();
+    let identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: owner.clone(),
+        trigger_id: "replay-goal-trigger".into(),
+        source_collection: "Schedule".into(),
+        source_doc_id: "original-due-occurrence".into(),
+    };
+    let prepared = crate::trigger_engine::durable::PreparedFire {
+        receipt: gents_protocol::trigger_delivery::TriggerFire {
+            fire_key: identity.fire_key(),
+            request_id: identity.request_id(),
+            identity,
+            task_id: "replay-goal-task".into(),
+            session_id: session.into(),
+            goal_id: Some(initial),
+            goal_objective: Some("Finish the task".into()),
+            goal_token_budget: None,
+            goal_assignment_applied: false,
+            emit_outcome: false,
+            queued_serial: false,
+            source_handoff_id: None,
+            reply_session_id: None,
+            shard_id: None,
+            attempt: None,
+            created_at: "2030-01-01T00:00:00Z".into(),
+        },
+        target_existing: true,
+        replace_prior: false,
+    };
+    let mut task = resolved_task("Finish the task");
+    task.task_id = prepared.receipt.task_id.clone();
+    task.goal_objective_template = prepared.receipt.goal_objective.clone();
+    let publish = || {
+        materializer.materialize(
+            &task,
+            Some("replay-goal-trigger"),
+            TriggerKind::Schedule,
+            Some("replay-goal-trigger-document"),
+            None,
+            None,
+            None,
+            "Finish the task",
+            Some("Finish the task"),
+            &prepared.receipt.fire_key,
+            Some(&prepared),
+            None,
+        )
+    };
+    assert_eq!(publish().await.unwrap(), prepared.receipt.request_id);
+    let query = format!(
+        "{{AgentRequest {{{}}} TriggerFire {{_docID goal_id request_id}}}}",
+        crate::request_admission::SIGNED_REQUEST_FIELDS
+    );
+    let admitted = access.execute(&query).await.unwrap();
+    assert_eq!(
+        admitted["data"]["TriggerFire"][0]["goal_id"],
+        selected.goal_id
+    );
+    assert_eq!(
+        admitted["data"]["AgentRequest"][0]["input"]["goal_assignment"]["goal_id"],
+        selected.goal_id
+    );
+    assert!(
+        admitted["data"]["AgentRequest"][0]["input"]["goal_assignment"]["root_request_doc_id"]
+            .is_null()
+    );
+    let goal = crate::goal::load_canonical_goal(&node, &owner, session)
+        .await
+        .unwrap()
+        .unwrap();
+    let replacement = crate::goal::replacement_goal_identity(&owner, session, "later-replacement");
+    access
+        .write(
+            "test.replay_later_goal",
+            &format!(
+                "mutation {{update_Goal(docID: \"{}\", input: {{goal_id: \"{}\"}}) {{_docID}}}}",
+                escape_graphql_string(&goal.doc_id),
+                escape_graphql_string(&replacement.goal_id),
+            ),
+        )
+        .await
+        .unwrap();
+    let duplicate = publish().await.unwrap_err();
+    assert_eq!(
+        duplicate
+            .downcast_ref::<MaterializeDuplicate>()
+            .unwrap()
+            .request_id,
+        prepared.receipt.request_id
+    );
+    assert_eq!(access.execute(&query).await.unwrap(), admitted);
+    assert_eq!(
+        crate::goal::load_canonical_goal(&node, &owner, session)
+            .await
+            .unwrap()
+            .unwrap()
+            .goal_id,
+        replacement.goal_id
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let first_behavior = integration_test_agent("general");
     let first_did = first_behavior.node_did().to_string();
@@ -287,7 +455,7 @@ async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
 
 #[tokio::test]
 async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let node_did = behavior.node_did().to_string();
@@ -454,7 +622,7 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
 
 #[tokio::test]
 async fn materializer_rejects_workspace_from_different_explicit_owner() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_agent("general");
     insert_ready_workspace(
@@ -685,7 +853,7 @@ async fn workspace_requests(
 
 #[tokio::test]
 async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();
@@ -723,7 +891,7 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
 
 #[tokio::test]
 async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();
@@ -768,7 +936,7 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
 
 #[tokio::test]
 async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let executor = behavior.node_did().to_owned();
@@ -815,7 +983,7 @@ async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor(
 
 #[tokio::test]
 async fn goal_task_workspace_activation_retry_is_idempotent() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     insert_ready_workspace(
@@ -881,7 +1049,7 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
 
 #[tokio::test]
 async fn unique_read_write_denial_does_not_leave_claimable_request() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     insert_ready_workspace(
@@ -1129,7 +1297,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
 
 #[tokio::test]
 async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
         snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
@@ -1207,7 +1375,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
 
 #[tokio::test]
 async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
         snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
@@ -1285,7 +1453,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
 
 #[tokio::test]
 async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();

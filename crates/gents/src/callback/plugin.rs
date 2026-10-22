@@ -491,7 +491,7 @@ mod tests {
         if let Some((allowed, access)) = allowed {
             crate::plugin::allowed::add(home.path(), allowed, access).unwrap();
         }
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node.add_schema(
             "type Job { job_run: String text: String path: String origin: String }

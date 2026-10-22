@@ -88,7 +88,13 @@ pub struct MessageReconstructionView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub background_available: Option<bool>,
     pub tool_call_key: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub tool_call_doc_id: Option<String>,
     pub request_id: Option<String>,
     pub message_sequence: Option<i64>,
     pub tool_name: Option<String>,
@@ -150,6 +156,10 @@ pub struct CommandDenialView {
 pub struct ToolDiffLineView {
     pub kind: ToolDiffLineKind,
     pub text: String,
+    /// Line in the tool's reported excerpt, not a location inferred from arguments.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub line_number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -191,6 +201,10 @@ pub enum ToolPresentationView {
     FileEdit {
         operation: String,
         path: Option<String>,
+        /// Only a successful, non-preview native file result confirms a mutation.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        applied: Option<bool>,
         /// Execution-node path; reveal only when that node is local.
         #[ts(optional = nullable)]
         reveal_path: Option<String>,
@@ -232,7 +246,13 @@ pub enum ToolPresentationView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderedToolCallView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub background_available: Option<bool>,
     pub item_key: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub tool_call_doc_id: Option<String>,
     pub tool_name: String,
     pub status_kind: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -373,6 +393,27 @@ pub enum RenderedTimelineItem {
         tools: Vec<RenderedToolCallView>,
     },
     #[serde(rename_all = "camelCase")]
+    RequestContextReductionSummary {
+        item_key: String,
+        sequence: i64,
+        request_doc_id: String,
+        request_id: String,
+        reduction_count: i64,
+        compacted_count: i64,
+        repaired_count: i64,
+        latest_estimated_input_tokens: Option<i64>,
+        latest_timestamp: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    SessionCompaction {
+        item_key: String,
+        sequence: i64,
+        messages_compacted: Option<i64>,
+        original_tokens: Option<i64>,
+        compacted_tokens: Option<i64>,
+        timestamp: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
     PendingUserTurn {
         item_key: String,
         request_id: String,
@@ -439,7 +480,7 @@ pub struct RetryEligibilityView {
 pub struct SessionCompactionView {
     pub compaction_key: String,
     pub sequence: Option<i64>,
-    pub messages_compacted: i64,
+    pub messages_compacted: Option<i64>,
     pub original_tokens: Option<i64>,
     pub compacted_tokens: Option<i64>,
     pub created_at: Option<String>,
@@ -498,6 +539,8 @@ pub struct SessionContextView {
     pub durable_message_count: i64,
     pub provider_message_count: i64,
     pub total_compacted_messages: i64,
+    pub session_compaction_count: Option<i64>,
+    pub request_reduction_history_loaded: bool,
     pub compactions: Vec<SessionCompactionView>,
     pub last_request: Option<SessionRequestContextView>,
 }

@@ -105,7 +105,7 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
     for case in cases {
         let temp = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            gents::defra_node::EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(temp.path().join("db"))
                 .build()
                 .await

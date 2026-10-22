@@ -141,7 +141,7 @@ pub struct AgentRequestAdmissionObservation {
     pub target_policy_allows: bool,
     /// The target's `PeerAdmissionAuthority` ACP authorizes the requester DID.
     pub peer_authority_allows: bool,
-    /// `request_hop <= Node.max_request_hop` for the target.
+    /// The target node's configured causal-hop cap admits this request, if set.
     pub hop_within_bound: bool,
 }
 
@@ -777,6 +777,11 @@ fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::R
         for context in &input.captured_context {
             push_captured_context(fields, context);
         }
+    }
+    if let Some(reference) = &input.goal_assignment {
+        push_text(fields, "goal-assignment");
+        push_text(fields, &reference.goal_id);
+        push_input_option(fields, reference.root_request_doc_id.as_deref());
     }
 }
 

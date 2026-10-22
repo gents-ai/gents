@@ -196,7 +196,7 @@ pub(super) fn build_session_context_view(
         .map(|row| SessionCompactionView {
             compaction_key: row.compaction_key.clone(),
             sequence: row.sequence,
-            messages_compacted: row.messages_compacted.unwrap_or_default().max(0),
+            messages_compacted: row.messages_compacted.map(|value| value.max(0)),
             original_tokens: row.original_tokens,
             compacted_tokens: row.compacted_tokens,
             created_at: normalize_optional(row.created_at.as_deref()),
@@ -218,6 +218,8 @@ pub(super) fn build_session_context_view(
         durable_message_count: usize_to_i64(durable_message_count),
         provider_message_count: usize_to_i64(active_provider_messages.len()),
         total_compacted_messages: usize_to_i64(total_compacted_messages),
+        session_compaction_count: None,
+        request_reduction_history_loaded: false,
         compactions,
         last_request: None,
     }

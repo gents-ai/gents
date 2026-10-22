@@ -2,6 +2,7 @@ use anyhow::{ensure, Context, Result};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation};
 
+use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{
     GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, SessionGoalView,
 };
@@ -50,41 +51,54 @@ fn budget(raw: Option<String>) -> Result<Option<i64>> {
 pub async fn control_goal(
     core: &ClientCore,
     request: GoalControlRequest,
-) -> Result<GoalControlResult> {
+) -> Result<GoalControlResult, BridgeError> {
     let operation = match request.action {
         GoalControlAction::Create {
             objective,
             token_budget,
         } => GoalOperation::Create {
             objective,
-            token_budget: budget(token_budget)?,
+            token_budget: budget(token_budget).map_err(invalid_goal_argument)?,
         },
         GoalControlAction::Edit {
             objective,
             token_budget,
         } => GoalOperation::Edit {
             objective,
-            token_budget: budget(token_budget)?,
+            token_budget: budget(token_budget).map_err(invalid_goal_argument)?,
         },
         GoalControlAction::Pause {} => GoalOperation::Pause {},
         GoalControlAction::Resume {} => GoalOperation::Resume {},
+        GoalControlAction::Stop {} => GoalOperation::Stop {},
     };
-    ensure!(!request.node_did.trim().is_empty(), "node_did is required");
+    if request.node_did.trim().is_empty() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "node_did is required",
+        ));
+    }
     let session_id = match request.session_id {
         Some(session) => {
-            ensure!(!session.trim().is_empty(), "session_id is required");
+            if session.trim().is_empty() {
+                return Err(BridgeError::new(
+                    BridgeErrorCode::InvalidArgument,
+                    "session_id is required",
+                ));
+            }
             session
         }
         None => {
-            ensure!(
-                matches!(operation, GoalOperation::Create { .. }),
-                "select a session before changing its goal"
-            );
+            if !matches!(operation, GoalOperation::Create { .. }) {
+                return Err(BridgeError::new(
+                    BridgeErrorCode::InvalidArgument,
+                    "select a session before changing its goal",
+                ));
+            }
             uuid::Uuid::new_v4().to_string()
         }
     };
     let input = gents_protocol::request_input::RequestInput {
-        cwd: super::chat::chat_folder(request.cwd.as_deref())?,
+        cwd: super::chat::chat_folder(request.cwd.as_deref()).map_err(invalid_goal_argument)?,
         captured_context: request.captured_context.unwrap_or_default(),
         ..Default::default()
     };
@@ -98,8 +112,20 @@ pub async fn control_goal(
             request.agent_id.as_deref(),
             input,
         )
-        .await?;
-    match receipt.outcome {
+        .await
+        .map_err(BridgeError::classify_transport_error)?;
+    goal_control_result(session_id, receipt.outcome)
+}
+
+fn invalid_goal_argument(error: anyhow::Error) -> BridgeError {
+    BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string())
+}
+
+fn goal_control_result(
+    session_id: String,
+    outcome: GoalControlOutcome,
+) -> Result<GoalControlResult, BridgeError> {
+    match outcome {
         GoalControlOutcome::Applied {
             goal_id,
             request_id,
@@ -108,9 +134,10 @@ pub async fn control_goal(
             session_id,
             request_id,
         }),
-        GoalControlOutcome::Rejected { reason } => {
-            anyhow::bail!("Runtime rejected goal control: {reason}")
-        }
+        GoalControlOutcome::Rejected { reason } => Err(BridgeError::new(
+            BridgeErrorCode::GoalControlRejected,
+            reason,
+        )),
     }
 }
 
@@ -125,5 +152,35 @@ mod tests {
         for invalid in ["0", "-1", "1.5", "1e6", "9223372036854775808", ""] {
             assert!(budget(Some(invalid.into())).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn goal_control_rejection_keeps_its_reason_and_code_in_host_and_tauri_payloads() {
+        let reason = "wait for this session to finish before starting a goal";
+        let error = goal_control_result(
+            "chat".into(),
+            GoalControlOutcome::Rejected {
+                reason: reason.into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code.as_str(), "goalControlRejected");
+        let tauri = serde_json::to_value(&error).unwrap();
+        let host =
+            serde_json::to_value(crate::host::protocol::HostMessage::response(1, Err(error)))
+                .unwrap();
+        assert_eq!(host["error"], tauri);
+        assert_eq!(host["error"]["code"], "goalControlRejected");
+        assert_eq!(host["error"]["message"], reason);
+        assert_eq!(host["error"]["retryable"], false);
+        assert!(host["error"]["endpoint"].is_null());
+    }
+
+    #[test]
+    fn goal_control_transport_lookalike_is_not_a_confirmed_rejection() {
+        let error = BridgeError::classify_transport_error(anyhow::anyhow!(
+            "Runtime rejected goal control: wait for this session to finish before starting a goal"
+        ));
+        assert_eq!(error.code, BridgeErrorCode::Unknown);
     }
 }

@@ -296,6 +296,7 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) execution_registered: Option<bool>,
     pub(crate) process_outcome: Option<String>,
     pub(crate) owner_task_deleted: Option<bool>,
+    pub(crate) owner_session_stopped: Option<bool>,
     pub(crate) recovery_cause: Option<String>,
     pub(crate) notification_reason: Option<String>,
     pub(crate) deadline_audit_ref: String,

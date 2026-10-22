@@ -147,30 +147,28 @@ async fn dispatch_with_lost_receipt(
 #[tokio::test]
 async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     let dir = tempfile::tempdir().unwrap();
+    let identity =
+        crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()
             .await
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let identity =
-        crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let did = identity.did().to_owned();
     enable_agents_tools(&node, &did).await;
     let hook = DefraSessionHook::with_identity(node.clone(), &did, FailurePolicy::default());
-    hook.on_completion_call(&user_text_message("start agents"), &[])
-        .await;
-    let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        node.as_ref(),
+    bind_signed_hook_request(
         &hook,
         "request-commit-receipt-loss",
-        &session_id,
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    hook.on_completion_call(&user_text_message("start agents"), &[])
+        .await;
 
     let (tool_doc_id, caused) = dispatch_with_lost_receipt(
         &hook,

@@ -33,7 +33,7 @@ structure StepContext where
   (`originOf`): a file of a pack-tier mount whose pack has `operator` install
   provenance and is trusted. Read on every step. -/
   installedTrusted : String → Bool
-  maxHop : Nat
+  maxHop : Option Nat
   /-- The target session's current hop. -/
   targetHop : Target → Nat
   cwdAllowed : String → Bool
@@ -76,7 +76,7 @@ def effectiveTargets (ctx : StepContext) (pin : Pin) : EndpointScope Target Unit
 
 inductive Refusal
   | terminal | notAvailable | engineChanged | policyDenied | stalled | depthExceeded | timedOut
-  | stepFailed
+  | stepFailed | backgroundBudgetExceeded
   deriving DecidableEq, Repr
 
 /-- The host terminal codes; `.terminal` is a no-op and has none. -/
@@ -89,6 +89,7 @@ def Refusal.code : Refusal → Option String
   | .depthExceeded => some "plugin_job_depth_exceeded"
   | .timedOut => some "plugin_job_timed_out"
   | .stepFailed => some "plugin_job_step_failed"
+  | .backgroundBudgetExceeded => some "background_tool_budget_exceeded"
 
 def StepOutput.pin : StepOutput → Option GuestPin
   | .result _ _ p _ => p
@@ -410,7 +411,7 @@ def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusa
         .error .policyDenied
       else if job.pin.isNone && ctx.live = Ceiling.empty then .error .notAvailable
       else if job.pin.isNone && (Background.admitBackground ctx.liveBackground).isNone then
-        .error .policyDenied
+        .error .backgroundBudgetExceeded
       else if job.pin.isNone && ctx.startedByJob then .error .depthExceeded
       else if pin.origin = .installed ∧ ctx.installedTrusted pin.sourceDigest = false then
         .error .policyDenied
@@ -429,10 +430,11 @@ def settleStep (ctx : StepContext) (job : Job) (out : StepOutput)
 theorem refusal_code_spellings :
     Refusal.code .terminal = none ∧
       [Refusal.stalled, .policyDenied, .notAvailable, .engineChanged, .timedOut, .depthExceeded,
-          .stepFailed].map Refusal.code =
+          .stepFailed, .backgroundBudgetExceeded].map Refusal.code =
         [some "plugin_job_stalled", some "plugin_job_policy_denied", some "plugin_job_not_available",
           some "plugin_job_engine_changed", some "plugin_job_timed_out",
-          some "plugin_job_depth_exceeded", some "plugin_job_step_failed"] ∧
+          some "plugin_job_depth_exceeded", some "plugin_job_step_failed",
+          some "background_tool_budget_exceeded"] ∧
       ∀ r : Refusal, r.code = none ↔ r = .terminal := by
   refine ⟨rfl, rfl, ?_⟩
   intro r
@@ -884,11 +886,13 @@ theorem child_hop_outward (job : Job) (own : Nat) :
   ⟨CausalHop.cross_session_exceeds_cause _ _, rfl⟩
 
 /-- An admitted child's hop is within the target node's bound. -/
-theorem child_admissible_hop {ctx : StepContext} {job job' : Job} {e : Effects} {p : Pin}
+theorem child_admissible_hop_within_configured_bound {ctx : StepContext} {job job' : Job}
+    {e : Effects} {p : Pin} {bound : Nat}
+    (hbound : ctx.maxHop = some bound)
     (h : admitStep ctx job (.effects e) = .ok job') (hp : stepPin ctx job (.effects e) = some p)
     {s : Spawn} (hs : s ∈ freshSpawns (stepRow ctx job (.effects e)) e.spawns) :
-    CausalHop.nextHop (.crossSession job.callerHop) (ctx.targetHop s.target) ≤ ctx.maxHop := by
-  simpa [CausalHop.admitHop] using (admitted_spawn_checks h hp hs).2.1
+    CausalHop.nextHop (.crossSession job.callerHop) (ctx.targetHop s.target) ≤ bound := by
+  simpa [CausalHop.admitHop, hbound] using (admitted_spawn_checks h hp hs).2.1
 
 /-- The child write is the `agent_new` session-message request naming the job
 row's tool call, so the child's completion settles that call.
@@ -963,7 +967,8 @@ theorem messages_within_effective_targets {ctx : StepContext} {p : Pin} {job job
     exact ⟨ch, rfl, hs.1⟩
 
 set_option maxHeartbeats 400000 in
-/-- Adoption takes one background slot of the calling request; a pinned row's
+/-- Adoption takes one background slot of the calling request; a full budget
+returns a capacity refusal, while a pinned row's
 steps, and so its children, neither read nor take one. -/
 theorem job_row_consumes_one_background_slot (ctx : StepContext) (job job' : Job)
     (out : StepOutput) (p : Pin) (m : Nat) :
@@ -973,16 +978,15 @@ theorem job_row_consumes_one_background_slot (ctx : StepContext) (job job' : Job
         admitStep { ctx with liveBackground := m } job out = admitStep ctx job out) := by
   refine ⟨fun hpin h hp => ?_, fun hpin => ?_⟩
   · have hb : (Background.admitBackground ctx.liveBackground).isNone = false := by
-      by_contra hn
-      simp only [Bool.not_eq_false] at hn
+      by_contra hnone
+      simp only [Bool.not_eq_false] at hnone
       unfold admitStep at h
       rw [hp] at h
-      dsimp only at h
-      split_ifs at h
-      exact absurd (by simp [hpin, hn])
-        ‹¬(job.pin.isNone && (Background.admitBackground ctx.liveBackground).isNone) = true›
+      simp only [hpin, Option.isNone_none, Bool.true_and, Bool.and_true] at h
+      simp only [if_pos hnone] at h
+      split_ifs at h <;> cases h
     unfold Background.admitBackground at hb ⊢
-    split_ifs at hb ⊢ <;> simp_all
+    split <;> simp_all
   · unfold admitStep
     simp only [stepPin, hpin, Option.isNone_some, Bool.false_and, Bool.false_eq_true, if_false]
     rfl

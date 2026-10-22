@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let ids =
         crate::trigger_engine::event_delivery::source_scan::tests::create_source_documents(&node)
@@ -72,7 +72,7 @@ impl crate::UpdateSubscriptionSource for FakeUpdateSubscriptionSource {
 
 #[tokio::test]
 async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real_one_does() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema("type BranchableProbe { value: String }")
         .await
@@ -131,7 +131,7 @@ async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real
 
 #[tokio::test]
 async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_document() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let trigger = resolved_event_trigger(
         "receipt-trigger",
@@ -189,7 +189,7 @@ impl crate::RuntimeSnapshotObserver for SubscriptionObserver {
 
 #[tokio::test]
 async fn event_source_acknowledges_exact_configuration_after_subscription_setup() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema("type ReadyInput { value: String }")
         .await
@@ -232,7 +232,7 @@ async fn event_source_acknowledges_exact_configuration_after_subscription_setup(
 
 #[tokio::test]
 async fn event_source_retries_schema_visibility_before_subscription_readiness() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot = snapshot_with_event_triggers(
         1,
@@ -269,7 +269,7 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
 
 #[tokio::test]
 async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let triggers = HashMap::from([(
         "missing".into(),
@@ -299,7 +299,7 @@ async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations()
 
 #[tokio::test]
 async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let triggers = HashMap::from([(
         "eventual".into(),
@@ -485,7 +485,7 @@ async fn admit_observed_event(
 
 #[tokio::test]
 async fn event_source_reconciles_subscriptions_on_generation_bump() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let task = resolved_task("ignored");
@@ -527,7 +527,7 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
 
 #[tokio::test]
 async fn event_source_next_fire_emits_intent_on_matching_real_event() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -615,7 +615,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
 
 #[tokio::test]
 async fn a_callback_result_fires_its_bindings_event_source_once() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let task = ResolvedTask {
@@ -683,7 +683,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
 
 #[tokio::test]
 async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_scope() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
         r#"type GroupMember {
@@ -750,7 +750,7 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
 
 #[tokio::test]
 async fn per_group_timeout_uses_durable_first_seen_clock() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
         r#"type DurableGroupMember {
@@ -821,7 +821,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 
 #[tokio::test]
 async fn correlation_populated_after_create_remains_eligible_for_delivery() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
         r#"type DeferredCorrelationMember {
@@ -928,7 +928,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
         logical_doc, pending_doc,
         "siblings must share one physical source row"
     );
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
         r#"type MixedCorrelationMember {
@@ -1028,7 +1028,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
 
 #[tokio::test]
 async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
         r#"type SeededMixedCorrelationMember {
@@ -1103,7 +1103,7 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
 
 #[tokio::test]
 async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
         r#"type QuiescedGroupMember {
@@ -1206,7 +1206,7 @@ fn group_state_identity_changes_only_with_membership_definition() {
 
 #[tokio::test]
 async fn generation_bump_recovers_only_when_group_membership_definition_changes() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
         r#"type RecoveryFingerprintMember {
@@ -1277,7 +1277,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
 
 #[tokio::test]
 async fn event_source_filter_probe_gates_fire_on_operator_filter() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     // `kind` must be indexed for DefraDB's filter evaluator to accept `_eq`
@@ -1377,7 +1377,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
 
 #[tokio::test]
 async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let webhook_sdl = r#"
@@ -1491,7 +1491,7 @@ async fn create_event_trigger_doc(
 
 #[tokio::test]
 async fn concurrent_trigger_fire_count_updates_are_not_lost() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let trigger_id = "trigger-concurrent-fire-count";
     create_event_trigger_doc(&node, trigger_id, "task-webhook", "WebhookEvent").await;
@@ -1546,7 +1546,7 @@ async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_js
 
 #[tokio::test]
 async fn event_source_on_result_writes_runtime_fields_on_fired() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let webhook_sdl = r#"
@@ -1640,7 +1640,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
 
 #[tokio::test]
 async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let webhook_sdl = r#"
@@ -1765,7 +1765,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 
 #[tokio::test]
 async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let webhook_sdl = r#"
@@ -1854,7 +1854,7 @@ async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
 
 #[tokio::test]
 async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -1932,7 +1932,7 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
 
 #[tokio::test]
 async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -2000,7 +2000,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
 
 #[tokio::test]
 async fn event_source_tries_all_triggers_when_first_filter_misses() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let webhook_sdl = r#"
         type WebhookEvent {
@@ -2077,7 +2077,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
 
 #[tokio::test]
 async fn event_source_reconcile_excludes_invalid_source_collection_identifiers() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let task = resolved_task("ignored");

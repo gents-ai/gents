@@ -7,6 +7,7 @@ use crate::graphql::escape_graphql_string;
 
 pub mod canonical_rows;
 mod compaction_entries;
+mod control;
 mod fork;
 mod history;
 mod observations;
@@ -35,6 +36,7 @@ pub(crate) use compaction_entries::{
     save_compaction_entry, save_compaction_entry_with_requester_did,
 };
 pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
+pub use control::{resume_session, stop_session, SessionStopReceipt};
 pub use fork::{
     fork, fork_on, fork_via_http, is_user_turn, ForkBoundary, ForkError, ForkOutcome, ForkParams,
 };
@@ -72,6 +74,8 @@ pub(crate) use output::{
     load_canonical_message_in_txn, load_request_headers_in_txn, resolve_canonical_replay_tags,
     validate_canonical_replay_boundary, CanonicalReplayScope, TxnCanonicalReader,
 };
+pub(crate) use query::session_is_stopped;
+pub(crate) use query::session_stopped_in_txn;
 pub use query::{
     decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
 };

@@ -10,6 +10,9 @@ use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
 use crate::session_origin::SessionScope;
 use crate::tool_surface::AgentToolConfig;
 
+#[cfg(test)]
+mod goal_input_tests;
+
 mod discovery;
 pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
 mod inspection;
@@ -311,6 +314,80 @@ impl Plan {
     }
 }
 
+async fn target_goal_assignment(
+    node: &Arc<EmbeddedNode>,
+    cause: &SessionMessageCause,
+    target: &SessionMessageTarget,
+) -> Result<Option<gents_protocol::request_input::GoalAssignmentInput>> {
+    use gents_protocol::request_input::GoalAssignmentInput;
+    if target.node_did == cause.caller_node_did {
+        return ConfigAccess::transact_local_readonly(
+            node,
+            None,
+            "session_message.target_goal",
+            |txn| {
+                Box::pin(async move {
+                    let Some(session) = crate::session::load_agent_session_row_in_txn(
+                        txn,
+                        &target.node_did,
+                        &target.session_id,
+                        Some(&cause.caller_node_did),
+                    )
+                    .await?
+                    else {
+                        return Ok(None);
+                    };
+                    anyhow::ensure!(
+                        session.session.agent_id == target.agent_id,
+                        "session-message target Agent differs from its canonical session"
+                    );
+                    let goal = crate::goal::load_canonical_goal_in_txn(
+                        txn,
+                        &target.node_did,
+                        &target.session_id,
+                    )
+                    .await?;
+                    Ok(goal.and_then(|goal| {
+                        goal.assignment_root_request_doc_id
+                            .map(|root| GoalAssignmentInput {
+                                goal_id: goal.goal_id,
+                                root_request_doc_id: Some(root),
+                            })
+                    }))
+                })
+            },
+        )
+        .await;
+    }
+    let verifier = crate::identity::RegisteredIdentity::from_registered_did(
+        cause.caller_node_did.clone(),
+        None,
+    )?;
+    let state = crate::goal::load_session_goal_observation_state(
+        &ConfigAccess::local(node.clone()),
+        &verifier,
+        &target.node_did,
+        &target.session_id,
+        Some(&cause.caller_node_did),
+    )
+    .await?;
+    match state {
+        crate::goal::SessionGoalObservationState::NoReadableSession => Ok(None),
+        crate::goal::SessionGoalObservationState::Unknown => {
+            anyhow::bail!("The target chat's Goal state is still syncing. Read the chat and retry the message.")
+        }
+        crate::goal::SessionGoalObservationState::Observed(observation) => {
+            Ok(observation.goal.and_then(|goal| {
+                goal.assignment_root_request_doc_id
+                    .map(|root| GoalAssignmentInput {
+                        goal_id: goal.snapshot.goal_id,
+                        root_request_doc_id: Some(root),
+                    })
+            }))
+        }
+    }
+}
+
 pub(crate) async fn plan(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -321,6 +398,18 @@ pub(crate) async fn plan(
 ) -> Result<Result<Plan, String>> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let local = target.node_did == cause.caller_node_did;
+    if crate::session::session_is_stopped(
+        node,
+        &target.node_did,
+        &target.session_id,
+        Some(&cause.caller_node_did),
+    )
+    .await?
+    {
+        return Ok(Err(
+            "session is stopped; use agent_resume before sending another message".to_owned(),
+        ));
+    }
     let active = if local {
         match crate::interrupt::active_session_request(
             node,
@@ -406,7 +495,7 @@ pub(crate) async fn plan(
                 background_completion_wake_version: None,
             });
         PlannedWrite::Request {
-            create: crate::lifecycle::build_session_message_request(
+            create: crate::lifecycle::materialize::build_session_message_request_with_input(
                 cause,
                 target,
                 &rendered.content,
@@ -414,8 +503,11 @@ pub(crate) async fn plan(
                 &request_id,
                 None,
                 hop,
-                queue,
-                None,
+                gents_protocol::request_input::RequestInput {
+                    queue,
+                    goal_assignment: target_goal_assignment(node, cause, target).await?,
+                    ..Default::default()
+                },
             )
             .await?,
             delivery: if steering.is_some() {
@@ -720,6 +812,37 @@ pub async fn interrupt_session(
     node: &Arc<EmbeddedNode>,
     target: &SessionScope,
 ) -> Result<Option<String>> {
+    if node.node_identity_did() == Some(target.node_did.as_str()) {
+        let session_id = target.session_id.clone();
+        let node_did = target.node_did.clone();
+        let requester_did = target.requester_did.clone();
+        return crate::config_client::ConfigAccess::transact_local_write(
+            node,
+            None,
+            "session.interrupt",
+            move |txn| {
+                let session_id = session_id.clone();
+                let node_did = node_did.clone();
+                let requester_did = requester_did.clone();
+                Box::pin(async move {
+                    let active = crate::interrupt::interrupt_active_session_in_txn(
+                        txn,
+                        &session_id,
+                        &node_did,
+                        requester_did.as_deref(),
+                    )
+                    .await?;
+                    if active.is_none() {
+                        crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
+                            .await?;
+                    }
+                    Ok(active)
+                })
+            },
+        )
+        .await;
+    }
+
     let Some(active) = crate::interrupt::active_session_request(
         node,
         &target.session_id,
@@ -1288,7 +1411,26 @@ mod agent_tools_tests {
             agent_id: caused.agent_id.clone(),
             session_id: caused.session_id.clone(),
         };
+        crate::goal::set_goal(
+            &node,
+            &caused.node_did,
+            &caused.session_id,
+            Some("pause after operator interrupt"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(interrupt_session(&node, &scope).await.unwrap(), None);
+        assert_eq!(
+            crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .parsed_status(),
+            Some(crate::goal::GoalStatus::Paused),
+            "an idle same-node interrupt pauses autonomous Goal work"
+        );
         set_state(&node, &message.caused_request_doc_id, "processing").await;
 
         let cause = SessionMessageCause {
@@ -1327,6 +1469,82 @@ mod agent_tools_tests {
         .await
         .unwrap()
         .is_some());
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
+        let (message, caller, caused) = started("agent-stop-drains").await;
+        let node = message.admission.node.clone();
+        crate::goal::set_goal(
+            &node,
+            &caused.node_did,
+            &caused.session_id,
+            Some("stop this session"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let receipt = crate::session::stop_session(
+            &node,
+            &caused.node_did,
+            &caused.session_id,
+            caused.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(receipt.status, "stop_requested");
+        assert_eq!(receipt.drained_request_ids, vec![caused.request_id.clone()]);
+        assert!(crate::session::session_is_stopped(
+            &node,
+            &caused.node_did,
+            &caused.session_id,
+            caused.requester_did.as_deref(),
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .parsed_status(),
+            Some(crate::goal::GoalStatus::Paused)
+        );
+
+        let error = plan(
+            &node,
+            &SessionMessageCause {
+                caller_node_did: caller.node_did.clone(),
+                caller_request_id: caller.request_id.clone(),
+                caller_request_doc_id: caller.doc_id.clone(),
+                caller_hop: caller.request_hop,
+                tool_call_id: "late-message".to_owned(),
+                tool_call_doc_id: "late-message-doc".to_owned(),
+                correlation: None,
+            },
+            &SessionMessageTarget {
+                node_did: caused.node_did.clone(),
+                agent_id: caused.agent_id.clone(),
+                session_id: caused.session_id.clone(),
+            },
+            RenderedBody {
+                content: "too late".to_owned(),
+                goal: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(
+            error.is_err(),
+            "late message admission must honor durable stop"
+        );
+
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
@@ -1402,6 +1620,7 @@ mod agent_tools_tests {
                 agent_id: "worker".to_owned(),
                 created_at: "2026-10-14T00:00:00Z".to_owned(),
                 closed_at: None,
+                stopped_at: None,
                 title: None,
                 tags: Vec::new(),
                 observation: None,

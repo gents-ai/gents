@@ -101,10 +101,7 @@ fn generated_causal_hop_cases_match_native_materializer() {
     use gents::{next_request_hop, request_hop_within_bound, RequestHopCause};
 
     let contract = lean_causal_hop_contract();
-    assert_eq!(
-        contract.default_max_request_hop,
-        gents::document_config::DEFAULT_MAX_REQUEST_HOP
-    );
+    assert_eq!(contract.default_max_request_hop, None);
     let cause = |name: &str, cause_hop: Option<u32>| match name {
         "root" => RequestHopCause::Root,
         "cross_session" => RequestHopCause::CrossSession {

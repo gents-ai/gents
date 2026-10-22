@@ -4,8 +4,31 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
-## Unreleased
+## 0.21.0 - 2026-10-22
 
+- Rendered request captures (capture v4) store shared, content-defined
+  manifest trees, so unchanged history is not stored again with each request;
+  context reduction snapshots reference those pinned blocks, unsigned
+  reasoning deltas coalesce into one transcript block, and closing references
+  are interned once per message. Server and desktop must both run 0.21.0.
+  Existing history is not rewritten.
+- DefraDB is pinned to its Iroh-integrated main, which also fixes history
+  pruning deleting blocks that retained documents still reference.
+- A request's concurrent background admissions (spawns, background starts,
+  foreground handoffs and plugin adoptions) now reserve capacity through one
+  shared write, so they can no longer exceed the per-request ceiling of 8.
+  A plugin job adoption refused at that ceiling now fails with
+  `background_tool_budget_exceeded` (`serviceUnavailable`) instead of
+  `plugin_job_policy_denied`.
+- Spawn receipts report one `effective_timeout_secs`; `lifetime_secs` is
+  removed.
+- A budget-limited Goal whose claimed continuation has invalid evidence
+  abandons its wrap-up and stays `budget_limited` instead of pausing.
+- `agent_stop` and `agent_resume` stop and resume another session; a stopped
+  session drains its queued requests, pauses its Goal and cancels its plugin
+  jobs and background processes, and resume waits until they have settled.
+- `Node.max_request_hop` no longer defaults to 8; when it is absent the
+  causal-hop cap is disabled.
 - `gents config export` writes `$` as `$$` in every `pack_config.json`
   string, so `gents config apply` reads the exported text back unchanged.
   Text containing `${VAR}` or `$$`, such as a hook's shell script, previously
@@ -23,6 +46,10 @@ source consistency checks, not a separate runtime compatibility version.
   authority and a peer's `/status` enrollment token, a node signs and delivers
   its own enrollment request, so the peer approves it with `enrollment approve`
   and pairs with `pairings apply` without the desktop app.
+- `gents init --engineer` turns on the `p2p` tool with mutations, so an
+  Engineer can request and approve enrollments and manage its pairings
+  without editing its Tools. Application collection grants
+  (`p2p_collections`) stay empty until an operator adds them.
 - `gents pack wire` (with `--targets-from` and `--remove`), `gents pack install
   --wire <agent>` and the desktop's Enable for agent action add a job plugin
   to an agent's Tools with a reviewed job block, without turning on direct

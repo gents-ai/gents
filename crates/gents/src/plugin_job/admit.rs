@@ -89,7 +89,7 @@ pub struct StepContext {
     pub engine_digest: String,
     pub engine_provenance_operator: bool,
     pub installed_trusted_sources: Vec<String>,
-    pub max_hop: u32,
+    pub max_hop: Option<u32>,
     pub target_hops: Vec<((String, String), u32)>,
     pub live_background: u32,
     pub started_by_job: bool,
@@ -118,6 +118,7 @@ pub enum Refusal {
     DepthExceeded,
     TimedOut,
     StepFailed,
+    BackgroundBudgetExceeded,
 }
 
 impl Refusal {
@@ -132,6 +133,7 @@ impl Refusal {
             Self::DepthExceeded => Some("plugin_job_depth_exceeded"),
             Self::TimedOut => Some("plugin_job_timed_out"),
             Self::StepFailed => Some("plugin_job_step_failed"),
+            Self::BackgroundBudgetExceeded => Some("background_tool_budget_exceeded"),
         }
     }
 }
@@ -291,7 +293,7 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
             return Err(Refusal::NotAvailable);
         }
         if ctx.live_background as usize >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return Err(Refusal::PolicyDenied);
+            return Err(Refusal::BackgroundBudgetExceeded);
         }
         if ctx.started_by_job {
             return Err(Refusal::DepthExceeded);
@@ -908,7 +910,7 @@ mod tests {
             engine_digest: "engine".to_owned(),
             engine_provenance_operator: true,
             installed_trusted_sources: vec!["source".to_owned()],
-            max_hop: 8,
+            max_hop: Some(8),
             target_hops: vec![(pair("a"), 0), (pair("b"), 0)],
             live_background: 0,
             started_by_job: false,
@@ -1384,7 +1386,10 @@ mod tests {
             live_background: 8,
             ..base_context()
         };
-        assert_eq!(code(&busy, &job, &out), DENIED);
+        assert_eq!(
+            code(&busy, &job, &out),
+            Some("background_tool_budget_exceeded")
+        );
 
         let nested = StepContext {
             started_by_job: true,
@@ -1566,9 +1571,9 @@ mod tests {
         };
         let out = effects(vec![spawn("s1", 0, "a")], &[]);
         let mut ctx = base_context();
-        ctx.max_hop = 3;
+        ctx.max_hop = Some(3);
         assert_eq!(code(&ctx, &job, &out), Some("plugin_job_depth_exceeded"));
-        ctx.max_hop = 4;
+        ctx.max_hop = Some(4);
         assert!(admit_step(&ctx, &job, &out).is_ok());
     }
 

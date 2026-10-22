@@ -5,6 +5,17 @@ use crate::live_output::LiveToolOutputWriter;
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
 
+pub type ForegroundCall = Box<
+    dyn FnOnce(tokio_util::sync::CancellationToken) -> crate::tool::BoxFuture<'static, ToolOutcome>
+        + Send,
+>;
+
+pub enum ForegroundResult {
+    Settled(ToolOutcome),
+    /// The same execution continues under the durable background owner.
+    Backgrounded(String),
+}
+
 #[async_trait]
 pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
     async fn adopt_accepted_tool_calls(&self, calls: Vec<(String, Accepted)>)
@@ -13,6 +24,18 @@ pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
 
 #[async_trait]
 pub trait SessionHook: Send + Sync {
+    async fn run_foreground_tool(
+        &self,
+        _name: &str,
+        _internal_id: &str,
+        call: ForegroundCall,
+    ) -> ForegroundResult {
+        let token = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            .map(|scope| scope.cancellation_token)
+            .unwrap_or_default();
+        ForegroundResult::Settled(call(token).await)
+    }
+
     /// Bind canonical arguments and the physical parent before exposing the
     /// derived child's internal identity to dispatch hooks.
     async fn admit_tool_effect(

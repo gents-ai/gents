@@ -45,7 +45,7 @@ mod tests {
     #[tokio::test]
     async fn context_uses_physical_request_and_rejects_foreign_scope() {
         let dir = tempfile::tempdir().unwrap();
-        let node = EmbeddedNode::builder()
+        let node = crate::shared::test_support::node_builder()
             .data_path(dir.path().join("node"))
             .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
             .build()

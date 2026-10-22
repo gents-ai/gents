@@ -54,7 +54,7 @@ impl Fixture {
     }
 
     async fn build(did: &str, accounts: &[&'static str]) -> Self {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         crate::ensure_node(&node, did).await.unwrap();
         let access = ConfigAccess::local(node.clone());
@@ -570,7 +570,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
     use crate::plugin::store;
     let did = "did:key:z6MkTestSwitchSlot";
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::ensure_node(&node, did).await.unwrap();
     let fixture = Fixture {

@@ -4,7 +4,7 @@ use gents::tool_call_lifecycle::{AwaitMode, ToolRowKind};
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 46);
+    assert_eq!(cases.len(), 56);
 
     let names = cases
         .iter()
@@ -22,6 +22,16 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
             "complete_goal_keeps_background_wake",
             "background_tool_budget_count_7_admits_spawn",
             "background_tool_budget_count_8_rejects_spawn",
+            "background_batch_attempt_0",
+            "background_batch_attempt_1",
+            "background_batch_attempt_2",
+            "background_batch_attempt_3",
+            "background_batch_attempt_4",
+            "background_batch_attempt_5",
+            "background_batch_attempt_6",
+            "background_batch_attempt_7",
+            "background_batch_attempt_8",
+            "background_batch_attempt_9",
             "tool_kind_background_mode_executes",
             "tool_kind_bridge_complete_persists_result",
             "tool_kind_explicit_cancel_projects_explicit_cancel",

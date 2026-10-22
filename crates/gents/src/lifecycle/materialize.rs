@@ -197,6 +197,38 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     requester_did: Option<&str>,
     trigger_doc_id: Option<&str>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+    let spec = pending_agent_request_spec(
+        node_did,
+        agent_id,
+        content,
+        execution_origin,
+        trigger_lineage,
+        conversation_title,
+        workspace_lineage,
+        request_id,
+        session_id,
+        retry_key,
+        requester_did,
+        trigger_doc_id,
+    )?;
+    build_signed_request(spec, RequestSigner::RegisteredTarget).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pending_agent_request_spec(
+    node_did: &str,
+    agent_id: &str,
+    content: &str,
+    execution_origin: ExecutionOrigin,
+    trigger_lineage: TriggerLineage,
+    conversation_title: Option<&str>,
+    workspace_lineage: Option<&WorkspaceLineage>,
+    request_id: &str,
+    session_id: &str,
+    retry_key: Option<&str>,
+    requester_did: Option<&str>,
+    trigger_doc_id: Option<&str>,
+) -> Result<RequestSpec> {
     validate_trigger_lineage(&trigger_lineage, trigger_doc_id)?;
     if trigger_lineage.trigger_kind.as_deref() == Some("manual")
         && trigger_lineage.trigger_id.is_some()
@@ -273,7 +305,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
             admission,
         )
     };
-    build_signed_request(spec, RequestSigner::RegisteredTarget).await
+    Ok(spec)
 }
 
 pub struct RequestIdentity {
@@ -525,8 +557,8 @@ pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
     }
 }
 
-pub fn request_hop_within_bound(max_request_hop: u32, hop: u32) -> bool {
-    hop <= max_request_hop
+pub fn request_hop_within_bound(max_request_hop: Option<u32>, hop: u32) -> bool {
+    max_request_hop.map_or(true, |bound| hop <= bound)
 }
 
 #[derive(Debug, Clone)]
@@ -558,6 +590,33 @@ pub(crate) async fn build_session_message_request(
     queue: Option<gents_protocol::request_input::RequestQueue>,
     cwd: Option<String>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+    build_session_message_request_with_input(
+        cause,
+        target,
+        content,
+        title,
+        request_id,
+        retry_key,
+        hop,
+        gents_protocol::request_input::RequestInput {
+            queue,
+            cwd,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+pub(crate) async fn build_session_message_request_with_input(
+    cause: &SessionMessageCause,
+    target: &SessionMessageTarget,
+    content: &str,
+    title: Option<&str>,
+    request_id: &str,
+    retry_key: Option<String>,
+    hop: u32,
+    mut input: gents_protocol::request_input::RequestInput,
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     anyhow::ensure!(
         !cause.caller_request_id.trim().is_empty()
@@ -582,19 +641,14 @@ pub(crate) async fn build_session_message_request(
         execution_origin: ExecutionOrigin::Interactive,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     };
-    let input = gents_protocol::request_input::RequestInput {
-        selected_skill_ids: prompt_selection.selected_skill_ids,
-        initial_title: title
-            .map(str::trim)
-            .filter(|title| !title.is_empty())
-            .map(|text| gents_protocol::session::SessionTitle {
-                text: text.to_owned(),
-                source: gents_protocol::session::SessionTitleSource::Task,
-            }),
-        queue,
-        cwd,
-        ..Default::default()
-    };
+    input.selected_skill_ids = prompt_selection.selected_skill_ids;
+    input.initial_title = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(|text| gents_protocol::session::SessionTitle {
+            text: text.to_owned(),
+            source: gents_protocol::session::SessionTitleSource::Task,
+        });
     let spec = RequestSpec {
         trigger_lineage: TriggerLineage {
             correlation: cause.correlation.clone(),
@@ -1207,9 +1261,32 @@ pub(crate) async fn write_trigger_delivery(
         "lifecycle.admit_trigger_delivery",
         |txn| {
             Box::pin(async move {
-                let admitted =
-                    stage_task_delivery(txn, &prepared.receipt, prepared.target_existing, create)
+                let fresh =
+                    crate::trigger_engine::durable::stage_fire_receipt(txn, &prepared.receipt)
                         .await?;
+                let mut create = create.clone();
+                if fresh {
+                    if prepared.target_existing && prepared.receipt.goal_id.is_none() {
+                        create.input = crate::goal::prepare_goal_input_in_txn(
+                            txn,
+                            &create.node_did,
+                            &create.session_id,
+                            &create.agent_id,
+                            Some(&create.requester_did),
+                            create.input,
+                        )
+                        .await?;
+                    }
+                    sign_request(&mut create, RequestSigner::RegisteredTarget).await?;
+                }
+                let admitted = stage_task_delivery_with_receipt(
+                    txn,
+                    &prepared.receipt,
+                    prepared.target_existing,
+                    &create,
+                    fresh,
+                )
+                .await?;
                 if prepared.replace_prior && !admitted.duplicate {
                     supersede_trigger_requests_in_txn(
                         txn,
@@ -1302,6 +1379,16 @@ async fn stage_task_delivery(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
     let fresh = crate::trigger_engine::durable::stage_fire_receipt(txn, fire).await?;
+    stage_task_delivery_with_receipt(txn, fire, continue_existing, create, fresh).await
+}
+
+async fn stage_task_delivery_with_receipt(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    fire: &gents_protocol::trigger_delivery::TriggerFire,
+    continue_existing: bool,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    fresh: bool,
+) -> Result<TaskDeliveryAdmission> {
     if fresh {
         if create.caused_by_trigger_kind.as_deref() == Some("event") {
             anyhow::ensure!(
@@ -1330,14 +1417,14 @@ async fn stage_task_delivery(
         );
         match &fire.goal_id {
             Some(goal_id) => {
-                anyhow::ensure!(
-                    goal_id
-                        == &crate::goal::deterministic_goal_id(
-                            &create.node_did,
-                            &create.session_id
-                        ),
-                    "Task receipt has a noncanonical Goal identity"
-                );
+                crate::goal::validate_task_goal_identity_in_txn(
+                    txn,
+                    &create.node_did,
+                    &create.session_id,
+                    goal_id,
+                    create.input.goal_assignment.as_ref(),
+                )
+                .await?;
                 anyhow::ensure!(
                     fire.goal_objective
                         .as_deref()
@@ -1445,7 +1532,13 @@ mod task_delivery_tests {
     async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         let identity_dir = tempfile::tempdir().unwrap();
         let _identity = pin_fixed_signing_identity(identity_dir.path());
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(PIN_FIXED_DID)
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let access = crate::config_client::ConfigAccess::local(node.clone());
         let identity = gents_protocol::trigger_delivery::FireIdentity {

@@ -8,7 +8,7 @@ use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::tool_surface::ToolCeiling;
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+    Arc::new(crate::test_support::node_builder().build().await.unwrap())
 }
 
 fn created_skill_doc_id(data: Option<&serde_json::Value>) -> Option<String> {
@@ -35,7 +35,7 @@ async fn bind_default_agent_backend(
     agent_id: &str,
 ) {
     crate::test_support::install_test_agent(node, node_did, agent_id).await;
-    crate::upsert_node(node, node_did, None, Some(agent_id), true)
+    crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
         .await
         .unwrap();
     crate::backend_registry::set_backend_probe_status(
@@ -1291,7 +1291,7 @@ async fn bind_subscription_backend(
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     crate::test_support::install_test_agent(node, node_did, agent_id).await;
-    crate::upsert_node(node, node_did, None, Some(agent_id), true)
+    crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
         .await
         .unwrap();
     crate::backend_registry::set_backend_probe_status(

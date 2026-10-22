@@ -166,6 +166,7 @@ async fn interrupt_request_matching_in_txn(
         .as_str()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow::anyhow!("interrupt request missing node identity"))?;
+    crate::goal::pause_goal_for_interrupt_in_txn(txn, node_did, session_id).await?;
     if row["interrupt_requested_at"]
         .as_str()
         .is_some_and(|value| !value.is_empty())
@@ -190,6 +191,43 @@ async fn interrupt_request_matching_in_txn(
         "automated wake-up drained because active request was interrupted",
     )
     .await
+}
+
+pub(crate) async fn interrupt_active_session_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<String>> {
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{ _eq: "normal" }},
+                lifecycle_state: {{ _in: ["claimed", "processing"] }} }}, limit: 2)
+                {{ _docID request_id }} }}"#
+        ))
+        .await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("active session request query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "multiple active requests in exact session scope"
+    );
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let doc_id = row["_docID"]
+        .as_str()
+        .context("active session request omitted _docID")?;
+    let request_id = row["request_id"]
+        .as_str()
+        .context("active session request omitted request_id")?
+        .to_owned();
+    let filter = exact_request_filter(doc_id, node_did, requester_did)?;
+    interrupt_request_matching_in_txn(txn, &filter).await?;
+    Ok(Some(request_id))
 }
 
 pub(crate) async fn active_session_request(

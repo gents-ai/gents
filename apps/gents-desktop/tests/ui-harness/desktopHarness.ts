@@ -66,6 +66,8 @@ function harnessSessionContext(
     durableMessageCount: 0,
     providerMessageCount: 0,
     totalCompactedMessages: 0,
+    sessionCompactionCount: null,
+    requestReductionHistoryLoaded: false,
     compactions: [],
     lastRequest: null,
     ...overrides,
@@ -2571,6 +2573,9 @@ export function createDesktopUiHarness(
         alreadyInterrupted: false,
       };
       return result;
+    },
+    async backgroundTool() {
+      return true;
     },
     async jobControl() {
       const outcome: JobControlOutcome = {

@@ -81,6 +81,7 @@ async fn boot_background_turn_with_bounds(
     )
     .await;
     if let Some(deadline_duration_secs) = execution_deadline_secs {
+        assert!(deadline_duration_secs > 1);
         use gents::config_client::{
             read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
@@ -107,7 +108,7 @@ async fn boot_background_turn_with_bounds(
                         serde_json::to_value(gents::document_config::InferenceExecution {
                             node_did: node_did.to_string(),
                             execution_id,
-                            stream_liveness_timeout_secs: Some(1),
+                            stream_liveness_timeout_secs: Some(deadline_duration_secs - 1),
                             deadline_duration_secs: Some(deadline_duration_secs),
                             ..Default::default()
                         })?;
@@ -1254,24 +1255,51 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
     )
     .await;
     let request_id = escape_graphql_string("r6-background-wait-deadline-request-2");
-    let persisted_deadline_at = tokio::time::timeout(Duration::from_secs(5), async {
+    let (request_doc_id, execution_generation, persisted_deadline_at) = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let response = turn.db.node.execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ lifecycle_state deadline }} }}"#,
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID lifecycle_state deadline execution_generation }} }}"#,
             )).await;
-            if let Some(deadline) = response.data.as_ref()
+            if let Some(request) = response.data.as_ref()
                 .and_then(|data| data["AgentRequest"].as_array())
                 .and_then(|rows| rows.first())
                 .filter(|row| row["lifecycle_state"] == "processing")
-                .and_then(|row| row["deadline"].as_str())
             {
-                break chrono::DateTime::parse_from_rfc3339(deadline)
-                    .expect("parse claimed execution deadline")
-                    .with_timezone(&chrono::Utc);
+                break (
+                    request["_docID"].as_str().expect("physical caller").to_string(),
+                    request["execution_generation"].as_str().expect("caller generation").to_string(),
+                    chrono::DateTime::parse_from_rfc3339(request["deadline"].as_str().expect("caller deadline"))
+                        .expect("parse claimed execution deadline")
+                        .with_timezone(&chrono::Utc),
+                );
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }).await.expect("follow-up request was not claimed with an execution deadline");
+    let request_doc_id = escape_graphql_string(&request_doc_id);
+    let access = gents::ConfigAccess::local(turn.db.node.clone());
+    let renewal_bound = (persisted_deadline_at - chrono::Utc::now())
+        .to_std()
+        .expect("caller deadline remains open");
+    // Execution configuration requires lease < deadline; observe a real renewal
+    // past this caller's deadline before testing which boundary wins.
+    tokio::time::timeout(renewal_bound, async {
+        loop {
+            let response = access.execute(&format!(
+                r#"{{ AgentRequest(docID: "{request_doc_id}") {{ lifecycle_state execution_generation execution_lease_expires_at failure_reason }} }}"#,
+            )).await.expect("observe caller lease renewal");
+            let request = &response["data"]["AgentRequest"][0];
+            assert_eq!(request["lifecycle_state"], "processing", "{request}");
+            assert_eq!(request["execution_generation"], execution_generation, "{request}");
+            let expiry = chrono::DateTime::parse_from_rfc3339(
+                request["execution_lease_expires_at"].as_str().expect("caller lease expiry"),
+            ).expect("parse caller lease expiry");
+            if expiry > persisted_deadline_at {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }).await.expect("caller lease did not renew beyond the execution deadline");
     turn.runtime.backend.release(prompt);
     let wait_row =
         wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "wait_process").await;
@@ -1307,6 +1335,21 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let response = access.execute(&format!(
+                r#"{{ AgentRequest(docID: "{request_doc_id}") {{ lifecycle_state execution_generation failure_reason }} }}"#,
+            )).await.expect("observe caller deadline terminalization");
+            let request = &response["data"]["AgentRequest"][0];
+            assert_eq!(request["execution_generation"], execution_generation, "{request}");
+            if request["lifecycle_state"] == "failed" {
+                assert!(request["failure_reason"].as_str().is_some_and(|reason| reason.contains("deadline exceeded")), "{request}");
+                break;
+            }
+            assert_eq!(request["lifecycle_state"], "processing", "{request}");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }).await.expect("caller deadline did not terminalize the owned request");
     let history = gents::load_history(
         &turn.db.node,
         &turn.session_id,

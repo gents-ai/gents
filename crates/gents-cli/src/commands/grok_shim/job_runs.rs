@@ -806,7 +806,6 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::Duration;
-    use defra_node::EmbeddedNode;
     use gents::plugin_job::view::{JobFilter, StateFilter};
     use gents_protocol::job::JobReadError;
 
@@ -826,7 +825,7 @@ mod tests {
     ) {
         let directory = tempfile::tempdir().unwrap();
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(directory.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

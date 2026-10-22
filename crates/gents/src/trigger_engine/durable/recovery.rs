@@ -1,4 +1,7 @@
-use super::{assignment_replaced, observe_goal_outcome_binding, stage_outcome, FIRE_FIELDS};
+use super::{
+    assignment_replaced, observe_goal_outcome_binding, outcome_published, stage_outcome,
+    FIRE_FIELDS,
+};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::trigger_delivery::TriggerFire;
@@ -28,6 +31,9 @@ pub(crate) async fn recover_outcomes_in_txn(
     let now = chrono::Utc::now().to_rfc3339();
     let mut recovered = 0;
     for fire in fires {
+        if outcome_published(txn, &fire).await? {
+            continue;
+        }
         let response = txn
             .execute_local_response(&format!(
                 r#"{{AgentRequest(filter: {{
@@ -126,7 +132,7 @@ mod tests {
             };
             let directory = tempfile::tempdir().unwrap();
             let node = std::sync::Arc::new(
-                EmbeddedNode::builder()
+                crate::test_support::node_builder()
                     .data_path(directory.path())
                     .build()
                     .await

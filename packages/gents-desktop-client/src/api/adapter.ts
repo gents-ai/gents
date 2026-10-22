@@ -85,7 +85,8 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop("desktop_chat_send", { request }),
-    steerPendingMessage: (request) => invokeDesktop("desktop_pending_message_steer", { request }),
+    steerPendingMessage: (request) =>
+      invokeDesktop("desktop_pending_message_steer", { request }),
     editPendingQueue: (request) =>
       invokeDesktop("desktop_pending_queue_edit", {
         request,
@@ -266,7 +267,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_interrupt_request", {
         request,
       }),
-    jobControl: (request) =>
-      invokeDesktop("desktop_job_control", { request }),
+    backgroundTool: (request) =>
+      invokeDesktop("desktop_background_tool", { request }),
+    jobControl: (request) => invokeDesktop("desktop_job_control", { request }),
   };
 }

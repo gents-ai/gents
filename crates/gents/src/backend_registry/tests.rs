@@ -366,7 +366,7 @@ fn admission_rejects_unrelated_observation_and_defaults_capacity() {
 
 #[tokio::test]
 async fn scoped_backend_replacement_preserves_observations_and_resets_defaults() -> Result<()> {
-    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
     let access = crate::config_client::ConfigAccess::local(node.clone());
@@ -447,7 +447,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
 
 #[tokio::test]
 async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Result<()> {
-    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
     let access = crate::config_client::ConfigAccess::local(node.clone());
@@ -486,7 +486,7 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
 
 #[tokio::test]
 async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -> Result<()> {
-    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let owner = base_backend().node_did;
     crate::ensure_node(&node, &owner).await?;
@@ -531,7 +531,7 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
 
 #[tokio::test]
 async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catalog() -> Result<()> {
-    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
     let access = crate::config_client::ConfigAccess::local(node.clone());
@@ -588,7 +588,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
 
 #[tokio::test]
 async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Result<()> {
-    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
     let access = crate::config_client::ConfigAccess::local(node.clone());
@@ -692,7 +692,7 @@ async fn spawn_echoing_models_server(secret: &'static str) -> String {
 #[tokio::test]
 async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result<()> {
     const SECRET: &str = "subscription-access-token-never-stored";
-    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let owner = base_backend().node_did;
     crate::ensure_node(&node, &owner).await?;

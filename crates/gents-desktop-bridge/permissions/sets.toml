@@ -158,6 +158,7 @@ identifier = "interrupt-control"
 description = "Interrupt request execution"
 permissions = [
   "allow-desktop-interrupt-request",
+  "allow-desktop-background-tool",
   "allow-desktop-job-control",
 ]
 

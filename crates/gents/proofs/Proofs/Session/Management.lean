@@ -6,7 +6,8 @@ def steersInto (active candidate : QueueEntry) : Prop :=
   candidate.fresh = true ∧ candidate.delivery = .steer ∧ candidate.policy = .append ∧
   (candidate.source = .user ∨ candidate.source = .steering) ∧
   candidate.origin = .interactive ∧ candidate.requester = active.requester ∧
-  candidate.turnContext = active.turnContext
+  candidate.turnContext = active.turnContext ∧
+  candidate.goalAssignment = active.goalAssignment
 
 instance (active candidate : QueueEntry) : Decidable (steersInto active candidate) := by
   unfold steersInto
@@ -107,6 +108,11 @@ theorem stale_input_is_barrier (active entry : QueueEntry) (rest : List QueueEnt
     (admitted : List RequestId) (h : entry.fresh = false) :
     steeringRun active admitted (entry :: rest) = [] := by
   simp [steeringRun, steersInto, h]
+
+theorem different_assignment_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) (different : entry.goalAssignment ≠ active.goalAssignment) :
+    steeringRun active admitted (entry :: rest) = [] := by
+  simp [steeringRun, steersInto, different]
 
 theorem replacement_preserves_active_and_invalidates_selection
     {target : AgentSession.Scope} {pre post : SessionQueueState}

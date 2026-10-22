@@ -187,6 +187,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
         [ (Surface.operatorCli, "#266")
         ]
     }
+  , { feature := "session-control"
+    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "mcp-health"
     , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
     , deferred := []
@@ -1217,6 +1221,11 @@ def caseCoverage : List CoverageEntry :=
       "interrupt::queue_tests::generated_interrupt_queue_events_bind_to_native_rows"
       "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_control_cases"
+      "SessionControlCases"
+      "conformance::session_control::generated_session_control_cases_drive_native_interrupt_stop_and_resume")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "fold_queue_cases"
       "FoldQueueCases"
@@ -1330,6 +1339,45 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases"
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "stored_file_image_access_cases"
+      "StoredFileImageAccessCases"
+      "agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_keeps_unselected_images_and_collection_interest_local"
+      "Drives native document ACP on the source and recipient, and attempts a direct pull from an unrelated transport peer. Fresh enrollment remains the delivery owner's obligation.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_image_read_grant_cases"
+      "FileImageReadGrantCases"
+      "tool_call_lifecycle::file_review_access::tests::file_image_read_grant_matches_signed_receipt_contract")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_hydration_completion_cases"
+      "FileImageHydrationCompletionCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_completion_cases_gate_delivery_and_receipts"
+      "Checks the native delivery target and durable terminal decision. Physical transport, live enrollment fences and receipt publication retain their existing owners and need integrated qualification.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_attempt_cases"
+      "FileImageAttemptCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_attempt_cases_preserve_terminal_outcomes_and_prevent_redelivery"
+      "Drives recorded-outcome selection and replay delivery suppression. Source-signed immutable storage, transaction rollback and actual peer replay remain native refinement obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_review_subscription_cases"
+      "FileReviewSubscriptionCases"
+      "client::schema::tests::generated_file_review_rules_exclude_whole_collection_delivery")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "file_image_hydration_route_cases"
+      "FileImageHydrationRouteCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_image_hydration_cases"
+      "FileImageHydrationCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::generated_cases_drive_exact_tool_selection"
+      "Drives native selection with exact enrollment, session and physical tool/image observations. Delivery, signed receipts and client demand wiring remain transport refinement obligations.")
+      "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "schema_argument_repair_cases"
       "SchemaArgumentRepairCases"
@@ -1532,6 +1580,71 @@ def caseCoverage : List CoverageEntry :=
       "goal_claimed_publication_cases"
       "GoalClaimedPublicationCases"
       "goal::claimed_publication::contract_tests::generated_goal_claimed_publication_cases_drive_real_transactions")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_first_request_binding_cases"
+      "GoalFirstRequestBindingCases"
+      "goal::first_request_binding::contract_tests::generated_first_request_bindings_commit_exact_physical_roots")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_assignment_history_cases"
+      "GoalAssignmentHistoryCases"
+      "goal::request_assignment::history_tests::generated_assignment_histories_drive_goal_version_selection")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_message_goal_input_cases"
+      "SessionMessageGoalInputCases"
+      "session_message::goal_input_tests::generated_session_messages_capture_target_goal_before_signing")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_delivery_input_cases"
+      "GoalDeliveryInputCases"
+      "plugin_job::effects::goal_input_tests::generated_deliveries_capture_destination_goal_in_the_admission_transaction")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_input_binding_cases"
+      "GoalInputBindingCases"
+      "client::core::goal::tests::generated_goal_input_bindings_wait_for_verified_source_state")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "goal_fresh_session_input_cases"
+      "GoalFreshSessionInputCases"
+      "request_input::tests::generated_fresh_session_resubmissions_drop_invocation_lineage")
+      "durable-goals" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "goal_request_assignment_cases"
+      "GoalRequestAssignmentCases"
+      "goal::request_assignment::contract_tests::generated_goal_request_assignments_drive_signed_binding")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_wake_receipt_cases"
+      "GoalWakeReceiptCases"
+      "agent::daemon::wake_input::scope_tests::generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_wake_coalescing_cases"
+      "GoalWakeCoalescingCases"
+      "lifecycle::queue::tests::goal_assignment_wakes::generated_goal_wake_scopes_preserve_atomic_notification_bindings")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_wake_ancestry_cases"
+      "GoalWakeAncestryCases"
+      "goal::request_head::tests::generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_tool_context_cases"
+      "GoalToolContextCases"
+      "hook::tests::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_request_ancestry_cases"
+      "GoalRequestAncestryCases"
+      "goal::request_head::tests::generated_goal_ancestry_cases_keep_one_signed_goal")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_queue_assignment_cases"
+      "GoalQueueAssignmentCases"
+      "lifecycle::queue::folding::assignment_tests::generated_goal_assignments_bound_fold_and_steering")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_request_head_cases"
@@ -1896,6 +2009,12 @@ def caseCoverage : List CoverageEntry :=
       "ReasoningAuditCases"
       "native_output_reconstruction::generated_reasoning_audit_cases_drive_exact_native_prefix"
       "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "reasoning_delta_cases"
+      "ReasoningDeltaCases"
+      "agent::stream_processor::tests::generated_reasoning_delta_cases_coalesce_native_parts"
+      "Generated fragment cases drive the native accumulator across reasoning identities, signed boundaries, text boundaries and UTF-8 bytes.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "reasoning_signature_cases"

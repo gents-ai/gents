@@ -287,25 +287,6 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/agent/daemon/wake_input.rs",
-      "collection": "AgentRequest",
-      "arguments": "filter: {$GENTS_scope$, _docID: {_ne: \"$GENTS_doc$\"}, lifecycle_state: {_eq: \"completed\"}, background_completion_notification_keys_json: {_ne: null}, background_completion_input_through_sequence: {_le: $GENTS_cutoff$}}, order: [{background_completion_input_through_sequence: DESC}, {created_at: DESC}, {request_id: DESC}], limit: 1"
-    },
-    "bindings": [
-      {
-        "scope": "@session",
-        "doc": "probe",
-        "cutoff": "1"
-      },
-      {
-        "scope": "@session-absent",
-        "doc": "probe",
-        "cutoff": "1"
-      }
-    ]
-  },
-  {
-    "read": {
       "path": "crates/gents/src/background_completion_diagnostics.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node_did$\" }, message_key: { _like: \"background-completion-notification:%\" } }, order: { created_at: DESC }, limit: $GENTS_NOTIFICATION_SCAN_LIMIT$"
@@ -492,23 +473,6 @@
         "0": "probe",
         "1": "1",
         "2": "1"
-      }
-    ]
-  },
-  {
-    "read": {
-      "path": "crates/gents/src/rendered_request/sink.rs",
-      "collection": "$GENTS_collection$",
-      "arguments": "filter: { node_did: {_eq: \"$GENTS_node_did$\"}, requester_did: {_eq: \"$GENTS_requester_did$\"}, session_id: {_eq: \"$GENTS_session_id$\"}, source: {_eq: \"$GENTS_source$\"}, capture_scope: {_eq: \"$GENTS_capture_scope$\"} }, order: [{node_did: DESC}, {requester_did: DESC}, {session_id: DESC}, {source: DESC}, {capture_scope: DESC}, {created_at: DESC}], limit: 1"
-    },
-    "bindings": [
-      {
-        "collection": "RenderedRequest",
-        "node_did": "probe",
-        "requester_did": "probe",
-        "session_id": "probe",
-        "source": "probe",
-        "capture_scope": "probe"
       }
     ]
   },

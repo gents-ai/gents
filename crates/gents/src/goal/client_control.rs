@@ -16,12 +16,14 @@ pub(crate) enum PreparedGoalControl {
         objective: String,
         token_budget: Option<i64>,
         request: Box<AgentRequestCreate>,
+        replacement: Option<(GoalDocument, GoalCreationIdentity)>,
     },
     Edit {
         goal: GoalDocument,
         fields: GoalEdit,
     },
     Pause(GoalDocument),
+    Stop(GoalDocument),
     ResumeCurrent(GoalDocument),
     ResumeIdle {
         goal: GoalDocument,
@@ -55,29 +57,80 @@ pub(crate) async fn prepare_goal_control(
         ));
     }
     let goal = load_canonical_goal_in_txn(txn, &command.node_did, &command.session_id).await?;
-    let requests =
+    let requests = if matches!(
+        command.operation,
+        GoalOperation::Create { .. } | GoalOperation::Resume {}
+    ) {
         super::request_head::load_session_requests(txn, &command.node_did, &command.session_id)
-            .await?;
+            .await?
+    } else {
+        Vec::new()
+    };
     let idle = goal_session_is_idle(&requests);
     if let GoalOperation::Create {
         objective,
         token_budget,
     } = &command.operation
     {
-        if goal.is_some() {
-            return Ok(Err("this session already has a goal".into()));
-        }
+        let replacement = match (goal, command.expected.as_ref()) {
+            (None, None) => None,
+            (Some(goal), Some(expected)) => {
+                if !matches!(
+                    goal.parsed_status(),
+                    Some(GoalStatus::Complete | GoalStatus::Stopped)
+                ) {
+                    return Ok(Err(
+                        "only a completed or removed goal can be replaced".into()
+                    ));
+                }
+                let current = crate::graphql::newest_document_composite_commit_in_txn(
+                    txn,
+                    &goal.doc_id,
+                    "goal.replace_preflight",
+                )
+                .await?
+                .context("goal has no unambiguous composite revision")?;
+                if expected.document != goal.doc_id || expected.composite != current.cid {
+                    return Ok(Err(
+                        "goal changed; refresh before starting another goal".into()
+                    ));
+                }
+                let identity = replacement_goal_identity(
+                    &command.node_did,
+                    &command.session_id,
+                    &command.command_id,
+                );
+                let response = txn.execute(&format!(r#"{{
+                    Goal(filter: {{node_did: {{_eq: "{}"}}, goal_id: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
+                    GoalCreationClaim(filter: {{creation_key: {{_eq: "{}"}}}}, showDeleted: true) {{_docID}}
+                }}"#, escape_graphql_string(&command.node_did), escape_graphql_string(&identity.goal_id),
+                    escape_graphql_string(&identity.creation_key))).await?;
+                if ["Goal", "GoalCreationClaim"].into_iter().any(|collection| {
+                    response["data"][collection]
+                        .as_array()
+                        .is_none_or(|rows| !rows.is_empty())
+                }) {
+                    return Ok(Err("the replacement goal identity is already in use".into()));
+                }
+                Some((goal, identity))
+            }
+            _ => {
+                return Ok(Err(
+                    "this chat's goal changed; refresh before starting another goal".into(),
+                ))
+            }
+        };
         if !idle {
             return Ok(Err(
                 "wait for this session to finish before starting a goal".into(),
             ));
         }
-        let claim = load_goal_creation_claim_fingerprint_in_txn(
-            txn,
-            &command.node_did,
-            &command.session_id,
-        )
-        .await?;
+        let claim = if replacement.is_some() {
+            None
+        } else {
+            load_goal_creation_claim_fingerprint_in_txn(txn, &command.node_did, &command.session_id)
+                .await?
+        };
         let creation = GoalCreateRequest {
             caller: command.node_did.clone(),
             current_session: command.session_id.clone(),
@@ -98,15 +151,33 @@ pub(crate) async fn prepare_goal_control(
         let Some(request) = &command.initial_request else {
             return Ok(Err("goal creation lacks its signed first request".into()));
         };
+        if replacement.is_some()
+            && requests.iter().any(|prior| {
+                prior.request_id == request.request_id || prior.retry_key == request.retry_key
+            })
+        {
+            return Ok(Err(
+                "the new goal's first request has already been used".into()
+            ));
+        }
         if let Err(error) = request.graphql_input_fields() {
             return Ok(Err(error.into()));
         }
+        let expected_goal_id = replacement
+            .as_ref()
+            .map(|(_, identity)| identity.goal_id.clone())
+            .unwrap_or_else(|| deterministic_goal_id(&command.node_did, &command.session_id));
+        let first_assignment = gents_protocol::request_input::GoalAssignmentInput {
+            goal_id: expected_goal_id,
+            root_request_doc_id: None,
+        };
         if request.node_did != command.node_did
             || request.session_id != command.session_id
             || request.requester_did != command.requester_did
             || request.purpose != RequestPurpose::Normal
             || request.execution_origin != "interactive"
             || request.input.goal_continuation.is_some()
+            || request.input.goal_assignment.as_ref() != Some(&first_assignment)
             || !request.input.queue.as_ref().is_some_and(|queue| {
                 queue.source == gents_protocol::request_input::QueueSource::User
                     && queue.policy == gents_protocol::request_input::QueuePolicy::Append
@@ -133,6 +204,7 @@ pub(crate) async fn prepare_goal_control(
             objective: objective.clone(),
             token_budget: *token_budget,
             request: request.clone(),
+            replacement,
         }));
     }
     let Some(goal) = goal else {
@@ -179,33 +251,46 @@ pub(crate) async fn prepare_goal_control(
             }
             PreparedGoalControl::Pause(goal)
         }
-        GoalOperation::Resume {} => {
-            if state.step(GoalAction::Resume).is_none()
-                || (!idle && state.status != GoalStatus::Paused)
-            {
-                return Ok(Err("goal status does not allow resume".into()));
+        GoalOperation::Stop {} => {
+            if state.step(GoalAction::Stop).is_none() {
+                return Ok(Err("goal status does not allow removal".into()));
             }
-            if !idle {
-                PreparedGoalControl::ResumeCurrent(goal)
-            } else {
-                let Some(parent) = latest_goal_request(&goal, &requests) else {
-                    return Ok(Err("goal has no authenticated predecessor to resume".into()));
-                };
-                if !parent
-                    .lifecycle_state
-                    .is_some_and(RequestLifecycleState::is_terminal)
-                {
-                    return Ok(Err("goal predecessor is not terminal".into()));
-                }
-                PreparedGoalControl::ResumeIdle {
-                    predecessor: parent.request_id.clone(),
-                    goal,
-                }
-            }
+            PreparedGoalControl::Stop(goal)
         }
+        GoalOperation::Resume {} => match prepare_goal_resume(goal, state, &requests) {
+            Ok(prepared) => prepared,
+            Err(error) => return Ok(Err(error)),
+        },
         GoalOperation::Create { .. } => unreachable!(),
     };
     Ok(Ok(prepared))
+}
+
+pub(crate) fn prepare_goal_resume(
+    goal: GoalDocument,
+    state: GoalState,
+    requests: &[gents_protocol::row::AgentRequestRow],
+) -> Result<PreparedGoalControl, String> {
+    let idle = goal_session_is_idle(requests);
+    if state.step(GoalAction::Resume).is_none() || (!idle && state.status != GoalStatus::Paused) {
+        return Err("goal status does not allow resume".into());
+    }
+    if !idle {
+        return Ok(PreparedGoalControl::ResumeCurrent(goal));
+    }
+    let Some(parent) = latest_goal_request(&goal, requests) else {
+        return Err("goal has no authenticated predecessor to resume".into());
+    };
+    if !parent
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
+    {
+        return Err("goal predecessor is not terminal".into());
+    }
+    Ok(PreparedGoalControl::ResumeIdle {
+        predecessor: parent.request_id.clone(),
+        goal,
+    })
 }
 
 pub(crate) async fn stage_goal_control(
@@ -217,6 +302,7 @@ pub(crate) async fn stage_goal_control(
         PreparedGoalControl::Create { request, .. } => &request.node_did,
         PreparedGoalControl::Edit { goal, .. }
         | PreparedGoalControl::Pause(goal)
+        | PreparedGoalControl::Stop(goal)
         | PreparedGoalControl::ResumeCurrent(goal)
         | PreparedGoalControl::ResumeIdle { goal, .. } => &goal.node_did,
     };
@@ -229,6 +315,7 @@ pub(crate) async fn stage_goal_control(
             objective,
             token_budget,
             request,
+            replacement,
         } => {
             crate::session::ensure_session_in_txn(
                 txn,
@@ -241,18 +328,40 @@ pub(crate) async fn stage_goal_control(
                 &request.created_at,
             )
             .await?;
-            let submitted = stage_goal_backed_request_in_txn(
+            if let Some((prior, _)) = &replacement {
+                let response = txn
+                    .execute(&format!(
+                        r#"mutation {{ delete_Goal(docID: "{}") {{_docID}} }}"#,
+                        escape_graphql_string(&prior.doc_id)
+                    ))
+                    .await?;
+                anyhow::ensure!(
+                    mutation_row_count(&response["data"]["delete_Goal"]) == 1,
+                    "terminal goal was not retired"
+                );
+            }
+            let submitted = stage_goal_backed_request_with_identity_in_txn(
                 txn,
                 &request.node_did,
                 &request.session_id,
                 &objective,
                 token_budget,
                 &request,
+                replacement.as_ref().map(|(_, identity)| identity),
             )
             .await?;
             let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id)
                 .await?
                 .context("new goal disappeared during creation")?;
+            anyhow::ensure!(
+                replacement
+                    .as_ref()
+                    .is_none_or(|(prior, identity)| goal.goal_id == identity.goal_id
+                        && goal.doc_id != prior.doc_id
+                        && prior.assignment_root_request_doc_id.as_deref()
+                            != Some(&submitted.doc_id)),
+                "replacement goal reused its prior identity or ancestry"
+            );
             (goal.goal_id, Some(submitted.request_id))
         }
         PreparedGoalControl::Edit { goal, fields } => {
@@ -266,13 +375,18 @@ pub(crate) async fn stage_goal_control(
             .context("goal changed while staging its edit")?;
             (updated.goal_id, None)
         }
-        PreparedGoalControl::Pause(goal) => {
+        operation @ (PreparedGoalControl::Pause(_) | PreparedGoalControl::Stop(_)) => {
+            let (goal, status) = match operation {
+                PreparedGoalControl::Pause(goal) => (goal, GoalStatus::Paused),
+                PreparedGoalControl::Stop(goal) => (goal, GoalStatus::Stopped),
+                _ => unreachable!(),
+            };
             let updated = set_goal_in_txn(
                 txn,
                 &goal.node_did,
                 &goal.session_id,
                 None,
-                Some(GoalStatus::Paused),
+                Some(status),
                 None,
                 None,
             )

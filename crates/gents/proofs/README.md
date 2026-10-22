@@ -402,9 +402,9 @@ The proofs are strongest where the runtime is a state machine:
 - managed native executor deadline/cancel liveness and tool composition
 - mailbox owner stamping, open-row idempotence, and terminal transitions
   (`Proofs/Mailbox`)
-- the causal hop bound between agents (`Request/CausalHop`): continuations
-  preserve the hop, tool-caused requests are one further, and admission bounds
-  every chain by `max_request_hop`
+- causal-hop attribution between agents (`Request/CausalHop`): continuations
+  preserve the hop, tool-caused requests are one further, and admission applies
+  `max_request_hop` when configured
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
   #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
@@ -621,9 +621,9 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
 | `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
 | `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
-| `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input and context-bound activation |
-| `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another node and is authorized by the target's `PeerAdmissionAuthority` ACP. Every branch bounds the signed causal hop by `max_request_hop`. Title requests are runtime-internal local control with parent-only provenance |
-| `Proofs/Request/CausalHop.lean` | The only loop bound between agents: `nextHop` (roots 0, tool-caused +1, continuations copy), `admitHop`, and `admitted_chain_sends_le_max`. A plugin job's completion wake is a continuation (`job_completion_wake_is_continuation`) |
+| `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input, continuation assignment attribution and context-bound activation |
+| `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another node and is authorized by the target's `PeerAdmissionAuthority` ACP. Admission enforces the target's causal-hop cap when configured. Title requests are runtime-internal local control with parent-only provenance |
+| `Proofs/Request/CausalHop.lean` | Causal-hop attribution between agents: `nextHop` (roots 0, tool-caused +1, continuations copy), and `admitHop` (no cap or within the configured cap). Finite caps imply `admitted_chain_sends_le_max`. A plugin job's completion wake is a continuation (`job_completion_wake_is_continuation`) |
 | `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
 | `Proofs/SessionHydration/` | Exact applied peer/requester/agent route admission plus selected-network verified membership; exact requester/agent/session document selection; bounded delivery outcomes separated from terminal-write success or failure; explicit attempted versus confirmed-complete delivery for ambiguous transport failures; idempotent crash re-drive; and resettable session-scoped receiver progress (#1142). Fence: `tests/conformance/session_hydration.rs`. The reconciler consumes the selected set through DefraDB's bounded peer-targeted document pusher. Pairing transition invariants remain owned by `Proofs/PairingReconcile.lean`. |
 | `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
@@ -653,6 +653,12 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/GoalAutomation/ClientMutation.lean` | Atomic signed command receipts, replay, and stale session and Goal revision rejection. |
 | `Proofs/GoalAutomation/ClientStart.lean` | Atomic session reservation, Goal creation, and first request publication. |
 | `Proofs/GoalAutomation/Observation.lean` | Signed Goal projections bound to the canonical physical session and requester. |
+| `Proofs/GoalAutomation/RequestAssignment.lean` | Signed Goal and physical opening-request attribution, retained assignment handoffs |
+| `Proofs/GoalAutomation/FirstRequestBinding.lean` | Immutable Goal opening-request binding captured in the shared Goal/request transaction; task assignments reuse the session Goal identity. |
+| `Proofs/GoalAutomation/DeliveryInput.lean` | Trigger and plugin-job delivery keep committed signed input; only new ordinary delivery to an existing session captures its assignment. |
+| `Proofs/GoalAutomation/WakeReceipt.lean` | Wake capture by assignment scope and cutoff; captured notifications stay owned by their physical attempt. |
+| `Proofs/GoalAutomation/ToolContext.lean` | Goal tool context from the calling request's assignment; unknown provenance never borrows one, and writes need the current Goal and opening request. |
+| `Proofs/SessionHydration/FileImages.lean` | File-image delivery selection and receipts; stored-image reads limited to the signed creator and the receipt's requester. |
 | `Proofs/Session/CommandAuthority.lean` | Shared session command signature, enrollment, route, and ownership requirements. |
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model. `ToolOperation.pluginJob` is a detached operation (`isDetached`) whose row never foregrounds (`plugin_job_row_never_foregrounds`) |

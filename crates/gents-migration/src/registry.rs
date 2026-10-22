@@ -403,7 +403,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreibqqzwkzmqtq7he3smtdyw4smrkljrqjlx3fcxkb6wd76ex6ytsru"
+        "bafyreigcdauzj7thudljoqahk77xhlbf7dd2y76nedlt2dknjnqkmwtzdu"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
@@ -413,7 +413,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
         gents_protocol::schemas::AGENT_SESSION,
-        "bafyreietunsrqsijc3k6x3gf6y2nwkim74uf6j4lskv7p3pjrl44q4tthe"
+        "bafyreiajedcyxilotygvagpzwbruh3nofyd5mr3kao7phf6fc73x3sdc7u"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_NAME,
@@ -438,7 +438,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreihfkiuhbdzdlmfqf6wm4q5xgrad4wl2zi4fvcj25co3kdjrktjv5a"
+        "bafyreid3r2a6orllakh4ta4w65cvsxcwbq3gp476u7cz7nhcqcr65t7xly"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+        gents_protocol::schemas::TOOL_FILE_CHANGE,
+        "bafyreihw4weuomlxjf2imd46bw5mgcpbfaicnbjiuqhs5yo6tvaam4prae"
     ),
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,
@@ -569,6 +574,16 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST,
         "bafyreiebw7lxwzdcmltfz6khjz6e32utfpfwpxydnqwcnnsbtj4qqhxcmq"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+        gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST,
+        "bafyreihbcklqo55343lt7spcif4xftwqbsfe6flznvpge3sfcre3sakdgu"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME,
+        gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT,
+        "bafyreickb6g5druozipch55cjpaciwvm5gafgtrprqmdtezp4zqddk5fry"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
@@ -767,6 +782,11 @@ static TOOL_CALL_BACKGROUND_STATUS_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
+static SESSION_STOPPED_AT_FIELDS: &[OrdinaryIndexField<'static>] = &[OrdinaryIndexField {
+    name: "stopped_at",
+    descending: false,
+}];
+
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
@@ -782,6 +802,11 @@ pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
         collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         name: "AgentToolCall_node_await_status",
         fields: TOOL_CALL_BACKGROUND_STATUS_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_SESSION_NAME,
+        name: "AgentSession_stopped_at_ASC",
+        fields: SESSION_STOPPED_AT_FIELDS,
     },
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
@@ -838,6 +863,7 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
     gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
+    gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
     gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
     gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,
     gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME,

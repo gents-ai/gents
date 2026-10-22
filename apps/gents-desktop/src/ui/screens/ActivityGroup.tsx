@@ -12,6 +12,7 @@ import {
 } from "@gents/ui/components/collapsible";
 import { KEEP_DRAWN } from "@/lib/transcriptWindow";
 
+import { BackgroundToolButton } from "./BackgroundToolButton";
 import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -54,7 +55,12 @@ function Step({
     <ToolStep
       label={`${summary.kind} ${summary.primary}`.trim()}
       icon={<ToolIcon tool={tool} />}
-      meta={tally ?? outcome ?? undefined}
+      meta={
+        <>
+          {tally ?? outcome ?? undefined}
+          <BackgroundToolButton tool={tool} />
+        </>
+      }
       status={status}
       stepKey={tool.itemKey}
     >

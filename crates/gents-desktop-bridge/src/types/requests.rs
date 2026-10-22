@@ -596,3 +596,12 @@ pub struct AgentModelSelectionRequest {
     pub reasoning_effort: Option<gents::config::ReasoningEffort>,
     pub service_tier: Option<gents::config::ServiceTier>,
 }
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopBackgroundToolRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub request_id: String,
+    pub tool_call_id: String,
+}

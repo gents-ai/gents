@@ -34,6 +34,8 @@ pub(crate) fn verify_goal_continuation_edge(
     )?;
     anyhow::ensure!(
         child.caused_by_parent_request_doc_id.as_deref() == Some(parent_doc)
+            && (parent_row.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND)
+                || parent_row.caused_by_trigger_id.as_deref() == Some(goal_id))
             && child
                 .doc_id
                 .as_deref()
@@ -47,6 +49,20 @@ pub(crate) fn verify_goal_continuation_edge(
         .as_ref()
         .and_then(|input| input.goal_continuation.as_ref())
         .context("continuation receipt lacks its original issuance facts")?;
+    let parent_reference = parent_row
+        .input
+        .as_ref()
+        .and_then(|input| input.goal_assignment.as_ref());
+    let expected_reference = parent_reference.map(|reference| reference.continuation(parent_doc));
+    anyhow::ensure!(
+        child
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.as_ref())
+            == expected_reference.as_ref()
+            && parent_reference.is_none_or(|reference| reference.goal_id == goal_id),
+        "continuation receipt changed its signed goal assignment"
+    );
     let sequence = facts.sequence;
     let identity = goal_continuation_identity(goal_id, &parent_row.request_id, sequence)?;
     anyhow::ensure!(
@@ -104,22 +120,36 @@ pub(crate) fn latest_goal_request<'a>(
     goal: &GoalDocument,
     rows: &'a [AgentRequestRow],
 ) -> Option<&'a AgentRequestRow> {
-    let members = goal
-        .assignment_root_request_doc_id
-        .as_deref()
-        .map(|root| {
-            authenticated_goal_request_members(&goal.node_did, &goal.session_id, root, rows)
-        })
-        .transpose()
-        .ok()?;
+    let members = if goal.assignment_root_request_doc_id.is_some() {
+        let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, rows).ok()?;
+        let openings = assignment_openings(std::slice::from_ref(goal));
+        Some(
+            rows.iter()
+                .filter_map(|row| {
+                    let entry = authenticated_assignment_entry(
+                        &goal.node_did,
+                        &goal.session_id,
+                        row,
+                        &by_doc,
+                        Some(&goal.goal_id),
+                        &openings,
+                    )
+                    .ok()?;
+                    super::request_assignment::request_belongs_to_goal(goal, entry)
+                        .then(|| row.doc_id.clone())
+                        .flatten()
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
     latest_scoped_request(
         &goal.node_did,
         &goal.session_id,
         Some(&goal.goal_id),
         rows,
-        members
-            .as_ref()
-            .map(|membership| membership.member_doc_ids.as_slice()),
+        members.as_deref(),
     )
 }
 
@@ -179,22 +209,11 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     current_doc_id: &str,
     rows: &'a [AgentRequestRow],
 ) -> Result<AuthenticatedGoalRequestMembers<'a>> {
-    let mut by_doc = std::collections::HashMap::new();
-    for row in rows.iter().filter(|row| {
-        row.node_did.as_deref() == Some(node_did) && row.session_id.as_deref() == Some(session_id)
-    }) {
-        let Some(doc) = row.doc_id.as_deref().filter(|doc| !doc.is_empty()) else {
-            continue;
-        };
-        anyhow::ensure!(
-            by_doc.insert(doc, row).is_none(),
-            "duplicate physical request document in ancestry observation"
-        );
-    }
+    let by_doc = request_rows_by_doc(node_did, session_id, rows)?;
     let current = *by_doc
         .get(current_doc_id)
         .context("current request is absent from its owner/session observation")?;
-    let entry = authenticated_entry(node_did, session_id, current, &by_doc)?;
+    let entry = authenticated_entry(node_did, session_id, current, &by_doc, None)?;
     let entry_doc = entry
         .doc_id
         .as_deref()
@@ -202,7 +221,7 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     let mut member_doc_ids = by_doc
         .iter()
         .filter_map(|(doc, row)| {
-            authenticated_entry(node_did, session_id, row, &by_doc)
+            authenticated_entry(node_did, session_id, row, &by_doc, None)
                 .ok()
                 .filter(|root| root.doc_id.as_deref() == Some(entry_doc))
                 .map(|_| (*doc).to_owned())
@@ -227,27 +246,146 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     })
 }
 
-fn authenticated_entry<'a>(
+pub(super) fn request_rows_by_doc<'a>(
+    node_did: &str,
+    session_id: &str,
+    rows: &'a [AgentRequestRow],
+) -> Result<std::collections::HashMap<&'a str, &'a AgentRequestRow>> {
+    let mut by_doc = std::collections::HashMap::new();
+    for row in rows.iter().filter(|row| {
+        row.node_did.as_deref() == Some(node_did) && row.session_id.as_deref() == Some(session_id)
+    }) {
+        let Some(doc) = row.doc_id.as_deref().filter(|doc| !doc.is_empty()) else {
+            continue;
+        };
+        anyhow::ensure!(
+            by_doc.insert(doc, row).is_none(),
+            "duplicate physical request document in ancestry observation"
+        );
+    }
+    Ok(by_doc)
+}
+
+pub(super) type AssignmentOpenings<'a> =
+    std::collections::HashMap<&'a str, std::collections::HashSet<&'a str>>;
+
+pub(super) fn assignment_openings(goals: &[GoalDocument]) -> AssignmentOpenings<'_> {
+    let mut openings = AssignmentOpenings::new();
+    for goal in goals {
+        if let Some(root) = goal.assignment_root_request_doc_id.as_deref() {
+            openings.entry(root).or_default().insert(&goal.goal_id);
+        }
+    }
+    openings
+}
+
+pub(super) fn authenticated_assignment_entry<'a>(
+    node_did: &str,
+    session_id: &str,
+    row: &'a AgentRequestRow,
+    by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
+    expected_goal: Option<&str>,
+    openings: &AssignmentOpenings<'_>,
+) -> Result<&'a AgentRequestRow> {
+    authenticated_physical_entry(
+        node_did,
+        session_id,
+        row,
+        by_doc,
+        expected_goal,
+        Some(openings),
+    )
+}
+
+pub(super) fn authenticated_entry<'a>(
+    node_did: &str,
+    session_id: &str,
+    row: &'a AgentRequestRow,
+    by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
+    expected_goal: Option<&str>,
+) -> Result<&'a AgentRequestRow> {
+    authenticated_physical_entry(node_did, session_id, row, by_doc, expected_goal, None)
+}
+
+fn authenticated_physical_entry<'a>(
     node_did: &str,
     session_id: &str,
     mut row: &'a AgentRequestRow,
     by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
+    expected_goal: Option<&str>,
+    assignment_openings: Option<&AssignmentOpenings<'_>>,
 ) -> Result<&'a AgentRequestRow> {
     let mut visited = std::collections::HashSet::new();
+    let mut path_goal: Option<&str> = None;
     loop {
         let doc = row
             .doc_id
             .as_deref()
             .context("request has no document ID")?;
         anyhow::ensure!(visited.insert(doc), "cyclic Goal request ancestry");
+        anyhow::ensure!(
+            row.purpose == Some(RequestPurpose::Normal)
+                && row.node_did.as_deref() == Some(node_did)
+                && row.session_id.as_deref() == Some(session_id),
+            "request ancestry is outside its owner/session"
+        );
+        verify_request_receipt_signature(row)?;
         if row.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
-            verify_request_receipt_signature(row)?;
-            return Ok(row);
+            let opening_goals = assignment_openings.and_then(|openings| openings.get(doc));
+            anyhow::ensure!(
+                opening_goals.is_none_or(|goals| expected_goal
+                    .or(path_goal)
+                    .is_none_or(|goal| goals.contains(goal))),
+                "Goal continuation opening belongs to another assignment"
+            );
+            let follows_wake = assignment_openings.is_some()
+                && opening_goals.is_none()
+                && row
+                    .input
+                    .as_ref()
+                    .is_none_or(|input| input.goal_assignment.is_none())
+                && crate::lifecycle::queue::row_is_automated_wakeup(row);
+            if !follows_wake {
+                return Ok(row);
+            }
+            let parent_doc = row
+                .caused_by_parent_request_doc_id
+                .as_deref()
+                .context("background wake has no physical parent")?;
+            let parent = *by_doc
+                .get(parent_doc)
+                .context("background wake parent is absent from its owner/session observation")?;
+            anyhow::ensure!(
+                parent.purpose == Some(RequestPurpose::Normal)
+                    && parent.doc_id.as_deref() != Some(doc)
+                    && parent.node_did.as_deref() == Some(node_did)
+                    && parent.session_id.as_deref() == Some(session_id)
+                    && parent
+                        .input
+                        .as_ref()
+                        .is_none_or(|input| input.goal_assignment.is_none())
+                    && row.execution_origin.as_deref() == Some("scheduled"),
+                "background wake changed its signed assignment or physical owner/session"
+            );
+            verify_runtime_local_control_receipt(
+                row,
+                node_did,
+                &parent.request_id,
+                parent.requester_did.as_deref().unwrap_or(node_did),
+            )?;
+            row = parent;
+            continue;
         }
         let goal_id = row
             .caused_by_trigger_id
             .as_deref()
             .context("Goal continuation has no original Goal ID")?;
+        anyhow::ensure!(
+            expected_goal.is_none_or(|expected| expected == goal_id)
+                && path_goal.is_none_or(|expected| expected == goal_id),
+            "Goal continuation belongs to another assignment"
+        );
+        path_goal = Some(goal_id);
         let parent_doc = row
             .caused_by_parent_request_doc_id
             .as_deref()
@@ -273,6 +411,7 @@ pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {
 #[path = "request_head_tests.rs"]
 mod tests;
 
+#[cfg(test)]
 pub(crate) fn assignment_allows(assigned: Option<&str>, observed: Option<&str>) -> bool {
     assigned.is_none_or(|root| observed == Some(root))
 }
@@ -310,15 +449,25 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         binding.entry.doc_id.as_deref() == Some(root),
         "Task assignment root is a continuation"
     );
+    let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, &requests)?;
+    let openings = assignment_openings(std::slice::from_ref(goal));
     let mut allowed = true;
     for row in pending {
         let doc = row
             .doc_id
             .as_deref()
             .context("Goal continuation has no document ID")?;
-        let members =
-            authenticated_goal_request_members(&goal.node_did, &goal.session_id, doc, &requests)?;
-        if assignment_allows(Some(root), members.entry.doc_id.as_deref()) {
+        let entry = authenticated_assignment_entry(
+            &goal.node_did,
+            &goal.session_id,
+            row,
+            &by_doc,
+            None,
+            &openings,
+        )?;
+        if super::request_assignment::request_belongs_to_goal(goal, entry)
+            && row.caused_by_trigger_id.as_deref() == Some(&goal.goal_id)
+        {
             continue;
         }
         allowed = false;

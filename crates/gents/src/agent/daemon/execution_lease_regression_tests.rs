@@ -73,7 +73,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose, StreamPayload};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut agent_config = test_agent();
     {
@@ -126,6 +126,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "shutdown reasoning regression".into(),
             source: gents_protocol::session::SessionTitleSource::Task,
@@ -372,10 +373,10 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         .collect::<Vec<_>>();
     assert_eq!(
         reconstructed.len(),
-        2,
+        1,
         "exact received part count: {reconstructed:?}"
     );
-    for (part, text) in [(0, "first"), (1, " second")] {
+    for (part, text) in [(0, "first second")] {
         let content = reconstructed[part]
             .as_ref()
             .expect("closed reasoning stream reconstructs");
@@ -486,7 +487,7 @@ impl crate::llm::tool::ToolDyn for LeaseBlockingTool {
 
 #[tokio::test]
 async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let agent_config = test_agent();
     let node_did = agent_config.node_did().to_owned();
@@ -531,6 +532,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "lease loss tool regression".into(),
             source: gents_protocol::session::SessionTitleSource::Task,
@@ -666,7 +668,7 @@ impl CompletionModel for NonTerminalProvider {
 async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool) {
     let data = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(data.path())
             .build()
             .await
@@ -725,6 +727,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             agent_id: agent_config.agent_id.clone(),
             created_at: request.created_at.clone(),
             closed_at: None,
+            stopped_at: None,
             title: Some(gents_protocol::session::SessionTitle {
                 text: "lease regression".into(),
                 source: gents_protocol::session::SessionTitleSource::Task,
@@ -913,7 +916,7 @@ async fn eight_silent_provider_streams_renew_until_explicitly_interrupted_withou
 
 #[tokio::test]
 async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = crate::config_client::ConfigAccess::local(node.clone());
     let agent_config = test_agent();
@@ -962,6 +965,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "late wake interrupt regression".into(),
             source: gents_protocol::session::SessionTitleSource::Task,
@@ -1099,7 +1103,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     assert!(ACTIVE_STREAM_INTERVAL * ACTIVE_CHUNKS as u32 > lease * 2);
     let data = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(data.path())
             .build()
             .await
@@ -1163,6 +1167,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "active short lease".into(),
             source: gents_protocol::session::SessionTitleSource::Task,
@@ -1236,7 +1241,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut agent_config = test_agent();
     {
@@ -1292,6 +1297,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         agent_id: agent_config.agent_id.clone(),
         created_at: request.created_at.clone(),
         closed_at: None,
+        stopped_at: None,
         title: Some(gents_protocol::session::SessionTitle {
             text: "deadline reasoning regression".into(),
             source: gents_protocol::session::SessionTitleSource::Task,

@@ -73,6 +73,8 @@ function session(state: string, requestId = target.requestId): DesktopSessionSna
       durableMessageCount: 0,
       providerMessageCount: 0,
       totalCompactedMessages: 0,
+      sessionCompactionCount: null,
+      requestReductionHistoryLoaded: false,
       compactions: [],
       lastRequest: null,
     },

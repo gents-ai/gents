@@ -83,6 +83,21 @@ impl EmbeddedRemoteP2pAdmin {
         .await
     }
 
+    /// Exact document heads, without requiring unrelated branchable collection heads.
+    pub async fn document_heads_acknowledged(
+        &self,
+        peer_id: &str,
+        collection: &str,
+        doc_ids: &[String],
+    ) -> RemoteP2pAdminResult<Vec<bool>> {
+        let p2p = self.p2p()?;
+        self.run(
+            "document_heads_acknowledged",
+            p2p.document_heads_acknowledged(peer_id, collection, doc_ids),
+        )
+        .await
+    }
+
     /// The `(doc_id, requester_did)` documents of `collection` whose current
     /// heads every replicator carrying them acknowledged: those scoped to the
     /// requester and those carrying the whole collection. A document no
@@ -394,23 +409,15 @@ fn document_requests(doc_ids: &[String]) -> Vec<P2pDocumentRequest> {
 pub(super) async fn push_documents_to_peer(
     node: &Arc<EmbeddedNode>,
     peer_id: &str,
-    documents: &std::collections::BTreeSet<super::session_hydration::HydrationDocument>,
+    documents: Vec<P2pDocumentRequest>,
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
     let p2p = crate::identity::node_p2p(node)
         .context("embedded node has no P2P transport for hydration delivery")?;
-    let docs = documents
-        .iter()
-        .map(|document| P2pDocumentRequest {
-            collection: super::session_hydration::hydration_collection_name(document.collection)
-                .to_string(),
-            doc_id: document.doc_id.clone(),
-        })
-        .collect::<Vec<_>>();
     timeout(
         DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
-        p2p.push_documents_to_peer(peer_id, docs),
+        p2p.push_documents_to_peer(peer_id, documents),
     )
     .await
     .with_context(|| format!("push hydration documents to peer {peer_id} timed out"))?
@@ -431,7 +438,7 @@ fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminErro
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::collections::BTreeSet;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -478,8 +485,8 @@ mod tests {
         }
     "#;
 
-    struct TestNode {
-        node: Arc<EmbeddedNode>,
+    pub(in crate::agent::p2p_reconcile) struct TestNode {
+        pub(in crate::agent::p2p_reconcile) node: Arc<EmbeddedNode>,
         _tempdir: tempfile::TempDir,
     }
 
@@ -509,6 +516,13 @@ mod tests {
     }
 
     async fn p2p_node_with_identity(node_identity_did: Option<&str>) -> TestNode {
+        p2p_node_with_options(node_identity_did, None).await
+    }
+
+    async fn p2p_node_with_options(
+        node_identity_did: Option<&str>,
+        http_address: Option<std::net::SocketAddr>,
+    ) -> TestNode {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let mut builder = EmbeddedNode::builder()
             .data_path(tempdir.path())
@@ -532,6 +546,9 @@ mod tests {
         if let Some(did) = node_identity_did {
             builder = builder.with_node_identity_did(did);
         }
+        if let Some(address) = http_address {
+            builder = builder.with_http(defra_node::HttpConfig::with_addr(address));
+        }
         let node = Arc::new(builder.build().await.expect("embedded p2p node"));
         TestNode {
             node,
@@ -549,26 +566,32 @@ mod tests {
             .add_schema(TEST_SCHEMA)
             .await
             .expect("test schema");
-        test
-    }
-
-    #[tokio::test]
-    async fn collection_name_resolution_accepts_names_and_ids() {
-        let test = test_node().await;
-        let definition = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if let Some(definition) = test
+                if test
                     .node
                     .get_collection("P2pReconcileThing")
                     .expect("collection lookup")
+                    .is_some()
                 {
-                    break definition;
+                    break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
         .expect("committed schema reaches the collection observation");
+        test
+    }
+
+    #[tokio::test]
+    async fn collection_name_resolution_accepts_names_and_ids() {
+        let test = test_node().await;
+        let definition = test
+            .node
+            .get_collection("P2pReconcileThing")
+            .expect("collection lookup")
+            .expect("observed fixture schema");
         let admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&test.node));
 
         assert_eq!(
@@ -588,11 +611,10 @@ mod tests {
     }
 
     async fn runtime_test_node() -> TestNode {
-        let test = p2p_node().await;
-        ensure_runtime_schemas(&test.node)
-            .await
-            .expect("runtime schemas");
-        test
+        let directory = tempfile::tempdir().unwrap();
+        let identity =
+            KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        runtime_test_node_with_identity(&identity).await
     }
 
     async fn runtime_test_node_with_identity(identity: &dyn NodeIdentity) -> TestNode {
@@ -603,11 +625,35 @@ mod tests {
         test
     }
 
+    pub(in crate::agent::p2p_reconcile) async fn runtime_http_test_node(
+        identity: &dyn NodeIdentity,
+    ) -> (TestNode, String) {
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let test = p2p_node_with_options(Some(identity.did()), Some(address)).await;
+        ensure_runtime_schemas(&test.node).await.unwrap();
+        let endpoint = format!("http://{address}/api/v0/graphql");
+        let access = crate::config_client::ConfigAccess::graphql(&endpoint);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if access.execute("{ AgentRequest { _docID } }").await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("native HTTP endpoint becomes ready");
+        (test, endpoint)
+    }
+
     fn bs58_sig(signature: &[u8]) -> String {
         bs58::encode(signature).into_string()
     }
 
-    async fn authorize_enrollment_peer(
+    pub(in crate::agent::p2p_reconcile) async fn authorize_enrollment_peer(
         node: Arc<EmbeddedNode>,
         admin_identity: Arc<dyn NodeIdentity>,
         member_identity: Arc<dyn NodeIdentity>,
@@ -618,39 +664,47 @@ mod tests {
         let issued_at = issued.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let expires_at = (issued + chrono::Duration::minutes(5))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let network_id = format!("network-{}", uuid::Uuid::new_v4());
-
-        let mut network = NetworkRecord {
-            network_id: network_id.clone(),
-            admin_did: admin_identity.did().to_string(),
-            display_name: "final admission test".to_string(),
-            default_template: "conversation".to_string(),
-            created_at: issued_at.clone(),
-            sig: Vec::new(),
-        };
-        network.sig = admin_identity
-            .sign(&network.signing_payload())
+        let existing_network = GraphqlEnrollmentStore::new(node.clone(), admin_identity.clone())
+            .load_projection()
             .await
-            .expect("sign test network");
-        let response = node
-            .execute(&format!(
-                r#"mutation {{ create_Network(input: {{
+            .expect("load enrollment fixture network")
+            .network_id;
+        let network_id = existing_network
+            .clone()
+            .unwrap_or_else(|| format!("network-{}", uuid::Uuid::new_v4()));
+        if existing_network.is_none() {
+            let mut network = NetworkRecord {
+                network_id: network_id.clone(),
+                admin_did: admin_identity.did().to_string(),
+                display_name: "final admission test".to_string(),
+                default_template: "conversation".to_string(),
+                created_at: issued_at.clone(),
+                sig: Vec::new(),
+            };
+            network.sig = admin_identity
+                .sign(&network.signing_payload())
+                .await
+                .expect("sign test network");
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{ create_Network(input: {{
                     network_id: "{}", admin_did: "{}", display_name: "{}",
                     default_template: "{}", created_at: "{}", admin_sig: "{}"
                 }}) {{ _docID }} }}"#,
-                escape_graphql_string(&network.network_id),
-                escape_graphql_string(&network.admin_did),
-                escape_graphql_string(&network.display_name),
-                escape_graphql_string(&network.default_template),
-                escape_graphql_string(&network.created_at),
-                escape_graphql_string(&bs58_sig(&network.sig)),
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "create signed Network: {:?}",
-            response.errors
-        );
+                    escape_graphql_string(&network.network_id),
+                    escape_graphql_string(&network.admin_did),
+                    escape_graphql_string(&network.display_name),
+                    escape_graphql_string(&network.default_template),
+                    escape_graphql_string(&network.created_at),
+                    escape_graphql_string(&bs58_sig(&network.sig)),
+                ))
+                .await;
+            assert!(
+                !response.has_errors(),
+                "create signed Network: {:?}",
+                response.errors
+            );
+        }
 
         let p2p = node.p2p().expect("admin P2P enabled");
         let server_peer = p2p.local_peer_id().await.expect("admin peer id");
@@ -659,7 +713,7 @@ mod tests {
             .await
             .expect("admin ticket lookup")
             .expect("admin shareable ticket");
-        let challenge = format!("challenge-{network_id}-{member_peer}");
+        let challenge = format!("challenge-{}", uuid::Uuid::new_v4());
         let offer_id = format!(
             "offer-{}",
             derive_enrollment_id(
@@ -693,7 +747,7 @@ mod tests {
             .await
             .expect("sign enrollment offer");
         let offer_token = encode_offer(&offer).expect("encode enrollment offer");
-        let client_nonce = format!("nonce-{network_id}-{member_peer}");
+        let client_nonce = format!("nonce-{}", uuid::Uuid::new_v4());
         let request_id = format!(
             "enroll-{}",
             derive_enrollment_id(
@@ -971,7 +1025,9 @@ mod tests {
             .request_id
     }
 
-    async fn wait_for_peer_info(admin: &EmbeddedRemoteP2pAdmin) -> Vec<String> {
+    pub(in crate::agent::p2p_reconcile) async fn wait_for_peer_info(
+        admin: &EmbeddedRemoteP2pAdmin,
+    ) -> Vec<String> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             let addresses = admin.peer_info().await.expect("peer info");
@@ -992,7 +1048,9 @@ mod tests {
             .collection_id
     }
 
-    async fn wait_for_active_peer(admin: &EmbeddedRemoteP2pAdmin) {
+    pub(in crate::agent::p2p_reconcile) async fn wait_for_active_peer(
+        admin: &EmbeddedRemoteP2pAdmin,
+    ) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             let peers = admin.active_peers().await.expect("active peers");
@@ -1456,6 +1514,284 @@ mod tests {
 
         sender.shutdown().await;
         receiver.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn explicit_file_image_push_keeps_unselected_images_and_collection_interest_local() {
+        let keys = tempfile::tempdir().unwrap();
+        let sender_identity =
+            KeyIdentity::load_or_create(keys.path().join("sender.key"), None).unwrap();
+        let receiver_identity =
+            KeyIdentity::load_or_create(keys.path().join("receiver.key"), None).unwrap();
+        assert_ne!(sender_identity.did(), receiver_identity.did());
+        let (sender_test, sender_http) = runtime_http_test_node(&sender_identity).await;
+        let (receiver_test, receiver_http) = runtime_http_test_node(&receiver_identity).await;
+        let sender = &sender_test.node;
+        let receiver = &receiver_test.node;
+        let sender_admin = EmbeddedRemoteP2pAdmin::new(sender.clone());
+        let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
+        let sender_addresses = wait_for_peer_info(&sender_admin).await;
+        let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
+        sender_admin.connect(&receiver_addresses).await.unwrap();
+        wait_for_active_peer(&sender_admin).await;
+        wait_for_active_peer(&receiver_admin).await;
+        receiver_admin
+            .add_replicator(
+                &sender_addresses,
+                &["FileImageHydrationRequest".into()],
+                &PairingFilters::default(),
+            )
+            .await
+            .unwrap();
+        let mut selected = String::new();
+        for tool in ["selected-tool", "unselected-tool"] {
+            let images = serde_json::json!({
+                "version": 1, "tool_call_doc_id": tool, "changes": [{
+                    "root": "/recorded", "path": "edited.txt", "before": {"kind": "missing"},
+                    "after": {"kind": "unavailable", "reason": "tooLarge"}
+                }]
+            });
+            let variables = serde_json::json!({"input": {
+                "tool_call_doc_id": tool, "request_doc_id": "request",
+                "node_did": sender_identity.did(), "requester_did": receiver_identity.did(),
+                "session_id": "session", "file_changes": images,
+            }});
+            let response = crate::config_client::ConfigAccess::transact_local_write(
+                sender, None, "test.file_images.seed", move |txn| {
+                    let variables = variables.clone();
+                    Box::pin(async move { txn.execute_with_variables(
+                        "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+                        &variables,
+                    ).await })
+                },
+            ).await.unwrap();
+            if tool == "selected-tool" {
+                selected = crate::graphql::created_doc_id(&response, "ToolFileChange").unwrap();
+            }
+        }
+        let receiver_access = crate::config_client::ConfigAccess::local(receiver.clone());
+        assert!(receiver_access
+            .execute("{ ToolFileChange { _docID } }")
+            .await
+            .unwrap()["data"]["ToolFileChange"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let peer_id = receiver.p2p().unwrap().local_peer_id().await.unwrap();
+        push_documents_to_peer(
+            sender,
+            &peer_id,
+            vec![P2pDocumentRequest {
+                collection: "ToolFileChange".into(),
+                doc_id: selected.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            sender_admin
+                .document_heads_acknowledged(
+                    &peer_id,
+                    "ToolFileChange",
+                    std::slice::from_ref(&selected)
+                )
+                .await
+                .unwrap(),
+            [false]
+        );
+        sender_admin
+            .add_replicator(
+                &receiver_addresses,
+                &["FileImageHydrationRequest".into()],
+                &PairingFilters::default(),
+            )
+            .await
+            .unwrap();
+        push_documents_to_peer(
+            sender,
+            &peer_id,
+            vec![P2pDocumentRequest {
+                collection: "ToolFileChange".into(),
+                doc_id: selected.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            sender_admin
+                .document_heads_acknowledged(
+                    &peer_id,
+                    "ToolFileChange",
+                    std::slice::from_ref(&selected)
+                )
+                .await
+                .unwrap(),
+            [true]
+        );
+        let mut demand = gents_protocol::file_image_hydration::FileImageDemand {
+            admission: gents_protocol::session_hydration::HydrationRequest {
+                request_key: String::new(),
+                peer_id: peer_id.clone(),
+                requester_did: receiver_identity.did().into(),
+                node_did: sender_identity.did().into(),
+                session_id: "session".into(),
+            },
+            request_doc_id: "request".into(),
+            tool_call_doc_id: "selected-tool".into(),
+        };
+        demand.admission.request_key = demand.derive_request_key();
+        let mut receipt = gents_protocol::file_image_hydration::FileImageHydrationReceipt {
+            version: gents_protocol::file_image_hydration::FILE_IMAGE_RECEIPT_VERSION,
+            demand: demand.clone(),
+            selection: gents_protocol::file_image_hydration::FileImageSelection::Selected {
+                document: selected.clone(),
+            },
+            detail: String::new(),
+            processed_at: "2026-10-20T00:00:00Z".into(),
+            signer_did: sender_identity.did().into(),
+            signature: Vec::new(),
+        };
+        receipt.signature = sender_identity
+            .sign(&receipt.signing_payload().unwrap())
+            .await
+            .unwrap();
+        let receipt = crate::tool_call_lifecycle::VerifiedFileImageReceipt::verify(
+            receipt,
+            &demand,
+            &receiver_identity,
+        )
+        .await
+        .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !receipt.grant_local_read(receiver.clone()).await.unwrap() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "image creator registration did not arrive"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        wait_for_value(
+            receiver,
+            "ToolFileChange",
+            "tool_call_doc_id",
+            "selected-tool",
+        )
+        .await;
+        let result = receiver_access
+            .execute("{ ToolFileChange { _docID tool_call_doc_id file_changes } }")
+            .await
+            .unwrap();
+        let rows = result["data"]["ToolFileChange"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["_docID"], selected);
+        assert_eq!(rows[0]["file_changes"]["tool_call_doc_id"], "selected-tool");
+        let outsider_identity =
+            KeyIdentity::load_or_create(keys.path().join("outsider.key"), None).unwrap();
+        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+        for case in snapshot["stored_file_image_access_cases"]
+            .as_array()
+            .unwrap()
+        {
+            let (owner, endpoint) = match case["owner"].as_str().unwrap() {
+                "node" => (sender, sender_http.as_str()),
+                "client" => (receiver, receiver_http.as_str()),
+                role => panic!("unknown modeled storage owner: {role}"),
+            };
+            let actor = case["actor"].as_str().map(|actor| match actor {
+                "node" => sender_identity.did(),
+                "client" => receiver_identity.did(),
+                "outsider" => outsider_identity.did(),
+                role => panic!("unknown modeled actor: {role}"),
+            });
+            let visible = if let Some(actor) = actor {
+                let did = actor.parse().unwrap();
+                let result = crate::config_client::ConfigAccess::transact_local_write(
+                    owner,
+                    Some(did),
+                    "test.file_images.storage_access",
+                    |txn| {
+                        Box::pin(async move { txn.execute("{ ToolFileChange { _docID } }").await })
+                    },
+                )
+                .await
+                .unwrap();
+                result["data"]["ToolFileChange"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["_docID"] == selected)
+            } else {
+                let collection = owner.get_collection("ToolFileChange").unwrap().unwrap();
+                owner
+                    .document_acp()
+                    .check_doc_access(
+                        &defra_node::AcpIdentity::Anonymous,
+                        defra_node::DocumentPermission::Read,
+                        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+                        gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
+                        &collection.collection_id,
+                    )
+                    .await
+                    .unwrap()
+            };
+            assert_eq!(visible, case["expected"].as_bool().unwrap(), "{case}");
+            let http = match actor {
+                Some(did) => crate::config_client::ConfigAccess::graphql_as(endpoint, did),
+                None => crate::config_client::ConfigAccess::graphql(endpoint),
+            };
+            let response = http
+                .execute("{ ToolFileChange { _docID file_changes } }")
+                .await
+                .unwrap();
+            let http_visible = response["data"]["ToolFileChange"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["_docID"] == selected);
+            assert_eq!(
+                http_visible,
+                case["expected"].as_bool().unwrap(),
+                "HTTP: {case}"
+            );
+        }
+        let outsider_test = runtime_test_node_with_identity(&outsider_identity).await;
+        let outsider = &outsider_test.node;
+        let outsider_admin = EmbeddedRemoteP2pAdmin::new(outsider.clone());
+        outsider_admin.connect(&receiver_addresses).await.unwrap();
+        wait_for_active_peer(&outsider_admin).await;
+        let pull = outsider
+            .p2p()
+            .unwrap()
+            .sync_documents(
+                "ToolFileChange",
+                vec![selected.clone()],
+                Some(Duration::from_secs(5)),
+            )
+            .await;
+        let copied = crate::config_client::ConfigAccess::local(outsider.clone())
+            .execute("{ ToolFileChange { _docID } }")
+            .await
+            .unwrap();
+        assert!(
+            copied["data"]["ToolFileChange"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "an unrelated transport peer fetched a retained image from its recipient: {pull:?}"
+        );
+        assert!(sender_admin
+            .list_p2p_collections()
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(receiver_admin
+            .list_p2p_collections()
+            .await
+            .unwrap()
+            .is_empty());
+        sender.shutdown().await;
+        receiver.shutdown().await;
+        outsider.shutdown().await;
     }
 
     #[tokio::test]

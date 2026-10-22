@@ -15,6 +15,7 @@ namespace Recovery
     the job waiting; `max_wall_secs` bounds that wait. -/
 structure PluginJobRow where
   running : Bool
+  sessionStopped : Bool
   terminalChildren : Nat
   observed : Nat
   live : Nat
@@ -23,10 +24,10 @@ structure PluginJobRow where
   available : Bool
   deriving DecidableEq, Repr
 
-/-- A running job needs the sweep when a child's terminal is unobserved, its
-    deadline passed, it is no longer available, or it stalled: no live child,
-    no unobserved terminal and nothing new from the step that received them
-    (`plugin_job_stalled`). -/
+/-- The normal plugin-job recovery transition: a running job needs the sweep
+    when a child's terminal is unobserved, its deadline passed, it is no longer
+    available, or it stalled. Session stop is joined by the registered sweep
+    below and owns a distinct cancellation transition. -/
 def pluginJobStale (r : PluginJobRow) : Prop :=
   r.running ∧ (r.observed < r.terminalChildren ∨ r.deadlineExpired ∨ !r.available
     ∨ (r.live = 0 ∧ r.observed = r.terminalChildren ∧ r.stepNew = 0))
@@ -164,8 +165,67 @@ theorem pluginJobRow_tick_keeps_job_with_new_effects (row : PluginJobRow)
   rw [pluginJobRow_not_stale_unchanged _ h_not_stale, h_first]
   exact h_running
 
+/-- The step transaction must not publish guest effects once the exact caller
+    session is stopped. It re-reads this fact before staging child requests or
+    other effects. -/
+def pluginJobStepCommitAllowed (sessionStopped : Bool) : Bool := !sessionStopped
+
+/-- A stale observer may invoke the guest only while its physical job row is
+    still running and its exact caller session is open. The write transaction
+    repeats the session check before publishing effects. -/
+def pluginJobStepInvocationAllowed (rowRunning sessionStopped : Bool) : Bool :=
+  rowRunning && pluginJobStepCommitAllowed sessionStopped
+
+theorem stopped_session_cannot_commit_step : pluginJobStepCommitAllowed true = false := rfl
+
+theorem open_session_can_commit_step : pluginJobStepCommitAllowed false = true := rfl
+
+theorem terminal_job_does_not_invoke_guest :
+    pluginJobStepInvocationAllowed false false = false := rfl
+
+theorem stopped_job_does_not_invoke_guest :
+    pluginJobStepInvocationAllowed true true = false := rfl
+
 /-- A tick re-drives one step, then
     the stall rule fails the job closed when that step left it stalled. -/
+def pluginJobStoppedSessionStale (r : PluginJobRow) : Prop :=
+  r.running = true ∧ r.sessionStopped = true
+
+instance (r : PluginJobRow) : Decidable (pluginJobStoppedSessionStale r) := by
+  unfold pluginJobStoppedSessionStale
+  infer_instance
+
+@[simp] theorem pluginJobRecover_sessionStopped (row : PluginJobRow) :
+    (pluginJobRecover row).sessionStopped = row.sessionStopped := by
+  unfold pluginJobRecover
+  split
+  · split <;> rfl
+  · rfl
+
+def pluginJobRecoveryTick (r : PluginJobRow) : PluginJobRow :=
+  if pluginJobStoppedSessionStale r then { r with running := false }
+  else pluginJobRecover (pluginJobRecover r)
+
+theorem pluginJobRecoveryTick_not_stale (row : PluginJobRow)
+    (h : pluginJobStale row ∨ pluginJobStoppedSessionStale row) :
+    ¬ (pluginJobStale (pluginJobRecoveryTick row) ∨
+      pluginJobStoppedSessionStale (pluginJobRecoveryTick row)) := by
+  by_cases h_stopped : pluginJobStoppedSessionStale row
+  · rw [pluginJobRecoveryTick, if_pos h_stopped]
+    simp [pluginJobStoppedSessionStale, pluginJobStale]
+  · have h_stale : pluginJobStale row := by
+      rcases h with h_old | h_stopped_row
+      · exact h_old
+      · exact (h_stopped h_stopped_row).elim
+    have h_session_open : row.sessionStopped = false := by
+      cases h_session : row.sessionStopped
+      · rfl
+      · exact (h_stopped ⟨h_stale.1, h_session⟩).elim
+    rw [pluginJobRecoveryTick, if_neg h_stopped, not_or]
+    constructor
+    · exact pluginJobRow_tick_not_stale row h_stale
+    · simp [pluginJobStoppedSessionStale, h_session_open]
+
 def pluginJobRecoverySweep : RecoverySweep :=
   { Row := PluginJobRow
   , collection := .agentToolCall
@@ -173,17 +233,17 @@ def pluginJobRecoverySweep : RecoverySweep :=
   , rustFunction := "plugin_job::recovery::redrive_running_jobs"
   , cadence := .periodic
   , implementationStatus := .implemented
-  , stale := pluginJobStale
-  , recover := fun row => pluginJobRecover (pluginJobRecover row)
-  , terminal := fun row => ¬ pluginJobStale row
-  , measure := fun row => if pluginJobStale row then 1 else 0
+  , stale := fun row => pluginJobStale row ∨ pluginJobStoppedSessionStale row
+  , recover := pluginJobRecoveryTick
+  , terminal := fun row => ¬ (pluginJobStale row ∨ pluginJobStoppedSessionStale row)
+  , measure := fun row => if pluginJobStale row ∨ pluginJobStoppedSessionStale row then 1 else 0
   , h_stale_positive := by
       intro row h
       simp [h]
-  , h_recover_terminal := pluginJobRow_tick_not_stale
+  , h_recover_terminal := pluginJobRecoveryTick_not_stale
   , h_recover_zero := by
       intro row h
-      simp [pluginJobRow_tick_not_stale row h]
+      simp [pluginJobRecoveryTick_not_stale row h]
   }
 
 end Recovery

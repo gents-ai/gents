@@ -28,6 +28,11 @@ def renderedCaptureCaseJson (witness : RenderedCaptureCase) : String :=
 def renderedCaptureCasesJson : String :=
   jsonArray (renderedCaptureCases.map renderedCaptureCaseJson)
 
+private def manifestBlockJson (block : RenderedCaptureManifestBlock) : String :=
+  "{\"ref\":" ++ toString block.ref
+    ++ ",\"pinned_witness\":" ++ toString block.pinnedWitness
+    ++ ",\"stored_witness\":" ++ jsonOptionalNat block.storedWitness ++ "}"
+
 def renderedCaptureStorageCaseJson (witness : RenderedCaptureStorageCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
@@ -37,10 +42,10 @@ def renderedCaptureStorageCaseJson (witness : RenderedCaptureStorageCase) : Stri
     ++ "\"base_depth\":" ++ toString witness.baseDepth ++ ","
     ++ "\"max_depth\":" ++ toString witness.maxDepth ++ ","
     ++ "\"base_verified\":" ++ boolString witness.baseVerified ++ ","
-    ++ "\"manifest_blocks\":" ++ jsonArray (witness.manifestBlocks.map fun block =>
-      "{\"ref\":" ++ toString block.ref
-        ++ ",\"pinned_witness\":" ++ toString block.pinnedWitness
-        ++ ",\"stored_witness\":" ++ jsonOptionalNat block.storedWitness ++ "}") ++ ","
+    ++ "\"manifest_blocks\":" ++ jsonArray (witness.manifestBlocks.map manifestBlockJson) ++ ","
+    ++ "\"manifest_root\":" ++ (match witness.manifestRoot with
+      | none => "null"
+      | some block => manifestBlockJson block) ++ ","
     ++ "\"decoded_request\":" ++ jsonOptionalNat witness.decodedRequest ++ ","
     ++ "\"send_permitted\":" ++ boolString witness.sendPermitted
     ++ "}"

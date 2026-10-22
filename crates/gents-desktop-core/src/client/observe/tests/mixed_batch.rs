@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn scoped_missing_document_reload_preserves_other_owner_survivors() {
     let tempdir = tempfile::tempdir().unwrap();
-    let node = Arc::new(NodeBuilder::default().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     seed_node(node.as_ref(), "did:alpha").await;
     let mut raw = node.subscribe(&[EventName::Update]);

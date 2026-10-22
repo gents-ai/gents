@@ -1,3 +1,4 @@
+pub mod storage;
 use serde::{Deserialize, Serialize};
 
 use crate::message::{
@@ -317,7 +318,7 @@ pub struct TranscriptMessage {
     pub native_id: Option<String>,
     #[serde(
         default,
-        deserialize_with = "crate::row::deserialize_null_default",
+        deserialize_with = "storage::deserialize_blocks",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub blocks: Vec<MessageBlock>,

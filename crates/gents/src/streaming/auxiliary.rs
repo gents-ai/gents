@@ -136,9 +136,7 @@ pub(crate) fn sink(
                 AuxiliaryOutputEvent::TextDelta(text) => state.content.push_text(&text),
                 AuxiliaryOutputEvent::ReasoningDelta { id, fragment } => {
                     if !state.audit_seen {
-                        state
-                            .content
-                            .push_provider_reasoning_delta(profile, id, &fragment);
+                        state.content.push_reasoning_delta(id, &fragment);
                     }
                 }
                 AuxiliaryOutputEvent::Reasoning(reasoning) => {

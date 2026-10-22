@@ -71,7 +71,20 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
     pub(crate) graph_pipeline_edge_delivery_cases: Vec<LeanGraphPipelineEdgeDeliveryCase>,
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
+    pub(crate) goal_wake_coalescing_cases: Vec<serde_json::Value>,
+    pub(crate) goal_wake_ancestry_cases: Vec<serde_json::Value>,
+    pub(crate) goal_request_ancestry_cases: Vec<serde_json::Value>,
+    pub(crate) goal_queue_assignment_cases: Vec<serde_json::Value>,
+    pub(crate) goal_first_request_binding_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
+    pub(crate) goal_request_assignment_cases: Vec<serde_json::Value>,
+    pub(crate) goal_wake_receipt_cases: Vec<serde_json::Value>,
+    pub(crate) goal_tool_context_cases: Vec<serde_json::Value>,
+    pub(crate) goal_input_binding_cases: Vec<serde_json::Value>,
+    pub(crate) goal_fresh_session_input_cases: Vec<serde_json::Value>,
+    pub(crate) session_message_goal_input_cases: Vec<serde_json::Value>,
+    pub(crate) goal_delivery_input_cases: Vec<serde_json::Value>,
+    pub(crate) goal_assignment_history_cases: Vec<serde_json::Value>,
     pub(crate) goal_operator_resume_cases: Vec<serde_json::Value>,
     pub(crate) goal_operator_resume_on_cases: Vec<serde_json::Value>,
     pub(crate) goal_config_reactivation_cases: Vec<serde_json::Value>,
@@ -83,6 +96,13 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) trigger_delivery: serde_json::Value,
     pub(crate) operator_base_freeze_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
+    pub(crate) file_image_hydration_cases: Vec<serde_json::Value>,
+    pub(crate) file_image_hydration_route_cases: Vec<serde_json::Value>,
+    pub(crate) file_review_subscription_cases: Vec<serde_json::Value>,
+    pub(crate) file_image_hydration_completion_cases: Vec<serde_json::Value>,
+    pub(crate) file_image_attempt_cases: Vec<serde_json::Value>,
+    pub(crate) stored_file_image_access_cases: Vec<serde_json::Value>,
+    pub(crate) file_image_read_grant_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
     pub(crate) count_carrier_cases: serde_json::Value,
@@ -269,11 +289,13 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
     pub(crate) reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
+    pub(crate) reasoning_delta_cases: Vec<LeanReasoningDeltaCase>,
     pub(crate) auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub(crate) canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub(crate) canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub(crate) interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
+    pub(crate) session_control_cases: Vec<serde_json::Value>,
     pub(crate) fold_queue_cases: Vec<LeanFoldQueueCase>,
     pub(crate) fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
     pub(crate) handover_fold_cases: Vec<LeanHandoverFoldCase>,
@@ -997,9 +1019,9 @@ pub(crate) struct LeanPluginJobLineageCase {
     pub(crate) queries: Vec<LeanPluginJobLineageQuery>,
 }
 
-/// `Conformance.PluginJob.recoveryCasesJson`: one running plugin-job row, the
-/// registered sweep's staleness verdict and measures, and the row after one
-/// tick (`pluginJobRecover ∘ pluginJobRecover`).
+/// `Conformance.PluginJob.recoveryCasesJson`: plugin-job rows, the registered
+/// sweep's staleness verdict and measures, and the row after one tick
+/// (`pluginJobRecover ∘ pluginJobRecover`).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobRecoveryCase {
@@ -1010,6 +1032,8 @@ pub(crate) struct LeanPluginJobRecoveryCase {
     pub(crate) stale: bool,
     pub(crate) measure_before: u32,
     pub(crate) measure_after: u32,
+    pub(crate) step_commit_allowed: bool,
+    pub(crate) step_invocation_allowed: bool,
     pub(crate) expected_row: LeanPluginJobRecoveryRow,
 }
 
@@ -1017,6 +1041,7 @@ pub(crate) struct LeanPluginJobRecoveryCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobRecoveryRow {
     pub(crate) running: bool,
+    pub(crate) session_stopped: bool,
     pub(crate) terminal_children: u32,
     pub(crate) observed: u32,
     pub(crate) live: u32,
@@ -1307,7 +1332,7 @@ pub(crate) struct LeanPluginJobContext {
     pub(crate) engine_digest: String,
     pub(crate) engine_provenance_operator: bool,
     pub(crate) installed_trusted_sources: Vec<String>,
-    pub(crate) max_hop: u32,
+    pub(crate) max_hop: Option<u32>,
     pub(crate) target_hops: Vec<LeanPluginJobTargetHop>,
     pub(crate) live_background: u32,
     pub(crate) started_by_job: bool,
@@ -2147,7 +2172,7 @@ pub(crate) struct LeanKillCase {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopContract {
-    pub(crate) default_max_request_hop: u32,
+    pub(crate) default_max_request_hop: Option<u32>,
     pub(crate) step_cases: Vec<LeanCausalHopStepCase>,
     pub(crate) chain_cases: Vec<LeanCausalHopChainCase>,
     pub(crate) call_cases: Vec<LeanCausalHopCallCase>,
@@ -2214,7 +2239,7 @@ pub(crate) struct LeanCausalHopStepCase {
     pub(crate) cause: String,
     pub(crate) cause_hop: Option<u32>,
     pub(crate) own_predecessor_hop: u32,
-    pub(crate) max_request_hop: u32,
+    pub(crate) max_request_hop: Option<u32>,
     pub(crate) expected_hop: u32,
     pub(crate) expected_admitted: bool,
 }
@@ -2230,7 +2255,7 @@ pub(crate) struct LeanCausalHopChainStep {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopChainCase {
     pub(crate) name: String,
-    pub(crate) max_request_hop: u32,
+    pub(crate) max_request_hop: Option<u32>,
     pub(crate) steps: Vec<LeanCausalHopChainStep>,
     pub(crate) expected_hops: Vec<u32>,
     pub(crate) expected_admitted: Vec<bool>,
@@ -2240,7 +2265,7 @@ pub(crate) struct LeanCausalHopChainCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCausalHopCallCase {
     pub(crate) name: String,
-    pub(crate) max_request_hop: u32,
+    pub(crate) max_request_hop: Option<u32>,
     pub(crate) events: Vec<String>,
     pub(crate) expected_hops: Vec<u32>,
     pub(crate) expected_admitted: Vec<bool>,
@@ -2897,6 +2922,33 @@ pub(crate) fn lean_reasoning_signature_cases() -> &'static [LeanReasoningSignatu
     &lean_contract_snapshot().reasoning_signature_cases
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanReasoningDeltaPart {
+    Reasoning {
+        id: Option<usize>,
+        signature: Option<usize>,
+        bytes: Vec<u8>,
+    },
+    Text {
+        bytes: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanReasoningDeltaCase {
+    pub(crate) name: String,
+    pub(crate) before: Vec<LeanReasoningDeltaPart>,
+    pub(crate) id: Option<usize>,
+    pub(crate) fragment: Vec<u8>,
+    pub(crate) expected: Vec<LeanReasoningDeltaPart>,
+}
+
+pub(crate) fn lean_reasoning_delta_cases() -> &'static [LeanReasoningDeltaCase] {
+    &lean_contract_snapshot().reasoning_delta_cases
+}
+
 pub(crate) fn lean_auxiliary_output_cases() -> &'static [LeanAuxiliaryOutputCase] {
     &lean_contract_snapshot().auxiliary_output_cases
 }
@@ -2917,6 +2969,10 @@ pub(crate) fn lean_canonical_spawned_target_rejection_cases(
 
 pub(crate) fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {
     &lean_contract_snapshot().interrupt_queue_cases
+}
+
+pub(crate) fn lean_session_control_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().session_control_cases
 }
 
 #[derive(Debug, Deserialize)]

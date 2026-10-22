@@ -7,5 +7,6 @@ type Node @branchable {
     updated_at: DateTime @index(direction: DESC)
     created_by: String
     tags: [String]
+    # Null or absent disables the causal-hop admission cap.
     max_request_hop: Int
 }

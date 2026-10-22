@@ -2,13 +2,68 @@ import Proofs.Basic
 
 namespace Background
 
-/-- Live background rows one request may own (`MAX_BACKGROUNDED_TOOLS_PER_PARENT`). -/
+/-- Admitted background rows one physical parent request may own; this limit
+is runtime-local under the one-active-runtime-per-node convention. -/
 def maxBackgroundedPerParent : Nat := 8
 
-/-- Existing background admission gate; the caller supplies the count of live
-background rows observed by its owner. -/
+/-- The native owner counts running background rows and reserved spawn children,
+excluding accepted calls that have not reserved capacity. It serializes that
+count with the reservation or transition to running in one transaction. -/
 def admitBackground (liveCount : Nat) : Option Nat :=
   if liveCount < maxBackgroundedPerParent then some (liveCount + 1) else none
+
+/-- Pending accepted calls do not occupy capacity. A child reservation or a
+running call does; terminal rows release their slot and remain in history. -/
+inductive BackgroundRowState where
+  | pending
+  | admitted
+  | terminal
+  deriving BEq, DecidableEq, Repr
+
+def admittedBackgroundRows (rows : List BackgroundRowState) : Nat :=
+  rows.filter (· == .admitted) |>.length
+
+/-- Admit the first pending row against the already-admitted rows. A rejected
+pending row becomes terminal. -/
+def admitFirstPendingFrom (rows : List BackgroundRowState) (liveCount : Nat) :
+    Option (List BackgroundRowState × Bool) :=
+  match rows with
+  | [] => none
+  | .pending :: rest =>
+      match admitBackground liveCount with
+      | some _ => some (.admitted :: rest, true)
+      | none => some (.terminal :: rest, false)
+  | row :: rest =>
+      (admitFirstPendingFrom rest liveCount).map fun (updated, admitted) => (row :: updated, admitted)
+
+def admitFirstPending (rows : List BackgroundRowState) :
+    Option (List BackgroundRowState × Bool) :=
+  admitFirstPendingFrom rows (admittedBackgroundRows rows)
+
+def pendingBackgroundRows : Nat → List BackgroundRowState
+  | 0 => []
+  | n + 1 => .pending :: pendingBackgroundRows n
+
+def admitBackgroundBatch : List BackgroundRowState → Nat → List BackgroundRowState
+  | rows, 0 => rows
+  | rows, n + 1 =>
+      match admitFirstPending rows with
+      | none => rows
+      | some (updated, _) => admitBackgroundBatch updated n
+
+theorem ten_pending_background_calls_admit_eight :
+    admittedBackgroundRows (admitBackgroundBatch (pendingBackgroundRows 10) 10) =
+      maxBackgroundedPerParent := by
+  decide
+
+theorem terminal_background_row_releases_capacity :
+    admittedBackgroundRows [.admitted, .terminal, .admitted] = 2 := by
+  decide
+
+theorem rejected_background_row_is_terminal :
+    (admitFirstPending (List.replicate 8 .admitted ++ [.pending])).getD ([], false) =
+      (List.replicate 8 .admitted ++ [.terminal], false) := by
+  decide
 
 theorem admitted_background_count_bounded (before after : Nat)
     (h : admitBackground before = some after) :

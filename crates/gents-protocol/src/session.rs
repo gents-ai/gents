@@ -15,6 +15,10 @@ pub struct AgentSession {
     /// Authoritative request execution state remains on AgentRequest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
+    /// Durable explicit-stop latch. Interrupts pause autonomous Goal work but
+    /// leave this unset so subsequent ordinary messages remain admissible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<SessionTitle>,
     #[serde(

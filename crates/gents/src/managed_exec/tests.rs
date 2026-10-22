@@ -460,7 +460,31 @@ async fn managed_exec_bounds_stderr_drain_after_direct_child_exit() {
 }
 
 #[cfg(unix)]
+/// The non-retained stream must reach EOF independently of unrelated tests'
+/// forked children, which can inherit its writer until they exec.
 async fn assert_bounded_capture_drain(retained_stream: &str) {
+    const FIXTURE: &str = "GENTS_MANAGED_EXEC_DRAIN_FIXTURE";
+    if std::env::var(FIXTURE).as_deref() != Ok(retained_stream) {
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!(
+                    "managed_exec::tests::managed_exec_bounds_{retained_stream}_drain_after_direct_child_exit"
+                ),
+                "--nocapture",
+            ])
+            .env(FIXTURE, retained_stream)
+            .output()
+            .await
+            .expect("run isolated pipe-retention fixture");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let temp = tempfile::tempdir().expect("tempdir");
     let pid_file = temp
         .path()
@@ -622,6 +646,12 @@ async fn generated_process_stop_cases_drive_host_owner() {
         assert_eq!(outcome.as_str(), case.outcome, "{}", case.name);
         assert_eq!(before.may_terminate(), case.may_terminate, "{}", case.name);
         assert_eq!(
+            after.retain_process_record(),
+            case.retain_record,
+            "{}",
+            case.name
+        );
+        assert_eq!(
             outcome.cancel_reply().as_str(),
             case.cancel_reply,
             "{}",
@@ -691,8 +721,24 @@ async fn durable_process_record_survives_a_fresh_store() {
 }
 
 #[cfg(unix)]
+/// Unrelated fork-based spawns can retain these pipe writers until exec. Isolate
+/// complete-output stress from writers that can outlast the bounded drain.
 #[test]
 fn concurrent_managed_commands_retain_complete_output() {
+    const FIXTURE: &str = "GENTS_MANAGED_EXEC_OUTPUT_FIXTURE";
+    if std::env::var_os(FIXTURE).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "managed_exec::tests::concurrent_managed_commands_retain_complete_output",
+                "--nocapture",
+            ])
+            .env(FIXTURE, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated command-output stress failed");
+        return;
+    }
     let workers: Vec<_> = (0..16)
         .map(|_| {
             std::thread::spawn(|| {
@@ -725,7 +771,10 @@ fn concurrent_managed_commands_retain_complete_output() {
                                     assert_eq!(code, Some(0));
                                     assert_eq!(stdout, b"captured");
                                     assert!(stderr.is_empty());
-                                    assert!(!stdout_truncated && !stderr_truncated);
+                                    assert!(
+                                        !stdout_truncated && !stderr_truncated,
+                                        "stdout_truncated={stdout_truncated}, stderr_truncated={stderr_truncated}"
+                                    );
                                 }
                                 other => panic!("expected complete capture, got {other:?}"),
                             }

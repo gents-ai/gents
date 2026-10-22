@@ -205,7 +205,7 @@ pub async fn desktop_session_provenance(
         .ok_or_else(|| BridgeError::untyped("desktop bridge has not finished bootstrapping"))?;
     crate::provenance::session_provenance_request(&core, request)
         .await
-        .map_err(BridgeError::untyped)
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
@@ -239,7 +239,7 @@ pub async fn desktop_interrupt_request(
             "desktop interrupt action failed"
         ),
     }
-    result.map_err(BridgeError::untyped)
+    result.map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
@@ -273,7 +273,7 @@ pub async fn desktop_job_control(
             "desktop job control failed"
         ),
     }
-    result.map_err(BridgeError::untyped)
+    result.map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
@@ -473,4 +473,22 @@ pub(crate) async fn probe_mcp_service_for_core(
     probe_mcp_service(core.as_ref(), &request.node_did, &request.service_id)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn desktop_background_tool(
+    state: State<'_, DesktopAppState>,
+    request: crate::types::DesktopBackgroundToolRequest,
+) -> Result<bool, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    gents::background_tools::request_foreground_backgrounding(
+        &gents::config_client::ConfigAccess::local(core.node_arc()),
+        &request.node_did,
+        &request.session_id,
+        &request.request_id,
+        &request.tool_call_id,
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(error.to_string()))
 }

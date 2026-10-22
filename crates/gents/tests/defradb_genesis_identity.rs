@@ -93,7 +93,14 @@ async fn rows(node: &EmbeddedNode) -> Result<Vec<(String, OutputSegment)>> {
 #[tokio::test]
 async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_create() -> Result<()>
 {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    let directory = tempfile::tempdir()?;
+    let identity = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(gents::NodeIdentity::did(&identity))
+            .build()
+            .await?,
+    );
     gents::schema::ensure_runtime_schemas(&node).await?;
     let original = segment("original");
 

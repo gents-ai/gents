@@ -101,6 +101,9 @@ structure QueueEntry where
   /-- Abstract identity of the request-scoped execution settings the admission
   carries besides its content; equal values run under the same configuration. -/
   turnContext : Nat := 0
+  /-- The signed Goal ID and resolved physical opening request, observed through
+  the canonical input owner. Absence remains distinct from an assigned turn. -/
+  goalAssignment : Option (String × String) := none
   /-- Freshness observed through the existing TTL parser at the operation's
   boundary; absent TTL is fresh, expired or malformed TTL is not. -/
   fresh : Bool := true
@@ -137,7 +140,8 @@ def foldsInto (head candidate : QueueEntry) : Prop :=
   head.source = .user ∧ head.origin = .interactive ∧
     candidate.queuedUserMessage ∧
     candidate.requester = head.requester ∧
-    candidate.turnContext = head.turnContext ∧ candidate.fresh = true
+    candidate.turnContext = head.turnContext ∧ candidate.fresh = true ∧
+    candidate.goalAssignment = head.goalAssignment
 
 instance (head candidate : QueueEntry) : Decidable (head.foldsInto candidate) := by
   unfold QueueEntry.foldsInto
@@ -348,6 +352,13 @@ def drainObservedAutomatedWakeups
     pending := pendingAfterDrainMatching source queueKey allowed s.pending
     terminal := s.terminal ∪ drainedRequestIdsMatching source queueKey allowed s.pending
   }
+
+def drainAllPending (s : SessionQueueState) : SessionQueueState :=
+  { s with
+    pending := []
+    terminal := (s.pending ++ s.folding).foldl
+      (fun terminal entry => insert entry.requestId terminal) s.terminal
+    folding := [] }
 
 end SessionQueueState
 

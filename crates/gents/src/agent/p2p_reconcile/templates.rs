@@ -239,6 +239,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "MailboxItem",
     "PeerEndpoint",
     "SessionHydrationRequest",
+    "FileImageHydrationRequest",
     "AgentSessionInputEdit",
     "AgentSessionGoalControl",
     "Agent",
@@ -273,6 +274,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "MailboxItem",
     "PeerEndpoint",
     "SessionHydrationRequest",
+    "FileImageHydrationRequest",
     "AgentSessionInputEdit",
     "AgentSessionGoalControl",
 ];
@@ -616,7 +618,14 @@ mod tests {
     async fn pre_reasoning_audit_runtime_schema_is_refused_as_skew() {
         async fn node_with(schemas: &[String]) -> std::sync::Arc<defra_node::EmbeddedNode> {
             let node =
-                std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+                std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+            node.add_dac_policy_with_counter(
+                node.node_identity_did().unwrap(),
+                gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
+                0,
+            )
+            .await
+            .unwrap();
             for sdl in schemas {
                 node.add_schema(sdl).await.unwrap();
             }
@@ -707,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_schema_is_unreadable_until_migrations_register_every_collection() {
-        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         let error = read_client_replicated_schema(node.clone())
             .await
             .unwrap_err();

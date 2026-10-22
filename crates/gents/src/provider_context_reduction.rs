@@ -358,8 +358,33 @@ pub(crate) async fn persist(
         .unwrap_or_else(|| "null".to_string());
     let parent_reduction_key = graphql_optional_string(input.parent_reduction_key);
     let requester_did = graphql_optional_string(input.requester_did);
-    let mutation = format!(
-        r#"mutation {{
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "provider_context.create_reduction",
+        |txn| {
+            let intended = &intended;
+            let input = &input;
+            let reduction_key = &reduction_key;
+            let created_at = &created_at;
+            let producer_call_id = &producer_call_id;
+            let producer_call_seq = &producer_call_seq;
+            let parent_reduction_key = &parent_reduction_key;
+            let requester_did = &requester_did;
+            Box::pin(async move {
+                let compacted_prefix_json =
+                    crate::rendered_request::sink::store_shared_json_in_txn(
+                        txn,
+                        &intended.compacted_prefix_json,
+                    )
+                    .await?;
+                let retained_suffix_json = crate::rendered_request::sink::store_shared_json_in_txn(
+                    txn,
+                    &intended.retained_suffix_json,
+                )
+                .await?;
+                let mutation = format!(
+                    r#"mutation {{
             create_ProviderContextReduction(input: {{
                 reduction_key: "{reduction_key}"
                 node_did: "{node_did}"
@@ -386,28 +411,30 @@ pub(crate) async fn persist(
                 created_at: "{created_at}"
             }}) {{ _docID }}
         }}"#,
-        reduction_key = escape_graphql_string(&reduction_key),
-        node_did = escape_graphql_string(input.node_did),
-        session_id = escape_graphql_string(input.session_id),
-        request_id = escape_graphql_string(input.request_id),
-        request_doc_id = escape_graphql_string(input.request_doc_id),
-        request_commit_cid = escape_graphql_string(input.request_commit_cid),
-        reduction_index = input.reduction_index,
-        turn_index = input.turn_index,
-        source_boundary_json = escape_graphql_string(&intended.source_boundary_json),
-        compacted_prefix_json = escape_graphql_string(&intended.compacted_prefix_json),
-        retained_suffix_json = escape_graphql_string(&intended.retained_suffix_json),
-        checkpoint_messages_json = escape_graphql_string(&intended.checkpoint_messages_json),
-        replay_associations_json = escape_graphql_string(&intended.replay_associations_json),
-        summary = escape_graphql_string(input.summary.trim()),
-        messages_compacted = input.compacted_prefix.len(),
-        original_tokens = input.original_tokens,
-        compacted_tokens = input.compacted_tokens,
-    );
-    crate::config_client::ConfigAccess::write_local_response(
-        node,
-        "provider_context.create_reduction",
-        &mutation,
+                    reduction_key = escape_graphql_string(&reduction_key),
+                    node_did = escape_graphql_string(input.node_did),
+                    session_id = escape_graphql_string(input.session_id),
+                    request_id = escape_graphql_string(input.request_id),
+                    request_doc_id = escape_graphql_string(input.request_doc_id),
+                    request_commit_cid = escape_graphql_string(input.request_commit_cid),
+                    reduction_index = input.reduction_index,
+                    turn_index = input.turn_index,
+                    source_boundary_json = escape_graphql_string(&intended.source_boundary_json),
+                    compacted_prefix_json = escape_graphql_string(&compacted_prefix_json),
+                    retained_suffix_json = escape_graphql_string(&retained_suffix_json),
+                    checkpoint_messages_json =
+                        escape_graphql_string(&intended.checkpoint_messages_json),
+                    replay_associations_json =
+                        escape_graphql_string(&intended.replay_associations_json),
+                    summary = escape_graphql_string(input.summary.trim()),
+                    messages_compacted = input.compacted_prefix.len(),
+                    original_tokens = input.original_tokens,
+                    compacted_tokens = input.compacted_tokens,
+                );
+                txn.execute(&mutation).await?;
+                Ok(())
+            })
+        },
     )
     .await
     .with_context(|| format!("creating ProviderContextReduction {reduction_key}"))?;
@@ -480,7 +507,7 @@ pub async fn load_for_request(
             .with_context(|| {
                 format!("loading ProviderContextReduction for request {request_doc_id}")
             })?;
-    let rows: Vec<ProviderContextReduction> = serde_json::from_value(
+    let mut rows: Vec<ProviderContextReduction> = serde_json::from_value(
         response
             .data
             .as_ref()
@@ -488,6 +515,7 @@ pub async fn load_for_request(
             .cloned()
             .unwrap_or_else(|| json!([])),
     )?;
+    hydrate_rows(node, &mut rows).await?;
     validate_chain(&rows)?;
     validate_recoverable_rows(&rows)?;
     Ok(rows)
@@ -617,7 +645,7 @@ async fn load_by_key(
         graphql_with_transaction_retry(node, &query, "loading ProviderContextReduction by key")
             .await
             .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
-    serde_json::from_value(
+    let mut rows = serde_json::from_value(
         response
             .data
             .as_ref()
@@ -625,7 +653,22 @@ async fn load_by_key(
             .cloned()
             .unwrap_or_else(|| json!([])),
     )
-    .context("decoding ProviderContextReduction rows")
+    .context("decoding ProviderContextReduction rows")?;
+    hydrate_rows(node, &mut rows).await?;
+    Ok(rows)
+}
+
+async fn hydrate_rows(node: &EmbeddedNode, rows: &mut Vec<ProviderContextReduction>) -> Result<()> {
+    let mut cache = crate::rendered_request::CaptureReadCache::default();
+    for row in rows {
+        row.compacted_prefix_json =
+            crate::rendered_request::load_shared_json(node, &row.compacted_prefix_json, &mut cache)
+                .await?;
+        row.retained_suffix_json =
+            crate::rendered_request::load_shared_json(node, &row.retained_suffix_json, &mut cache)
+                .await?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -1126,7 +1169,7 @@ mod tests {
 
     #[tokio::test]
     async fn durable_chain_is_idempotent_conflict_visible_and_restartable() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let prefix = vec![Message::user("old")];
         let suffix = vec![Message::assistant("current")];
@@ -1503,7 +1546,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_rejects_a_split_through_a_tool_pair() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let call = Message::Assistant {
             id: None,
@@ -1627,7 +1670,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_boundary_pins_bounded_canonical_high_water() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for sequence in [2, 1] {
             let mutation = format!(
@@ -1682,5 +1725,103 @@ mod tests {
         assert_eq!(high_water.sequence, 2);
         assert!(!high_water.doc_id.is_empty());
         assert!(!high_water.commit_cid.is_empty());
+    }
+
+    #[tokio::test]
+    async fn shared_reduction_snapshots_reload_exactly_and_reuse_pinned_blocks() {
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let prefix = vec![Message::user("prefix 🦀 ".repeat(2400))];
+        let suffix = vec![Message::user("retained suffix ".repeat(2400))];
+        let associations = ReplayAssociations {
+            required: vec![],
+            prefix_rows: vec![unassociated_row()],
+            retained_rows: vec![unassociated_row()],
+        };
+        let sources = ["request-doc", "request-doc-2"].map(|request_doc_id| SourceBoundary {
+            boundary_version: SOURCE_BOUNDARY_VERSION,
+            request_doc_id: request_doc_id.to_string(),
+            request_commit_cid: "claim-cid-7".to_string(),
+            canonical_through: None,
+        });
+        let make_input = |source: usize| NewProviderContextReduction {
+            node_did: "did:key:agent",
+            requester_did: None,
+            session_id: "session",
+            request_id: "request",
+            request_doc_id: &sources[source].request_doc_id,
+            request_commit_cid: "claim-cid-7",
+            reduction_index: 1,
+            turn_index: 1,
+            parent_reduction_key: None,
+            producer_call: None,
+            source_boundary: &sources[source],
+            compacted_prefix: &prefix,
+            retained_suffix: &suffix,
+            checkpoint_messages: &suffix,
+            replay_associations: &associations,
+            summary: "",
+            original_tokens: 20000,
+            compacted_tokens: 10000,
+        };
+        let block_ids = || async {
+            graphql_with_transaction_retry(
+                &node,
+                "{ RenderedRequestBlock { _docID } }",
+                "test reduction blocks",
+            )
+            .await
+            .unwrap()
+            .data
+            .unwrap()["RenderedRequestBlock"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|block| block["_docID"].as_str().unwrap().to_string())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let first = persist(&node, make_input(0)).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Vec<Message>>(&first.compacted_prefix_json).unwrap(),
+            prefix
+        );
+        assert_eq!(first.checkpoint_messages().unwrap(), suffix);
+        let blocks = block_ids().await;
+        assert!(!blocks.is_empty());
+        let raw = graphql_with_transaction_retry(
+            &node,
+            "{ ProviderContextReduction { compacted_prefix_json retained_suffix_json } }",
+            "test reduction storage",
+        )
+        .await
+        .unwrap()
+        .data
+        .unwrap();
+        for field in ["compacted_prefix_json", "retained_suffix_json"] {
+            let encoded = raw["ProviderContextReduction"][0][field].as_str().unwrap();
+            assert!(encoded.len() < 1024);
+            assert!(encoded.contains("\"kind\":\"tree\""));
+        }
+
+        let second = persist(&node, make_input(1)).await.unwrap();
+        assert_ne!(second.doc_id, first.doc_id);
+        assert_eq!(block_ids().await, blocks);
+        for request_doc_id in ["request-doc", "request-doc-2"] {
+            let loaded = load_for_request(&node, request_doc_id).await.unwrap();
+            assert_eq!(loaded[0].compacted_prefix_json, first.compacted_prefix_json);
+            assert_eq!(loaded[0].retained_suffix_json, first.retained_suffix_json);
+        }
+
+        crate::config_client::ConfigAccess::write_local_response(
+            &node,
+            "test.delete_reduction_block",
+            &format!(
+                "mutation {{ delete_RenderedRequestBlock(docID: \"{}\") {{ _docID }} }}",
+                escape_graphql_string(blocks.first().unwrap())
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(load_for_request(&node, "request-doc").await.is_err());
     }
 }

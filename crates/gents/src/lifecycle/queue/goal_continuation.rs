@@ -62,6 +62,7 @@ pub(crate) fn prepare_goal_continuation(
             sequence: continuation_sequence,
             wrapup,
         }),
+        &parent.doc_id,
     );
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(

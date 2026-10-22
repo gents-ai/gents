@@ -90,6 +90,7 @@ async fn generated_goal_observations_drive_signature_and_scope_validation() {
                 snapshot.node_did = map(&reference.node);
                 snapshot.session_id = map(&reference.session);
                 ObservedGoal {
+                    assignment_root_request_doc_id: native.assignment_root_request_doc_id.clone(),
                     revision: GoalRevision {
                         document: reference.document,
                         composite: reference.composite,
@@ -264,5 +265,119 @@ async fn goal_projection_is_signed_scoped_and_settles_without_writes() {
         .await
         .unwrap();
     assert_eq!(durable_rows(&f).await, settled);
+    f.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn retained_signed_observation_refreshes_its_root_without_changing_goal_revision() {
+    let f = fixture().await;
+    let identity: Arc<dyn NodeIdentity> = f.identity.clone();
+    let access = ConfigAccess::local(f.node.clone());
+    access.write("test.goal_physical_root", &format!(
+        "mutation {{update_Goal(docID: \"{}\", input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
+        escape_graphql_string(&f.goal.doc_id), escape_graphql_string(&f.parent.doc_id))).await.unwrap();
+    project_session_goal(&f.node, &identity, SESSION, Some(f.identity.did()))
+        .await
+        .unwrap();
+    let mut retained = load_session_goal_observation(
+        &access,
+        f.identity.as_ref(),
+        f.identity.did(),
+        SESSION,
+        Some(f.identity.did()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let revision = retained.goal.as_ref().unwrap().revision.clone();
+    assert_eq!(
+        retained
+            .goal
+            .as_ref()
+            .unwrap()
+            .assignment_root_request_doc_id
+            .as_deref(),
+        Some(f.parent.doc_id.as_str())
+    );
+    retained
+        .goal
+        .as_mut()
+        .unwrap()
+        .assignment_root_request_doc_id = None;
+    retained.signature = f
+        .identity
+        .sign(&retained.signing_payload().unwrap())
+        .await
+        .unwrap();
+    assert!(serde_json::to_value(retained.goal.as_ref().unwrap())
+        .unwrap()
+        .get("assignment_root_request_doc_id")
+        .is_none());
+    let rows = durable_rows(&f).await;
+    let doc = rows[0]["_docID"].as_str().unwrap();
+    access.write("test.retained_goal_observation", &format!(
+        "mutation {{update_GoalObservation(docID: \"{}\", input: {{observation_json: \"{}\"}}) {{_docID}}}}",
+        escape_graphql_string(doc),escape_graphql_string(&serde_json::to_string(&retained).unwrap()))).await.unwrap();
+    assert!(load_session_goal_observation(
+        &access,
+        f.identity.as_ref(),
+        f.identity.did(),
+        SESSION,
+        Some(f.identity.did())
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .goal
+    .unwrap()
+    .assignment_root_request_doc_id
+    .is_none());
+    project_session_goal(&f.node, &identity, SESSION, Some(f.identity.did()))
+        .await
+        .unwrap();
+    let refreshed = load_session_goal_observation(
+        &access,
+        f.identity.as_ref(),
+        f.identity.did(),
+        SESSION,
+        Some(f.identity.did()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(refreshed.goal.as_ref().unwrap().revision, revision);
+    assert_eq!(
+        refreshed
+            .goal
+            .as_ref()
+            .unwrap()
+            .assignment_root_request_doc_id
+            .as_deref(),
+        Some(f.parent.doc_id.as_str())
+    );
+    let stable = durable_rows(&f).await;
+    project_session_goal(&f.node, &identity, SESSION, Some(f.identity.did()))
+        .await
+        .unwrap();
+    assert_eq!(durable_rows(&f).await, stable);
+    let mut substituted = refreshed;
+    substituted
+        .goal
+        .as_mut()
+        .unwrap()
+        .assignment_root_request_doc_id = Some("another-physical-request".into());
+    access.write("test.substituted_goal_root", &format!(
+        "mutation {{update_GoalObservation(docID: \"{}\", input: {{observation_json: \"{}\"}}) {{_docID}}}}",
+        escape_graphql_string(doc),escape_graphql_string(&serde_json::to_string(&substituted).unwrap()))).await.unwrap();
+    assert!(load_session_goal_observation(
+        &access,
+        f.identity.as_ref(),
+        f.identity.did(),
+        SESSION,
+        Some(f.identity.did())
+    )
+    .await
+    .unwrap()
+    .is_none());
     f.node.shutdown().await;
 }

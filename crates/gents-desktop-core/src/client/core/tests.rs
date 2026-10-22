@@ -1414,6 +1414,24 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         })))
         .mount(&server)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":17})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx/17"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
+        .and(body_string_contains("AgentSession"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data":{"AgentSession":[]}
+        })))
+        .mount(&server)
+        .await;
     let core = Arc::new(
         ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(temp.path().join("client")),
@@ -1482,6 +1500,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         agent_id: "agent".into(),
         created_at: chrono::Utc::now().to_rfc3339(),
         closed_at: None,
+        stopped_at: None,
         title: None,
         provenance: None,
         tags: Vec::new(),

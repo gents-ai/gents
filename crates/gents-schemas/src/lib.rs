@@ -33,6 +33,13 @@ pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
 pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
+pub const TOOL_FILE_CHANGE_NAME: &str = "ToolFileChange";
+pub const TOOL_FILE_CHANGE: &str = include_str!("../schemas/agent/tool_file_change.graphql");
+pub const TOOL_FILE_CHANGE_POLICY: &str =
+    include_str!("../schemas/agent/tool_file_change_policy.yaml");
+pub const TOOL_FILE_CHANGE_POLICY_ID: &str =
+    "2e14bb0746cf90a5e955db6b9bb5d9098f6aa0776849c8bcb68db4dd1e67ea82";
+pub const TOOL_FILE_CHANGE_POLICY_RESOURCE: &str = "file_images";
 pub const AGENT_OUTPUT_SEGMENT_NAME: &str = "AgentOutputSegment";
 pub const AGENT_OUTPUT_SEGMENT: &str =
     include_str!("../schemas/agent/agent_output_segment.graphql");
@@ -152,6 +159,12 @@ pub const NETWORK_ENROLLMENT_ROUTE_RECEIPT: &str =
 pub const ENROLLMENT_OPERATOR_NONCE_NAME: &str = "EnrollmentOperatorNonce";
 pub const ENROLLMENT_OPERATOR_NONCE: &str =
     include_str!("../schemas/agent/enrollment_operator_nonce.graphql");
+pub const FILE_IMAGE_HYDRATION_REQUEST_NAME: &str = "FileImageHydrationRequest";
+pub const FILE_IMAGE_HYDRATION_REQUEST: &str =
+    include_str!("../schemas/agent/file_image_hydration_request.graphql");
+pub const FILE_IMAGE_HYDRATION_RECEIPT_NAME: &str = "FileImageHydrationReceipt";
+pub const FILE_IMAGE_HYDRATION_RECEIPT: &str =
+    include_str!("../schemas/agent/file_image_hydration_receipt.graphql");
 pub const SESSION_HYDRATION_REQUEST_NAME: &str = "SessionHydrationRequest";
 pub const SESSION_HYDRATION_REQUEST: &str =
     include_str!("../schemas/agent/session_hydration_request.graphql");
@@ -207,6 +220,7 @@ pub const ALL: &[&str] = &[
     MAILBOX_ITEM,
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
+    TOOL_FILE_CHANGE,
     COMPACTION_ENTRY,
     RENDERED_REQUEST,
     RENDERED_REQUEST_BLOCK,
@@ -231,6 +245,8 @@ pub const ALL: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
     SESSION_HYDRATION_REQUEST,
+    FILE_IMAGE_HYDRATION_REQUEST,
+    FILE_IMAGE_HYDRATION_RECEIPT,
     AGENT_SESSION_INPUT_EDIT,
     AGENT_SESSION_GOAL_CONTROL,
     GOAL_OBSERVATION,
@@ -283,6 +299,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
+    TOOL_FILE_CHANGE_NAME,
     COMPACTION_ENTRY_NAME,
     RENDERED_REQUEST_NAME,
     RENDERED_REQUEST_BLOCK_NAME,
@@ -307,6 +324,8 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
+    FILE_IMAGE_HYDRATION_REQUEST_NAME,
+    FILE_IMAGE_HYDRATION_RECEIPT_NAME,
     AGENT_SESSION_INPUT_EDIT_NAME,
     AGENT_SESSION_GOAL_CONTROL_NAME,
     GOAL_OBSERVATION_NAME,
@@ -342,6 +361,15 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_RESULT_NAME,
 ];
 
+/// Whole-collection subscriptions would bypass the file-review selection
+/// boundary. These records use filtered control routes or document-scoped push.
+pub const EXPLICIT_DELIVERY_COLLECTION_NAMES: &[&str] =
+    &[TOOL_FILE_CHANGE_NAME, FILE_IMAGE_HYDRATION_REQUEST_NAME];
+
+pub fn requires_explicit_delivery(name: &str) -> bool {
+    EXPLICIT_DELIVERY_COLLECTION_NAMES.contains(&name)
+}
+
 /// Sensitive runtime facts that stay on the runtime node; every broad
 /// replication catalog filters these names explicitly.
 pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
@@ -358,6 +386,7 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
 pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ADMIN_PIN_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
+    FILE_IMAGE_HYDRATION_RECEIPT_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
 ];
 

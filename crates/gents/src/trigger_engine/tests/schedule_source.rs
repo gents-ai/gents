@@ -163,7 +163,7 @@ fn interval_cadence_json() -> serde_json::Value {
 
 #[tokio::test]
 async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_errors() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner_a = schedule_test_behavior().node_did().to_owned();
     let owner_b = "did:test:schedule-cursor-other-owner";
@@ -211,7 +211,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
 
 #[tokio::test]
 async fn schedule_cursor_batches_more_than_one_chunk() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner = schedule_test_behavior().node_did().to_owned();
     let scopes = (0..128)
@@ -230,7 +230,7 @@ async fn schedule_cursor_batches_more_than_one_chunk() {
 
 #[tokio::test]
 async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let task = resolved_task("due schedule");
     let schedules = (0..128)
@@ -286,7 +286,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
 
 #[tokio::test]
 async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let behavior = schedule_test_behavior();
@@ -371,7 +371,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
 
 #[tokio::test]
 async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let behavior = schedule_test_behavior();
@@ -547,7 +547,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
 
 #[tokio::test]
 async fn schedule_source_next_fire_honors_cancellation_token() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let snapshot = snapshot_with_schedules(HashMap::new());
@@ -577,7 +577,7 @@ async fn schedule_source_next_fire_honors_cancellation_token() {
 
 #[tokio::test]
 async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let behavior = schedule_test_behavior();
@@ -732,7 +732,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
 
 #[tokio::test]
 async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = schedule_test_behavior();
     let owner_did = behavior.node_did().to_string();
@@ -809,7 +809,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
 
 #[tokio::test]
 async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let behavior = schedule_test_behavior();
@@ -913,7 +913,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
 
 #[tokio::test]
 async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let snapshot = snapshot_with_schedules(HashMap::new());

@@ -67,6 +67,8 @@ export const sessionContext = (
   durableMessageCount: 0,
   providerMessageCount: 0,
   totalCompactedMessages: 0,
+  sessionCompactionCount: null,
+  requestReductionHistoryLoaded: false,
   compactions: [],
   lastRequest: null,
   ...context,

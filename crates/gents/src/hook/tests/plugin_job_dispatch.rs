@@ -243,18 +243,15 @@ async fn step0(output: Value, options: Options) -> Step0 {
             tool_root: cwd.as_ref().map(|cwd| cwd.path().to_owned()),
         }));
     }
-    hook.on_completion_call(&user_text_message("run the workflow"), &[])
-        .await;
     let session_id = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(&node, &session_id, identity.did(), "general")
-        .await
-        .unwrap();
     let request_id = format!("step0-{}", uuid::Uuid::new_v4());
     let cause = match options.hop {
         0 => None,
         depth => Some(job_ancestry(&node, depth).await),
     };
     bind_request_at_hop(&node, &hook, &request_id, &session_id, options.hop, cause).await;
+    hook.on_completion_call(&user_text_message("run the workflow"), &[])
+        .await;
     Step0 {
         _dir: dir,
         home,
@@ -269,92 +266,55 @@ async fn step0(output: Value, options: Options) -> Step0 {
     }
 }
 
-/// [`bind_interruptible_request`] for a request created at `hop` and caused
-/// by `cause`, a (request, tool call) document pair; both are immutable.
 async fn bind_request_at_hop(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     hook: &DefraSessionHook,
     request_id: &str,
     session_id: &str,
     hop: u32,
     cause: Option<(String, String)>,
 ) {
-    let cause = cause
-        .map(|(request_doc_id, call_doc_id)| {
-            format!(
-                r#"caused_by_parent_request_id: "parent", caused_by_parent_request_doc_id: "{request_doc_id}",
-                    caused_by_parent_tool_call_id: "call", caused_by_parent_tool_call_doc_id: "{call_doc_id}","#
-            )
-        })
-        .unwrap_or_default();
-    let created = node
-        .execute(&format!(
-            r#"mutation {{
-                create_AgentRequest(input: {{
-                    request_id: "{request_id}", purpose: "normal", node_did: "{}",
-                    agent_id: "general", session_id: "{session_id}",
-                    retry_parent_request: "", retry_root_request: "{request_id}",
-                    superseded_by_request: "", content: "run", lifecycle_state: "pending",
-                    backend_id: "", execution_origin: "interactive", request_hop: {hop},
-                    {cause}
-                    created_at: "{}", retry_count: 0, max_retries: {}
-                }}) {{ _docID }}
-            }}"#,
-            hook.node_did,
-            chrono::Utc::now().to_rfc3339(),
-            crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-        ))
-        .await;
-    assert!(!created.has_errors(), "{:?}", created.errors);
-    let lookup = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#
-        ))
-        .await;
-    let doc_id = lookup.data.unwrap()["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let loaded = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS
-        ))
-        .await;
-    let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&loaded, "AgentRequest")
-            .unwrap()
-            .unwrap();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
-        hook.node.clone(),
+    let identity = crate::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
+        .expect("registered job fixture identity");
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        request_id,
+        identity.did(),
+        identity.did(),
         "general",
-        &hook.node_did,
-        row.try_into().unwrap(),
-        60,
+        session_id,
+        "run",
+        "interactive",
+        Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(identity.did()),
     );
-    assert_eq!(
-        lifecycle.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
-    );
-    let writer = crate::streaming::DefraStreamWriter::new(
-        hook.node.clone(),
-        &hook.node_did,
-        std::time::Duration::ZERO,
-    );
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    hook.set_active_request_lineage(Some(request_id.to_owned()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(Utc::now() + chrono::Duration::minutes(5)))
-        .await;
-    hook_execution_fixtures().lock().await.insert(
-        hook_execution_fixture_key(hook, request_id),
-        HookExecutionFixture {
-            lifecycle,
-            writer,
-            turn: 0,
-        },
-    );
+    create.request_hop = hop;
+    if let Some((request_doc_id, call_doc_id)) = cause {
+        let response = crate::ConfigAccess::local(node.clone()).execute(&format!(
+            r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{request_id}} AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{tool_call_id}}}}"#,
+            crate::graphql::escape_graphql_string(&request_doc_id),
+            crate::graphql::escape_graphql_string(&call_doc_id),
+        )).await.unwrap();
+        create.caused_by_parent_request_id = Some(
+            response["data"]["AgentRequest"][0]["request_id"]
+                .as_str()
+                .unwrap()
+                .into(),
+        );
+        create.caused_by_parent_request_doc_id = Some(request_doc_id);
+        create.caused_by_parent_tool_call_id = Some(
+            response["data"]["AgentToolCall"][0]["tool_call_id"]
+                .as_str()
+                .unwrap()
+                .into(),
+        );
+        create.caused_by_parent_tool_call_doc_id = Some(call_doc_id);
+    }
+    let lifecycle = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request_create(
+        node, &identity, create,
+    )
+    .await;
+    bind_claimed_hook_request(hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
 }
 
 /// The (request, tool call) documents the calling request is caused by: a
@@ -460,7 +420,7 @@ impl Step0 {
             row["_docID"].as_str().unwrap(),
             &self.hook.node_did,
             &self.session_id,
-            None,
+            Some(&self.hook.node_did),
         )
         .await
         .unwrap();
@@ -678,7 +638,7 @@ async fn finish_job(step: &Step0, row: &str) {
         row,
         &step.hook.node_did,
         &step.session_id,
-        None,
+        Some(&step.hook.node_did),
     )
     .await
     .unwrap()
@@ -726,9 +686,9 @@ async fn ninth_adoption_on_one_request_is_refused() {
         assert_eq!(answer["status"], "running", "call {n}: {answer}");
     }
     let ninth = step.call_as("call-9", ARGS).await;
-    assert_eq!(ninth["code"], "plugin_job_policy_denied", "{ninth}");
+    assert_eq!(ninth["code"], "background_tool_budget_exceeded", "{ninth}");
     let row = step.row_of("call-9").await;
-    failed(&row, "policyDenied");
+    failed(&row, "serviceUnavailable");
     assert_eq!(row["await_mode"], "foreground", "{row}");
     step.finish().await;
 }

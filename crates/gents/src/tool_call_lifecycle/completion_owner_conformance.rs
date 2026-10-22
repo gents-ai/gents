@@ -684,6 +684,9 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let admission = admitted_parent(case, "over-bound-redrive").await;
     let node = &admission.node;
     let did = admission.node_did.as_str();
+    crate::document_config::upsert_node(node, did, None, Some("general"), true, Some(8))
+        .await
+        .expect("set node hop cap");
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent = rows(
@@ -698,17 +701,14 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         .as_str()
         .unwrap()
         .to_owned();
-    let bound = crate::document_config::load_node(node, did)
-        .await
-        .unwrap()
-        .and_then(|principal| principal.max_request_hop)
-        .unwrap_or(crate::document_config::DEFAULT_MAX_REQUEST_HOP);
+    let bound = 8;
     let over_bound = crate::lifecycle::next_request_hop(
         crate::lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
         0,
     );
     assert!(!crate::lifecycle::request_hop_within_bound(
-        bound, over_bound
+        Some(bound),
+        over_bound
     ));
     let refused_wake = "refused-over-bound-wake";
     let input = RequestInput {
@@ -760,7 +760,10 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     assert_eq!(successor.len(), 1);
     let hop = successor[0]["request_hop"].as_u64().unwrap() as u32;
     assert_eq!(hop, over_bound);
-    assert!(!crate::lifecycle::request_hop_within_bound(bound, hop));
+    assert!(!crate::lifecycle::request_hop_within_bound(
+        Some(bound),
+        hop
+    ));
     admission.node.shutdown().await;
     std::fs::remove_dir_all(admission.path).unwrap();
 }

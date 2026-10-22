@@ -9,15 +9,20 @@ use crate::support::mock_endpoint::MockModelEndpoint;
 
 #[tokio::test]
 async fn oneshot_completes_without_backend_admission_reconciliation() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    ensure_runtime_schemas(node.as_ref()).await?;
-
-    let mock_endpoint = MockModelEndpoint::start("default")?;
     let mut behavior = test_agent(
         "oneshot-admission-exemption",
         "backend-oneshot-exempt",
         None,
     );
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(behavior.node_did())
+            .build()
+            .await?,
+    );
+    ensure_runtime_schemas(node.as_ref()).await?;
+
+    let mock_endpoint = MockModelEndpoint::start("default")?;
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
     bind_agent_backend(
         &node,

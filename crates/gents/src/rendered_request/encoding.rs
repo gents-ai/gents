@@ -15,7 +15,7 @@ pub(crate) const MAX_DELTA_DEPTH: u8 = 8;
 const MIN_DELTA_SAVINGS: usize = 256;
 const COMPRESSED_JSON_VERSION: u32 = 2;
 const MAX_COMPRESSED_RECORD_BYTES: usize = 64 * 1024 * 1024;
-const MIN_COMPRESSION_BYTES: usize = 4096;
+pub(crate) const MIN_COMPRESSION_BYTES: usize = 4096;
 
 #[derive(Serialize, Deserialize)]
 struct CompressedEnvelope {
@@ -151,6 +151,9 @@ enum Payload {
     Manifest {
         blocks: Vec<ManifestEntry>,
     },
+    Tree {
+        tree: ManifestTree,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -196,6 +199,8 @@ struct BorrowedEnvelope<'a> {
     removed: Option<Vec<String>>,
     #[serde(default, borrow)]
     blocks: Option<&'a RawValue>,
+    #[serde(default)]
+    tree: Option<ManifestTree>,
 }
 
 fn deserialize_present_raw<'de, D>(
@@ -442,9 +447,132 @@ pub(crate) fn block_content_key(bytes: &[u8]) -> String {
 }
 
 pub(crate) const MAX_MANIFEST_BLOCKS: usize = 10_000;
+pub(crate) const MAX_MANIFEST_HEIGHT: u8 = 8;
+pub(crate) const MANIFEST_FANOUT: usize = 32;
+const MANIFEST_MIN_GROUP: usize = 8;
+pub(crate) const TREE_RESOLUTION_FUEL: usize =
+    MAX_MANIFEST_BLOCKS * 2 + MAX_MANIFEST_HEIGHT as usize;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ManifestTree {
+    pub(crate) root: ManifestEntry,
+    pub(crate) height: u8,
+    pub(crate) leaves: usize,
+}
+
+impl ManifestTree {
+    pub(crate) fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.height <= MAX_MANIFEST_HEIGHT,
+            "capture manifest exceeds maximum height"
+        );
+        anyhow::ensure!(
+            (1..=MAX_MANIFEST_BLOCKS).contains(&self.leaves),
+            "capture manifest exceeds leaf bound"
+        );
+        Ok(())
+    }
+}
+
+pub(crate) fn manifest_groups(entries: &[ManifestEntry]) -> Vec<&[ManifestEntry]> {
+    let mut groups = Vec::new();
+    let mut start = 0;
+    for (index, entry) in entries.iter().enumerate() {
+        let size = index + 1 - start;
+        let boundary = entry
+            .content_key
+            .as_bytes()
+            .last()
+            .is_some_and(|byte| *byte == b'0');
+        if size == MANIFEST_FANOUT || (size >= MANIFEST_MIN_GROUP && boundary) {
+            groups.push(&entries[start..=index]);
+            start = index + 1;
+        }
+    }
+    if start < entries.len() {
+        groups.push(&entries[start..]);
+    }
+    groups
+}
+
+pub(crate) fn manifest_children(bytes: &[u8]) -> Result<Vec<ManifestEntry>> {
+    let entries: Vec<ManifestEntry> =
+        serde_json::from_slice(bytes).context("decoding shared manifest node")?;
+    anyhow::ensure!(
+        (1..=MANIFEST_FANOUT).contains(&entries.len()),
+        "invalid shared manifest fanout"
+    );
+    Ok(entries)
+}
+
+pub(crate) fn verify_manifest_block(
+    entry: &ManifestEntry,
+    bytes: &[u8],
+    actual_commit: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        actual_commit == entry.field_commit_cid,
+        "capture manifest block field commit changed"
+    );
+    anyhow::ensure!(
+        u64::try_from(bytes.len())? == entry.byte_len,
+        "capture manifest block length mismatch"
+    );
+    anyhow::ensure!(
+        block_content_key(bytes) == entry.content_key,
+        "capture manifest block content key mismatch"
+    );
+    Ok(())
+}
+
+pub(crate) fn encode_tree(tree: ManifestTree) -> Result<EncodedJson> {
+    tree.validate()?;
+    Ok(EncodedJson {
+        stored: encode_envelope(Payload::Tree { tree })?,
+    })
+}
+
+pub(crate) fn resolve_tree<F>(tree: ManifestTree, mut fetch: F) -> Result<Value>
+where
+    F: FnMut(&ManifestEntry) -> Result<(Vec<u8>, String)>,
+{
+    tree.validate()?;
+    let mut pending = vec![(tree.root, tree.height)];
+    let mut fuel = TREE_RESOLUTION_FUEL;
+    let mut leaves = 0;
+    let mut bytes = Vec::new();
+    while let Some((entry, height)) = pending.pop() {
+        anyhow::ensure!(fuel > 0, "capture manifest exhausted resolution fuel");
+        fuel -= 1;
+        let (body, commit) = fetch(&entry)?;
+        verify_manifest_block(&entry, &body, &commit)?;
+        if height == 0 {
+            leaves += 1;
+            anyhow::ensure!(
+                leaves <= tree.leaves,
+                "capture manifest leaf count mismatch"
+            );
+            bytes.extend_from_slice(&body);
+        } else {
+            pending.extend(
+                manifest_children(&body)?
+                    .into_iter()
+                    .rev()
+                    .map(|child| (child, height - 1)),
+            );
+        }
+    }
+    anyhow::ensure!(
+        leaves == tree.leaves,
+        "capture manifest leaf count mismatch"
+    );
+    serde_json::from_slice(&bytes).context("decoding manifest-reassembled capture JSON")
+}
 
 pub(crate) const MANIFEST_RESOLUTION_FUEL: usize = MAX_MANIFEST_BLOCKS + 2;
 
+#[cfg(test)]
 pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     anyhow::ensure!(
         blocks.len() <= MAX_MANIFEST_BLOCKS,
@@ -458,10 +586,11 @@ pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_manifest_with_limit<F>(
     fuel: usize,
     stored: &str,
-    mut fetch_block: F,
+    fetch_block: F,
 ) -> Result<Value>
 where
     F: FnMut(&ManifestEntry) -> Result<(Vec<u8>, String)>,
@@ -470,11 +599,22 @@ where
         DecodedRecord::Manifest { blocks } => blocks,
         _ => anyhow::bail!("capture record is not a block manifest"),
     };
+    resolve_manifest_blocks(fuel, &blocks, fetch_block)
+}
+
+fn resolve_manifest_blocks<F>(
+    fuel: usize,
+    blocks: &[ManifestEntry],
+    mut fetch_block: F,
+) -> Result<Value>
+where
+    F: FnMut(&ManifestEntry) -> Result<(Vec<u8>, String)>,
+{
     let mut remaining = fuel;
     let mut assembled = Vec::new();
     anyhow::ensure!(remaining > 0, "capture manifest exhausted resolution fuel");
     remaining -= 1;
-    for entry in &blocks {
+    for entry in blocks {
         anyhow::ensure!(remaining > 0, "capture manifest exhausted resolution fuel");
         remaining -= 1;
         let (bytes, actual_commit) = fetch_block(entry)?;
@@ -530,7 +670,18 @@ pub(crate) fn decode_capture_record(
     match capture_version {
         1 if kind == CapturePayloadKind::RequestBody => decode_versioned_record(1, stored),
         1 => anyhow::bail!("legacy provenance payload lives in provenance_json"),
-        2 | 3 => decode_record(&select_container_record(stored, kind)?),
+        2 => decode_record(&select_container_record(stored, kind)?),
+        3 | 4 => {
+            let record = decode_record(&select_container_record(stored, kind)?)?;
+            anyhow::ensure!(
+                matches!(
+                    (&record, capture_version),
+                    (DecodedRecord::Manifest { .. }, 3) | (DecodedRecord::Tree(_), 4)
+                ),
+                "capture version does not match manifest format"
+            );
+            Ok(record)
+        }
         other => anyhow::bail!("unsupported rendered-request capture version {other}"),
     }
 }
@@ -542,7 +693,10 @@ pub(crate) fn capture_record_depth(
 ) -> Result<u8> {
     Ok(
         match decode_capture_record(capture_version, stored, kind)? {
-            DecodedRecord::Legacy(_) | DecodedRecord::Full(_) | DecodedRecord::Manifest { .. } => 0,
+            DecodedRecord::Legacy(_)
+            | DecodedRecord::Full(_)
+            | DecodedRecord::Manifest { .. }
+            | DecodedRecord::Tree(_) => 0,
             DecodedRecord::Delta { base, .. } => base
                 .depth
                 .checked_add(1)
@@ -606,6 +760,7 @@ pub(crate) enum DecodedRecord {
     Manifest {
         blocks: Vec<ManifestEntry>,
     },
+    Tree(ManifestTree),
 }
 
 pub(crate) fn decode_record(stored: &str) -> Result<DecodedRecord> {
@@ -647,6 +802,9 @@ pub(crate) fn decode_record(stored: &str) -> Result<DecodedRecord> {
                 .removed
                 .context("capture delta lacks removed fields")?,
         }),
+        "tree" => Ok(DecodedRecord::Tree(
+            envelope.tree.context("capture tree lacks root")?,
+        )),
         "manifest" => Ok(DecodedRecord::Manifest {
             blocks: serde_json::from_str(
                 envelope
@@ -695,7 +853,7 @@ pub(crate) fn decode_versioned_record(capture_version: u32, stored: &str) -> Res
         1 => serde_json::from_str(stored)
             .map(DecodedRecord::Legacy)
             .context("decoding legacy capture JSON"),
-        2 | 3 => decode_record(stored),
+        2 | 3 | 4 => decode_record(stored),
         other => anyhow::bail!("unsupported rendered-request capture version {other}"),
     }
 }
@@ -704,7 +862,7 @@ pub(crate) fn decode_inline_value(capture_version: u32, stored: &str) -> Result<
     match decode_versioned_record(capture_version, stored)? {
         DecodedRecord::Legacy(value) | DecodedRecord::Full(value) => Ok(value),
         DecodedRecord::Delta { .. } => anyhow::bail!("capture delta requires base resolution"),
-        DecodedRecord::Manifest { .. } => {
+        DecodedRecord::Manifest { .. } | DecodedRecord::Tree(_) => {
             anyhow::bail!("capture manifest requires block resolution")
         }
     }
@@ -733,7 +891,7 @@ where
     let base = loop {
         match decode_versioned_record(version, &encoded)? {
             DecodedRecord::Legacy(value) | DecodedRecord::Full(value) => break value,
-            DecodedRecord::Manifest { .. } => {
+            DecodedRecord::Manifest { .. } | DecodedRecord::Tree(_) => {
                 anyhow::bail!("capture manifest resolution requires a block source")
             }
             DecodedRecord::Delta {
@@ -773,7 +931,7 @@ pub(crate) fn resolve_capture_with<B, F>(
     stored: &str,
     kind: CapturePayloadKind,
     mut fetch_base: F,
-    mut fetch_block: B,
+    fetch_block: B,
 ) -> Result<Value>
 where
     F: FnMut(&BaseWitness) -> Result<(u32, String, String)>,
@@ -790,17 +948,13 @@ where
                 Ok((2, select_container_record(&container, kind)?, commit))
             })
         }
-        3 => {
-            let selected = select_container_record(stored, kind)?;
-            match decode_record(&selected)? {
-                DecodedRecord::Manifest { .. } => {
-                    resolve_manifest_with_limit(MANIFEST_RESOLUTION_FUEL, &selected, |entry| {
-                        fetch_block(entry)
-                    })
-                }
-                _ => anyhow::bail!("v3 capture record is not a block manifest"),
+        3 | 4 => match decode_capture_record(capture_version, stored, kind)? {
+            DecodedRecord::Tree(tree) => resolve_tree(tree, fetch_block),
+            DecodedRecord::Manifest { blocks } => {
+                resolve_manifest_blocks(MANIFEST_RESOLUTION_FUEL, &blocks, fetch_block)
             }
-        }
+            _ => anyhow::bail!("capture version does not match manifest format"),
+        },
         other => anyhow::bail!("unsupported rendered-request capture version {other}"),
     }
 }
@@ -860,6 +1014,34 @@ pub(crate) fn apply_delta(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn version_selects_manifest_format_before_any_reads() {
+        let entry = ManifestEntry {
+            doc_id: "block".into(),
+            content_key: "hash".into(),
+            field_commit_cid: "commit".into(),
+            byte_len: 2,
+        };
+        let flat = encode_manifest(&[entry.clone()]).unwrap();
+        let tree = encode_tree(ManifestTree {
+            root: entry,
+            height: 0,
+            leaves: 1,
+        })
+        .unwrap();
+        let flat = encode_container(&flat, &flat).unwrap();
+        let tree = encode_container(&tree, &tree).unwrap();
+        for kind in [
+            CapturePayloadKind::RequestBody,
+            CapturePayloadKind::ProvenancePayload,
+        ] {
+            assert!(decode_capture_record(3, &flat, kind).is_ok());
+            assert!(decode_capture_record(4, &tree, kind).is_ok());
+            assert!(decode_capture_record(3, &tree, kind).is_err());
+            assert!(decode_capture_record(4, &flat, kind).is_err());
+        }
+    }
 
     #[test]
     fn compressed_records_preserve_full_delta_and_commit_witnesses() {
@@ -1001,7 +1183,7 @@ mod tests {
         let cases = crate::lean_vocab_test::lean_rendered_capture_storage_cases();
         assert_eq!(
             cases.len(),
-            10,
+            13,
             "Lean storage cases changed without a Rust fence"
         );
         for case in cases {
@@ -1048,7 +1230,13 @@ mod tests {
                         ))
                     })
                 }
-                "manifest" => {
+                "manifest" | "manifest_tree" => {
+                    assert_eq!(
+                        case.encoding == "manifest_tree",
+                        case.manifest_root.is_some(),
+                        "{}: the tree adapter requires one root child",
+                        case.name
+                    );
                     let chunks = if case.manifest_blocks.is_empty() {
                         Vec::new()
                     } else {
@@ -1079,13 +1267,47 @@ mod tests {
                                 .insert(doc_id, (chunk.bytes.clone(), format!("witness-{stored}")));
                         }
                     }
-                    let manifest = encode_manifest(&entries).unwrap();
-                    resolve_manifest_with_limit(case.max_depth + 1, &manifest.stored, |entry| {
-                        store
-                            .get(&entry.doc_id)
-                            .cloned()
-                            .context("block document is missing")
-                    })
+                    if let Some(root) = &case.manifest_root {
+                        assert!(
+                            case.max_depth >= case.manifest_blocks.len() + 2,
+                            "{}: this adapter supports only nonbinding tree fuel",
+                            case.name
+                        );
+                        let bytes = serde_json::to_vec(&entries).unwrap();
+                        let entry = ManifestEntry {
+                            doc_id: format!("block-{}", root.r#ref),
+                            content_key: block_content_key(&bytes),
+                            field_commit_cid: format!("witness-{}", root.pinned_witness),
+                            byte_len: bytes.len() as u64,
+                        };
+                        if let Some(witness) = root.stored_witness {
+                            store.insert(
+                                entry.doc_id.clone(),
+                                (bytes, format!("witness-{witness}")),
+                            );
+                        }
+                        resolve_tree(
+                            ManifestTree {
+                                root: entry,
+                                height: 1,
+                                leaves: entries.len(),
+                            },
+                            |entry| {
+                                store
+                                    .get(&entry.doc_id)
+                                    .cloned()
+                                    .context("block document is missing")
+                            },
+                        )
+                    } else {
+                        let manifest = encode_manifest(&entries).unwrap();
+                        resolve_manifest_with_limit(case.max_depth + 1, &manifest.stored, |entry| {
+                            store
+                                .get(&entry.doc_id)
+                                .cloned()
+                                .context("block document is missing")
+                        })
+                    }
                 }
                 other => panic!("unknown Lean encoding {other}"),
             };
@@ -1375,6 +1597,48 @@ mod tests {
     }
 
     #[test]
+    fn shared_manifest_validates_internal_pins_before_following_children() {
+        let chunks = chunk_capture_body(r#"{"message":"snow ☃ and ordered bytes"}"#);
+        let (entries, store) = manifest_store(&chunks);
+        let mut store: BTreeMap<_, _> = store
+            .into_iter()
+            .map(|(id, (witness, bytes))| (id, (bytes, witness)))
+            .collect();
+        let bytes = serde_json::to_vec(&entries).unwrap();
+        let root = ManifestEntry {
+            doc_id: "root".into(),
+            content_key: block_content_key(&bytes),
+            field_commit_cid: "root-version".into(),
+            byte_len: bytes.len() as u64,
+        };
+        store.insert(root.doc_id.clone(), (bytes, root.field_commit_cid.clone()));
+        let tree = ManifestTree {
+            root,
+            height: 1,
+            leaves: entries.len(),
+        };
+        let value = resolve_tree(tree.clone(), |entry| Ok(store[&entry.doc_id].clone())).unwrap();
+        assert_eq!(value["message"], "snow ☃ and ordered bytes");
+        let mut reads = 0;
+        assert!(resolve_tree(tree.clone(), |entry| {
+            reads += 1;
+            let (bytes, _) = store[&entry.doc_id].clone();
+            Ok((bytes, "wrong-version".into()))
+        })
+        .is_err());
+        assert_eq!(reads, 1, "unverified internal nodes must not be followed");
+        let mut wrong_count = tree.clone();
+        wrong_count.leaves += 1;
+        assert!(resolve_tree(wrong_count, |entry| Ok(store[&entry.doc_id].clone())).is_err());
+        let mut wrong_height = tree;
+        wrong_height.height = MAX_MANIFEST_HEIGHT + 1;
+        assert!(resolve_tree(wrong_height, |_| panic!(
+            "invalid height must fail before reading"
+        ))
+        .is_err());
+    }
+
+    #[test]
     fn manifest_round_trip_reassembles_the_exact_canonical_bytes() {
         let body = json!({
             "request": 7,
@@ -1484,7 +1748,9 @@ mod tests {
                 changed, removed, ..
             } => apply_delta(base, changed, removed).unwrap(),
             DecodedRecord::Legacy(_) => panic!("new value lacked an envelope"),
-            DecodedRecord::Manifest { .. } => panic!("unexpected manifest encoding"),
+            DecodedRecord::Manifest { .. } | DecodedRecord::Tree(_) => {
+                panic!("unexpected manifest encoding")
+            }
         };
         assert_eq!(decoded, next);
     }

@@ -401,9 +401,10 @@ def startedByJobWithin (edges : Req → List (Req × ToolExecution.ToolOperation
   | n + 1, r => (edges r).any fun e => e.2 == .pluginJob || startedByJobWithin edges n e.1
 
 /-- The host's ancestry walk behind `StepContext.startedByJob`. Its fuel is the
-caller's `request_hop`, which is at most `max_request_hop` for every admitted
-request (`admitted_chain_sends_le_max`). It is not the graph Goal-ancestry
-kernel, which carries Goal semantics and multi-parent fuel. -/
+caller's `request_hop`; every cross-session ancestor strictly lowers that hop,
+so the provenance value supplies sufficient fuel independently of whether the
+node configures an admission cap. It is not the graph Goal-ancestry kernel,
+which carries Goal semantics and multi-parent fuel. -/
 def startedByJob (edges : Req → List (Req × ToolExecution.ToolOperation)) (hop : Req → Nat)
     (r : Req) : Bool :=
   startedByJobWithin edges (hop r) r

@@ -63,6 +63,8 @@ type AgentRequest @branchable {
     execution_lease_expires_at: String @index
     background_completion_input_through_sequence: Int
     background_completion_notification_keys_json: String
+    # Bumped by every background admission so concurrent slot checks conflict.
+    background_admission_sequence: Int
     # Runtime-derived execution deadline; excluded from requester signatures.
     deadline: String
     retry_count: Int @immutable
@@ -71,7 +73,7 @@ type AgentRequest @branchable {
     valid_until: String @immutable
     # Session-message lineage, filled only on agent_new/agent_message calls or
     # a request-only control continuation; null on roots. request_hop null
-    # means hop 0; admission refuses depth > Node.max_request_hop.
+    # means hop 0; an explicitly configured Node.max_request_hop caps admission.
     request_hop: Int @immutable
     caused_by_parent_request_id: String @index @immutable
     caused_by_parent_request_doc_id: String @index @immutable

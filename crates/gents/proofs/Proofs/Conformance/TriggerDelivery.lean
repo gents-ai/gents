@@ -123,10 +123,42 @@ def outcomeCases : List String :=
    outcomeCase "preclaim_cancelled_goal" { goal with goalAssignmentApplied := false } none false,
    outcomeCase "replaced_applied_goal" { goal with assignmentReplaced := true } none false,
    outcomeCase "completed_goal" goal (some .complete) false,
+   outcomeCase "stopped_goal" goal (some .stopped) false,
    outcomeCase "blocked_goal" goal (some .blocked) false,
    outcomeCase "budget_exhausted_goal" goal (some .budgetLimited) false,
    outcomeCase "paused_goal" goal (some .paused) false,
    outcomeCase "usage_limited_goal" goal (some .usageLimited) false]
+
+def retainedOutcomeCase (name : String) (request : Request)
+    (retained current : Option GoalBinding) (settled : Bool := false) : String :=
+  let reason := retainedOutcomeReason request retained current
+  object [("name", jsonString name), ("request", requestJson request),
+    ("retained", (retained.map goalBindingJson).getD "null"),
+    ("current", (current.map goalBindingJson).getD "null"),
+    ("settled", toString settled),
+    ("classification", jsonOptionalString (reason.map reasonString)),
+    ("recover_reason", jsonOptionalString (if settled then none else reason.map reasonString))]
+
+def retainedOutcomeCases : List String :=
+  let f := { fire "retained" with goalBacked := true }
+  let request : Request := { fire := f, terminal := true, goalAssignmentApplied := true }
+  let old : GoalBinding := { owner := request.fire.identity.owner, session := request.fire.session, assignment := request.fire.identity }
+  let next : GoalBinding := { old with assignment := identity "owner-a" "fresh" }
+  [retainedOutcomeCase "retained_stopped_after_new_goal" request (some { old with status := .stopped }) (some next),
+   retainedOutcomeCase "retained_complete_after_new_goal" request (some { old with status := .complete }) (some next),
+   retainedOutcomeCase "retained_blocked_after_new_goal" request (some { old with status := .blocked }) (some next),
+   retainedOutcomeCase "retained_budget_after_new_goal" request (some { old with status := .budgetLimited }) (some next),
+   retainedOutcomeCase "retained_active_superseded" request (some old) (some next),
+   retainedOutcomeCase "retained_paused_superseded" request (some { old with status := .paused }) (some next),
+   retainedOutcomeCase "retained_usage_limited_superseded" request (some { old with status := .usageLimited }) (some next),
+   retainedOutcomeCase "retained_active_without_current" request (some old) none,
+   retainedOutcomeCase "retained_stopped_without_current" request (some { old with status := .stopped }) none,
+   retainedOutcomeCase "missing_retained_cannot_borrow_current" request none (some next),
+   retainedOutcomeCase "foreign_retained_owner" request (some { old with owner := "owner-b" }) (some next),
+   retainedOutcomeCase "foreign_retained_session" request (some { old with session := "other-session" }) (some next),
+   retainedOutcomeCase "foreign_retained_root" request (some { old with assignment := next.assignment }) (some next),
+   retainedOutcomeCase "foreign_current_cannot_supersede" request (some old) (some { next with owner := "owner-b" }),
+   retainedOutcomeCase "settled_retained_complete_after_new_goal" request (some { old with status := .complete }) (some next) true]
 
 inductive OutcomeAction where
   | admitFire (fire : Fire)
@@ -440,6 +472,7 @@ def casesJson : String := object [
   ("observed_claims", jsonArray observedClaimCases),
   ("assignment_roots", jsonArray assignmentRootCases),
   ("outcomes", jsonArray outcomeCases), ("outcome_traces", jsonArray outcomeTraces),
+  ("retained_outcomes", jsonArray retainedOutcomeCases),
   ("cursors", jsonArray cursorCases),
   ("callback_cursors", jsonArray callbackCursorCases),
   ("identities", jsonArray identityCases), ("sessions", jsonArray sessionCases),

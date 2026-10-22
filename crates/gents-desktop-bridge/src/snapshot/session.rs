@@ -51,6 +51,7 @@ use projection::build_session_snapshot_from_store_for_node_with_transcript;
 #[cfg(test)]
 use request_context::decode_latest_request_context;
 use request_context::load_latest_session_request_context;
+use timeline_page::insert_timeline_item_by_sequence;
 pub use timeline_page::{apply_session_timeline_page, apply_session_timeline_page_with_query};
 
 pub(super) fn message_is_runtime_control(
@@ -146,8 +147,11 @@ pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {
 
 struct LoadedRequestContext {
     request_id: String,
+    request_doc_id: Option<String>,
+    anchor_sequence: Option<i64>,
     call_id: String,
     call_sequence: i64,
+    queued_at: Option<String>,
     accounting: gents_protocol::rendered_request::ContextAccounting,
 }
 
@@ -193,6 +197,7 @@ pub async fn build_session_snapshot_for_node(
 ) -> Option<DesktopSessionSnapshot> {
     build_session_snapshot_for_node_with_transcript(
         core,
+        &ConfigAccess::local(core.node_arc()),
         node_did,
         session_id,
         preferred_request_id,
@@ -210,6 +215,7 @@ pub async fn build_session_snapshot_for_node(
 
 pub async fn build_session_snapshot_for_node_with_transcript(
     core: &ClientCore,
+    access: &ConfigAccess,
     node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
@@ -318,13 +324,8 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     });
     let loaded_context = match (node_did, session_requester) {
         (Some(node_did), Some(requester_did)) => {
-            match load_latest_session_request_context(
-                core.node(),
-                node_did,
-                requester_did,
-                session_id,
-            )
-            .await
+            match load_latest_session_request_context(access, node_did, requester_did, session_id)
+                .await
             {
                 Ok(context) => context,
                 Err(error) => {
@@ -382,6 +383,75 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             ),
             None => {}
         }
+        if let (Some(node_did), Some(requester_did)) = (node_did, session_requester) {
+            let page_sequences = transcript_store
+                .unwrap_or(store.as_ref())
+                .transcript_messages
+                .iter()
+                .map(|row| i64::from(row.message.sequence))
+                .collect::<std::collections::HashSet<_>>();
+            match gents_desktop_core::client::load_session_compaction_entries_on(
+                access,
+                session_id,
+                node_did,
+                requester_did,
+            )
+            .await
+            {
+                Ok(entries) => {
+                    snapshot.context.session_compaction_count =
+                        Some(i64::try_from(entries.len()).unwrap_or(i64::MAX));
+                    snapshot.context.compactions = entries
+                        .iter()
+                        .map(|entry| SessionCompactionView {
+                            compaction_key: entry.compaction_key.clone(),
+                            sequence: entry.sequence,
+                            messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
+                            original_tokens: entry.original_tokens,
+                            compacted_tokens: entry.compacted_tokens,
+                            created_at: entry.created_at.clone(),
+                        })
+                        .collect();
+                    attach_session_compaction_timeline_events(snapshot, &entries, &page_sequences);
+                }
+                Err(error) => tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading session compaction history failed"
+                ),
+            }
+            let request_doc_ids = transcript_store
+                .unwrap_or(store.as_ref())
+                .transcript_messages
+                .iter()
+                .filter_map(|row| row.message.request_doc_id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            match request_context::load_session_request_context_history(
+                access,
+                node_did,
+                session_id,
+                requester_did,
+                &request_doc_ids,
+            )
+            .await
+            {
+                Ok(history) => {
+                    snapshot.context.request_reduction_history_loaded = true;
+                    attach_context_reduction_timeline_events(snapshot, history, &page_sequences);
+                }
+                Err(error) => tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading page context reduction history failed"
+                ),
+            }
+        }
         snapshot.projection_revision = Some(SessionProjectionRevisionView {
             store_version: projection_revision.store_version,
             provenance_version: projection_revision.provenance_version,
@@ -393,6 +463,80 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         }
     }
     snapshot
+}
+
+fn attach_context_reduction_timeline_events(
+    snapshot: &mut DesktopSessionSnapshot,
+    history: Vec<LoadedRequestContext>,
+    page_sequences: &std::collections::HashSet<i64>,
+) {
+    struct RequestSummary {
+        sequence: i64,
+        request_id: String,
+        reductions: i64,
+        compacted: i64,
+        repaired: i64,
+        latest_order: (Option<String>, i64, String),
+        latest_estimate: i64,
+        latest_timestamp: Option<String>,
+    }
+    let mut summaries = std::collections::BTreeMap::<String, RequestSummary>::new();
+    for entry in history {
+        let compacted = match entry.accounting.compaction_reason {
+            gents_protocol::rendered_request::ContextCompactionReason::Compacted => true,
+            gents_protocol::rendered_request::ContextCompactionReason::ProviderViewRepaired => {
+                false
+            }
+            _ => continue,
+        };
+        let (Some(request_doc_id), Some(sequence)) = (entry.request_doc_id, entry.anchor_sequence)
+        else {
+            continue;
+        };
+        let order = (entry.queued_at.clone(), entry.call_sequence, entry.call_id);
+        let summary = summaries
+            .entry(request_doc_id)
+            .or_insert_with(|| RequestSummary {
+                sequence,
+                request_id: entry.request_id.clone(),
+                reductions: 0,
+                compacted: 0,
+                repaired: 0,
+                latest_order: (None, i64::MIN, String::new()),
+                latest_estimate: 0,
+                latest_timestamp: None,
+            });
+        summary.reductions = summary.reductions.saturating_add(1);
+        if compacted {
+            summary.compacted = summary.compacted.saturating_add(1);
+        } else {
+            summary.repaired = summary.repaired.saturating_add(1);
+        }
+        if order > summary.latest_order {
+            summary.latest_order = order;
+            summary.latest_estimate =
+                i64::try_from(entry.accounting.estimated_input_tokens).unwrap_or(i64::MAX);
+            summary.latest_timestamp = entry.queued_at;
+        }
+    }
+    for (request_doc_id, summary) in summaries {
+        if !page_sequences.contains(&summary.sequence) {
+            continue;
+        }
+        let sequence = summary.sequence;
+        let item = RenderedTimelineItem::RequestContextReductionSummary {
+            item_key: format!("request-context-reduction:{request_doc_id}"),
+            sequence,
+            request_doc_id,
+            request_id: summary.request_id,
+            reduction_count: summary.reductions,
+            compacted_count: summary.compacted,
+            repaired_count: summary.repaired,
+            latest_estimated_input_tokens: Some(summary.latest_estimate),
+            latest_timestamp: summary.latest_timestamp,
+        };
+        insert_timeline_item_by_sequence(&mut snapshot.timeline_items, item, summary.sequence);
+    }
 }
 
 /// The sync builder holds no `ConfigAccess`, so a failed or timed-out job
@@ -470,6 +614,30 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
                 }
             }
         }
+    }
+}
+
+fn attach_session_compaction_timeline_events(
+    snapshot: &mut DesktopSessionSnapshot,
+    entries: &[gents_protocol::row::CompactionEntryRow],
+    page_sequences: &std::collections::HashSet<i64>,
+) {
+    for entry in entries {
+        let Some(sequence) = entry
+            .compacted_through_sequence
+            .filter(|sequence| *sequence >= 0 && page_sequences.contains(sequence))
+        else {
+            continue;
+        };
+        let item = RenderedTimelineItem::SessionCompaction {
+            item_key: format!("session-compaction:{}", entry.compaction_key),
+            sequence,
+            messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
+            original_tokens: entry.original_tokens,
+            compacted_tokens: entry.compacted_tokens,
+            timestamp: entry.created_at.clone(),
+        };
+        insert_timeline_item_by_sequence(&mut snapshot.timeline_items, item, sequence);
     }
 }
 
@@ -596,6 +764,105 @@ mod retry_eligibility_tests;
 mod paging_coverage_tests {
     use super::*;
     use gents_desktop_core::client::ClientStoreRows;
+
+    #[test]
+    fn many_reduction_rows_collapse_to_one_request_summary_that_pages() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![gents_protocol::session::AgentSession {
+                session_id: "session".into(),
+                node_did: "node".into(),
+                requester_did: None,
+                agent_id: "agent".into(),
+                created_at: "2026-10-21T00:00:00Z".into(),
+                closed_at: None,
+                stopped_at: None,
+                title: None,
+                tags: Vec::new(),
+                provenance: None,
+                observation: None,
+            }],
+            ..ClientStoreRows::default()
+        });
+        let mut snapshot = build_session_snapshot_from_store(&store, "session", None).unwrap();
+        let history = (0..81)
+            .map(|index| LoadedRequestContext {
+                request_id: "request-logical".into(),
+                request_doc_id: Some("AgentRequest/physical".into()),
+                anchor_sequence: Some(1),
+                call_id: format!("call-{index}"),
+                call_sequence: index,
+                queued_at: Some(format!(
+                    "2026-10-21T00:{:02}:{:02}Z",
+                    index / 60,
+                    index % 60
+                )),
+                accounting: gents_protocol::rendered_request::ContextAccounting {
+                    accounting_version:
+                        gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+                    turn_index: index as usize,
+                    attempt: 0,
+                    estimator: "test".into(),
+                    components: gents_protocol::rendered_request::ContextInputComponents {
+                        messages: 100,
+                        documents: 0,
+                        tool_schemas: 0,
+                        additional_parameters: 0,
+                        output_schema: 0,
+                    },
+                    estimated_input_tokens: 100,
+                    context_window: 1_000,
+                    compaction_threshold_basis_points: 8000,
+                    compaction_threshold_tokens: 800,
+                    configured_max_output_tokens: None,
+                    effective_max_output_tokens: None,
+                    compaction_reason:
+                        gents_protocol::rendered_request::ContextCompactionReason::Compacted,
+                    pre_compaction_input_tokens: Some(900),
+                },
+            })
+            .collect();
+        attach_context_reduction_timeline_events(
+            &mut snapshot,
+            history,
+            &std::collections::HashSet::from([1]),
+        );
+        assert!(matches!(
+            snapshot.timeline_items.as_slice(),
+            [RenderedTimelineItem::RequestContextReductionSummary {
+                reduction_count: 81,
+                compacted_count: 81,
+                ..
+            }]
+        ));
+        snapshot
+            .timeline_items
+            .push(RenderedTimelineItem::AssistantMessage {
+                item_key: "assistant-2".into(),
+                sequence: Some(2),
+                content: None,
+                reasoning: None,
+                timestamp: None,
+                reconstruction: MessageReconstructionView {
+                    state: ReconstructionState::Ready,
+                    error: None,
+                    denied_dependency_doc_id: None,
+                },
+            });
+        let full_snapshot = snapshot;
+        let mut newest = full_snapshot.clone();
+        apply_session_timeline_page(&mut newest, None, Some(1)).unwrap();
+        let cursor = newest.timeline_page.unwrap().oldest_item_key.unwrap();
+        assert_eq!(cursor, "assistant-2");
+        let mut older = full_snapshot;
+        apply_session_timeline_page(&mut older, Some(&cursor), Some(1)).unwrap();
+        assert!(matches!(
+            older.timeline_items.as_slice(),
+            [RenderedTimelineItem::RequestContextReductionSummary {
+                reduction_count: 81,
+                ..
+            }]
+        ));
+    }
 
     #[test]
     fn paged_pending_prompt_uses_lean_read_coverage() {

@@ -1,3 +1,4 @@
+import type { DesktopBackgroundToolRequest } from "../generated/DesktopBackgroundToolRequest.js";
 import type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
 import type { SessionForkResult } from "../generated/SessionForkResult.js";
 import type { PendingMessageSteerRequest } from "../generated/PendingMessageSteerRequest.js";
@@ -199,7 +200,9 @@ export type DesktopApiAdapter = {
     baseReasoningHash: string;
   }) => Promise<SessionLiveDeltaView | null>;
   sendChatMessage: (request: ChatSendRequest) => Promise<ChatSendResult>;
-  steerPendingMessage: (request: PendingMessageSteerRequest) => Promise<PendingQueueEditResult>;
+  steerPendingMessage: (
+    request: PendingMessageSteerRequest,
+  ) => Promise<PendingQueueEditResult>;
   editPendingQueue: (
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;
@@ -367,6 +370,7 @@ export type DesktopApiAdapter = {
   interruptRequest: (
     request: DesktopInterruptRequestRequest,
   ) => Promise<InterruptRequestResult>;
+  backgroundTool: (request: DesktopBackgroundToolRequest) => Promise<boolean>;
   jobControl: (request: DesktopJobControlRequest) => Promise<JobControlOutcome>;
   listInstalledPacks: () => Promise<{ packs: InstalledPack[] }>;
   listPackPluginSlots: () => Promise<{

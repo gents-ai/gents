@@ -1069,6 +1069,7 @@ mod tests {
                     agent_id: "general".to_string(),
                     created_at: "2026-01-01T00:00:00Z".to_string(),
                     closed_at: None,
+                    stopped_at: None,
                     title: None,
                     tags: Vec::new(),
                     provenance: None,

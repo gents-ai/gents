@@ -107,7 +107,7 @@ theorem reset_resume_preserves_budget_and_usage (s : Snapshot) (cause : Cause)
       · exact ⟨rfl, rfl⟩
       · exact resume_preserves_budget_and_usage s r commit
 
-/-- After a timer resume committed, the Goal is active, so any later reset
+/-- After a timer resume committed, the Goal is no longer usage-limited, so any later reset
 cause against that state, the same retry included, publishes nothing. -/
 theorem reset_retry_after_commit_is_noop (s : Snapshot) (f f' : ResetFacts)
     (r r' : Request) (commit commit' : Bool)
@@ -118,8 +118,10 @@ theorem reset_retry_after_commit_is_noop (s : Snapshot) (f f' : ResetFacts)
   have same : resumeBy s (.resetReached f) r commit = resume s r commit := by
     simp [resumeBy, due.1, due.2]
   rw [same] at h ⊢
-  have active := (created_publishes_atomically s r commit h).1
-  exact reset_resume_only_from_usage_limited _ f' r' commit' (by simp [active])
+  have resumed := (created_publishes_atomically s r commit h).1
+  apply reset_resume_only_from_usage_limited _ f' r' commit'
+  rw [resumed]
+  split <;> simp
 
 theorem due_reset_bounds (f : ResetFacts) (t : Nat) (h : f.due = true)
     (ht : f.resetAt = some t) : f.limitStartedAt < t ∧ t ≤ f.now := by

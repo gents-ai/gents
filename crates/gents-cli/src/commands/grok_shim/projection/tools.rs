@@ -1705,7 +1705,7 @@ mod tests {
     async fn embedded_node() -> (tempfile::TempDir, Arc<EmbeddedNode>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
-            EmbeddedNode::builder()
+            crate::shared::test_support::node_builder()
                 .data_path(dir.path().join("node"))
                 .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
                 .build()

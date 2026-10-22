@@ -8,6 +8,11 @@ use crate::{
 
 pub const SESSION_GOAL_CONTROL_VERSION: u8 = 1;
 
+/// Clients must observe this capability on the selected serving runtime before
+/// removing a goal or replacing a terminal assignment with a fresh signed start.
+pub const GOAL_STOP_CONTRACT_VERSION: u8 = 3;
+pub const STATUS_GOAL_STOP_CONTRACT_FIELD: &str = "goal_stop_contract_version";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -21,6 +26,9 @@ pub struct GoalRevision {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ObservedGoal {
     pub revision: GoalRevision,
+    /// Physical attribution stays in the signed read envelope rather than tool-facing Goal text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment_root_request_doc_id: Option<String>,
     pub snapshot: GoalSnapshot,
 }
 
@@ -99,6 +107,7 @@ pub enum GoalOperation {
     },
     Pause {},
     Resume {},
+    Stop {},
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -170,27 +179,19 @@ impl SessionGoalControl {
                 .is_none_or(|id| !id.trim().is_empty()),
             "empty goal control session document"
         );
-        match &self.operation {
-            GoalOperation::Create { .. } => {
-                ensure!(
-                    self.expected.is_none(),
-                    "goal creation has an existing revision"
-                );
-            }
-            _ => {
-                ensure!(
-                    self.session_doc_id.is_some(),
-                    "goal control lacks its session document"
-                );
-                let revision = self
-                    .expected
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("goal control lacks its observed revision"))?;
-                ensure!(
-                    !revision.document.trim().is_empty() && !revision.composite.trim().is_empty(),
-                    "empty goal control revision"
-                );
-            }
+        if !matches!(self.operation, GoalOperation::Create { .. }) || self.expected.is_some() {
+            ensure!(
+                self.session_doc_id.is_some(),
+                "goal control lacks its session document"
+            );
+            let revision = self
+                .expected
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("goal control lacks its observed revision"))?;
+            ensure!(
+                !revision.document.trim().is_empty() && !revision.composite.trim().is_empty(),
+                "empty goal control revision"
+            );
         }
         Ok(())
     }

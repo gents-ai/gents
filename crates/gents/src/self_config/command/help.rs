@@ -298,7 +298,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "tools" => Page {
             what: "an agent's Tools: what it may use, in groups (tools grant).",
             commands: &["tools get|preview|edit  options.agent (default: the invoking agent); set/clear: groups"],
-            notes: "A group in set replaces that whole group: read it with tools get and send back what you keep. host.root is the workspace path alongside host.files and host.bash; active host tools need an admitted root when workspace policy is configured. On your own Tools, a set that would drop existing settings is refused and names them; options.allow-drop with the group names drops them on purpose. host.bash.mode selects bash (Off by default); execution_mode, argv prefixes and background_enabled only constrain it. For one approved write command use mode Unrestricted with allowed_argv_prefixes holding only that prefix; the process ceiling still applies. integrations.plugins[].job lets a plugin that declares job: true run job steps within its ceiling; absent means non-job verbs only. Its bounds, defaults and policy are in tools edit --help, and it is operator-only.",
+            notes: "A group in set replaces that whole group: read it with tools get and send back what you keep. host.root is the workspace path alongside host.files and host.bash; active host tools need an admitted root when workspace policy is configured. On your own Tools, a set that would drop existing settings is refused and names them; options.allow-drop with the group names drops them on purpose. host.bash.mode selects bash (Off by default); execution_mode, argv prefixes and background_enabled only constrain it. For one approved write command use mode Unrestricted with allowed_argv_prefixes holding only that prefix; the process ceiling still applies. integrations.plugins[].job lets a plugin that declares job: true run job steps within its ceiling; absent means non-job verbs only, and a job-capable plugin is called by its plugin name — the name in its namespace/name coordinate — as a model tool. Its bounds, defaults and policy are in tools edit --help, and it is operator-only.",
             next: "verify saved Tools restrictions and runtime_effective with agent get, then test in a fresh session of that agent.",
         },
         "profile" => Page {
@@ -368,11 +368,44 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack check --help",
                 "pack verify --help",
             ],
-            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local .pack paths require the held file read grant and explicit tool root; symlinks and request workspace paths use the file owner. Local pack authoring: scaffold, check and verify run inside the effective tool root; scaffold needs readwrite file tools, check and verify only read, and all take the pack grant. pack build (compiles plugin sources through language toolchains) and pack test (author tests) are unavailable through config; run them from the operator CLI. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not run a graph or select model tools. Inspect plugins with plugin get, then explicitly select integrations.plugins on Tools and start a fresh request. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
-            next: "Inspect plugin selection with plugin get, or run the installed graph with graph tools.",
+            notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local .pack paths require the held file read grant and explicit tool root; symlinks and request workspace paths use the file owner. Local pack authoring: scaffold, check and verify run inside the effective tool root; scaffold needs readwrite file tools, check and verify only read, and all take the pack grant. pack build (compiles plugin sources through language toolchains) and pack test (author tests) are unavailable through config; run them from the operator CLI. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not run a graph or select model tools. Inspect plugins with plugin get, then explicitly select integrations.plugins on Tools and start a fresh request. A plugins-only pack can carry workflow plugins: one whose manifest declares `job: true` (a Tools job block on a plugin that does not declare `job: true` is refused at tool resolution). Selecting it and starting a fresh request exposes it as a model tool named after the plugin (the name part of its namespace/name), and its calls run as jobs on the runtime's job driver. No model tool action lists jobs: observe runs with the operator CLI `gents job list`. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
+            next: "Inspect plugin selection with plugin get, run the installed graph with graph tools, or call an installed workflow plugin by its tool name in a fresh request and list its runs with gents job list.",
         },
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod pack_page_tests {
+    use super::page;
+
+    /// The pack help page names the model-facing workflow tool surface and
+    /// where runs are listed; regression for the retrospective discovery gap.
+    #[test]
+    fn pack_page_mentions_the_workflow_tool_name() {
+        let page = page("pack").expect("pack help page exists");
+        assert!(
+            page.notes.contains("workflow plugins") && page.notes.contains("integrations.plugins"),
+            "pack page should explain workflow plugins and their selection: {}",
+            page.notes
+        );
+        // The tool is exposed under the plugin's own name (the name part of
+        // its namespace/name); runs are listed only via the operator CLI.
+        assert!(
+            page.notes
+                .contains("named after the plugin (the name part of its namespace/name)")
+                && page.next.contains("gents job list"),
+            "pack page should name the job tool surface and run listing: {} | {}",
+            page.notes,
+            page.next
+        );
+        // Help text is shown to the model: no internal Rust symbols.
+        assert!(
+            !page.notes.contains("::"),
+            "pack page notes should not contain internal symbols: {}",
+            page.notes
+        );
+    }
 }
 
 fn mailbox_values() -> Value {

@@ -29,7 +29,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
         params.token_budget,
     )
     .await?;
-    Ok(Some(enrich(state, goal).await?))
+    enrich(state, goal).await
 }
 
 pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(
@@ -46,7 +46,7 @@ pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(
     else {
         return Ok(None);
     };
-    Ok(Some(enrich(state, goal).await?))
+    enrich(state, goal).await
 }
 
 pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
@@ -62,22 +62,25 @@ pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
     Ok(delete_goals_for_session(&state.node, state.node_did.as_ref(), thread_id).await? > 0)
 }
 
-async fn enrich(state: &ShimState, mut goal: GoalDocument) -> Result<codex::ThreadGoal> {
+async fn enrich(state: &ShimState, mut goal: GoalDocument) -> Result<Option<codex::ThreadGoal>> {
     refresh_goal_usage(&state.node, &goal).await?;
     goal = load_canonical_goal(&state.node, state.node_did.as_ref(), &goal.session_id)
         .await?
         .unwrap_or(goal);
     let snapshot = gents::goal::snapshot(&goal, Utc::now());
-    Ok(codex::ThreadGoal {
+    let Some(status) = goal_status_to_codex(&snapshot.status)? else {
+        return Ok(None);
+    };
+    Ok(Some(codex::ThreadGoal {
         thread_id: snapshot.session_id,
         objective: snapshot.objective,
-        status: goal_status_to_codex(&snapshot.status)?,
+        status,
         token_budget: snapshot.token_budget,
         tokens_used: snapshot.tokens_used,
         time_used_seconds: snapshot.active_time_seconds,
         created_at: epoch_seconds(snapshot.created_at.as_deref()),
         updated_at: epoch_seconds(snapshot.updated_at.as_deref()),
-    })
+    }))
 }
 
 fn codex_status_to_goal_status(status: codex::ThreadGoalStatus) -> GoalStatus {
@@ -91,8 +94,8 @@ fn codex_status_to_goal_status(status: codex::ThreadGoalStatus) -> GoalStatus {
     }
 }
 
-fn goal_status_to_codex(status: &str) -> Result<codex::ThreadGoalStatus> {
-    Ok(
+fn goal_status_to_codex(status: &str) -> Result<Option<codex::ThreadGoalStatus>> {
+    Ok(Some(
         match GoalStatus::parse(status).context("invalid durable Goal status")? {
             GoalStatus::Active => codex::ThreadGoalStatus::Active,
             GoalStatus::Paused => codex::ThreadGoalStatus::Paused,
@@ -100,8 +103,9 @@ fn goal_status_to_codex(status: &str) -> Result<codex::ThreadGoalStatus> {
             GoalStatus::UsageLimited => codex::ThreadGoalStatus::UsageLimited,
             GoalStatus::BudgetLimited => codex::ThreadGoalStatus::BudgetLimited,
             GoalStatus::Complete => codex::ThreadGoalStatus::Complete,
+            GoalStatus::Stopped => return Ok(None),
         },
-    )
+    ))
 }
 
 fn epoch_seconds(value: Option<&str>) -> i64 {

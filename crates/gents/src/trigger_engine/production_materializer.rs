@@ -10,7 +10,6 @@ use gents_protocol::row::AgentRequestRow;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::lifecycle::{
-    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     task_goal_session_title, task_session_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
     TriggerLineage, WorkspaceLineage,
@@ -261,6 +260,20 @@ impl MaterializerHandle for ProductionMaterializer {
             let workspace_ref = workspace.is_bound().then_some(&workspace);
             let mut duplicate = false;
             let (enqueued, conversation_title) = if let Some(prepared) = &delivery {
+                let mut prepared = prepared.clone();
+                if prepared.receipt.goal_id.is_some() {
+                    let current = crate::goal::load_canonical_goal(
+                        &node,
+                        &node_did,
+                        &prepared.receipt.session_id,
+                    )
+                    .await?;
+                    prepared.receipt.goal_id = Some(crate::goal::task_assignment_goal_id(
+                        current.as_ref().map(|goal| goal.goal_id.as_str()),
+                        &node_did,
+                        &prepared.receipt.session_id,
+                    ));
+                }
                 let fire = &prepared.receipt;
                 let title = task_session_title(&task_label);
                 // Written under the requester that owns the session
@@ -282,15 +295,31 @@ impl MaterializerHandle for ProductionMaterializer {
                 } else {
                     &fire.fire_key
                 };
-                let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                    &node_did, &agent_id, &rendered_prompt, execution_origin, lineage,
-                    Some(&title), workspace_ref, &fire.request_id, &fire.session_id,
-                    Some(retry_key), session_scope.as_deref(), trigger_doc_id.as_deref(),
-                ).await?;
+                let mut spec = crate::lifecycle::materialize::pending_agent_request_spec(
+                    &node_did,
+                    &agent_id,
+                    &rendered_prompt,
+                    execution_origin,
+                    lineage,
+                    Some(&title),
+                    workspace_ref,
+                    &fire.request_id,
+                    &fire.session_id,
+                    Some(retry_key),
+                    session_scope.as_deref(),
+                    trigger_doc_id.as_deref(),
+                )?;
+                spec.input.goal_assignment = fire.goal_id.as_ref().map(|goal_id| {
+                    gents_protocol::request_input::GoalAssignmentInput {
+                        goal_id: goal_id.clone(),
+                        root_request_doc_id: None,
+                    }
+                });
+                let create = crate::lifecycle::materialize::build_request(spec)?;
                 let admission = crate::lifecycle::write_trigger_delivery(
                     &node,
                     runtime_actor,
-                    prepared,
+                    &prepared,
                     &create,
                 )
                 .await?;
@@ -300,7 +329,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 let identity =
                     crate::goal::task_goal_fire_identity(&node_did, &task_id, &durable_fire_key);
                 let conversation_title = task_goal_session_title(&task_label, &identity.retry_key);
-                let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+                let mut spec = crate::lifecycle::materialize::pending_agent_request_spec(
                     &node_did,
                     &agent_id,
                     &rendered_prompt,
@@ -313,6 +342,18 @@ impl MaterializerHandle for ProductionMaterializer {
                     Some(&identity.retry_key),
                     None,
                     trigger_doc_id.as_deref(),
+                )?;
+                spec.input.goal_assignment =
+                    Some(gents_protocol::request_input::GoalAssignmentInput {
+                        goal_id: crate::goal::deterministic_goal_id(
+                            &node_did,
+                            &identity.session_id,
+                        ),
+                        root_request_doc_id: None,
+                    });
+                let create = crate::lifecycle::build_signed_request(
+                    spec,
+                    crate::lifecycle::RequestSigner::RegisteredTarget,
                 )
                 .await?;
                 let enqueued = crate::goal::submit_goal_backed_request_local(

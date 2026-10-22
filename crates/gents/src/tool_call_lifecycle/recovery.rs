@@ -57,6 +57,8 @@ struct RunningToolCallRow {
     #[serde(default)]
     request_id: Option<String>,
     #[serde(default)]
+    request_doc_id: Option<String>,
+    #[serde(default)]
     requester_did: Option<String>,
     /// Immutable owner scope; request IDs can overlap across agents.
     #[serde(default)]
@@ -109,6 +111,7 @@ enum RecoveryOutcome {
     BackgroundInterrupted,
     ProcessLost,
     TaskDeleted,
+    SessionStopped,
 }
 
 impl super::ToolCallLifecycle {
@@ -170,7 +173,8 @@ impl super::ToolCallLifecycle {
                     if let Some(cached) = parent_cache.get(request_id) {
                         cached.clone()
                     } else {
-                        let loaded = lookup_parent_request(node, node_did, request_id).await?;
+                        let loaded =
+                            lookup_parent_request(node, node_did, request_id, None).await?;
                         parent_cache.insert(request_id.to_string(), loaded.clone());
                         loaded
                     }
@@ -242,9 +246,21 @@ impl super::ToolCallLifecycle {
             }
             running_background.insert(row.tool_call_id.clone());
             let registered = executions.contains(&row.tool_call_id).await;
-            let parent = match row.request_id.as_deref().filter(|id| !id.is_empty()) {
-                Some(request_id) => lookup_parent_request(node, node_did, request_id).await?,
-                None => None,
+            let parent = match (
+                non_empty(row.request_doc_id.as_deref()),
+                non_empty(row.node_did.as_deref()),
+                non_empty(row.request_id.as_deref()),
+            ) {
+                (Some(doc_id), Some(parent_node_did), Some(request_id)) => {
+                    let scope = crate::session::session_scope_filter(
+                        parent_node_did,
+                        &row.session_id,
+                        row.requester_did.as_deref(),
+                    );
+                    lookup_parent_request(node, parent_node_did, request_id, Some((doc_id, &scope)))
+                        .await?
+                }
+                _ => None,
             };
             let Some(parent) = parent else {
                 if unresolved_parent_warning_due(&row.doc_id) {
@@ -258,32 +274,67 @@ impl super::ToolCallLifecycle {
                 continue;
             };
             let task_deleted = owner_task_deleted(node, node_did, &parent).await?;
-            if registered && !task_deleted {
+            let session_stopped = crate::session::session_is_stopped(
+                node,
+                node_did,
+                &row.session_id,
+                row.requester_did.as_deref(),
+            )
+            .await?;
+            if registered && !task_deleted && !session_stopped {
                 continue;
             }
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
 
-            if registered {
-                let updated = match recover_tool_call_row(
-                    node,
-                    &row,
-                    deadline_at,
-                    RecoveryOutcome::TaskDeleted,
-                    true,
-                )
-                .await
-                {
-                    Ok(updated) => updated,
-                    Err(error) => {
-                        tracing::warn!(
-                            doc_id = %row.doc_id,
-                            tool_call_id = %row.tool_call_id,
-                            error = %error,
-                            "failed to cancel background tool of a deleted task"
-                        );
-                        continue;
-                    }
+            if registered && session_stopped {
+                let process = executions
+                    .stop_execution(&row.tool_call_id, &row.doc_id)
+                    .await;
+                let Some(cause) = classify_registered_session_stop(process) else {
+                    tracing::info!(
+                        doc_id = %row.doc_id,
+                        tool_call_id = %row.tool_call_id,
+                        "background process is still running after session stop; leaving tool call running"
+                    );
+                    continue;
                 };
+                let updated =
+                    match recover_tool_call_row(node, &row, deadline_at, cause, true).await {
+                        Ok(updated) => updated,
+                        Err(error) => {
+                            tracing::warn!(
+                                doc_id = %row.doc_id,
+                                tool_call_id = %row.tool_call_id,
+                                error = %error,
+                                "failed to recover stopped-session background tool"
+                            );
+                            continue;
+                        }
+                    };
+                // The worker may have won the terminal CAS while stop was in
+                // flight. Its own completion owns the durable outcome.
+                if updated {
+                    append_recovered_background_tool_completion(node, &row, cause).await;
+                    report.tool_calls_terminalized += 1;
+                }
+                continue;
+            }
+
+            if registered {
+                let cause = RecoveryOutcome::TaskDeleted;
+                let updated =
+                    match recover_tool_call_row(node, &row, deadline_at, cause, true).await {
+                        Ok(updated) => updated,
+                        Err(error) => {
+                            tracing::warn!(
+                                doc_id = %row.doc_id,
+                                tool_call_id = %row.tool_call_id,
+                                error = %error,
+                                "failed to cancel background tool after owner stop"
+                            );
+                            continue;
+                        }
+                    };
                 let process = executions
                     .stop_execution(&row.tool_call_id, &row.doc_id)
                     .await;
@@ -292,16 +343,11 @@ impl super::ToolCallLifecycle {
                         doc_id = %row.doc_id,
                         tool_call_id = %row.tool_call_id,
                         process = process.as_str(),
-                        "background process of a deleted task was not observed to stop"
+                        "background process was not observed to stop"
                     );
                 }
                 if updated {
-                    append_recovered_background_tool_completion(
-                        node,
-                        &row,
-                        RecoveryOutcome::TaskDeleted,
-                    )
-                    .await;
+                    append_recovered_background_tool_completion(node, &row, cause).await;
                     report.tool_calls_terminalized += 1;
                 }
                 continue;
@@ -310,9 +356,13 @@ impl super::ToolCallLifecycle {
             let process = executions
                 .stop_execution(&row.tool_call_id, &row.doc_id)
                 .await;
-            let Some(outcome) =
-                classify_orphaned_background_tool(&row, process, task_deleted, Utc::now())
-            else {
+            let Some(outcome) = classify_orphaned_background_tool(
+                &row,
+                process,
+                task_deleted,
+                session_stopped,
+                Utc::now(),
+            ) else {
                 tracing::warn!(
                     doc_id = %row.doc_id,
                     tool_call_id = %row.tool_call_id,
@@ -466,7 +516,7 @@ impl super::ToolCallLifecycle {
             let Some(request_id) = non_empty(row.request_id.as_deref()) else {
                 continue;
             };
-            if lookup_parent_request(node, node_did, request_id)
+            if lookup_parent_request(node, node_did, request_id, None)
                 .await?
                 .is_none()
             {
@@ -610,6 +660,7 @@ mod tests {
             RecoveryOutcome::BackgroundInterrupted => "TerminalizeBackgroundedAsInterrupted",
             RecoveryOutcome::ProcessLost => "processLost",
             RecoveryOutcome::TaskDeleted => "taskDeleted",
+            RecoveryOutcome::SessionStopped => "sessionStopped",
         };
         let mut checked = 0;
         for case in crate::lean_vocab_test::lean_restart_disposition_cases() {
@@ -629,6 +680,7 @@ mod tests {
             let outcome = classify_orphaned_background_tool(
                 &row(case.deadline_expired),
                 verdict(&case.process_outcome),
+                false,
                 false,
                 Utc::now(),
             );
@@ -666,6 +718,7 @@ mod tests {
                 &row(case.deadline_expired == Some(true)),
                 verdict(process),
                 task_deleted,
+                case.owner_session_stopped == Some(true),
                 Utc::now(),
             );
             assert_eq!(
@@ -676,6 +729,24 @@ mod tests {
             );
             checked += 1;
         }
+        let mut registered_session_stop_cases = 0;
+        for case in crate::lean_vocab_test::lean_recovery_sweep_cases() {
+            if case.execution_registered != Some(true) || case.owner_session_stopped != Some(true) {
+                continue;
+            }
+            let Some(process) = case.process_outcome.as_deref() else {
+                continue;
+            };
+            let outcome = classify_registered_session_stop(verdict(process));
+            assert_eq!(
+                outcome.map(lean_cause),
+                case.recovery_cause.as_deref(),
+                "{}",
+                case.name
+            );
+            registered_session_stop_cases += 1;
+        }
+        assert_eq!(registered_session_stop_cases, 2);
         assert!(checked >= 12, "only {checked} generated native witnesses");
     }
 
@@ -785,7 +856,7 @@ async fn recover_stuck_running_tool_calls(
             .as_deref()
             .filter(|request_id| !request_id.is_empty())
         {
-            Some(request_id) => lookup_parent_request(node, node_did, request_id).await?,
+            Some(request_id) => lookup_parent_request(node, node_did, request_id, None).await?,
             None => None,
         };
 
@@ -841,7 +912,8 @@ async fn append_recovered_background_tool_completion(
     let status = match outcome {
         RecoveryOutcome::Cancelled
         | RecoveryOutcome::BackgroundInterrupted
-        | RecoveryOutcome::TaskDeleted => "cancelled",
+        | RecoveryOutcome::TaskDeleted
+        | RecoveryOutcome::SessionStopped => "cancelled",
         RecoveryOutcome::TimedOut | RecoveryOutcome::Failed | RecoveryOutcome::ProcessLost => {
             "failed"
         }
@@ -1032,33 +1104,31 @@ fn background_completion_projection(
     }
 }
 
+/// `exact` narrows the lookup to one physical request (`_docID`) within an
+/// exact session scope filter.
 async fn lookup_parent_request(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     request_id: &str,
+    exact: Option<(&str, &str)>,
 ) -> Result<Option<AgentRequestRow>> {
-    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_request_id = escape_graphql_string(request_id);
+    let filter = match exact {
+        Some((doc_id, scope)) => format!(
+            r#"_docID: {{ _eq: "{}" }}, request_id: {{ _eq: "{escaped_request_id}" }}, {scope}"#,
+            escape_graphql_string(doc_id)
+        ),
+        None => format!(
+            r#"node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{escaped_request_id}" }}"#,
+            escape_graphql_string(node_did)
+        ),
+    };
     let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    node_did: {{ _eq: "{escaped_node_did}" }},
-                    request_id: {{ _eq: "{escaped_request_id}" }}
-                }},
-                limit: 1
-            ) {{
-                request_id
-                node_did
-                lifecycle_state
-                caused_by_trigger_id
-                request_hop
-                workspace_id
-                workspace_authority
-                workspace_owner_node_did
-                workspace_seal_hash
-            }}
-        }}"#
+        r#"{{ AgentRequest(filter: {{ {filter} }}, limit: 2) {{
+            _docID request_id node_did requester_did session_id lifecycle_state
+            caused_by_trigger_id request_hop workspace_id workspace_authority
+            workspace_owner_node_did workspace_seal_hash
+        }} }}"#
     );
 
     let resp =
@@ -1072,6 +1142,10 @@ async fn lookup_parent_request(
         .context("AgentRequest field missing from parent recovery query")?;
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
         .context("decode parent AgentRequest rows for tool-call recovery")?;
+    anyhow::ensure!(
+        exact.is_none() || rows.len() <= 1,
+        "background parent scope is ambiguous"
+    );
     Ok(rows.into_iter().next())
 }
 
@@ -1111,7 +1185,8 @@ async fn recover_tool_call_row(
         RecoveryOutcome::TimedOut => lifecycle.timeout().await,
         RecoveryOutcome::Cancelled
         | RecoveryOutcome::BackgroundInterrupted
-        | RecoveryOutcome::TaskDeleted => {
+        | RecoveryOutcome::TaskDeleted
+        | RecoveryOutcome::SessionStopped => {
             lifecycle
                 .cancel_during_run_owned(
                     outcome
@@ -1186,6 +1261,7 @@ fn classify_orphaned_background_tool(
     row: &RunningToolCallRow,
     process: crate::managed_exec::ProcessStopOutcome,
     task_deleted: bool,
+    session_stopped: bool,
     now: DateTime<Utc>,
 ) -> Option<RecoveryOutcome> {
     use crate::managed_exec::ProcessStopOutcome;
@@ -1197,6 +1273,8 @@ fn classify_orphaned_background_tool(
         ProcessStopOutcome::Stopped => {
             if deadline_is_expired(now, row.deadline_at.as_deref()) {
                 Some(RecoveryOutcome::TimedOut)
+            } else if session_stopped {
+                Some(RecoveryOutcome::SessionStopped)
             } else if task_deleted {
                 Some(RecoveryOutcome::TaskDeleted)
             } else {
@@ -1205,6 +1283,19 @@ fn classify_orphaned_background_tool(
                 Some(RecoveryOutcome::BackgroundInterrupted)
             }
         }
+    }
+}
+
+fn classify_registered_session_stop(
+    process: crate::managed_exec::ProcessStopOutcome,
+) -> Option<RecoveryOutcome> {
+    use crate::managed_exec::ProcessStopOutcome;
+    match process {
+        ProcessStopOutcome::StillRunning => None,
+        ProcessStopOutcome::NotOwned | ProcessStopOutcome::AlreadyExited => {
+            Some(RecoveryOutcome::ProcessLost)
+        }
+        ProcessStopOutcome::Stopped => Some(RecoveryOutcome::SessionStopped),
     }
 }
 
@@ -1328,15 +1419,17 @@ impl RecoveryOutcome {
             Self::BackgroundInterrupted => "interrupted_on_restart",
             Self::ProcessLost => "process_lost",
             Self::TaskDeleted => "task_deleted",
+            Self::SessionStopped => "session_stopped",
         }
     }
 
     fn lifecycle_state(self) -> ToolCallState {
         match self {
             Self::TimedOut => ToolCallState::TimedOut,
-            Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted => {
-                ToolCallState::Cancelled
-            }
+            Self::Cancelled
+            | Self::BackgroundInterrupted
+            | Self::TaskDeleted
+            | Self::SessionStopped => ToolCallState::Cancelled,
             Self::Failed | Self::ProcessLost => ToolCallState::Failed,
         }
     }
@@ -1344,7 +1437,10 @@ impl RecoveryOutcome {
     fn failure_class(self) -> Option<FailureClass> {
         match self {
             Self::TimedOut | Self::Failed | Self::ProcessLost => Some(FailureClass::External),
-            Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted => None,
+            Self::Cancelled
+            | Self::BackgroundInterrupted
+            | Self::TaskDeleted
+            | Self::SessionStopped => None,
         }
     }
 
@@ -1375,6 +1471,9 @@ impl RecoveryOutcome {
             Self::TaskDeleted => {
                 "background process stopped because its task was deleted".to_string()
             }
+            Self::SessionStopped => {
+                "background process stopped because its session was stopped".to_string()
+            }
         }
     }
 
@@ -1383,6 +1482,7 @@ impl RecoveryOutcome {
             .and_then(CancelCause::from_persisted)
             .or(match self {
                 Self::TimedOut => Some(CancelCause::Deadline),
+                Self::SessionStopped => Some(CancelCause::UserCancelled),
                 Self::Cancelled | Self::BackgroundInterrupted | Self::TaskDeleted => {
                     Some(CancelCause::Interrupted)
                 }

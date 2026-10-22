@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
@@ -16,6 +17,9 @@ use super::*;
 #[path = "tests/transcript_native.rs"]
 mod transcript_native;
 
+#[path = "tests/goal_context.rs"]
+mod goal_context;
+
 #[path = "tests/background_panic.rs"]
 mod background_panic;
 
@@ -24,6 +28,9 @@ mod background_budget;
 
 #[path = "tests/background_admission.rs"]
 mod background_admission;
+
+#[path = "tests/foreground_handoff.rs"]
+mod foreground_handoff;
 
 #[path = "tests/wait_settlement.rs"]
 mod wait_settlement;
@@ -66,7 +73,7 @@ fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> Stri
 async fn client_output_snapshot_reads_full_retained_window_without_widening_model_budget() {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -217,10 +224,13 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
 
 #[tokio::test]
 async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifecycle() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-create-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -228,7 +238,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:owner", FailurePolicy::default())
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, true);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start"), &[])
@@ -236,14 +246,8 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        node.as_ref(),
-        &hook,
-        "goal-request",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    goal_context::bind_signed_request(&node, &hook, &identity, "goal-request", &session_id, None)
+        .await;
 
     accept_hook_tool_call(
         &hook,
@@ -266,7 +270,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         "unexpected forged create action: {forged:?}"
     );
     assert!(
-        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .unwrap()
             .is_none()
@@ -289,11 +293,11 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         )
         .await;
     assert!(matches!(created, ToolCallHookAction::Skip { .. }));
-    let goal = crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+    let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(goal.node_did, "did:test:owner");
+    assert_eq!(goal.node_did, identity.did());
     assert_eq!(goal.session_id, session_id);
     assert_eq!(goal.objective, "ship");
     assert_eq!(goal.token_budget, Some(1000));
@@ -316,7 +320,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         .await;
     assert!(matches!(forged_update, ToolCallHookAction::Skip { .. }));
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .unwrap()
             .unwrap()
@@ -349,7 +353,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
                 .await,
             ToolCallHookAction::Skip { .. }
         ));
-        let updated = crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        let updated = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .unwrap()
             .unwrap();
@@ -400,7 +404,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         ToolCallHookAction::Skip { .. }
     ));
     assert_eq!(
-        crate::goal::load_canonical_goal(&node, "did:test:owner", &session_id)
+        crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .unwrap()
             .unwrap()
@@ -435,7 +439,7 @@ fn hook_counters_for_test() -> HookCounters {
 #[tokio::test]
 async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .build()
             .await
             .expect("embedded node"),
@@ -499,7 +503,7 @@ async fn active_request_binding_rejects_a_half_bound_pair() {
 #[tokio::test]
 async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .build()
             .await
             .expect("embedded node"),
@@ -562,7 +566,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
         .filter(|case| case.inputs.iter().all(|input| input.policy_allows))
     {
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
             let hook =
                 DefraSessionHook::with_identity(node.clone(), "did:test:dispatch-receipt", policy);
@@ -747,6 +751,9 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
 
 #[tokio::test]
 async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let goal_case = crate::lean_vocab_test::lean_goal_create_cases()
         .iter()
         .find(|case| case.expected == "fresh" && case.token_budget.is_none())
@@ -759,23 +766,23 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
     for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
         let mut completion_mutation = None;
         for inject in [false, true] {
-            let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
-            let hook =
-                DefraSessionHook::with_identity(node.clone(), "did:test:control-receipt", policy)
-                    .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
+            let hook = DefraSessionHook::with_identity(node.clone(), identity.did(), policy)
+                .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Create a goal"), &[])
                     .await,
                 HookAction::Continue
             ));
             let session = hook.session_id().await.unwrap();
-            bind_interruptible_request(
+            goal_context::bind_signed_request(
                 &node,
                 &hook,
+                &identity,
                 "control-receipt",
                 &session,
-                chrono::Utc::now() + chrono::Duration::minutes(5),
+                None,
             )
             .await;
             accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
@@ -785,11 +792,10 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     hook.on_tool_call("create_goal", None, "control-call", &args),
                 )
                 .await;
-            let goal =
-                crate::goal::load_canonical_goal(&node, "did:test:control-receipt", &session)
-                    .await
-                    .unwrap()
-                    .expect("the control effect committed before completion");
+            let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session)
+                .await
+                .unwrap()
+                .expect("the control effect committed before completion");
             assert_eq!(goal.objective, goal_case.objective);
             if inject {
                 assert_eq!(Some(mutations), completion_mutation, "fault must fire");
@@ -809,11 +815,10 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     matches!(again, ToolCallHookAction::Continue),
                     replay.expected[1].may_invoke
                 );
-                let after =
-                    crate::goal::load_canonical_goal(&node, "did:test:control-receipt", &session)
-                        .await
-                        .unwrap()
-                        .unwrap();
+                let after = crate::goal::load_canonical_goal(&node, identity.did(), &session)
+                    .await
+                    .unwrap()
+                    .unwrap();
                 assert_eq!(
                     serde_json::to_value(after).unwrap(),
                     serde_json::to_value(goal).unwrap(),
@@ -1106,21 +1111,47 @@ async fn bind_interruptible_request_with_requester(
         lifecycle.claim().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
+    bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
+}
+
+async fn bind_signed_hook_request(
+    hook: &DefraSessionHook,
+    request_id: &str,
+    deadline_at: chrono::DateTime<chrono::Utc>,
+) {
+    let identity = crate::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
+        .expect("the hook fixture has a registered signing identity");
+    let session_id = hook.session_id().await.expect("hook session");
+    let lifecycle = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request(
+        &hook.node,
+        request_id,
+        &session_id,
+        &identity,
+        None,
+    )
+    .await;
+    bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
+}
+
+async fn bind_claimed_hook_request(
+    hook: &DefraSessionHook,
+    mut lifecycle: crate::lifecycle::RequestLifecycle,
+    deadline_at: chrono::DateTime<chrono::Utc>,
+) {
+    let request_id = lifecycle.request().request_id.clone();
+    let requester_did = lifecycle.request().requester_did.clone();
     let writer = crate::streaming::DefraStreamWriter::new(
         hook.node.clone(),
         &hook.node_did,
         std::time::Duration::ZERO,
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
-    hook.set_active_request_lineage(
-        Some(request_id.to_string()),
-        requester_did.map(str::to_owned),
-    )
-    .await
-    .expect("bind persisted request lineage");
+    hook.set_active_request_lineage(Some(request_id.clone()), requester_did)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(deadline_at)).await;
     hook_execution_fixtures().lock().await.insert(
-        hook_execution_fixture_key(hook, request_id),
+        hook_execution_fixture_key(hook, &request_id),
         HookExecutionFixture {
             lifecycle,
             writer,
@@ -1393,7 +1424,7 @@ async fn fetch_tool_call_row(
 async fn list_processes_skip_publishes_canonical_tool_result() {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -1450,7 +1481,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
 async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -1573,7 +1604,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
 
 #[tokio::test]
 async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -1694,7 +1725,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
 async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
     use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
@@ -1765,7 +1796,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-deadline-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1815,10 +1846,13 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
 
 #[tokio::test]
 async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-guard-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1827,7 +1861,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     ensure_runtime_schemas(&node).await.unwrap();
 
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start goal"), &[])
@@ -1837,7 +1871,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     let session_id = hook.session_id().await.expect("session id");
     crate::goal::set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         &session_id,
         Some("Do not resurrect after budget exhaustion"),
         Some(crate::goal::GoalStatus::Active),
@@ -1847,7 +1881,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     .expect("create active goal");
     crate::goal::set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         &session_id,
         None,
         Some(crate::goal::GoalStatus::BudgetLimited),
@@ -1855,12 +1889,13 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     )
     .await
     .expect("latch budget-limited goal");
-    bind_interruptible_request(
-        node.as_ref(),
+    goal_context::bind_signed_request(
+        &node,
         &hook,
+        &identity,
         "goal-wrapup-request",
         &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
+        None,
     )
     .await;
 
@@ -1881,7 +1916,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         )
         .await;
     assert!(matches!(action, ToolCallHookAction::Skip { .. }));
-    let goal = crate::goal::load_canonical_goal(node.as_ref(), "did:test:general", &session_id)
+    let goal = crate::goal::load_canonical_goal(node.as_ref(), identity.did(), &session_id)
         .await
         .expect("load goal")
         .expect("goal exists");
@@ -1899,10 +1934,13 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
 
 #[tokio::test]
 async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-goal-update-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -1910,7 +1948,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start goal"), &[])
@@ -1918,14 +1956,6 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        node.as_ref(),
-        &hook,
-        "goal-update-request",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
 
     // Accepted active edit through the hook path: no status, objective updated,
     // stale-race message absent. Complements the edit_active_goal contract tests
@@ -1934,7 +1964,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     {
         crate::goal::set_goal(
             &node,
-            "did:test:general",
+            identity.did(),
             &session_id,
             Some("blocked-edit semantics"),
             Some(crate::goal::GoalStatus::Active),
@@ -1942,6 +1972,15 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         )
         .await
         .expect("create active goal");
+        goal_context::bind_signed_request(
+            &node,
+            &hook,
+            &identity,
+            &format!("goal-update-{}", uuid::Uuid::new_v4()),
+            &session_id,
+            None,
+        )
+        .await;
         let call_id = "active-edit-accepted";
         let args = r#"{"objective":"revised while active"}"#;
         accept_hook_tool_call(
@@ -1966,12 +2005,12 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
                 == true,
             "active edit must be accepted: {tool_result}"
         );
-        let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+        let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .expect("load goal")
             .expect("goal exists");
         assert_eq!(goal.objective, "revised while active");
-        crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
+        crate::goal::delete_goals_for_session(&node, identity.did(), &session_id)
             .await
             .expect("clear goal");
     }
@@ -2000,7 +2039,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
     ] {
         crate::goal::set_goal(
             &node,
-            "did:test:general",
+            identity.did(),
             &session_id,
             Some("blocked-edit semantics"),
             Some(crate::goal::GoalStatus::Active),
@@ -2008,9 +2047,10 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         )
         .await
         .expect("create active goal");
+        goal_context::bind_signed_request(&node, &hook, &identity, &format!("goal-update-{}", uuid::Uuid::new_v4()), &session_id, None).await;
         crate::goal::set_goal(
             &node,
-            "did:test:general",
+            identity.did(),
             &session_id,
             None,
             Some(status),
@@ -2018,7 +2058,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         )
         .await
         .expect("latch status");
-        let before = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+        let before = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
             .await
             .expect("load before")
             .expect("goal exists");
@@ -2068,7 +2108,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
                 !tool_result.contains("no longer active or its continuation changed"),
                 "{call_id}: stale-race message must not appear for a fresh non-active goal: {tool_result}"
             );
-            let goal = crate::goal::load_canonical_goal(&node, "did:test:general", &session_id)
+            let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session_id)
                 .await
                 .expect("load goal")
                 .expect("goal exists");
@@ -2088,7 +2128,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         }
         // Rebuild from a fresh active goal for the next case; complete and
         // budget_limited cannot be reset to active via set_goal.
-        crate::goal::delete_goals_for_session(&node, "did:test:general", &session_id)
+        crate::goal::delete_goals_for_session(&node, identity.did(), &session_id)
             .await
             .expect("clear goal for next case");
     }
@@ -2102,7 +2142,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2162,7 +2202,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
 async fn context_and_prompt_deduped_across_retry_attempts() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2254,7 +2294,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2326,7 +2366,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-timeout-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2387,7 +2427,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-unknown-tool-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2455,7 +2495,7 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-full-spill-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2519,7 +2559,7 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-cancel-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2586,7 +2626,7 @@ async fn interruption_leaves_background_workers_running() {
     use std::time::Duration;
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -2614,7 +2654,11 @@ async fn interruption_leaves_background_workers_running() {
         .await;
         lifecycle.start_running().await.unwrap();
         let token = CancellationToken::new();
-        let reservation = hook.background_executions.reserve(id.into(), token.clone());
+        let reservation = hook.background_executions.reserve(
+            id.into(),
+            lifecycle.doc_id().unwrap().to_owned(),
+            token.clone(),
+        );
         if detached {
             reservations.push(reservation);
         } else {
@@ -2648,10 +2692,11 @@ async fn interruption_leaves_background_workers_running() {
     .await;
     unrelated.start_running().await.unwrap();
     let unrelated_token = CancellationToken::new();
-    reservations.push(
-        hook.background_executions
-            .reserve("unrelated".into(), unrelated_token.clone()),
-    );
+    reservations.push(hook.background_executions.reserve(
+        "unrelated".into(),
+        unrelated.doc_id().unwrap().to_owned(),
+        unrelated_token.clone(),
+    ));
     tokens.push(unrelated_token);
     let process_name = format!("background-parent-cascade-{}", uuid::Uuid::new_v4());
     let name = process_name.clone();
@@ -2712,7 +2757,7 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     assert!(!cases.is_empty());
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(dir.path())
             .build()
             .await
@@ -2785,7 +2830,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-mixed-cancel-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2914,7 +2959,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
 async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-fail-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -2971,7 +3016,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
 async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let data_path = std::env::temp_dir().join(format!("gents-hook-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3106,7 +3151,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3176,7 +3221,7 @@ async fn read_file_result_persists_raw_output() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3275,7 +3320,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3436,7 +3481,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3509,7 +3554,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-tool-turn-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3597,7 +3642,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
     use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
     let temp = tempfile::tempdir().unwrap();
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(temp.path().join("data"))
             .build()
             .await
@@ -3668,12 +3713,20 @@ async fn remote_presentations_persist_the_same_selected_identity() {
 async fn background_execution_reservation_drop_releases_ownership() {
     let registry = BackgroundExecutionRegistry::default();
     {
-        let _reservation = registry.reserve("tool-reserved".to_string(), CancellationToken::new());
+        let _reservation = registry.reserve(
+            "tool-reserved".to_string(),
+            "tool-reserved-doc".to_string(),
+            CancellationToken::new(),
+        );
         assert!(registry.contains("tool-reserved").await);
     }
     assert!(!registry.contains("tool-reserved").await);
 
-    let reservation = registry.reserve("tool-transferred".to_string(), CancellationToken::new());
+    let reservation = registry.reserve(
+        "tool-transferred".to_string(),
+        "tool-transferred-doc".to_string(),
+        CancellationToken::new(),
+    );
     reservation.disarm();
     assert!(registry.contains("tool-transferred").await);
     registry.remove("tool-transferred").await;
@@ -3682,7 +3735,11 @@ async fn background_execution_reservation_drop_releases_ownership() {
 #[tokio::test]
 async fn background_execution_completion_wait_is_missed_event_safe() {
     let registry = BackgroundExecutionRegistry::default();
-    let reservation = registry.reserve("tool-waited".to_string(), CancellationToken::new());
+    let reservation = registry.reserve(
+        "tool-waited".to_string(),
+        "tool-waited-doc".to_string(),
+        CancellationToken::new(),
+    );
     reservation.disarm();
 
     let waiter_registry = registry.clone();
@@ -3709,7 +3766,11 @@ async fn background_execution_completion_wait_is_missed_event_safe() {
 #[tokio::test]
 async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
     let registry = BackgroundExecutionRegistry::default();
-    let reservation = registry.reserve("tool-aborted".to_string(), CancellationToken::new());
+    let reservation = registry.reserve(
+        "tool-aborted".to_string(),
+        "tool-aborted-doc".to_string(),
+        CancellationToken::new(),
+    );
     let task = tokio::spawn(async move {
         let _reservation = reservation;
         std::future::pending::<()>().await;
@@ -3732,7 +3793,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-forgery-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3808,7 +3869,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
         uuid::Uuid::new_v4()
     ));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -3875,14 +3936,17 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
 
 #[tokio::test]
 async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity =
+        KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     use crate::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
     use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
     use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook =
-        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
             .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("publish required review output"), &[])
@@ -3892,7 +3956,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let session = hook.session_id().await.unwrap();
     set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         &session,
         Some("publish review output"),
         Some(GoalStatus::Active),
@@ -3900,8 +3964,15 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     )
     .await
     .unwrap();
-    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&node, &hook, "goal-output-request", &session, deadline).await;
+    goal_context::bind_signed_request(
+        &node,
+        &hook,
+        &identity,
+        "goal-output-request",
+        &session,
+        None,
+    )
+    .await;
     let request_doc = hook.active_request_doc_id().await.unwrap();
     let gate = OutputObligationGate::new(
         node.clone(),
@@ -3917,7 +3988,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     );
     let hook = hook.with_output_obligation_gate(Some(gate.clone()));
     let persistence_hook = hook.clone();
-    let before = load_canonical_goal(&node, "did:test:general", &session)
+    let before = load_canonical_goal(&node, identity.did(), &session)
         .await
         .unwrap()
         .unwrap();
@@ -3949,7 +4020,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         .as_str()
         .unwrap()
         .contains("write_scan_result"));
-    let after = load_canonical_goal(&node, "did:test:general", &session)
+    let after = load_canonical_goal(&node, identity.did(), &session)
         .await
         .unwrap()
         .unwrap();
@@ -4007,7 +4078,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let result: serde_json::Value =
         serde_json::from_str(accepted["result"].as_str().unwrap()).unwrap();
     assert_eq!(result["accepted"], true);
-    let complete = load_canonical_goal(&node, "did:test:general", &session)
+    let complete = load_canonical_goal(&node, identity.did(), &session)
         .await
         .unwrap()
         .unwrap();
@@ -4015,7 +4086,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
 
     set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         "operator-output-session",
         Some("operator decision"),
         Some(GoalStatus::Active),
@@ -4038,7 +4109,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     assert_eq!(empty_gate.unmet().await.unwrap().len(), 1);
     set_goal(
         &node,
-        "did:test:general",
+        identity.did(),
         "operator-output-session",
         None,
         Some(GoalStatus::Complete),
@@ -4046,7 +4117,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     )
     .await
     .unwrap();
-    let operator = load_canonical_goal(&node, "did:test:general", "operator-output-session")
+    let operator = load_canonical_goal(&node, identity.did(), "operator-output-session")
         .await
         .unwrap()
         .unwrap();
@@ -4062,7 +4133,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-cancelled-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -4136,7 +4207,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-real-denial-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -4232,7 +4303,7 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-hook-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -4309,7 +4380,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-timeout-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
@@ -4403,7 +4474,7 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
     let data_path =
         std::env::temp_dir().join(format!("plugin-child-job-tool-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await

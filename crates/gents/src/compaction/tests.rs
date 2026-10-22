@@ -1861,7 +1861,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     ));
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
-    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let keys = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(keys.path().join("compaction.key"), None).unwrap();
@@ -2721,7 +2721,7 @@ fn safe_to_reduce_accepts_a_native_order_reasoning_text_turn() {
 async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let data_path = std::env::temp_dir().join(format!("gents-compactor-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
+        crate::test_support::node_builder()
             .data_path(&data_path)
             .build()
             .await
