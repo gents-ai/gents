@@ -586,6 +586,7 @@ pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_manifest_with_limit<F>(
     fuel: usize,
     stored: &str,

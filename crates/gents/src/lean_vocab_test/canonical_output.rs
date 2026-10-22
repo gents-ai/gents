@@ -182,29 +182,6 @@ pub(crate) struct LeanReasoningSignatureCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum LeanReasoningDeltaPart {
-    Reasoning {
-        id: Option<usize>,
-        signature: Option<usize>,
-        bytes: Vec<u8>,
-    },
-    Text {
-        bytes: Vec<u8>,
-    },
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanReasoningDeltaCase {
-    pub(crate) name: String,
-    pub(crate) before: Vec<LeanReasoningDeltaPart>,
-    pub(crate) id: Option<usize>,
-    pub(crate) fragment: Vec<u8>,
-    pub(crate) expected: Vec<LeanReasoningDeltaPart>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanAuxiliaryOutputCase {
     pub(crate) name: String,
