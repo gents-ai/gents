@@ -164,6 +164,9 @@ fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, S
         Refusal::TimedOut => ("the job ran past its max_wall_secs", inspect),
         Refusal::StepFailed => ("three consecutive job steps failed", inspect),
         Refusal::Terminal => ("the job already ended", inspect),
+        Refusal::ResumeUnknown | Refusal::ResumeNotHead => {
+            ("the job's resume named a row that is not the newest of a run", inspect)
+        }
     }
 }
 

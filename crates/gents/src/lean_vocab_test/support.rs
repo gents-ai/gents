@@ -1023,6 +1023,7 @@ pub(crate) struct LeanPluginJobRecoveryRow {
     pub(crate) step_new: u32,
     pub(crate) deadline_expired: bool,
     pub(crate) available: bool,
+    pub(crate) stepped: bool,
 }
 
 /// `Conformance.PluginResources.dataCasesJson`: `PluginData.admitted` and

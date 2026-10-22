@@ -458,22 +458,29 @@ struct OwnerRow {
 
 #[derive(Deserialize)]
 struct SessionPin {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    tool_call_id: String,
     #[serde(default)]
     job_pin: Option<serde_json::Value>,
 }
 
+/// A `StepContext.resume_targets` entry.
+pub(crate) type ResumeTarget = (
+    String,
+    bool,
+    Option<(ProcessControlScope, bool, StepRow, StepRow)>,
+);
+
 /// Lean `resumeTarget` and `resumeIsHead` for `row_doc_id`, read through
 /// `txn`: `(row_doc_id, head, Some((owner, same_plugin, prior, root)))`, or
-/// `(row_doc_id, false, None)` when no such row exists.
+/// `(row_doc_id, false, None)` when no such row exists, with the address
+/// (`session_id:tool_call_id`) of the run's newest row when it is not the head.
 pub(crate) async fn resume_target_in_txn(
     txn: &ConfigApplyTxn<'_>,
     plugin: &str,
     row_doc_id: &str,
-) -> Result<(
-    String,
-    bool,
-    Option<(ProcessControlScope, bool, StepRow, StepRow)>,
-)> {
+) -> Result<(ResumeTarget, Option<String>)> {
     let response = txn
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did }} }}"#,
@@ -481,7 +488,7 @@ pub(crate) async fn resume_target_in_txn(
         ))
         .await?;
     let Some(owner) = response.pointer("/data/AgentToolCall/0") else {
-        return Ok((row_doc_id.to_owned(), false, None));
+        return Ok(((row_doc_id.to_owned(), false, None), None));
     };
     let owner: OwnerRow =
         serde_json::from_value(owner.clone()).context("decoding the resume target row")?;
@@ -497,7 +504,7 @@ pub(crate) async fn resume_target_in_txn(
         .is_some_and(|pin| pin.plugin_ref == plugin);
     let session = txn
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ job_pin }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_id job_pin }} }}"#,
             escape_graphql_string(&owner.session_id)
         ))
         .await?;
@@ -508,11 +515,19 @@ pub(crate) async fn resume_target_in_txn(
             .context("session job query omitted rows")?,
     )
     .context("decoding session job rows")?;
-    let head = !rows.into_iter().any(|row| {
-        row.job_pin
-            .and_then(|pin| serde_json::from_value::<JobPin>(pin).ok())
-            .is_some_and(|pin| pin.resume_of.as_deref() == Some(row_doc_id))
-    });
+    let continuations: Vec<(String, String, String)> = rows
+        .into_iter()
+        .filter_map(|row| {
+            let pin = serde_json::from_value::<JobPin>(row.job_pin?).ok()?;
+            Some((pin.resume_of?, row.doc_id, row.tool_call_id))
+        })
+        .collect();
+    let mut resumed_by = None;
+    let mut at = row_doc_id;
+    while let Some((_, doc_id, call)) = continuations.iter().find(|(of, ..)| of == at) {
+        resumed_by = Some(format!("{}:{call}", owner.session_id));
+        at = doc_id;
+    }
     let owner = ProcessControlScope {
         request_id: String::new(),
         session_id: owner.session_id,
@@ -520,17 +535,20 @@ pub(crate) async fn resume_target_in_txn(
         requester_did: owner.requester_did,
     };
     Ok((
-        row_doc_id.to_owned(),
-        head,
-        Some((owner, same_plugin, prior, root)),
+        (
+            row_doc_id.to_owned(),
+            resumed_by.is_none(),
+            Some((owner, same_plugin, prior, root)),
+        ),
+        resumed_by,
     ))
 }
 
 /// Validates a step-0 `effects.resume` inside the adoption transaction: Lean
 /// `resumeValid` over the prior row, the chain root and the owner scope read
-/// through `txn`, with no second rule. The chain-head flag is admission's.
+/// through `txn`, with no second rule.
 /// `guest` and `facts` are the step output's pin and `StepContext.resume_facts`.
-/// A refusal is `Ok(Err(Refusal::PolicyDenied))`; `Err` is a storage failure.
+/// A refusal is `Ok(Err(_))`, Lean `resumeRefusal`; `Err` is a storage failure.
 pub async fn validate_resume(
     txn: &ConfigApplyTxn<'_>,
     caller: &ProcessControlScope,
@@ -539,10 +557,20 @@ pub async fn validate_resume(
     guest: &JobGuestPin,
     facts: &HostFacts,
 ) -> Result<std::result::Result<ValidatedResume, Refusal>> {
-    let (_, _, target) = resume_target_in_txn(txn, plugin, &resume.row_doc_id).await?;
+    let ((_, head, target), _) = resume_target_in_txn(txn, plugin, &resume.row_doc_id).await?;
     let Some((owner, same_plugin, prior, root)) = target else {
-        return Ok(Err(Refusal::PolicyDenied));
+        return Ok(Err(Refusal::ResumeUnknown));
     };
+    if same_plugin
+        && !head
+        && caller.authorizes(
+            &owner.session_id,
+            &owner.node_did,
+            owner.requester_did.as_deref(),
+        )
+    {
+        return Ok(Err(Refusal::ResumeNotHead));
+    }
     if root.pin.is_none()
         || !resume_valid(caller, &owner, same_plugin, &prior, guest, facts, resume)
     {
@@ -1242,7 +1270,7 @@ mod tests {
         );
         assert_eq!(
             plain_resume(&job, "no-such-row").await,
-            Err(Refusal::PolicyDenied)
+            Err(Refusal::ResumeUnknown)
         );
         let done = finished(&mut job, "call-3", None, None, JobState::Completed).await;
         assert!(plain_resume(&job, &done).await.is_ok());
@@ -1296,6 +1324,46 @@ mod tests {
         )
         .await;
         assert!(admitted.is_ok());
+        job.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn resume_of_a_continued_row_names_the_head_even_when_resume_is_invalid() {
+        let mut job = new_chain().await;
+        let first = finished(&mut job, "call-1", None, None, JobState::Completed).await;
+        finished(
+            &mut job,
+            "call-2",
+            Some(&first),
+            Some(&first),
+            JobState::Completed,
+        )
+        .await;
+        let moved = facts(&first, "sha256:new-engine", None);
+        let refused = validate(
+            &job,
+            &caller(),
+            PLUGIN,
+            &resume_block(&first),
+            &guest("fixture-script", 4),
+            &moved,
+        )
+        .await;
+        assert_eq!(refused, Err(Refusal::ResumeNotHead));
+        let stranger = ProcessControlScope {
+            session_id: "session-2".to_owned(),
+            ..caller()
+        };
+        let refused = validate(
+            &job,
+            &stranger,
+            PLUGIN,
+            &resume_block(&first),
+            &guest("fixture-script", 4),
+            &moved,
+        )
+        .await;
+        assert_eq!(refused, Err(Refusal::PolicyDenied));
         job.node.shutdown().await;
     }
 
@@ -1482,13 +1550,7 @@ mod tests {
         }
     }
 
-    type Target = (
-        String,
-        bool,
-        Option<(ProcessControlScope, bool, StepRow, StepRow)>,
-    );
-
-    async fn target(job: &Job, plugin: &str, row: &str) -> Target {
+    async fn target(job: &Job, plugin: &str, row: &str) -> (ResumeTarget, Option<String>) {
         job.access
             .transact_readonly("test.control.resume_target", |txn| {
                 Box::pin(resume_target_in_txn(txn, plugin, row))
@@ -1501,7 +1563,8 @@ mod tests {
     async fn a_row_already_resumed_is_not_a_chain_head() {
         let mut job = new_chain().await;
         let p = finished(&mut job, "call-1", None, None, JobState::Completed).await;
-        let (id, head, found) = target(&job, PLUGIN, &p).await;
+        let ((id, head, found), resumed_by) = target(&job, PLUGIN, &p).await;
+        assert_eq!(resumed_by, None);
         let (owner, same_plugin, prior, root) = found.unwrap();
         assert_eq!((id.as_str(), head, same_plugin), (p.as_str(), true, true));
         assert_eq!(
@@ -1514,17 +1577,32 @@ mod tests {
         assert_eq!(prior, read_step_row(&job.access, &p).await.unwrap());
         assert_eq!(root, prior);
 
-        let (_, _, found) = target(&job, "acme/other", &p).await;
+        let ((_, _, found), _) = target(&job, "acme/other", &p).await;
         assert!(!found.unwrap().1);
 
         assert_eq!(
             target(&job, PLUGIN, "no-such-row").await,
-            ("no-such-row".to_owned(), false, None)
+            (("no-such-row".to_owned(), false, None), None)
         );
 
         let resumed = finished(&mut job, "call-2", Some(&p), Some(&p), JobState::Completed).await;
-        assert!(!target(&job, PLUGIN, &p).await.1);
-        assert!(target(&job, PLUGIN, &resumed).await.1);
+        let ((_, head, _), resumed_by) = target(&job, PLUGIN, &p).await;
+        assert!(!head);
+        assert_eq!(resumed_by, Some(format!("{}:call-2", caller().session_id)));
+        assert!(target(&job, PLUGIN, &resumed).await.0 .1);
+
+        let newest = finished(
+            &mut job,
+            "call-3",
+            Some(&p),
+            Some(&resumed),
+            JobState::Completed,
+        )
+        .await;
+        let ((_, head, _), resumed_by) = target(&job, PLUGIN, &p).await;
+        assert!(!head);
+        assert_eq!(resumed_by, Some(format!("{}:call-3", caller().session_id)));
+        assert!(target(&job, PLUGIN, &newest).await.0 .1);
         job.node.shutdown().await;
     }
 }

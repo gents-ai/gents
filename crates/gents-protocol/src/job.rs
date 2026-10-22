@@ -336,7 +336,9 @@ pub struct JobControlEcho {
     pub payload: Option<JobResume>,
 }
 
-/// One row of the caller session's jobs for this plugin.
+/// One row of the caller session's jobs for this plugin. `JobStepInput.jobs`
+/// lists them oldest first by `adopted_at`, so a run's resumes share its
+/// `handle` and its newest row is the last listed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -345,6 +347,12 @@ pub struct JobRowView {
     pub tool_call_id: String,
     pub handle: String,
     pub state: JobState,
+    /// The pin's `adopted_at`.
+    pub adopted_at: u64,
+    /// The pin's `resume_of`: the row this one resumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub resume_of: Option<String>,
 }
 
 /// The input of one job step, built natively by the step driver. Every field is

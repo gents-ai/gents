@@ -12,6 +12,7 @@ use super::control::{kill, KillCause};
 use super::driver::{load_lifecycle, read_step_row, JobDriver, StepOutcome};
 use super::input::live_job_settings;
 use super::origin::engine_guard;
+use super::records::read_progress;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::plugin::store::{parse_coordinate, read_record};
@@ -26,6 +27,7 @@ pub struct RecoveryFacts {
     pub step_new: u32,
     pub deadline_expired: bool,
     pub available: Result<(), Refusal>,
+    pub stepped: bool,
 }
 
 /// What one application of Lean's `pluginJobRecover` does to a running row.
@@ -38,13 +40,17 @@ pub enum TickAction {
 
 /// Lean `pluginJobRecover`, first application: a row past its deadline,
 /// unavailable or stalled is killed and fails closed; one with unobserved
-/// terminals is re-driven one step; any other row is left alone.
+/// terminals, or at rest before its first step since adoption, is re-driven
+/// one step; any other row is left alone.
 pub fn tick_action(facts: &RecoveryFacts) -> TickAction {
     if facts.deadline_expired {
         return TickAction::Kill(KillCause::Deadline);
     }
     if let Err(refusal) = facts.available {
         return TickAction::Kill(KillCause::FailClosed(refusal));
+    }
+    if !facts.stepped && facts.live == 0 && facts.observed >= facts.terminal_children {
+        return TickAction::Step;
     }
     if is_stalled(
         facts.live,
@@ -151,7 +157,8 @@ async fn kill_row(
 /// The row and its recovery facts as the stored state shows them now. A step
 /// leaves `step_new` 0 in a stored row: its fresh spawns and messages are live
 /// at its commit, so a row with nothing live and every terminal observed
-/// added nothing.
+/// added nothing. Adoption writes progress revision 1 and every committed
+/// step raises it, so a row still at 1 has not stepped since adoption.
 async fn facts_of(
     driver: &JobDriver,
     access: &ConfigAccess,
@@ -161,6 +168,9 @@ async fn facts_of(
 ) -> Result<(StepRow, RecoveryFacts)> {
     let runtime = driver.runtime();
     let row = read_step_row(access, row_doc_id).await?;
+    let stepped = read_progress(access, row_doc_id)
+        .await?
+        .is_some_and(|progress| progress.revision > 1);
     let caller = load_agent_request_by_doc_id(&runtime.node, request_doc_id)
         .await?
         .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?;
@@ -188,6 +198,7 @@ async fn facts_of(
         step_new: 0,
         deadline_expired: deadline <= u64::try_from(chrono::Utc::now().timestamp_millis())?,
         available,
+        stepped,
     };
     Ok((row, facts))
 }
@@ -538,6 +549,64 @@ mod tests {
         redrive_running_jobs(&driver).await.unwrap();
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         settle_time().await;
+        assert_eq!(step.progress(&step.row).await.revision, 2);
+        step.close().await;
+    }
+
+    /// A row a resume just adopted: its chain's one child is terminal and was
+    /// observed before the resume, nothing is live, and no step has committed
+    /// since its adoption (progress revision 1).
+    async fn resumed_row(step: &mut Stepper) -> String {
+        let row = step
+            .job
+            .row("workflow", "call-2", json!({"argv": ["resume", "flow"]}))
+            .await;
+        let base = read_pin(&step.job.access, &step.row)
+            .await
+            .unwrap()
+            .unwrap();
+        let pin = JobPin {
+            chain_root_doc_id: row.clone(),
+            resume_of: Some(step.row.clone()),
+            adopted_at: now_ms(),
+            ..base
+        };
+        step.job.write_pin(&row, &pin).await;
+        terminal_child(step, &row, "child-1").await;
+        step.job
+            .write_progress_observed(&row, JobState::Running, 1, 1)
+            .await;
+        start_running(&step.job, &row).await;
+        row
+    }
+
+    #[tokio::test]
+    async fn resumed_row_before_its_first_step_is_stepped_not_killed_stalled() {
+        let mut step =
+            stepper(json!({"suspend": {"kind": "await_user", "message": "which one?"}})).await;
+        let resumed = resumed_row(&mut step).await;
+        let driver = driver_of(&step);
+        redrive_running_jobs(&driver).await.unwrap();
+        assert_eq!(
+            step.row_json(&resumed).await["lifecycle_state"],
+            "completed",
+            "{}",
+            step.output(&resumed).await
+        );
+        assert_eq!(step.output(&resumed).await["status"], "awaiting_user");
+        step.close().await;
+    }
+
+    #[tokio::test]
+    async fn stepped_row_at_rest_still_fails_closed_stalled() {
+        let step = stepper(json!({"effects": {}})).await;
+        terminal_child(&step, &step.row, "child-1").await;
+        let driver = driver_of(&step);
+        let stepped = driver.step_now(&step.row).await.unwrap().unwrap();
+        assert_eq!(stepped, StepOutcome::Committed);
+        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
+        assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
+        assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
         assert_eq!(step.progress(&step.row).await.revision, 2);
         step.close().await;
     }
