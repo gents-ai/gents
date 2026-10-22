@@ -65,6 +65,11 @@ export function OpenSessionComposer({
   );
 
   const status = presentedComposerSendStatus(draft, sendStatus);
+  /* a session that never takes this app's messages says so before anything is typed */
+  const readOnly =
+    sendStatus.kind === "disabled" && sendStatus.reason === "sessionNotOwned"
+      ? sendStatus.hint
+      : null;
   const queueing = status.kind === "queue";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
@@ -164,7 +169,9 @@ export function OpenSessionComposer({
                 ? "Edit the message"
                 : inFlight
                   ? "Ask anything"
-                  : placeholderFor(status, "Ask anything")
+                  : readOnly
+                    ? readOnly
+                    : placeholderFor(status, "Ask anything")
             }
           />
         </div>

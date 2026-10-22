@@ -1672,3 +1672,114 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
     core.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> anyhow::Result<()> {
+    use gents::NodeIdentity;
+    use wiremock::{
+        matchers::{body_string_contains, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("runtime");
+    std::fs::create_dir(&home)?;
+    let key = home.join("node.key");
+    let owner = gents::identity::KeyIdentity::load_or_create(&key, None)?;
+    let server = MockServer::start().await;
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    std::fs::write(
+        home.join("init.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "node_name":"owner", "node_did":owner.did(), "key_path":key,
+        }))?,
+    )?;
+    std::fs::write(
+        home.join("runtime.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "node_name":"owner", "node_did":owner.did(), "graphql":graphql,
+            "p2p_transport":"iroh", "p2p_peer_id":"owner-peer",
+        }))?,
+    )?;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
+        .and(body_string_contains("create_AgentRequest"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data":{"create_AgentRequest":[{"_docID":"owner-request"}]}
+        })))
+        .mount(&server)
+        .await;
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(temp.path().join("client")),
+            ClientCoreOptions::local_simulated_route(),
+        )
+        .await?,
+    );
+    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
+        .await?;
+    let session = |session_id: &str, requester: &str, started_by: Option<&str>| {
+        gents_protocol::session::AgentSession {
+            session_id: session_id.into(),
+            node_did: owner.did().to_string(),
+            requester_did: Some(requester.to_string()),
+            agent_id: "agent".into(),
+            created_at: "2026-10-22T00:00:00Z".into(),
+            closed_at: None,
+            title: None,
+            tags: Vec::new(),
+            provenance: started_by.map(|parent| gents_protocol::session::SessionProvenance {
+                parent_request_doc_id: Some(parent.to_string()),
+                ..Default::default()
+            }),
+            observation: None,
+        }
+    };
+    let sender = core.node_identity().did().to_string();
+    core.store()
+        .merge_snapshot(crate::client::ClientStore::from_rows(
+            crate::client::store::ClientStoreRows {
+                sessions: vec![
+                    session("worker", owner.did(), Some("parent-request")),
+                    session("own", &sender, None),
+                ],
+                ..Default::default()
+            },
+        ));
+
+    assert!(
+        core.session_read_through_operator("worker", owner.did()),
+        "a node-owned session is read through the node, not hydrated"
+    );
+    assert!(!core.session_read_through_operator("own", owner.did()));
+
+    let error = core
+        .submit_request("worker", owner.did(), "hello", Some("agent"))
+        .await
+        .expect_err("a send into a node-owned session must be refused");
+    let refusal = error
+        .downcast_ref::<crate::error::BridgeError>()
+        .expect("the refusal is a typed bridge error");
+    assert_eq!(refusal.code, crate::error::BridgeErrorCode::SessionNotOwned);
+    assert_eq!(
+        refusal.message,
+        "Read-only. Message the session that started it."
+    );
+    let written = |server_requests: &[wiremock::Request]| {
+        server_requests
+            .iter()
+            .filter(|request| {
+                String::from_utf8_lossy(&request.body).contains("create_AgentRequest")
+            })
+            .count()
+    };
+    assert_eq!(
+        written(&server.received_requests().await.unwrap()),
+        0,
+        "a refused send must not be written"
+    );
+
+    core.submit_request("own", owner.did(), "hello", Some("agent"))
+        .await?;
+    assert_eq!(written(&server.received_requests().await.unwrap()), 1);
+    Ok(())
+}

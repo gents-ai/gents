@@ -382,6 +382,34 @@ fn unreadable_reason_follows_the_exact_read_scope() {
     assert_eq!(session_unreadable_reason(&unscoped, None, false), None);
 }
 
+#[test]
+fn unsendable_reason_follows_the_session_owner() {
+    let node_did = "did:test:node";
+    let desktop = "did:test:desktop";
+    let own = session_row("own", node_did, Some(desktop));
+    assert_eq!(session_unsendable_reason(&own, desktop), None);
+
+    let node_owned = session_row("triggered", node_did, Some(node_did));
+    assert!(session_unsendable_reason(&node_owned, desktop)
+        .is_some_and(|reason| reason.contains("belongs to the node")));
+    assert_eq!(session_unsendable_reason(&node_owned, node_did), None);
+
+    let mut worker = session_row("worker", node_did, Some(node_did));
+    worker.provenance = Some(gents_protocol::session::SessionProvenance {
+        parent_request_doc_id: Some("parent-request".to_string()),
+        ..Default::default()
+    });
+    assert!(session_unsendable_reason(&worker, desktop)
+        .is_some_and(|reason| reason.contains("session that started it")));
+
+    let other = session_row("other", node_did, Some("did:test:other"));
+    assert!(session_unsendable_reason(&other, desktop)
+        .is_some_and(|reason| reason.contains("someone else")));
+
+    let unscoped = session_row("unscoped", node_did, None);
+    assert!(session_unsendable_reason(&unscoped, desktop).is_some());
+}
+
 #[tokio::test]
 async fn transcript_payload_page_batches_exact_dependencies_without_reading_other_history() {
     use crate::client::canonical_output::{project_canonical_message, CanonicalMessageProjection};

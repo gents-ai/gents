@@ -63,19 +63,21 @@ pub async fn session_snapshot(
             )
             .await);
         }
-        match core
-            .ensure_session_hydration_started(&session_id, node_did)
-            .await
-        {
-            Ok(observation) => hydration_observation = Some(observation),
-            Err(error) => {
-                tracing::warn!(
-                    target: "gents_desktop::chat",
-                    node_did,
-                    session_id = %session_id,
-                    error = %error,
-                    "session hydration request failed; rendering whatever is already local"
-                );
+        if !core.session_read_through_operator(&session_id, node_did) {
+            match core
+                .ensure_session_hydration_started(&session_id, node_did)
+                .await
+            {
+                Ok(observation) => hydration_observation = Some(observation),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "gents_desktop::chat",
+                        node_did,
+                        session_id = %session_id,
+                        error = %error,
+                        "session hydration request failed; rendering whatever is already local"
+                    );
+                }
             }
         }
     }
