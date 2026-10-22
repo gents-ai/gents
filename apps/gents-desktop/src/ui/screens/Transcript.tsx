@@ -58,6 +58,7 @@ import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
 import { useCopied } from "@/lib/clipboard";
 import { toastFailure } from "@/lib/failure";
+import { sessionViews } from "@/app/sessionViews";
 import { createHeightLearner, guessHeight, type RowShape } from "@/lib/rowHeights";
 import { useApp, useView } from "@/app/AppContext";
 import {
@@ -432,25 +433,6 @@ function shapeOf(entry: TranscriptEntry): RowShape {
   }
 }
 
-/* where the reader left a session, so opening it again returns there */
-type SavedPlace = ReaderPlace & { sequence: number | null };
-const placeKey = (sessionId: string) => `gents-transcript-place:${sessionId}`;
-function savedPlace(sessionId: string | null): SavedPlace | null {
-  if (!sessionId) return null;
-  try {
-    const raw = localStorage.getItem(placeKey(sessionId));
-    return raw ? (JSON.parse(raw) as SavedPlace) : null;
-  } catch {
-    return null;
-  }
-}
-function savePlace(sessionId: string, place: SavedPlace | null) {
-  try {
-    if (place) localStorage.setItem(placeKey(sessionId), JSON.stringify(place));
-    else localStorage.removeItem(placeKey(sessionId));
-  } catch {}
-}
-
 export const TranscriptPanel = memo(function TranscriptPanel({
   inFlight,
   stopping = false,
@@ -606,7 +588,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   /* opening a session returns to where the reader left it: at once when
      that row is drawn, else once the page around its message is read */
   const opening = useMemo(() => {
-    const place = savedPlace(sessionKey);
+    const place = sessionViews.placeOf(sessionKey);
     if (!place) return null;
     if (indexOf.has(place.key)) return place;
     return place.sequence !== null ? ("awaiting" as const) : null;
@@ -650,7 +632,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   useEffect(() => {
     if (!sessionKey || returning.current === sessionKey || entries.length === 0) return;
     returning.current = sessionKey;
-    const place = savedPlace(sessionKey);
+    const place = sessionViews.placeOf(sessionKey);
     if (!place || indexOf.has(place.key) || place.sequence === null) return;
     rows.jump(place.sequence, () => {
       pendingPlace.current = place;
@@ -676,7 +658,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         timer = 0;
         const at = place();
         const entry = at ? entries[indexOf.get(at.key) ?? -1] : undefined;
-        savePlace(
+        sessionViews.setPlace(
           sessionKey,
           at ? { ...at, sequence: entrySequence(entry, sequences) } : null,
         );

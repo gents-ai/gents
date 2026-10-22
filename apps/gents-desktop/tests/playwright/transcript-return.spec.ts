@@ -109,12 +109,15 @@ test("a session opens and returns to the reader's place without a frame out of p
   }
   await page.waitForTimeout(800);
   const saved = await page.evaluate(() => {
-    const key = Object.keys(localStorage).find((k) =>
-      k.startsWith("gents-transcript-place:"),
+    const stored = JSON.parse(localStorage.getItem("gents-session-views") ?? "{}") as {
+      state?: {
+        places?: { session: string; place: { key: string; offset: number } }[];
+      };
+    };
+    return (
+      stored.state?.places?.find((entry) => entry.session === "session-large")?.place ??
+      null
     );
-    return key
-      ? (JSON.parse(localStorage.getItem(key)!) as { key: string; offset: number })
-      : null;
   });
   expect(saved).not.toBeNull();
 
