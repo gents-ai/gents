@@ -1222,3 +1222,42 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
             assert_eq!((window.label.as_str(), window.used_pct), ("5h", 25.0));
         });
 }
+
+#[test]
+fn refusal_stop_reason_surfaces_as_a_distinct_error() {
+    // Recorded Claude Messages SSE for a content-free refusal: the model reads
+    // the prompt (message_start usage), opens no content block, and closes the
+    // turn with stop_reason "refusal" and zero output tokens. Without explicit
+    // handling the owned loop would see an empty turn and resample until its
+    // transport budget was spent, reporting an opaque "no visible output".
+    let sse = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_refusal\",",
+        "\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[],",
+        "\"stop_reason\":null,\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",",
+        "\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let parsed = parse_messages_sse_typed(sse, &HashSet::new());
+    match parsed {
+        Err(MessagesParseError::ProviderRefusal { request_id }) => {
+            assert_eq!(request_id, "-", "no request-id header in this fixture");
+        }
+        other => panic!("expected a ProviderRefusal error, got {other:?}"),
+    }
+
+    // The refusal is surfaced to the loop as a provider error whose text the
+    // retry classifier recognizes as permanent, so it is not resampled.
+    let rendered = CompletionError::from(MessagesParseError::ProviderRefusal {
+        request_id: "-".into(),
+    })
+    .to_string();
+    assert!(
+        rendered.contains("stop_reason: refusal"),
+        "provider error text carries the refusal marker: {rendered}"
+    );
+}
