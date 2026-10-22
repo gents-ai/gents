@@ -8,6 +8,7 @@ import type {
   DeploymentView,
   DesktopSessionSnapshot,
   NodeReadinessDecision,
+  SessionSummary,
 } from "@source-inc/gents-desktop-client";
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import {
@@ -475,6 +476,43 @@ describe("projectChatShell", () => {
     },
     GENERATED_CONTRACT_TEST_TIMEOUT_MS,
   );
+});
+
+describe("a session this app doesn't own", () => {
+  const workerSummary = (unsendableReason: string | null) =>
+    ({
+      sessionId: "worker",
+      nodeDid: "did:key:node",
+      requesterDid: "did:key:node",
+      turnState: null,
+      latestRequestId: null,
+      unsendableReason,
+    }) as SessionSummary;
+  const project = (summary: SessionSummary) =>
+    projectChatShell({
+      clientAvailable: true,
+      selectedNodeDid: "did:key:node",
+      selectedSessionId: "worker",
+      sending: false,
+      session: null,
+      selectedSessionSummary: summary,
+      localWorkflow: { kind: "ready" },
+    });
+
+  test("blocks the composer with the bridge's reason", () => {
+    const reason = "Read-only. Message the session that started it.";
+    expect(project(workerSummary(reason)).nonEmptyContentSendStatus).toEqual({
+      kind: "disabled",
+      reason: "sessionNotOwned",
+      hint: reason,
+    });
+  });
+
+  test("doesn't block a session the app may send into", () => {
+    expect(
+      project(workerSummary(null)).nonEmptyContentSendStatus,
+    ).not.toMatchObject({ reason: "sessionNotOwned" });
+  });
 });
 
 describe("requestProgressPresentation", () => {

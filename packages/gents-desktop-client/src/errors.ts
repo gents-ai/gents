@@ -18,6 +18,7 @@ const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
   "pairing",
   "credentialNotSaved",
   "runtimeStillBooting",
+  "sessionNotOwned",
   "unknown",
 ]);
 

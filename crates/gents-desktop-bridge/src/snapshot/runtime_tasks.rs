@@ -193,6 +193,7 @@ pub(super) fn session_summaries(
                 message_count: None,
                 tool_call_count: None,
                 unreadable_reason: None,
+                unsendable_reason: None,
             }
         })
         .collect::<Vec<_>>();

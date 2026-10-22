@@ -19,6 +19,8 @@ pub enum BridgeErrorCode {
     Pairing,
     CredentialNotSaved,
     RuntimeStillBooting,
+    /// The session belongs to another requester, so core would refuse the send.
+    SessionNotOwned,
     Unknown,
 }
 
@@ -39,6 +41,7 @@ impl BridgeErrorCode {
             Self::Pairing => "pairing",
             Self::CredentialNotSaved => "credentialNotSaved",
             Self::RuntimeStillBooting => "runtimeStillBooting",
+            Self::SessionNotOwned => "sessionNotOwned",
             Self::Unknown => "unknown",
         }
     }

@@ -262,6 +262,10 @@ pub struct SessionSummary {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub unreadable_reason: Option<String>,
+    /// Why a send from this client into the session would be refused, when it would.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub unsendable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

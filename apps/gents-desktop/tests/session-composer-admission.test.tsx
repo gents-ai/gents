@@ -314,6 +314,36 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 
+  it("says a session this app can't send into is read-only before anything is typed", () => {
+    const reason = "Read-only. Message the session that started it.";
+    const { app, sendChatMessage } = screenApp({
+      session: heldSession({ sessionId: "worker", turnState: "completed" }),
+      nodeOverrides: {
+        sessions: [
+          {
+            sessionId: "worker",
+            nodeDid: NODE,
+            requesterDid: NODE,
+            turnState: "completed",
+            latestRequestId: "request",
+            unsendableReason: reason,
+          },
+        ],
+      },
+    });
+    renderScreen(app);
+    expect(app.view.getState().shellProjection.nonEmptyContentSendStatus).toMatchObject(
+      {
+        kind: "disabled",
+        reason: "sessionNotOwned",
+      },
+    );
+    const message = screen.getByRole("textbox", { name: "Message" });
+    expect(message).toBeDisabled();
+    expect(message).toHaveAttribute("placeholder", reason);
+    expect(sendChatMessage).not.toHaveBeenCalled();
+  });
+
   it("re-enables the rendered existing-session composer after terminal interruption", () => {
     const { app } = screenApp({ session: heldSession({ turnState: "running" }) });
     renderScreen(app);

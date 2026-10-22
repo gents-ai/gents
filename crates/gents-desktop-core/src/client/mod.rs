@@ -39,8 +39,8 @@ pub use query::{
     load_session_diagnostics_store, load_session_live_store, load_session_live_store_on,
     load_session_tip_store, load_session_tip_store_on, load_session_transcript_page,
     load_session_transcript_page_on, session_transcript_requester_scope, session_unreadable_reason,
-    CanonicalTranscriptDependencies, RequestPromptFact, RequestPromptOwnership,
-    SessionTranscriptQueryPage, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE,
+    session_unsendable_reason, CanonicalTranscriptDependencies, RequestPromptFact,
+    RequestPromptOwnership, SessionTranscriptQueryPage, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE,
     MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
 };
 pub use schema::subscribed_collection_names;

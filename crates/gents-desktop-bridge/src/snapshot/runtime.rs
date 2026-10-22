@@ -266,19 +266,23 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             );
             let node_scope = core.transcript_node_scope(&peer.node_did);
             let operator = core.operator_observation_graphql(&peer.node_did).is_some();
+            let sender = core.requester_did(&peer);
             for summary in &mut sessions {
-                summary.unreadable_reason = store
-                    .sessions
-                    .iter()
-                    .find(|row| {
-                        row.session_id == summary.session_id && row.node_did == summary.node_did
-                    })
+                let row = store.sessions.iter().find(|row| {
+                    row.session_id == summary.session_id && row.node_did == summary.node_did
+                });
+                summary.unreadable_reason = row
                     .and_then(|row| {
                         gents_desktop_core::client::session_unreadable_reason(
                             row,
                             node_scope.as_deref(),
                             operator,
                         )
+                    })
+                    .map(str::to_owned);
+                summary.unsendable_reason = row
+                    .and_then(|row| {
+                        gents_desktop_core::client::session_unsendable_reason(row, &sender)
                     })
                     .map(str::to_owned);
             }
@@ -813,6 +817,7 @@ mod agent_environment_tests {
             message_count: None,
             tool_call_count: None,
             unreadable_reason: None,
+            unsendable_reason: None,
         }
     }
 

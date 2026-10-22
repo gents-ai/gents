@@ -419,6 +419,31 @@ pub fn session_unreadable_reason(
     })
 }
 
+/// Why a send from `sender_did` into `session` would be refused, when it would.
+///
+/// Core admits a request only from the requester that owns its session (Lean
+/// `requesterMatchesSessionScope`). Applying the same check here keeps the
+/// client from offering, or submitting, a send that core will refuse.
+pub fn session_unsendable_reason(session: &AgentSession, sender_did: &str) -> Option<&'static str> {
+    if session.requester_did.as_deref() == Some(sender_did) {
+        return None;
+    }
+    let started_by_a_session = session
+        .provenance
+        .as_ref()
+        .is_some_and(|provenance| provenance.parent_request_doc_id.is_some());
+    Some(match session.requester_did.as_deref() {
+        Some(requester) if requester == session.node_did && started_by_a_session => {
+            "Read-only. Message the session that started it."
+        }
+        Some(requester) if requester == session.node_did => {
+            "Read-only. This session belongs to the node."
+        }
+        Some(_) => "Read-only. This session belongs to someone else.",
+        None => "Read-only.",
+    })
+}
+
 pub async fn load_session_transcript_page(
     node: &EmbeddedNode,
     session_id: &str,
