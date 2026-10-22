@@ -1014,6 +1014,41 @@ impl JobDriver {
         Some(outcome)
     }
 
+    /// Whether a step of the row is running or a hold is on it.
+    pub fn is_stepping(&self, row_doc_id: &str) -> bool {
+        self.in_flight
+            .lock()
+            .expect("in-flight rows lock")
+            .contains_key(row_doc_id)
+    }
+
+    /// Runs `f` while no step of the row runs or can start, or returns `None`
+    /// when one is in flight. A wake during `f` steps the row afterwards.
+    pub async fn hold_steps<T>(
+        &self,
+        row_doc_id: &str,
+        f: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        {
+            let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
+            if in_flight.contains_key(row_doc_id) {
+                return None;
+            }
+            in_flight.insert(row_doc_id.to_owned(), Dirty::default());
+        }
+        let out = f.await;
+        let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
+        if in_flight.get(row_doc_id).is_some_and(|dirty| dirty.0) {
+            in_flight.insert(row_doc_id.to_owned(), Dirty::default());
+            let driver = self.this.upgrade().expect("a driver is held by its Arc");
+            let row_doc_id = row_doc_id.to_owned();
+            tokio::spawn(async move { driver.drive(&row_doc_id).await });
+        } else {
+            in_flight.remove(row_doc_id);
+        }
+        Some(out)
+    }
+
     /// Steps the row until no wake or retry is left.
     async fn drive(&self, row_doc_id: &str) {
         loop {
