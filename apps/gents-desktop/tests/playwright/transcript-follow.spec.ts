@@ -514,3 +514,34 @@ test("the transcript stops at its ends instead of bouncing past them", async ({
     ),
   ).toBe("none");
 });
+
+/* The composer is pinned within the transcript's content. A row drawn
+   taller than the list has placed it yet must not stretch the scroll range
+   past that content, or the composer rides up with the content's end and
+   rows show below it. */
+test("keeps the composer at the foot while a row outgrows its place", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  await expect(viewport).toHaveAttribute("data-following", "true");
+  const gap = await viewport.evaluate((scroller) => {
+    const rows = scroller.querySelectorAll<HTMLElement>("[data-row-key]");
+    rows[rows.length - 1]!.style.paddingBottom = "400px";
+    /* before the list hears of it, the view goes as far down as it can */
+    scroller.scrollTop = scroller.scrollHeight;
+    const composer = scroller
+      .querySelector('[aria-label="Message"]')!
+      .closest<HTMLElement>(".sticky")!;
+    return Math.round(
+      scroller.getBoundingClientRect().bottom - composer.getBoundingClientRect().bottom,
+    );
+  });
+  expect(gap).toBeLessThanOrEqual(1);
+});

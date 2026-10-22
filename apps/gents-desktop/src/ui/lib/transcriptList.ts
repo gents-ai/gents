@@ -912,9 +912,13 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     place,
     listProps: {
       ref: listRef,
+      /* a row drawn taller than the list has placed it yet is clipped to
+         the list rather than stretching the scroll range past the content:
+         what is pinned to the content's foot would ride up with it */
       style: {
         position: "relative",
         height: virtual.getTotalSize(),
+        overflowY: "clip",
         visibility: landing ? "hidden" : undefined,
       },
     } satisfies ComponentProps<"div">,
