@@ -54,39 +54,65 @@ pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::Con
     decode_live_backgrounded_rows(value)
 }
 
-/// The live count a background admission checks against the ceiling.
-/// DefraDB transactions do not conflict on predicate reads, so the admission
-/// also bumps the request's `background_admission_sequence`: concurrent
-/// admissions to one request then conflict at commit and their idempotent
-/// transaction replays this count.
+/// How an admission's own row stands in the live count it checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackgroundSlot {
+    /// The caller's row is not live yet.
+    Requested,
+    /// The caller's row already counts as live.
+    Occupied,
+    /// The caller checked the ceiling against its own count in this transaction.
+    Admitted,
+}
+
+/// Admits one background slot on `request_doc_id` in `txn`, refusing with
+/// [`BackgroundCapacityExceeded`] at the ceiling, and returns the request row
+/// with `request_fields`. DefraDB transactions do not conflict on predicate
+/// reads, so every admission bumps the request's
+/// `background_admission_sequence`: concurrent admissions to one request then
+/// conflict at commit and recount. Conflicts are per value key and head sets
+/// merge, so lease renewal and lifecycle writes, which neither read nor write
+/// this field, never conflict with it.
 pub(crate) async fn reserve_background_slot_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
-) -> anyhow::Result<usize> {
-    let live = count_live_backgrounded_rows_in(txn, request_doc_id).await?;
+    slot: BackgroundSlot,
+    request_fields: &str,
+) -> anyhow::Result<serde_json::Value> {
+    txn.contend_for_background_slot();
+    if slot != BackgroundSlot::Admitted {
+        let live = count_live_backgrounded_rows_in(txn, request_doc_id).await?;
+        let admitted = if slot == BackgroundSlot::Occupied {
+            live.saturating_sub(1)
+        } else {
+            live
+        };
+        if admitted >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
+            return Err(BackgroundCapacityExceeded(admitted).into());
+        }
+    }
     let escaped = crate::graphql::escape_graphql_string(request_doc_id);
     let request = txn
         .execute(&format!(
-            r#"{{ AgentRequest(docID: "{escaped}") {{ background_admission_sequence }} }}"#
+            r#"{{ AgentRequest(docID: "{escaped}") {{ background_admission_sequence {request_fields} }} }}"#
         ))
         .await?;
-    let rows = request
+    let mut rows = request
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
+        .cloned()
         .context("background admission request lookup omitted rows")?;
     anyhow::ensure!(
         rows.len() == 1,
         "background admission request {request_doc_id} is missing"
     );
-    let next = rows[0]["background_admission_sequence"]
-        .as_u64()
-        .unwrap_or(0)
-        + 1;
+    let row = rows.remove(0);
+    let next = row["background_admission_sequence"].as_u64().unwrap_or(0) + 1;
     txn.execute(&format!(
         r#"mutation {{ update_AgentRequest(docID: "{escaped}", input: {{ background_admission_sequence: {next} }}) {{ _docID }} }}"#
     ))
     .await?;
-    Ok(live)
+    Ok(row)
 }
 
 #[cfg(test)]

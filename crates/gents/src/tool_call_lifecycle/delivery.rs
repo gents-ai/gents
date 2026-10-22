@@ -564,19 +564,14 @@ impl ToolCallLifecycle {
                     anyhow::ensure!(parent_row["data"]["AgentToolCall"].as_array().is_some_and(|rows|
                         rows.len() == 1 && rows[0]["spawned_by_tool_call_doc_id"].is_null()),
                         "spawned admission lost its exact running accepted parent");
-                    let live = crate::hook::persistence::reserve_background_slot_in_txn(txn, &request_doc_id).await?;
-                    if live >= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-                        return Err(crate::hook::persistence::BackgroundCapacityExceeded(live).into());
-                    }
-                    let request_row = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
-                        _docID: {{ _eq: "{request}" }}, node_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}
-                    }}, limit: 2) {{ request_id requester_did lifecycle_state execution_generation execution_lease_expires_at interrupt_requested_at }} }}"#)).await?;
-                    let requests = request_row["data"]["AgentRequest"].as_array()
-                        .context("spawned admission request lookup omitted rows")?;
-                    anyhow::ensure!(requests.len() == 1, "spawned admission request is missing or ambiguous");
-                    let request_row = &requests[0];
+                    let request_row = &crate::hook::persistence::reserve_background_slot_in_txn(
+                        txn, &request_doc_id, crate::hook::persistence::BackgroundSlot::Requested,
+                        "node_did session_id request_id requester_did lifecycle_state execution_generation execution_lease_expires_at interrupt_requested_at",
+                    ).await?;
                     anyhow::ensure!(
-                        request_row["requester_did"].as_str() == requester_did.as_deref()
+                        request_row["node_did"].as_str() == Some(node_did.as_str())
+                            && request_row["session_id"].as_str() == Some(session_id.as_str())
+                            && request_row["requester_did"].as_str() == requester_did.as_deref()
                             && request_row["lifecycle_state"].as_str() == Some("processing")
                             && request_row["execution_generation"].as_str() == Some(generation.as_str())
                             && request_row["interrupt_requested_at"].is_null(),
@@ -3594,11 +3589,13 @@ pub(crate) async fn start_running_in_txn(
         "dispatch physical tool is missing or ambiguous"
     );
     if start.await_mode == "background" {
-        let live =
-            crate::hook::persistence::reserve_background_slot_in_txn(txn, &start.request).await?;
-        if live >= crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return Err(crate::hook::persistence::BackgroundCapacityExceeded(live).into());
-        }
+        crate::hook::persistence::reserve_background_slot_in_txn(
+            txn,
+            &start.request,
+            crate::hook::persistence::BackgroundSlot::Requested,
+            "",
+        )
+        .await?;
     }
     let update = txn
         .execute(&format!(

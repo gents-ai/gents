@@ -50,7 +50,7 @@ impl ToolCallLifecycle {
                 let original = original.clone();
                 let receipt = receipt.clone();
                 Box::pin(async move {
-                    if original.background_in_txn(txn, original.deadline_at).await?.is_none() {
+                    if original.background_in_txn(txn, original.deadline_at, crate::hook::persistence::BackgroundSlot::Occupied).await?.is_none() {
                         let existing = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{receipt_key}" }} }}, limit: 2) {{ _docID }} }}"#)).await?;
                         anyhow::ensure!(existing.pointer("/data/AgentMessage").and_then(serde_json::Value::as_array)
                             .is_some_and(|rows| rows.len() == 1), "foreground tool changed before background handoff");
@@ -83,7 +83,15 @@ impl ToolCallLifecycle {
             "tool.background",
             move |txn| {
                 let original = original.clone();
-                Box::pin(async move { original.background_in_txn(txn, original.deadline_at).await })
+                Box::pin(async move {
+                    original
+                        .background_in_txn(
+                            txn,
+                            original.deadline_at,
+                            crate::hook::persistence::BackgroundSlot::Occupied,
+                        )
+                        .await
+                })
             },
         )
         .await?;
@@ -104,6 +112,7 @@ impl ToolCallLifecycle {
         &self,
         txn: &crate::config_client::ConfigApplyTxn<'_>,
         deadline_at: chrono::DateTime<chrono::Utc>,
+        slot: crate::hook::persistence::BackgroundSlot,
     ) -> Result<Option<Self>> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         anyhow::ensure!(
@@ -145,11 +154,8 @@ impl ToolCallLifecycle {
             .request_doc_id
             .as_deref()
             .ok_or_else(|| anyhow!("background called without parent request document"))?;
-        let live =
-            crate::hook::persistence::reserve_background_slot_in_txn(txn, request_doc_id).await?;
-        if live > crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return Err(crate::hook::persistence::BackgroundCapacityExceeded(live - 1).into());
-        }
+        crate::hook::persistence::reserve_background_slot_in_txn(txn, request_doc_id, slot, "")
+            .await?;
         let mut adopted = self.clone();
         adopted.await_mode = AwaitMode::Background;
         adopted.deadline_at = deadline_at;
@@ -161,7 +167,14 @@ impl ToolCallLifecycle {
         txn: &crate::config_client::ConfigApplyTxn<'_>,
         deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<Self>> {
-        let Some(mut adopted) = self.background_in_txn(txn, deadline_at).await? else {
+        let Some(mut adopted) = self
+            .background_in_txn(
+                txn,
+                deadline_at,
+                crate::hook::persistence::BackgroundSlot::Admitted,
+            )
+            .await?
+        else {
             return Ok(None);
         };
         adopted.kind = ToolRowKind::PluginJob;

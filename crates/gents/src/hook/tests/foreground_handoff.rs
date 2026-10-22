@@ -453,3 +453,80 @@ async fn refused_foreground_handoff_can_be_retried() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let session = hook.session_id().await.unwrap();
+    let deadline = Utc::now() + chrono::Duration::seconds(30);
+    bind_interruptible_request(&node, &hook, "concurrent-parent", &session, deadline).await;
+    let capacity = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        "background_tool_budget_count_8_rejects_spawn",
+    )
+    .max_backgrounded;
+    let ids = (0..=capacity)
+        .map(|index| format!("concurrent-start-{index}"))
+        .collect::<Vec<_>>();
+    let calls = ids.iter().map(|id| (id.as_str(), None)).collect::<Vec<_>>();
+    let message = Message::Assistant {
+        id: Some("concurrent-start-turn".into()),
+        content: ids
+            .iter()
+            .map(|id| {
+                AssistantContent::ToolCall(ToolCall {
+                    id: id.clone(),
+                    call_id: None,
+                    function: ToolFunction {
+                        name: "held_background_tool".into(),
+                        arguments: serde_json::json!({}),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
+    };
+    publish_and_adopt_tool_turns(&hook, &calls, message).await;
+    let mut starts = Vec::new();
+    for id in &ids {
+        starts.push(
+            hook.adopt_accepted_tool_dispatch(
+                id,
+                None,
+                "concurrent-parent",
+                &session,
+                "held_background_tool",
+                "{}",
+                deadline,
+                crate::tool_call_lifecycle::AwaitMode::Background,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let results =
+        futures::future::join_all(starts.iter_mut().map(|start| start.start_running())).await;
+    let refusals = results
+        .iter()
+        .filter_map(|result| result.as_ref().err())
+        .map(|error| {
+            error
+                .downcast_ref::<crate::hook::persistence::BackgroundCapacityExceeded>()
+                .map(|capacity| capacity.0)
+                .unwrap_or_else(|| panic!("unexpected start failure: {error:#}"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(refusals, vec![capacity]);
+    for start in &mut starts {
+        if start.state() == crate::tool_call_lifecycle::ToolCallState::Running {
+            start
+                .cancel_during_run(crate::tool_call_lifecycle::CancelCause::UserCancelled)
+                .await
+                .unwrap();
+        }
+    }
+    node.shutdown().await;
+}
