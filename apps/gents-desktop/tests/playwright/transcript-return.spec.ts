@@ -6,6 +6,7 @@ declare global {
   interface Window {
     __frames: Frame[];
     __heldKey: string | null;
+    __barsWhileHidden: number;
   }
 }
 
@@ -17,13 +18,29 @@ async function watchFrames(page: Page) {
   await page.evaluate(() => {
     window.__frames = [];
     window.__heldKey = null;
+    window.__barsWhileHidden = 0;
     const sentinel = document.body.appendChild(document.createElement("div"));
     sentinel.style.cssText =
       "position:fixed;left:0;top:0;height:1px;pointer-events:none";
     new ResizeObserver(() => {
       const list = document.querySelector<HTMLElement>("[data-transcript-list]");
       const scroller = list?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
-      if (!list || !scroller || getComputedStyle(list).visibility === "hidden") return;
+      if (!list || !scroller) return;
+      /* while the rows are hidden, so is the scroller's own bar */
+      if (getComputedStyle(list).visibility === "hidden") {
+        const bars = scroller
+          .closest('[data-slot="scroll-area"]')
+          ?.querySelectorAll<HTMLElement>(
+            ':scope > [data-slot="scroll-area-scrollbar"]',
+          );
+        for (const bar of bars ?? [])
+          if (
+            getComputedStyle(bar).visibility !== "hidden" &&
+            bar.getBoundingClientRect().height > 0
+          )
+            window.__barsWhileHidden += 1;
+        return;
+      }
       const rows = [...list.querySelectorAll<HTMLElement>("[data-row-key]")];
       if (rows.length === 0) return;
       const view = scroller.getBoundingClientRect();
@@ -119,4 +136,5 @@ test("a session opens and returns to the reader's place without a frame out of p
   for (const frame of returned)
     expect(Math.abs(frame.offset! - saved!.offset)).toBeLessThanOrEqual(2);
   expect(returned.map((frame) => frame.gap).filter((gap) => gap > 2)).toEqual([]);
+  expect(await page.evaluate(() => window.__barsWhileHidden)).toBe(0);
 });

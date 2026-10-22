@@ -804,6 +804,16 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     return () => observer.disconnect();
   }, [scroller]);
 
+  /* the scroller is marked while a subject lands, so its own bars hide with
+     the rows: they would show the position being left before the one
+     landed on. The bars come and go with the scroller's size, so a style
+     rule on the mark hides them, not a style set on the bars */
+  useLayoutEffect(() => {
+    if (!scroller) return;
+    if (landing) scroller.dataset.landing = "";
+    else delete scroller.dataset.landing;
+  }, [scroller, landing]);
+
   const opened = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (!scroller || opened.current === subject || entries.length === 0) return;
