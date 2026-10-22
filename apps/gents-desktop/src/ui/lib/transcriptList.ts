@@ -685,6 +685,11 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       ahead,
       attach(s: HTMLElement) {
         s.style.overflowAnchor = "none";
+        /* the view stops at either end instead of bouncing past it: a bounce
+           moves the view outside the range the owner places it in, and at
+           the top of history still being read it looks like the start of
+           the session */
+        s.style.overscrollBehaviorY = "none";
         s.dataset.following = String(mode.kind === "follow");
         s.addEventListener("scroll", onScrollEvent, { passive: true });
         s.addEventListener("wheel", onWheel, { passive: true });

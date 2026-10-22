@@ -496,3 +496,21 @@ test("goes back to the foot when asked just after a wheel", async ({
   });
   await expect(viewport).toHaveAttribute("data-following", "true");
 });
+
+test("the transcript stops at its ends instead of bouncing past them", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+    "one layout per engine",
+  );
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  expect(
+    await viewport.evaluate(
+      (scroller) => getComputedStyle(scroller).overscrollBehaviorY,
+    ),
+  ).toBe("none");
+});
