@@ -312,6 +312,8 @@ def snapshotJson : String :=
     ++ "\"title_text_cases\":" ++ Conformance.TitleText.casesJson ++ ","
     ++ "\"title_usage_cases\":"
       ++ Conformance.TitleUsage.casesJson ++ ","
+    ++ "\"provider_limit_read_cases\":"
+      ++ Conformance.ProviderUsage.limitReadCasesJson ++ ","
     ++ "\"provider_usage_cases\":"
       ++ Conformance.ProviderUsage.casesJson ++ ","
     ++ "\"title_admission_join_cases\":"
