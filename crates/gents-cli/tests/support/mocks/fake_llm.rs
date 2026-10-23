@@ -14,6 +14,7 @@ use tokio::sync::{oneshot, Notify};
 pub enum ChatAction {
     Sse(String),
     HttpError(StatusCode, String),
+    WaitThenHttpError(Arc<tokio::sync::Semaphore>, StatusCode, String),
     DelayThenSse(Duration, String),
     WaitThenSse(Arc<tokio::sync::Semaphore>, String),
     GatedSse(
@@ -210,6 +211,28 @@ async fn handle_chat(
     match (state.responder)(&request_json) {
         ChatAction::Sse(body) => sse_response(body),
         ChatAction::HttpError(status, body) => json_response(status, body),
+        ChatAction::WaitThenHttpError(gate, status, body) => loop {
+            if state.stopped.load(Ordering::Relaxed) {
+                return json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    r#"{"error":"shutting down"}"#.to_string(),
+                );
+            }
+            if let Ok(permit) =
+                tokio::time::timeout(Duration::from_millis(50), gate.acquire()).await
+            {
+                return match permit {
+                    Ok(permit) => {
+                        drop(permit);
+                        json_response(status, body)
+                    }
+                    Err(_) => json_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        r#"{"error":"gate closed"}"#.to_string(),
+                    ),
+                };
+            }
+        },
         ChatAction::GatedSse(first, gate, rest, emitted) => {
             let stopped = state.stopped.clone();
             let chunks = futures_util::stream::unfold(

@@ -59,6 +59,9 @@ pub struct MessageView {
 pub enum RequestOriginView {
     #[serde(rename_all = "camelCase")]
     SessionMessage {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        display_body: Option<String>,
         sender_node_did: Option<String>,
         sender_session_id: Option<String>,
         sender_request_id: Option<String>,

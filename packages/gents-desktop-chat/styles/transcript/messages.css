@@ -629,3 +629,46 @@
     font-size: var(--text-sm);
   }
 }
+
+@layer transcript {
+  .received-message-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+  }
+  .received-message-heading .message-time {
+    margin-left: auto;
+  }
+  .received-message-details {
+    margin-top: 8px;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+  }
+  .received-message-details summary {
+    width: fit-content;
+    cursor: pointer;
+  }
+  .received-message-details pre {
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .received-message-unavailable {
+    color: var(--color-text-muted);
+  }
+}
+
+@layer transcript {
+  .received-message-copy {
+    min-height: 20px;
+    padding: 2px 4px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+  }
+}
