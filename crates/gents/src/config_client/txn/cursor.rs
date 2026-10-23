@@ -1,5 +1,5 @@
 use super::ConfigApplyTxn;
-use crate::graphql::{cursor_page, cursor_query, CURSOR_PAGE_SIZE};
+use crate::graphql::{cursor_page_data, cursor_query, CURSOR_PAGE_SIZE};
 use anyhow::{Context, Result};
 use rapidhash::{HashSetExt, RapidHashSet};
 use serde_json::Value;
@@ -9,7 +9,7 @@ impl ConfigApplyTxn<'_> {
     /// establishes completion; a short authorized page is not an EOF signal.
     /// Collection/field selections are caller-owned schema syntax, and filter
     /// values must already be escaped through the GraphQL owner.
-    pub(crate) async fn cursor_rows_local(
+    pub(crate) async fn cursor_rows(
         &self,
         collection: &str,
         fields: &str,
@@ -21,9 +21,9 @@ impl ConfigApplyTxn<'_> {
         let mut rows = Vec::new();
         loop {
             let response = self
-                .execute_local_response(&cursor_query(collection, fields, filter, after.as_deref()))
+                .execute(&cursor_query(collection, fields, filter, after.as_deref()))
                 .await?;
-            let (page, next) = cursor_page::<Value>(&response, collection)?;
+            let (page, next) = cursor_page_data::<Value>(response.get("data"), collection)?;
             anyhow::ensure!(
                 page.len() <= CURSOR_PAGE_SIZE,
                 "cursor page exceeded its native row bound"

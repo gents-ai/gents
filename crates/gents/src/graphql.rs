@@ -160,9 +160,17 @@ pub(crate) fn cursor_page<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    let cursor = response
-        .data
-        .as_ref()
+    cursor_page_data(response.data.as_ref(), collection)
+}
+
+pub(crate) fn cursor_page_data<T>(
+    data: Option<&serde_json::Value>,
+    collection: &str,
+) -> Result<(Vec<T>, Option<String>)>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let cursor = data
         .and_then(|data| data.get("_cursor"))
         .context("cursor query omitted _cursor")?;
     let rows = cursor

@@ -31,6 +31,64 @@ fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
 }
 
 #[tokio::test]
+async fn http_transaction_cursors_keep_all_pages() {
+    let root = tempfile::tempdir().unwrap();
+    let key = root.path().join("cursor.key");
+    let identity =
+        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key, None))
+            .await
+            .unwrap()
+            .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
+    ConfigAccess::local(node.clone())
+        .add_schema("type CursorTransportProbe { value: Int }")
+        .await
+        .unwrap();
+    let rows = (0..66)
+        .map(|value| format!("{{value:{value}}}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    ConfigAccess::write_local(
+        &node,
+        "test.cursor_transport.seed",
+        &format!("mutation {{ create_CursorTransportProbe(input:[{rows}]) {{ _docID }} }}",),
+    )
+    .await
+    .unwrap();
+    let access = ConfigAccess::Graphql(super::GraphqlEndpoint::as_principal(
+        endpoint,
+        identity.did(),
+    ));
+    let rows = access
+        .transact_readonly("test.cursor_transport.read", |txn| {
+            Box::pin(async move {
+                txn.cursor_rows("CursorTransportProbe", "_docID value", "")
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 66);
+    let mut values: Vec<_> = rows
+        .iter()
+        .map(|row| row["value"].as_i64().unwrap())
+        .collect();
+    values.sort();
+    assert_eq!(values, (0..66).collect::<Vec<_>>());
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))

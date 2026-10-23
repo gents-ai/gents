@@ -304,7 +304,7 @@ impl ReadAccess<'_, '_> {
     ) -> Result<Vec<serde_json::Value>> {
         if let Self::Txn(txn) = self {
             return txn
-                .cursor_rows_local(
+                .cursor_rows(
                     "AgentOutputSegment",
                     AGENT_OUTPUT_SEGMENT_FIELDS,
                     &super::canonical_rows::request_output_segments_filter(request_doc_id),
@@ -954,7 +954,7 @@ async fn source_rows(
     let _ = SOURCE_OUTPUT_QUERIES
         .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let values = if let ReadAccess::Txn(txn) = access {
-        txn.cursor_rows_local(
+        txn.cursor_rows(
             "AgentOutputSegment",
             AGENT_OUTPUT_SEGMENT_FIELDS,
             &super::canonical_rows::source_output_segments_filter(request_doc_id, source)?,

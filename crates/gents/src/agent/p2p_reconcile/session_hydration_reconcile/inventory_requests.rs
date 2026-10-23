@@ -23,7 +23,7 @@ pub(super) async fn reconcile_inventory_requests(
         ConfigAccess::transact_local_readonly(&store.node, None, "file_inventory.pending", |txn| {
             let filter = &filter;
             Box::pin(async move {
-                txn.cursor_rows_local(FILE_INVENTORY_REQUEST_NAME, REQUEST_FIELDS, filter)
+                txn.cursor_rows(FILE_INVENTORY_REQUEST_NAME, REQUEST_FIELDS, filter)
                     .await
             })
         })

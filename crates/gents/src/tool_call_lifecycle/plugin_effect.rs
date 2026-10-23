@@ -327,7 +327,7 @@ pub(super) async fn arguments_in_txn(
     name: &str,
 ) -> Result<(PayloadRef, String)> {
     let rows = txn
-        .cursor_rows_local(
+        .cursor_rows(
             "AgentOutputSegment",
             AGENT_OUTPUT_SEGMENT_FIELDS,
             &request_output_segments_filter(&binding.request_doc_id),

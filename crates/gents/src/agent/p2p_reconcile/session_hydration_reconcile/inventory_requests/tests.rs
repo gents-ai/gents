@@ -395,7 +395,7 @@ async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
             &source_node,
             None,
             "test.inventory.source_image_identities",
-            |txn| Box::pin(async move { txn.cursor_rows_local(collection, "_docID", "").await }),
+            |txn| Box::pin(async move { txn.cursor_rows(collection, "_docID", "").await }),
         )
         .await?;
         anyhow::ensure!(

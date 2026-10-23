@@ -35,7 +35,7 @@ pub(super) async fn load_rows(
     collection: SessionHydrationCollection,
     filter: &str,
 ) -> Result<Vec<serde_json::Value>> {
-    txn.cursor_rows_local(
+    txn.cursor_rows(
         hydration_collection_name(collection),
         fields(collection),
         filter,
