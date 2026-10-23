@@ -43,6 +43,7 @@ describe("a failed action", () => {
     toastFailure("start the task", new Error("args must be an object"));
     expect(toast).toHaveBeenCalledWith(
       "Couldn’t start the task: args must be an object",
+      { id: "Couldn’t start the task: args must be an object" },
     );
   });
 });

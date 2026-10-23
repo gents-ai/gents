@@ -203,7 +203,7 @@ function AppBody() {
       <AppShell route={route} history={history}>
         <RouteScreen route={route} />
       </AppShell>
-      <Toaster />
+      <Toaster closeButton />
       {hasLocalNode && <PluginAccessPrompt />}
       <Shortcuts />
     </TooltipProvider>

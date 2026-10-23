@@ -55,6 +55,47 @@ pub fn session_turn_request<'a>(
     )
 }
 
+pub fn session_display_request<'a>(
+    requests: &[&'a AgentRequestRow],
+    selected: &'a AgentRequestRow,
+) -> &'a AgentRequestRow {
+    let turn = session_turn_request(requests, selected);
+    if !turn
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
+    {
+        return turn;
+    }
+    let in_scope = |row: &&AgentRequestRow| {
+        row.doc_id.is_some()
+            && row.node_did == selected.node_did
+            && row.session_id == selected.session_id
+            && row.requester_did == selected.requester_did
+            && row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+    };
+    let selected_index = requests
+        .iter()
+        .position(|row| in_scope(row) && row.doc_id == selected.doc_id)
+        .unwrap_or(requests.len());
+    let subsequent = &requests[selected_index..];
+    if let Some(active) = subsequent.iter().rev().copied().find(|row| {
+        in_scope(row)
+            && matches!(
+                row.lifecycle_state,
+                Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
+            )
+    }) {
+        return active;
+    }
+    subsequent
+        .iter()
+        .rev()
+        .copied()
+        .find(in_scope)
+        .map(|row| session_turn_request(requests, row))
+        .unwrap_or(turn)
+}
+
 pub fn request_answer_owner<'a>(
     requests: &[&'a AgentRequestRow],
     request: &'a AgentRequestRow,

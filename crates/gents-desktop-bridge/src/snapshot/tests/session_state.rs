@@ -121,14 +121,18 @@ fn lean_session_rows(
                 failure_reason: row
                     .folded_into
                     .map(|_| gents::lifecycle::FOLDED_REASON.to_owned()),
-                input: row.queued_after.map(|after| RequestInput {
+                input: (row.queued_after.is_some() || row.background_wake).then(|| RequestInput {
                     queue: Some(RequestQueue {
                         delivery: Default::default(),
                         position: None,
-                        source: QueueSource::User,
+                        source: if row.background_wake {
+                            QueueSource::BackgroundCompletion
+                        } else {
+                            QueueSource::User
+                        },
                         policy: QueuePolicy::Append,
                         key: None,
-                        queued_after_request_id: Some(contract_request_id(after)),
+                        queued_after_request_id: row.queued_after.map(contract_request_id),
                         interrupted_request_id: None,
                         background_completion_wake_version: None,
                     }),
@@ -219,12 +223,23 @@ fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String>
 #[test]
 fn session_snapshot_binds_generated_session_turn_cases() {
     let cases = super::lean_vocab_test::lean_client_session_turn_cases();
-    assert_eq!(cases.len(), 22);
+    assert_eq!(cases.len(), 31);
     for case in cases {
         let rows = lean_session_rows("session-1", &case.rows);
-        let newest = rows.last().expect("case has rows");
+        let selected = rows
+            .iter()
+            .find(|row| {
+                row.doc_id.as_deref() == Some(format!("doc-{}", case.selected_doc).as_str())
+            })
+            .expect("selected case row");
         let refs = rows.iter().collect::<Vec<_>>();
-        let answer = gents_desktop_core::client::request_answer_owner(&refs, newest);
+        assert_eq!(
+            gents_desktop_core::client::session_turn_request(&refs, selected).doc_id,
+            Some(format!("doc-{}", case.expected_turn_doc)),
+            "{}",
+            case.name
+        );
+        let answer = gents_desktop_core::client::request_answer_owner(&refs, selected);
         assert_eq!(
             answer.doc_id,
             Some(format!("doc-{}", case.expected_answer_doc)),
@@ -234,8 +249,8 @@ fn session_snapshot_binds_generated_session_turn_cases() {
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
                 "session-1",
-                newest.requester_did.clone(),
-                Some(newest),
+                selected.requester_did.clone(),
+                Some(selected),
             )],
             requests: rows.clone(),
             ..ClientStoreRows::default()
@@ -244,10 +259,21 @@ fn session_snapshot_binds_generated_session_turn_cases() {
             build_session_snapshot_from_store(&store, "session-1", None).expect("snapshot");
         assert_eq!(
             snapshot.latest_request_id,
-            request_ids_for_docs(&rows, &[case.expected_turn_doc]).pop(),
+            request_ids_for_docs(&rows, &[case.expected_display_turn_doc]).pop(),
             "{}",
             case.name
         );
+        if let Some(background) = case.rows.iter().find(|row| row.background_wake) {
+            let request_id = contract_request_id(background.request);
+            let tracked = build_session_snapshot_from_store(&store, "session-1", Some(&request_id))
+                .expect("tracked background snapshot");
+            assert_eq!(
+                tracked.latest_request_id, snapshot.latest_request_id,
+                "{}",
+                case.name
+            );
+            assert_eq!(tracked.turn_state, snapshot.turn_state, "{}", case.name);
+        }
         assert_eq!(
             snapshot
                 .queued_turns
@@ -278,11 +304,16 @@ fn session_snapshot_binds_generated_session_turn_cases() {
             .iter()
             .map(|doc| format!("doc-{doc}"))
             .collect::<rapidhash::RapidHashSet<_>>();
-        let newest_requester = case.rows.last().expect("generated case has rows").requester;
+        let selected_requester = case
+            .rows
+            .iter()
+            .find(|row| row.doc == case.selected_doc)
+            .unwrap()
+            .requester;
         for row in case
             .rows
             .iter()
-            .filter(|row| row.requester == newest_requester)
+            .filter(|row| row.requester == selected_requester && row.public_input)
         {
             if !read_docs.contains(&format!("doc-{}", row.doc)) {
                 assert!(
@@ -312,7 +343,7 @@ fn session_snapshot_binds_generated_session_turn_cases() {
         );
         let bounded_refs = bounded_rows.iter().collect::<Vec<_>>();
         assert_eq!(
-            gents_desktop_core::client::request_answer_owner(&bounded_refs, newest).doc_id,
+            gents_desktop_core::client::request_answer_owner(&bounded_refs, selected).doc_id,
             answer.doc_id,
             "{} bounded read closure retains the modeled answer owner",
             case.name
@@ -320,8 +351,8 @@ fn session_snapshot_binds_generated_session_turn_cases() {
         let bounded_store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
                 "session-1",
-                newest.requester_did.clone(),
-                Some(newest),
+                selected.requester_did.clone(),
+                Some(selected),
             )],
             requests: bounded_rows,
             ..ClientStoreRows::default()

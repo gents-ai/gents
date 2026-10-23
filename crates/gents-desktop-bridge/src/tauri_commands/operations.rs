@@ -482,13 +482,7 @@ pub async fn desktop_background_tool(
 ) -> Result<bool, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
-    gents::background_tools::request_foreground_backgrounding(
-        &gents::config_client::ConfigAccess::local(core.node_arc()),
-        &request.node_did,
-        &request.session_id,
-        &request.request_id,
-        &request.tool_call_id,
-    )
-    .await
-    .map_err(|error| BridgeError::untyped(error.to_string()))
+    crate::commands::background_tool(core.as_ref(), request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }

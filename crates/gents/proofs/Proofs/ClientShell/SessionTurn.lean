@@ -19,6 +19,7 @@ structure Row where
   retryParentDoc : Option Nat
   completed   : Bool := false
   publicInput : Bool := true
+  backgroundWake : Bool := false
   authoredInputMaterialized : Bool := false
   deriving DecidableEq, Repr
 
@@ -65,6 +66,28 @@ def resolve (rows : List Row) (row : Row) : Row :=
 
 def turnOf (rows : List Row) (newest : Row) : Row :=
   resolve rows newest
+
+/-- A durable observation can still name a terminal request while another
+request owns the session loop. Once the observed turn has ended, presentation
+uses a subsequent active row in the same requester scope, or the latest subsequent
+normal request when none is active. Earlier active observations cannot revive
+a newer terminal turn. Input and answer
+ownership continue to use `turnOf` and `answerOf`. -/
+def displayTurn (rows : List Row) (selected : Row) : Row :=
+  let turn := turnOf rows selected
+  if turn.state = .terminal then
+    let eligible := fun row : Row => row.requester == selected.requester && row.publicInput
+    let subsequent := rows.dropWhile (fun row => row.doc != selected.doc)
+    match subsequent.reverse.find? (fun row => eligible row && row.state == .active) with
+    | some active => active
+    | none =>
+      ((subsequent.reverse.find? eligible).map (turnOf rows)).getD turn
+  else turn
+
+theorem display_keeps_nonterminal_turn (rows : List Row) (selected : Row)
+    (h : (turnOf rows selected).state ≠ .terminal) :
+    displayTurn rows selected = turnOf rows selected := by
+  simp [displayTurn, h]
 
 /-- A request's answer follows its physical fold owner and retry successor.
 A queue predecessor can occupy the session's turn without having consumed
@@ -136,6 +159,16 @@ def mayOmitCompletedPublicInput (row : Row) : Bool :=
   row.completed && row.publicInput && row.authoredInputMaterialized &&
     row.retryParentDoc.isNone
 
+/-- The owned completion fence publishes fresh authored input before a
+successful non-retry normal completion, as modeled by
+`FreshPromptCompletion.completed_fresh_request_has_authored_prompt`.
+SQL can use that lifecycle fact as
+publication evidence; permissive synthetic rows without it still exercise the
+general read-closure owner, but cannot bind this native query optimization. -/
+def nativeCompletionPremise (rows : List Row) : Bool :=
+  rows.all (fun row => !(row.completed && row.publicInput) ||
+    row.retryParentDoc.isSome || mayOmitCompletedPublicInput row)
+
 def expandReadRows (all current : List Row) : List Row :=
   let neededDocs := current.map (·.doc) ++
     (current.flatMap (fun row =>
@@ -149,7 +182,9 @@ def closeReadRows (all : List Row) : Nat → List Row → List Row
 /-- The request rows needed for the existing session-turn projection. Every
 unclaimed row is retained because all queued siblings are displayed; every
 folded row is retained because `foldedIn` is the complete acknowledgement
-list. The selected and observed latest physical rows are explicit seeds. The
+list. The selected, observed latest, and newest normal physical rows are explicit
+seeds, so a completed turn can replace a stale observation without retaining all
+completed history. The
 closure follows only references used by `resolve` (physical fold owners,
 logical queue predecessors, retry successors, and physical retry parents),
 preserving duplicate logical IDs and source order. Failed/dead/interrupted
@@ -160,8 +195,9 @@ Fold history is output-sensitive and must be read in full pages by its owner;
 it is not subject to a fixed row cap. -/
 def requestReadSeeds (all : List Row) (requester selectedDoc latestDoc : Nat)
     (pageRequestDocs : List Nat) : List Row :=
+  let newestDoc := ((all.filter (fun row => row.requester == requester && row.publicInput)).getLast?).map (·.doc)
   all.filter (fun row => row.requester == requester &&
-    (row.doc == selectedDoc || row.doc == latestDoc ||
+    (row.doc == selectedDoc || row.doc == latestDoc || some row.doc == newestDoc ||
       pageRequestDocs.contains row.doc || row.state == .unclaimed ||
       (row.publicInput && !mayOmitCompletedPublicInput row) ||
       row.retryParentDoc.isSome ||
@@ -224,7 +260,7 @@ def turnState (row : Row) : ClientTurnState :=
 
 def observe (sid : SessionId) (node : NodeDid) (agent : Option AgentId)
     (rows : List Row) (newest : Row) : SessionObservation :=
-  let turn := turnOf rows newest
+  let turn := displayTurn rows newest
   { sessionId := sid
   , nodeDid := node
   , agentId := agent
