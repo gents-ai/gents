@@ -20,7 +20,7 @@ struct ResumeCase {
 struct Contracts {
     pub goal_operator_resume_cases: Vec<ResumeCase>,
     pub goal_config_reactivation_cases: Vec<ConfigCase>,
-    pub goal_wake_ancestry_cases: Vec<Value>,
+    pub goal_wake_ancestry_cases: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]

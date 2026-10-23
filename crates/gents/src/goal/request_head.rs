@@ -137,6 +137,14 @@ pub(crate) fn latest_goal_request<'a>(
                         Some(&goal.goal_id),
                         &openings,
                     )
+                    .inspect_err(|error| {
+                        tracing::debug!(
+                            goal_id = %goal.goal_id,
+                            request_doc_id = ?row.doc_id,
+                            %error,
+                            "Goal assignment ancestry is unavailable"
+                        );
+                    })
                     .ok()?;
                     super::request_assignment::request_belongs_to_goal(goal, entry)
                         .then(|| row.doc_id.clone())
