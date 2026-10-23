@@ -3,14 +3,8 @@ import type {
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
 import { useListWindow } from "@source-inc/gents-desktop-ui";
-import {
-  type ReactNode,
-  memo,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import type { ReactNode } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
 import { TimelineItem, timelineKey } from "./transcript/TimelineItem.js";
@@ -102,6 +96,4 @@ export const MessageList = memo(function MessageList({
   );
 });
 
-function estimateItemSize() {
-  return 120;
-}
+const estimateItemSize = () => 120;
