@@ -172,16 +172,6 @@ fn plugin_rows(
             format!("gents pack install {engine} --grant-authority"),
         ));
     }
-    for pack in &block.policy.trusted_packs {
-        if let Some(reason) = not_operator(home, pack) {
-            rows.push(row(
-                "trusted_pack_not_operator",
-                "warn",
-                format!("{plugin}: trusted pack {reason}, so its scripts run as dynamic"),
-                format!("gents pack install {pack}"),
-            ));
-        }
-    }
     for id in &block.policy.dynamic_targets {
         let tools =
             find_target(bundle, agent, id)
@@ -197,7 +187,7 @@ fn plugin_rows(
                 "dynamic_target_exfiltration",
                 "warn",
                 format!("{plugin}: dynamic target {id} can read files and reach the network"),
-                "narrow job.policy.dynamic_targets to wf-read-only".into(),
+                "narrow job.policy.dynamic_targets to a read-only, offline target".into(),
             ));
         }
     }
@@ -565,7 +555,6 @@ mod tests {
         install(home.path(), "acme/engine", InstalledVia::SelfConfig);
         let (rows, report) = run(home.path(), world());
         assert!(rows.contains(&("engine_not_operator_installed".into(), "fail".into())));
-        assert!(rows.contains(&("trusted_pack_not_operator".into(), "warn".into())));
         let check = &report["agents"][0]["checks"][0];
         assert_eq!(
             check["next_call"],
@@ -603,22 +592,6 @@ mod tests {
     }
 
     #[test]
-    fn dependency_only_trusted_pack_warns() {
-        let home = healthy_home();
-        let mut config = world();
-        plugin_entry(&mut config)["job"]["policy"]["trusted_packs"] =
-            json!(["acme/engine", "acme/dependency"]);
-        let (rows, report) = run(home.path(), config);
-        only(&rows, "trusted_pack_not_operator", "warn");
-        let check = &report["agents"][0]["checks"][0];
-        assert!(check["subject"]
-            .as_str()
-            .unwrap()
-            .contains("acme/dependency"));
-        assert_eq!(check["next_call"], "gents pack install acme/dependency");
-    }
-
-    #[test]
     fn dynamic_target_exfiltration_warns_for_a_web_reading_target() {
         let home = healthy_home();
         let mut config = world();
@@ -632,7 +605,7 @@ mod tests {
         let next_call = report["agents"][0]["checks"][0]["next_call"]
             .as_str()
             .unwrap();
-        assert!(next_call.contains("wf-read-only"));
+        assert!(next_call.contains("read-only"), "{next_call}");
     }
 
     #[test]

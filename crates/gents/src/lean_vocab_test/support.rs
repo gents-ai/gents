@@ -748,7 +748,6 @@ pub(crate) struct LeanPluginJobChild {
 pub(crate) struct LeanPluginJobCall {
     pub(crate) argv: Vec<String>,
     pub(crate) args: Option<String>,
-    pub(crate) path: Option<String>,
     pub(crate) script: Option<String>,
     pub(crate) agent_budget: Option<u32>,
 }
@@ -758,7 +757,6 @@ pub(crate) struct LeanPluginJobCall {
 pub(crate) struct LeanPluginJobRootCall {
     pub(crate) argv: Vec<String>,
     pub(crate) args: Option<String>,
-    pub(crate) path: Option<String>,
     pub(crate) agent_budget: Option<u32>,
 }
 
@@ -851,11 +849,10 @@ pub(crate) struct LeanPluginJobPolicy {
     pub(crate) mode: String,
     pub(crate) dynamic_targets: LeanPluginJobScope,
     pub(crate) trusted_packs: Vec<String>,
-    pub(crate) project_roots: Vec<String>,
 }
 
 /// `Conformance.PluginJob.authorityCasesJson`, tagged by `kind`: provenance
-/// reads, install records, origin and mount trust hints, pack-shipped job
+/// reads, install records, call origin, pack-shipped job
 /// blocks, `Policy.valid` and `wireTargetsFrom`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -876,9 +873,6 @@ pub(crate) enum LeanPluginJobAuthorityCase {
     },
     Origin {
         name: String,
-        digest: String,
-        mounts: Vec<LeanPluginJobMount>,
-        trusted_packs: Vec<String>,
         call: LeanPluginJobCall,
         expected: LeanPluginJobOriginExpected,
     },
@@ -941,25 +935,10 @@ pub(crate) struct LeanPluginJobInstallExpected {
     pub(crate) provenance: String,
 }
 
-/// A model mount. `files` is the sha256 of each file in the mount: the
-/// install-cache index the native origin check builds, never on the wire.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanPluginJobMount {
-    pub(crate) pack: String,
-    pub(crate) class: String,
-    pub(crate) digest: String,
-    pub(crate) path: String,
-    pub(crate) trusted: bool,
-    pub(crate) via: String,
-    pub(crate) files: Vec<String>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobOriginExpected {
     pub(crate) origin: String,
-    pub(crate) trusted_hints: Vec<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -968,7 +947,6 @@ pub(crate) struct LeanPluginJobPackBlock {
     pub(crate) targets_from: Vec<String>,
     pub(crate) trusted: Vec<String>,
     pub(crate) dynamic: String,
-    pub(crate) project_roots: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1196,46 +1174,6 @@ pub(crate) struct LeanPluginCallsRouteCase {
     pub(crate) expected: bool,
 }
 
-/// `plugin_resource_cases.asset_mount`: `mountAccess` per mount and
-/// `mountCallAdmitted` for the call.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanPluginAssetMountCase {
-    pub(crate) rw_bind: bool,
-    pub(crate) mounts: Vec<LeanPluginMount>,
-    pub(crate) access: Vec<Option<LeanPluginAccess>>,
-    pub(crate) admitted: bool,
-}
-
-/// The pack tier spells `class` as the asset class; the project tier as
-/// `project` with empty `pack` and `digest`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanPluginMount {
-    pub(crate) pack: String,
-    pub(crate) class: String,
-    pub(crate) digest: String,
-    pub(crate) path: String,
-    pub(crate) trusted: bool,
-    pub(crate) installed: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LeanPluginAccess {
-    Read,
-    ReadWrite,
-}
-
-/// `plugin_resource_cases.project_tier`: `projectPreopen cwd roots within`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanPluginProjectTierCase {
-    pub(crate) cwd: String,
-    pub(crate) project_roots: Vec<String>,
-    pub(crate) expected: bool,
-}
-
 /// `plugin_resource_cases.scratch`: `scratchAdmitted`. `handle` is not an
 /// owner input; rows that differ only in it share a path.
 #[derive(Debug, Deserialize)]
@@ -1334,14 +1272,12 @@ pub(crate) struct LeanPluginJobContext {
     pub(crate) policy: LeanPluginJobPolicy,
     pub(crate) engine_digest: String,
     pub(crate) engine_provenance_operator: bool,
-    pub(crate) installed_trusted_sources: Vec<String>,
     pub(crate) max_hop: Option<u32>,
     pub(crate) target_hops: Vec<LeanPluginJobTargetHop>,
     pub(crate) live_background: u32,
     pub(crate) started_by_job: bool,
     pub(crate) cwd_allowed: Vec<String>,
     pub(crate) within: Vec<LeanPluginJobWithin>,
-    pub(crate) named_origin: Option<String>,
     pub(crate) adoption_facts: LeanPluginJobHostFacts,
     pub(crate) caller_scope: LeanPluginJobProcessScope,
     pub(crate) control_targets: Vec<LeanPluginJobControlTarget>,
@@ -2431,16 +2367,6 @@ pub(crate) fn lean_plugin_calls_route_cases() -> &'static [LeanPluginCallsRouteC
 fn lean_plugin_resource_group<T: serde::de::DeserializeOwned>(group: &str) -> Vec<T> {
     serde_json::from_value(lean_contract_snapshot().plugin_resource_cases[group].clone())
         .unwrap_or_else(|error| panic!("plugin_resource_cases.{group}: {error}"))
-}
-
-pub(crate) fn lean_plugin_asset_mount_cases() -> &'static [LeanPluginAssetMountCase] {
-    static CASES: OnceLock<Vec<LeanPluginAssetMountCase>> = OnceLock::new();
-    CASES.get_or_init(|| lean_plugin_resource_group("asset_mount"))
-}
-
-pub(crate) fn lean_plugin_project_tier_cases() -> &'static [LeanPluginProjectTierCase] {
-    static CASES: OnceLock<Vec<LeanPluginProjectTierCase>> = OnceLock::new();
-    CASES.get_or_init(|| lean_plugin_resource_group("project_tier"))
 }
 
 pub(crate) fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {

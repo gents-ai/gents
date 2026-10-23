@@ -11,8 +11,8 @@ use crate::plugin_job::records::{read_pin, read_progress, read_step_state, write
 use crate::plugin_job::JobBinding;
 use crate::tool_call_lifecycle::admission_fixture::{fixture_job_pin, write_fixture_job_pin};
 use gents_protocol::job::{
-    AssetMountDeclaration, DynamicMode, JobPin, JobPolicy, JobState, PluginDataDeclaration,
-    PluginJobDeclaration, PluginJobSettings,
+    DynamicMode, JobPin, JobPolicy, JobState, PluginDataDeclaration, PluginJobDeclaration,
+    PluginJobSettings,
 };
 use serde_json::Value;
 
@@ -150,9 +150,6 @@ fn install_plugin(
     let hex = record.digest.strip_prefix("sha256:").unwrap().to_owned();
     store::store_bytes(home, &hex, &store::read_bytes(source.path(), &hex).unwrap()).unwrap();
     record.declaration.job = PluginJobDeclaration(true);
-    record.declaration.asset_mounts = vec![AssetMountDeclaration {
-        class: "workflows".into(),
-    }];
     record.owner_pack_coordinate = Some("team/plugin".into());
     if script {
         record.declaration.script_runtime = Some(crate::pack::ScriptRuntime::Js);
@@ -726,7 +723,8 @@ async fn host_facts_overwrite_guest_pin_fields() {
     let installed = store::read_record(step.home.path(), "team", "plugin").unwrap();
     assert_eq!(pin.plugin_ref, "team/plugin");
     assert_eq!(pin.engine_digest, installed.digest);
-    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Dynamic);
+    // `ARGS` carries no script, so the call's origin is installed.
+    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Installed);
     assert_eq!(pin.chain_root_doc_id, first["_docID"].as_str().unwrap());
     assert_eq!(
         (pin.resume_of.clone(), pin.replayed_from.clone()),
@@ -1095,62 +1093,6 @@ async fn background_receipt_shows_address_handle_script_id_and_tier_line() {
         .unwrap();
     assert_eq!(progress.title, "flow");
     assert_eq!(progress.last_event, "dynamic script, run mode");
-    step.finish().await;
-}
-
-#[tokio::test]
-async fn adopted_origin_follows_classify() {
-    const SCRIPT: &[u8] = b"fn step(input) { input }";
-    let digest = format!(
-        "sha256:{:x}",
-        <sha2::Sha256 as sha2::Digest>::digest(SCRIPT)
-    );
-    let installed = json!({"effects": {
-        "pin": {"script_id": "s", "source_digest": digest, "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
-    }});
-    let step = step0(
-        installed,
-        Options {
-            settings: Some(worker_settings(JobPolicy {
-                trusted_packs: vec!["acme/op".into()],
-                ..running_policy()
-            })),
-            ..Default::default()
-        },
-    )
-    .await;
-    let assets = "packs/.materialized/acme/op/22";
-    let dir = step.home.path().join(assets).join("workflows");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("flow.rhai"), SCRIPT).unwrap();
-    write_home_install(
-        step.home.path(),
-        &HomePackInstall {
-            coordinate: "acme/op".into(),
-            version: "1.0.0".into(),
-            digest: "sha256:22".into(),
-            kind: PackKind::Documents,
-            assets: assets.into(),
-            dependency_assets: vec![],
-            plugins: vec![],
-            ux: Vec::new(),
-            installed_at: "2026-01-01T00:00:00Z".into(),
-            installed_via: Some(InstalledVia::Operator),
-        },
-    )
-    .unwrap();
-    step.call_as("call-1", ARGS).await;
-    assert_eq!(
-        step.pin_of(&step.row_of("call-1").await).await.origin,
-        gents_protocol::job::JobOrigin::Installed
-    );
-    step.reinstall(&adopting());
-    step.call_as("call-2", ARGS).await;
-    assert_eq!(
-        step.pin_of(&step.row_of("call-2").await).await.origin,
-        gents_protocol::job::JobOrigin::Dynamic
-    );
     step.finish().await;
 }
 

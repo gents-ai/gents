@@ -358,7 +358,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         BackendUsageView,
         UsageWindowView,
         gents_protocol::job::JobProgress,
-        gents_protocol::job::CatalogEntry,
         gents_protocol::job::JobView,
         gents_protocol::job::JobControlKind,
         gents_protocol::job::JobControlOutcome,
@@ -376,7 +375,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         gents_protocol::job::JobPinSummary,
         gents_protocol::job::JobChildRow,
         gents_protocol::job::JobUsage,
-        gents_protocol::job::CatalogSource,
     );
 
     commands::export(dir)?;

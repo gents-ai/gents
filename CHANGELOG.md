@@ -11,6 +11,12 @@ source consistency checks, not a separate runtime compatibility version.
   content pack ships (`gents pack install <pack> --grant-authority`, then
   `gents pack wire <ns>/<plugin> --agent <agent> --targets-from <pack>`), and
   `gents pack new <name> --template workflow` scaffolds one.
+- The Rhai-era job host surfaces are removed: plugin manifests no longer take
+  `asset_mounts` or `catalog`, job policies no longer take `project_roots`,
+  and the step input no longer carries `path`, `verified_script` or `mounts`.
+  A job's origin is decided by its call: a call that carries a `script` is
+  `dynamic` and the job policy gates it; any other call runs the plugin
+  artifact and is `installed`. Job next-call hints name `gents job` verbs.
 
 ## 0.21.0 - 2026-10-22
 

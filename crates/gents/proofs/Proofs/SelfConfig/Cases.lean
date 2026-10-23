@@ -72,12 +72,12 @@ def jobIntegrations (maxLive : Nat) (dynamic : String) : FieldValue :=
     ++ toString maxLive
     ++ ",\"max_spawns\":0,\"max_messages_per_slot\":0,\"result_bytes\":0,\"max_wall_secs\":0,"
     ++ "\"policy\":{\"dynamic\":\"" ++ dynamic
-    ++ "\",\"dynamic_targets\":[],\"trusted_packs\":[],\"project_roots\":[]}}}]}"
+    ++ "\",\"dynamic_targets\":[],\"trusted_packs\":[]}}}]}"
 
 def fixtureJob (maxLive : Nat) (mode : PluginJob.DynamicMode) : List (String × JobGrant) :=
   [("acme/wf",
     { ceiling := { PluginJob.Ceiling.empty with maxLive := maxLive }
-    , policy := { mode := mode, dynamicTargets := .none, trustedPacks := [], projectRoots := [] } })]
+    , policy := { mode := mode, dynamicTargets := .none, trustedPacks := [] } })]
 
 /-- Fixture decoder for the `integrations` values used below; every other
 value, and an absent field, carries no job block. -/

@@ -12,7 +12,7 @@ Keep configuration minimal. Reuse suitable documents and profiles, edit in place
 - Tools grant capabilities within the process ceiling and root. Prompts and skills cannot grant permissions. DefraDB DID/ACP owns document access; publishing a schema does not grant access. Credentials/OAuth remain operator-owned.
 - For automation, EventSource watches input documents, Trigger links a source to Task, and Task selects the agent and renders its request. Task owns MiniJinja interpolation; Context prompts are not templates. Render required source data, not just its ID, and keep that data separate from instructions.
 - A schema, a DatastoreToolSurface declaration, its selection in Tools, and successful execution are distinct requirements. Graphs compose these capabilities; configuration or installation alone does not prove they run.
-- **Workflows.** A workflow is a script that runs agents in the background as one job and returns one result. Workflows ship in packs or are written and kept in a session. An agent can use them once its Tools list the workflow plugin; the workflow tool's help explains its verbs.
+- **Workflows.** A workflow is a script that runs agents in the background as one job and returns one result. Workflows ship in packs as job plugins, or are written in a session as a script the `workflow` tool runs. An agent runs one by calling the workflow plugin's tool with its `args` and `agent_budget`; the result arrives later as a background completion.
 
 ## Use the existing tools
 

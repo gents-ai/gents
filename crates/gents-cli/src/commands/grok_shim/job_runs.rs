@@ -163,16 +163,10 @@ impl ObservedView for JobView {
                 details.push(format!("failed phase: {}", failed.join(", ")));
             }
         }
-        let next = next_calls(
-            self.state,
-            pause_reason,
-            self.outcome.as_ref().map(|outcome| outcome.code.as_str()),
-            &self.address,
-            &self.handle,
-        )
-        .into_iter()
-        .next()
-        .unwrap_or_default();
+        let next = next_calls(self.state, &self.address)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
         if let Some(outcome) = &self.outcome {
             details.push(format!(
                 "{}: {} (next: {next})",
@@ -560,7 +554,7 @@ mod tests {
         assert_eq!(frame["status"], "user_paused");
         let message = frame["pause_message"].as_str().unwrap();
         assert!(message.contains("verification"));
-        assert!(message.contains("workflow resume session-1:call-1"));
+        assert!(message.contains("gents job show session-1:call-1"));
     }
 
     #[test]
@@ -707,7 +701,7 @@ mod tests {
         let detail = frame["last_event_detail"].as_str().unwrap();
         assert!(detail.contains("plugin_job_step_failed"));
         assert!(detail.contains("step three failed"));
-        assert!(detail.contains("workflow status session-1:call-1"));
+        assert!(detail.contains("gents job show session-1:call-1"));
     }
 
     #[test]
@@ -720,7 +714,7 @@ mod tests {
         assert!(frame["pause_message"]
             .as_str()
             .unwrap()
-            .contains("workflow resume session-1:call-1 --budget N"));
+            .contains("gents job show session-1:call-1"));
         assert!(frame["last_event_detail"]
             .as_str()
             .unwrap()

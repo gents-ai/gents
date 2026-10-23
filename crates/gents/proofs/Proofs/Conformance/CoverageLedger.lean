@@ -1531,18 +1531,8 @@ def caseCoverage : List CoverageEntry :=
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_cases"
-      "PluginAssetMountCases"
-      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
-      "plugin-jobs" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "plugin_resource_cases"
-      "PluginProjectTierCases"
-      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
-      "plugin-jobs" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "plugin_resource_cases"
       "PluginScratchCases"
-      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
+      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_scratch")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_calls_route_cases"

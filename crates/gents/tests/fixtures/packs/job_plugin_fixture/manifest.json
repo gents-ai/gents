@@ -4,8 +4,12 @@
   "version": "0.1.0",
   "description": "Fixture documents pack with a table-driven job plugin, a FixtureNote schema and an asset class.",
   "namespace": "fixture",
-  "authors": ["gents"],
-  "tags": ["fixture"],
+  "authors": [
+    "gents"
+  ],
+  "tags": [
+    "fixture"
+  ],
   "kind": "documents",
   "assets": [
     "README.md",
@@ -16,7 +20,9 @@
   ],
   "dependencies": [],
   "config": "pack_config.json",
-  "schemas": ["schemas/fixture_note.graphql"],
+  "schemas": [
+    "schemas/fixture_note.graphql"
+  ],
   "plugins": [
     {
       "name": "job_fixture",
@@ -27,20 +33,25 @@
       "input_schema": {
         "type": "object",
         "properties": {
-          "plan": {"type": "array"}
+          "plan": {
+            "type": "array"
+          }
         }
       },
       "job": true,
       "data": {
-        "collections": ["FixtureNote"],
-        "ops": ["query", "insert"],
+        "collections": [
+          "FixtureNote"
+        ],
+        "ops": [
+          "query",
+          "insert"
+        ],
         "stamped": {
           "job_row_doc_id": "job_row_doc_id",
           "chain_root_doc_id": "chain_root_doc_id"
         }
-      },
-      "asset_mounts": [{"class": "fixture_assets"}],
-      "catalog": {"argv": ["catalog"]}
+      }
     }
   ]
 }

@@ -9,52 +9,34 @@ use defra_node::EmbeddedNode;
 use gents::document_config::{load_agent_tools_in_txn, PluginToolRef};
 use gents::plugin::executor::PluginExecutor;
 use gents::plugin::store::InstalledPlugin;
-use gents_protocol::job::{CatalogEntry, CatalogSource};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-/// One row of the pager's Workflows tab. The key casing and the `source`
-/// spellings are unverified until the pager probe confirms them.
+/// One row of the pager's Workflows tab: an installed job plugin's name, its
+/// manifest description, and the first paragraph of its TOOL.md (or the
+/// description again) as `when_to_use`. Every row is `bundled`: a workflow is
+/// a plugin a pack ships. The key casing is unverified until the pager probe
+/// confirms it.
 #[derive(Serialize)]
 struct WorkflowInfo {
     name: String,
     description: String,
     when_to_use: String,
     source: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
 }
 
-fn workflow_info(entry: CatalogEntry) -> WorkflowInfo {
-    WorkflowInfo {
-        name: entry.name,
-        description: entry.description,
-        when_to_use: entry.when_to_use,
-        source: match entry.source {
-            CatalogSource::Pack => "bundled",
-            CatalogSource::Project => "project",
-            CatalogSource::Kept => "user",
-        },
-        path: entry.path,
-    }
-}
-
-/// The catalog entry of an installed job plugin: its name, its manifest
-/// description, and the first paragraph of its TOOL.md (or the description
-/// again) as `when_to_use`.
-fn catalog_entry(record: &InstalledPlugin) -> CatalogEntry {
+fn workflow_info(record: &InstalledPlugin) -> WorkflowInfo {
     let description = record.declaration.description.clone();
     let when_to_use = record
         .instructions
         .as_deref()
         .and_then(first_paragraph)
         .unwrap_or_else(|| description.clone());
-    CatalogEntry {
+    WorkflowInfo {
         name: record.name.clone(),
         description,
         when_to_use,
-        source: CatalogSource::Pack,
-        path: None,
+        source: "bundled",
     }
 }
 
@@ -94,7 +76,7 @@ pub(super) async fn list(
                 .ok()
         })
         .filter(|record| record.declaration.job.0)
-        .map(|record| workflow_info(catalog_entry(&record)))
+        .map(|record| workflow_info(&record))
         .collect();
     Ok(json!({ "workflows": workflows }))
 }
@@ -106,42 +88,9 @@ mod tests {
 
     use defra_node::EmbeddedNode;
     use gents::document_config::{AgentContext, IntegrationTools, PluginToolRef, Tools};
-    use gents_protocol::job::{CatalogEntry, CatalogSource};
     use serde_json::{json, Value};
 
     use super::*;
-
-    #[test]
-    fn catalog_entry_maps_to_workflow_info() {
-        for source in [
-            CatalogSource::Pack,
-            CatalogSource::Project,
-            CatalogSource::Kept,
-        ] {
-            let spelling = match source {
-                CatalogSource::Pack => "bundled",
-                CatalogSource::Project => "project",
-                CatalogSource::Kept => "user",
-            };
-            let info = workflow_info(CatalogEntry {
-                name: "triage".into(),
-                description: "Sort issues".into(),
-                when_to_use: "new issues".into(),
-                source,
-                path: Some("workflows/triage.rhai".into()),
-            });
-            assert_eq!(
-                serde_json::to_value(info).unwrap(),
-                json!({
-                    "name": "triage",
-                    "description": "Sort issues",
-                    "when_to_use": "new issues",
-                    "source": spelling,
-                    "path": "workflows/triage.rhai",
-                })
-            );
-        }
-    }
 
     fn install(home: &Path, name: &str, job: bool, instructions: Option<&str>) {
         let mut record = json!({

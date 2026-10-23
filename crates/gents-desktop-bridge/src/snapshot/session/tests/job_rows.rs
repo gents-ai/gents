@@ -121,13 +121,7 @@ async fn job_row_projects_progress_handle_state_and_outcome() {
         code: "engine_boom".into(),
         message: "boom".into(),
     };
-    let next = gents_server::jobs::next_calls(
-        JobState::Failed,
-        None,
-        Some("engine_boom"),
-        "sess-job:call-failed",
-        "call-failed",
-    );
+    let next = gents_server::jobs::next_calls(JobState::Failed, "sess-job:call-failed");
     let wire = rendered(&snapshot, "call-failed");
     let flat_row = flat(&snapshot, "call-failed");
     assert_eq!(wire.job_progress.as_ref(), Some(&failed));
@@ -179,13 +173,7 @@ async fn paused_job_row_has_state_paused_and_no_outcome() {
 
     let snapshot = snapshot_of(&core, "sess-pause", &["req-call-paused"]).await;
 
-    let next = gents_server::jobs::next_calls(
-        JobState::Paused,
-        Some(JobPauseReason::BudgetExceeded),
-        None,
-        "sess-pause:call-paused",
-        "call-paused",
-    );
+    let next = gents_server::jobs::next_calls(JobState::Paused, "sess-pause:call-paused");
     let wire = rendered(&snapshot, "call-paused");
     assert_eq!(wire.job_state, Some(JobState::Paused));
     assert_eq!(wire.job_outcome, None);

@@ -97,7 +97,7 @@ inductive DynamicMode | off | check | run
 structure Policy where
   mode : DynamicMode
   dynamicTargets : EndpointScope Target Unit
-  (trustedPacks projectRoots : List String)
+  trustedPacks : List String
   deriving DecidableEq
 
 /-- The pin, field for field. -/
@@ -127,14 +127,14 @@ structure HostFacts where
 /-- Every call argument, echoed verbatim on every step. -/
 structure CallArgs where
   argv : List String
-  (args path script : Option String)
+  (args script : Option String)
   agentBudget : Option Nat
   deriving DecidableEq, Repr
 
 /-- `root_call`. -/
 structure RootCall where
   argv : List String
-  (args path : Option String)
+  args : Option String
   agentBudget : Option Nat
   deriving DecidableEq, Repr
 

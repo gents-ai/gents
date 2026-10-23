@@ -276,7 +276,7 @@ def boundaries : List Boundary :=
     , domain := "PluginJob"
     , subject := "arbitrary guest step function"
     , statement :=
-        "Proofs.PluginJob quantifies every core guarantee over an arbitrary guest step function, so admission, keyed spawns, budgets, ceilings and the kill path hold whatever the guest returns. The workflow engine pack carries the remaining premises: Rhai determinism (=1.25.1/=1.26.1), replay, its output schema, script and meta validation, and prefix monotonicity. Step-0 engine honesty is a premise too: step 0 emits effects before the host has classified the script's origin, so verified_script covers steps >= 1 only. The host still admits step-0 effects under the computed origin, and the engine pack must be operator-installed (self_config_engine_refused)."
+        "Proofs.PluginJob quantifies every core guarantee over an arbitrary guest step function, so admission, keyed spawns, budgets, ceilings and the kill path hold whatever the guest returns. A workflow plugin carries the remaining premises: its step function's determinism, its output schema and its own phase bookkeeping (fixtures under `gents pack test` fence them). The host admits step-0 effects under the origin the call decides (callOrigin), and the plugin's pack must be operator-installed (self_config_engine_refused)."
     , acceptedFailureMode :=
         some "A guest that breaks these premises can over-spawn within its ceilings and budget, or diverge on resume."
     , acceptedFollowUp :=

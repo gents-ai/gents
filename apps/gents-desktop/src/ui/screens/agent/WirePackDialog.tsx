@@ -22,11 +22,6 @@ import {
 import type { AgentView, PackWireResult } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
 
-export const WORKFLOW_ENGINE = {
-  pack: "gents/rhai_workflows",
-  plugin: "gents/workflow",
-} as const;
-
 export type WirePackDialogProps = {
   /** the plugin to wire, `<namespace>/<name>` */
   plugin: string;
@@ -161,9 +156,6 @@ export function WirePackDialog({
                       </li>
                       <li>
                         Trusted packs: {job.policy.trusted_packs.join(", ") || "none"}
-                      </li>
-                      <li>
-                        Project roots: {job.policy.project_roots.join(", ") || "none"}
                       </li>
                     </>
                   ) : (

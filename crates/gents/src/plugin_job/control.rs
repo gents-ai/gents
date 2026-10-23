@@ -626,7 +626,6 @@ mod tests {
             call: StepCall {
                 argv: vec!["run".to_owned()],
                 args: None,
-                path: None,
                 script: None,
                 agent_budget: None,
             },
@@ -1462,7 +1461,6 @@ mod tests {
             call: StepCall {
                 argv: vec!["root-argv".to_owned()],
                 args: Some(r#"{"a":1}"#.to_owned()),
-                path: Some("root/path".to_owned()),
                 script: Some("root script".to_owned()),
                 agent_budget: Some(9),
             },
@@ -1514,7 +1512,6 @@ mod tests {
             RootCall {
                 argv: vec!["root-argv".to_owned()],
                 args: Some(r#"{"a":1}"#.to_owned()),
-                path: Some("root/path".to_owned()),
                 agent_budget: Some(9),
             }
         );

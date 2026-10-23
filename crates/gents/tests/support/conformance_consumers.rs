@@ -1582,11 +1582,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_plugin_data_cases_drive_admit_write",
         },
         ConformanceConsumer::RustTest {
-            id: "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch",
+            id: "conformance::tool_policy::generated_plugin_job_resource_cases_drive_scratch",
             package: "gents",
             source_path: "crates/gents/tests/conformance/tool_policy.rs",
             module_path: "conformance::tool_policy",
-            function: "generated_plugin_job_resource_cases_drive_mounts_and_scratch",
+            function: "generated_plugin_job_resource_cases_drive_scratch",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::tool_policy::generated_plugin_calls_route_cases_drive_supported",

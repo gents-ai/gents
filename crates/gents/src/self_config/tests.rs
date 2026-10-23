@@ -7404,7 +7404,7 @@ fn job_block(overrides: Value) -> Value {
         "max_messages_per_slot": 4,
         "result_bytes": 65536,
         "max_wall_secs": 7200,
-        "policy": {"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": [], "project_roots": []}
+        "policy": {"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": []}
     });
     for (key, value) in overrides.as_object().unwrap() {
         block[key] = value.clone();
@@ -7468,10 +7468,9 @@ fn self_config_may_not_add_a_job_target() {
 fn self_config_may_not_edit_job_policy() {
     let stored = job_block(json!({}));
     for policy in [
-        json!({"dynamic": "off", "dynamic_targets": ["a"], "trusted_packs": [], "project_roots": []}),
-        json!({"dynamic": "check", "dynamic_targets": [], "trusted_packs": [], "project_roots": []}),
-        json!({"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": ["x/y"], "project_roots": []}),
-        json!({"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": [], "project_roots": ["/tmp"]}),
+        json!({"dynamic": "off", "dynamic_targets": ["a"], "trusted_packs": []}),
+        json!({"dynamic": "check", "dynamic_targets": [], "trusted_packs": []}),
+        json!({"dynamic": "check", "dynamic_targets": ["a"], "trusted_packs": ["x/y"]}),
     ] {
         let refused = job_guard(
             Some(stored.clone()),

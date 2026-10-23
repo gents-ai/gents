@@ -1121,16 +1121,6 @@ fn stamped_key_outside_declared_collections_is_refused() {
 }
 
 #[test]
-fn asset_mount_class_without_shipped_asset_is_refused() {
-    let (_home, installed) = install_fixture_plugins(NOTE_SDL, |plugin| {
-        plugin["asset_mounts"] = json!([{"class": "unshipped_assets"}]);
-    });
-    let message = refusal(installed);
-    assert!(message.contains("unshipped_assets"), "{message}");
-    assert!(message.contains("asset_mounts"), "{message}");
-}
-
-#[test]
 fn installed_plugin_record_without_data_unique_keys_decodes() {
     let (home, installed) = install_fixture_plugins(NOTE_SDL, |_| {});
     installed.unwrap();
@@ -1470,14 +1460,6 @@ fn pack_job_block_dynamic_run_is_refused() {
 }
 
 #[test]
-fn pack_job_block_project_roots_must_be_empty() {
-    operator_refusal(json!({
-        "agent_targets": ["wf-run"],
-        "policy": {"project_roots": ["/work/repo"]},
-    }));
-}
-
-#[test]
 fn engine_style_pack_job_block_installs() {
     let policy = json!({
         "dynamic": "check",
@@ -1486,81 +1468,6 @@ fn engine_style_pack_job_block_installs() {
     });
     let job = json!({"agent_targets": ["wf-run", "wf-read-only"], "policy": policy});
     engine_admission(job, crate::pack::InstalledVia::Operator).unwrap();
-}
-
-/// A graph fixture renamed to `fixture/<name>` that also ships `workflows/`.
-fn graph_archive_shipping_workflows(
-    fixture: &str,
-    name: &str,
-    edit: impl FnOnce(&mut serde_json::Value),
-) -> crate::pack_archive::PackArchive {
-    let (_guard, root) = crate::test_support::fixture_pack_copy(fixture, &json!({}));
-    let path = root.join("manifest.json");
-    let mut manifest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    manifest["name"] = json!(name);
-    manifest["assets"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("workflows/flow.json"));
-    edit(&mut manifest);
-    std::fs::create_dir_all(root.join("workflows")).unwrap();
-    std::fs::write(root.join("workflows/flow.json"), name).unwrap();
-    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
-}
-
-#[tokio::test]
-async fn content_then_engine_dependency_order_mounts_the_content_workflows() {
-    let (_node, access) = dependency_fixture().await;
-    let options = graph_bindings();
-    let content = graph_archive_shipping_workflows("review_graph", "content", |_| {});
-    let engine = graph_archive_shipping_workflows("prepared_graph", "engine", |manifest| {
-        let plugin = manifest["plugins"][0].as_object_mut().unwrap();
-        plugin.remove("limits");
-        plugin.insert("asset_mounts".into(), json!([{"class": "workflows"}]));
-    });
-    let load = |archive: &crate::pack_archive::PackArchive| {
-        crate::graph_package::load_archive_graph_package_with_environment(
-            archive,
-            &crate::pack::PackInstallOptions {
-                node_did: OWNER.into(),
-            },
-            &|name| (name == "GENTS_REVIEW_MODEL").then(|| "test-model".to_owned()),
-        )
-        .unwrap()
-    };
-    let engine_options = crate::graph_package::GraphPackageInstallBindings {
-        node_did: OWNER.into(),
-        inference_slots: BTreeMap::from([("worker".into(), "glm:inference".into())]),
-    };
-    let mut prepared = prepared();
-    prepared.dependencies = vec![
-        PreparedDependency::Graph(load(&content), options),
-        PreparedDependency::Graph(load(&engine), engine_options),
-    ];
-    let home = tempfile::tempdir().unwrap();
-    install_prepared_document_pack(
-        &access,
-        OWNER,
-        &documents_archive_shipping(&[]),
-        &[&content, &engine],
-        &prepared,
-        Some(home.path()),
-        false,
-        crate::pack::InstalledVia::SelfConfig,
-        DriftPolicy::Refuse,
-    )
-    .await
-    .unwrap();
-    let record = crate::plugin::store::read_record(home.path(), "fixture", "prepare_fixture")
-        .expect("the engine plugin is installed");
-    let mounts = crate::plugin::mounts::resolve(home.path(), &record, None, None).unwrap();
-    let packs: Vec<&str> = mounts.iter().map(|mount| mount.pack.as_str()).collect();
-    assert_eq!(packs, ["fixture/content", "fixture/engine"]);
-    assert!(mounts.iter().all(|mount| mount.class == "workflows"));
-    assert!(Path::new(&mounts[0].path).join("flow.json").is_file());
 }
 
 // --- Documents dependencies ---------------------------------------------

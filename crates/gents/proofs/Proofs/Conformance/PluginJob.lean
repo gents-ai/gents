@@ -15,12 +15,11 @@ own children. Adoption: by `admitStep`, `adopt`, `adoptTerminal`, `hostPin`,
 Keys: by the `SpawnKey` encoders and `decodeRetryKey?`. Control: by
 `Control.kill`, `resumeValid`, `resumePin`, `rootCallOf`, `echo`,
 `resultOffered`, `resultReadAuthorized` and `onInvocationFailure`. Authority:
-by `provenanceOf`, `recordAfterInstall`, `originOf`, `trustedHint`,
+by `provenanceOf`, `recordAfterInstall`, `callOrigin`,
 `packJobBlockAdmissible`, `Policy.valid` and `wireTargetsFrom`. Wire: protocol
 samples built from the `Types` constructors and rendered in the
-`gents_protocol::job` spellings, with echoes from `stepEcho`, verified bytes
-from `verifiedScript`, mount hints from `trustedHint`, origin from `originOf`
-and host codes from `Refusal.code`. Lineage: by `DurableLineage.openingRequest`.
+`gents_protocol::job` spellings, with echoes from `stepEcho`, origin from
+`callOrigin` and host codes from `Refusal.code`. Lineage: by `DurableLineage.openingRequest`.
 Recovery: by one tick of the registered `pluginJobRecoverySweep`.
 -/
 
@@ -32,7 +31,6 @@ private def targetA : Target := ("node-a", "reviewer")
 private def targetB : Target := ("node-b", "writer")
 private def targetC : Target := ("node-c", "deployer")
 private def knownTargets : List Target := [targetA, targetB, targetC]
-private def knownSources : List String := ["source-1", "source-2"]
 
 private def scope (ts : List Target) : EndpointScope Target Unit := .only ts.toFinset fun _ => ()
 
@@ -51,13 +49,11 @@ private def guestPin : GuestPin :=
 private def context : StepContext :=
   { live := ceiling, available := true
   , callerTargets := scope [targetA, targetB], jobTargets := scope [targetA, targetB]
-  , policy := { mode := .run, dynamicTargets := scope [targetA]
-                , trustedPacks := ["job_plugin_fixture"], projectRoots := [] }
+  , policy := { mode := .run, dynamicTargets := scope [targetA], trustedPacks := ["job_plugin_fixture"] }
   , engineDigest := "engine-1", engineProvenanceOperator := true
-  , installedTrusted := fun digest => digest == "source-1"
   , maxHop := some 4, targetHop := fun _ => 0
   , cwdAllowed := fun _ => true, within := fun base cwd => base == cwd
-  , liveBackground := 0, startedByJob := false, namedOrigin := none, adoptionFacts := facts
+  , liveBackground := 0, startedByJob := false, adoptionFacts := facts
   , callerScope := { requestId := "request-1", sessionId := "session-1", nodeDid := "did:key:node"
                    , requesterDid := none }
   , controlTarget := fun _ => none, resumeTarget := fun _ => none
@@ -69,8 +65,7 @@ private def child (slot : String) (state : ChildState) : Child :=
 private def stepZero : Job :=
   { root := "row-1", rowDoc := "row-1", callerSession := "session-1", callerCwd := "/work"
   , handle := "flow-1", callerHop := 0
-  , call := { argv := ["run", "flow"], args := none, path := none, script := none
-            , agentBudget := none }
+  , call := { argv := ["run", "flow"], args := none, script := none, agentBudget := none }
   , rootCall := none, resume := none, pin := none, children := [], spent := 0
   , observedTerminal := 0, consecutiveFailures := 0, state := .running }
 
@@ -146,8 +141,8 @@ def admissionCases : List AdmissionCase :=
   , ⟨"resume_of_chain_head_admitted", resumeContext true, stepZero, resumeOf "row-0"⟩
   , ⟨"resume_of_unknown_row_refused", resumeContext true, stepZero, resumeOf "row-9"⟩
   , ⟨"resume_of_continued_row_refused", resumeContext false, stepZero, resumeOf "row-0"⟩
-  , ⟨"empty_source_fields_run_named_script_under_off", offContext,
-      { stepZero with call := { stepZero.call with path := some "", script := some "" } },
+  , ⟨"empty_script_runs_artifact_under_off", offContext,
+      { stepZero with call := { stepZero.call with script := some "" } },
       .result noExtras [] none none⟩
   , ⟨"inline_script_refused_under_off", offContext,
       { stepZero with call := { stepZero.call with script := some "workflow flow { }" } },
@@ -262,11 +257,11 @@ private def childJson (ch : Child) : Json :=
     ("state", childStateJson ch.state), ("messages", toJson ch.messages)]
 
 private def callArgsJson (c : CallArgs) : Json :=
-  Json.mkObj [("argv", toJson c.argv), ("args", toJson c.args), ("path", toJson c.path),
-    ("script", toJson c.script), ("agent_budget", toJson c.agentBudget)]
+  Json.mkObj [("argv", toJson c.argv), ("args", toJson c.args), ("script", toJson c.script),
+    ("agent_budget", toJson c.agentBudget)]
 
 private def rootCallJson (c : RootCall) : Json :=
-  Json.mkObj [("argv", toJson c.argv), ("args", toJson c.args), ("path", toJson c.path),
+  Json.mkObj [("argv", toJson c.argv), ("args", toJson c.args),
     ("agent_budget", toJson c.agentBudget)]
 
 private def jobJson (j : Job) : Json :=
@@ -314,7 +309,7 @@ private def knownCwds : List String := ["/", "/work", "/work/sub"]
 
 private def policyJson (p : PluginJob.Policy) : Json :=
   Json.mkObj [("mode", modeJson p.mode), ("dynamic_targets", scopeJson p.dynamicTargets),
-    ("trusted_packs", toJson p.trustedPacks), ("project_roots", toJson p.projectRoots)]
+    ("trusted_packs", toJson p.trustedPacks)]
 
 private def contextJson (ctx : StepContext) : Json :=
   Json.mkObj [("live", ceilingJson ctx.live), ("available", toJson ctx.available),
@@ -322,7 +317,6 @@ private def contextJson (ctx : StepContext) : Json :=
     ("policy", policyJson ctx.policy),
     ("engine_digest", toJson ctx.engineDigest),
     ("engine_provenance_operator", toJson ctx.engineProvenanceOperator),
-    ("installed_trusted_sources", toJson (knownSources.filter ctx.installedTrusted)),
     ("max_hop", toJson ctx.maxHop),
     ("target_hops", toJson (knownTargets.map fun t =>
       Json.mkObj [("target", targetJson t), ("hop", toJson (ctx.targetHop t))])),
@@ -331,7 +325,6 @@ private def contextJson (ctx : StepContext) : Json :=
     ("within", toJson ((knownCwds.flatMap fun base => knownCwds.filterMap fun cwd =>
       if ctx.within base cwd then some (Json.mkObj [("base", toJson base), ("cwd", toJson cwd)])
       else none))),
-    ("named_origin", toJson (ctx.namedOrigin.map originJson)),
     ("adoption_facts", hostFactsJson ctx.adoptionFacts),
     ("caller_scope", processScopeJson ctx.callerScope),
     ("control_targets", toJson (knownDocs.map fun d =>
@@ -689,7 +682,7 @@ private def priorPin : Pin := (priorJob.pin).getD rootPin
 private def resumeCall : Job :=
   { stepZero with root := "row-r", rowDoc := "row-r", handle := "flow-r"
                 , call := { argv := ["resume", "flow-1", "--budget", "5"], args := some "own"
-                          , path := none, script := none, agentBudget := some 5 } }
+                          , script := none, agentBudget := some 5 } }
 
 private def resumeFacts : HostFacts :=
   { facts with resumeOf := some "row-p", chainRoot := "row-r", argsDigest := "args-r" }
@@ -938,53 +931,26 @@ def installCases : List InstallCase :=
 private def fixturePack : String := "job_plugin_fixture"
 private def scriptDigest : String := "sha256-flow"
 
-/-- A pack-tier mount. Its wire `trusted` field is left unset: `trustedHint`
-computes it. -/
-private def packMount (via : InstallProvenance) (files : List String) : AssetMount :=
-  { klass := .pack "workflows", pack := fixturePack, installDigest := "install-1"
-  , path := "/cache/job_plugin_fixture/workflows", installed := true, trusted := false, via
-  , files }
-
 structure OriginCase where
   name : String
-  digest : String
-  mounts : List AssetMount
-  trusted : List String
-  /-- The call the pin answers; `stepZero`'s names a script by `argv`. -/
+  /-- The call the pin answers. -/
   call : CallArgs
 
 def originCases : List OriginCase :=
-  [ ⟨"trusted_operator_pack_file_installed", scriptDigest,
-      [packMount .operator [scriptDigest]], [fixturePack], stepZero.call⟩
-  , ⟨"untrusted_pack_dynamic", scriptDigest, [packMount .operator [scriptDigest]],
-      ["content_pack"], stepZero.call⟩
-  , ⟨"self_config_pack_dynamic", scriptDigest, [packMount .selfConfig [scriptDigest]],
-      [fixturePack], stepZero.call⟩
-  , ⟨"project_mount_dynamic", scriptDigest,
-      [{ projectMount "/work/.gents/workflows" with files := [scriptDigest] }], [fixturePack],
-      stepZero.call⟩
-  , ⟨"digest_not_in_any_mount_dynamic", scriptDigest, [packMount .operator ["sha256-other"]],
-      [fixturePack], stepZero.call⟩
-  , ⟨"scriptless_call_installed_without_any_mount", scriptDigest, [], [],
-      { argv := [], args := some "{\"base\":\"main\"}", path := none, script := none
-      , agentBudget := some 22 }⟩
-  , ⟨"scriptless_call_with_empty_strings_installed", scriptDigest,
-      [packMount .operator ["sha256-other"]], ["content_pack"],
-      { argv := [], args := none, path := some "", script := some "", agentBudget := none }⟩
-  , ⟨"inline_script_without_argv_is_the_digests_origin", scriptDigest,
-      [packMount .operator ["sha256-other"]], [fixturePack],
-      { argv := [], args := none, path := none, script := some "module.exports = (i) => i"
-      , agentBudget := none }⟩ ]
+  [ ⟨"artifact_call_installed",
+      { argv := [], args := some "{\"base\":\"main\"}", script := none, agentBudget := some 22 }⟩
+  , ⟨"empty_script_installed", { argv := [], args := none, script := some "", agentBudget := none }⟩
+  , ⟨"inline_script_dynamic",
+      { argv := [], args := none, script := some "module.exports = (i) => i", agentBudget := none }⟩
+  , ⟨"named_run_without_script_installed", stepZero.call⟩ ]
 
-private def originVerdict (c : OriginCase) : Origin × List Bool :=
-  (callOrigin c.call c.digest c.mounts c.trusted, c.mounts.map (trustedHint · c.trusted))
+private def originVerdict (c : OriginCase) : Origin := callOrigin c.call
 
 /-- The pack and its dependencies. -/
 private def blockClosure : List String := [fixturePack, "content_pack"]
 
 private def admissibleBlock : PackJobBlock :=
-  { targetsFrom := ["content_pack"], trusted := ["content_pack"], dynamic := .check
-  , projectRoots := [] }
+  { targetsFrom := ["content_pack"], trusted := ["content_pack"], dynamic := .check }
 
 structure PackBlockCase where
   name : String
@@ -998,8 +964,7 @@ def packBlockCases : List PackBlockCase :=
       { admissibleBlock with targetsFrom := ["other_pack"] }⟩
   , ⟨"trusted_outside_closure_refused", .operator,
       { admissibleBlock with trusted := ["other_pack"] }⟩
-  , ⟨"dynamic_run_refused", .operator, { admissibleBlock with dynamic := .run }⟩
-  , ⟨"project_roots_refused", .operator, { admissibleBlock with projectRoots := ["/work"] }⟩ ]
+  , ⟨"dynamic_run_refused", .operator, { admissibleBlock with dynamic := .run }⟩ ]
 
 structure PolicyCase where
   name : String
@@ -1046,11 +1011,9 @@ theorem authority_regressions :
     installCases.map (fun c => recordAfterInstall c.prior c.kind c.explicit c.via) =
       [ .written .operator, .written .operator, .written .selfConfig, .written .operator
       , .written .selfConfig, .written .operator ] ∧
-    originCases.map originVerdict =
-      [ (.installed, [true]), (.dynamic, [false]), (.dynamic, [false]), (.dynamic, [false])
-      , (.dynamic, [true]), (.installed, []), (.installed, [false]), (.dynamic, [true]) ] ∧
+    originCases.map originVerdict = [.installed, .installed, .dynamic, .installed] ∧
     packBlockCases.map (fun c => packJobBlockAdmissible c.via blockClosure c.block) =
-      [true, false, false, false, false, false] ∧
+      [true, false, false, false, false] ∧
     policyCases.map (fun c => c.policy.valid c.agentTargets) = [true, false, true, true] ∧
     wireCases.map wireVerdict =
       [ (["content_pack", "job_plugin_fixture"], [targetA, targetC], [targetB, targetA, targetC])
@@ -1079,12 +1042,6 @@ private def recordName : PluginJob.Record → String
 
 private def targetsJson (ts : List Target) : Json := toJson (ts.map targetJson)
 
-private def mountJson (m : AssetMount) : Json :=
-  Json.mkObj [("pack", toJson m.pack),
-    ("class", toJson (match m.klass with | .pack k => k | .project => "project")),
-    ("digest", toJson m.installDigest), ("path", toJson m.path), ("trusted", toJson m.trusted),
-    ("via", provenanceJson m.via), ("files", toJson m.files)]
-
 private def renderProvenance (c : PackKind × PluginJob.Record) : Json :=
   Json.mkObj [("name", toJson (kindName c.1 ++ "_" ++ recordName c.2)),
     ("kind", toJson "provenance"), ("pack_kind", toJson (kindName c.1)),
@@ -1100,18 +1057,14 @@ private def renderInstall (c : InstallCase) : Json :=
       ("provenance", provenanceJson (provenanceOf c.kind r))])]
 
 private def renderOrigin (c : OriginCase) : Json :=
-  let (origin, hints) := originVerdict c
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "origin"), ("digest", toJson c.digest),
-    ("mounts", toJson (c.mounts.map mountJson)), ("trusted_packs", toJson c.trusted),
-    ("call", callArgsJson c.call),
-    ("expected", Json.mkObj [("origin", originJson origin), ("trusted_hints", toJson hints)])]
+  Json.mkObj [("name", toJson c.name), ("kind", toJson "origin"), ("call", callArgsJson c.call),
+    ("expected", Json.mkObj [("origin", originJson (originVerdict c))])]
 
 private def renderPackBlock (c : PackBlockCase) : Json :=
   Json.mkObj [("name", toJson c.name), ("kind", toJson "pack_job_block"),
     ("via", provenanceJson c.via), ("closure", toJson blockClosure),
     ("block", Json.mkObj [("targets_from", toJson c.block.targetsFrom),
-      ("trusted", toJson c.block.trusted), ("dynamic", modeJson c.block.dynamic),
-      ("project_roots", toJson c.block.projectRoots)]),
+      ("trusted", toJson c.block.trusted), ("dynamic", modeJson c.block.dynamic)]),
     ("expected", Json.mkObj [("admissible",
       toJson (packJobBlockAdmissible c.via blockClosure c.block))])]
 
@@ -1175,17 +1128,10 @@ private def argsJson (s : String) : Json := (Json.parse s).toOption.getD (toJson
 
 private def wireRootCallJson (c : RootCall) : Json :=
   Json.mkObj ([("argv", toJson c.argv)] ++ optField "args" (c.args.map argsJson) ++
-    optField "path" (c.path.map toJson) ++ optField "agent_budget" (c.agentBudget.map toJson))
+    optField "agent_budget" (c.agentBudget.map toJson))
 
 private def wireEchoJson (e : ControlEcho) : Json :=
   Json.mkObj ([("kind", toJson e.kind)] ++ optField "payload" (e.payload.map wireResumeJson))
-
-/-- A mount renders only its wire fields; `files` is model-only. -/
-private def wireMountJson (trusted : List String) (m : AssetMount) : Json :=
-  Json.mkObj [("pack", toJson m.pack),
-    ("class", toJson (match m.klass with | .pack k => k | .project => "project")),
-    ("digest", toJson m.installDigest), ("path", toJson m.path),
-    ("trusted", toJson (trustedHint m trusted))]
 
 private def usageJson : Json :=
   Json.mkObj [("input", toJson (120 : Nat)), ("output", toJson (80 : Nat)),
@@ -1217,7 +1163,7 @@ private def progressJson (j : Job) (total : Nat) (state : JobState)
 `last_event` reports them. -/
 private def adoptionLine : String :=
   "tier: pack " ++ fixturePack ++ "; origin: " ++
-    match originOf scriptDigest [packMount .operator [scriptDigest]] [fixturePack] with
+    match callOrigin stepZero.call with
     | .installed => "installed"
     | .dynamic => "dynamic"
 
@@ -1317,36 +1263,26 @@ structure RowSample where
 structure InputSample where
   name : String
   job : Job
-  /-- The step number `verifiedScript` reads. -/
-  step : Nat
-  mounts : List AssetMount
   jobs : List RowSample
   scratch : List (String × String)
 
-private def verifiedSource : String := "workflow flow { verified }"
-
 def inputSamples : List InputSample :=
-  [ ⟨"model_script_beside_verified_script",
+  [ ⟨"model_script_is_echoed",
       { pinned [child "1:a" .live] 1 0 with
-        call := { argv := ["run"], args := some "{\"topic\":\"wire\"}", path := none
-                , script := some "workflow flow { model }", agentBudget := some 3 } },
-      1, [packMount .operator [scriptDigest], projectMount "/work/.gents/workflows"], [],
-      [("runs/call-1/notes.md", "draft")]⟩
+        call := { argv := ["run"], args := some "{\"topic\":\"wire\"}"
+                , script := some "module.exports = (i) => i", agentBudget := some 3 } },
+      [], [("runs/call-1/notes.md", "draft")]⟩
   , ⟨"resumed_step0_echoes_control_and_root_call",
       resumeRow rowA priorJob
-        { resumeCall with call := { resumeCall.call with args := some "{\"own\":true}"
-                                                       , path := some "flows/flow.rhai" } }
+        { resumeCall with call := { resumeCall.call with args := some "{\"own\":true}" } }
         answerResume,
-      0, [], [], []⟩
+      [], []⟩
   , ⟨"paused_row_jobs_and_child_states",
       pinned [child "1:a" .live, child "2:b" .completed, child "3:c" .failed,
         child "4:d" .interrupted, child "5:e" .other] 5 4,
-      2, [], [⟨"row-p", "call-p", "flow-p", .completed, .paused (some .user), 1000, none⟩,
+      [⟨"row-p", "call-p", "flow-p", .completed, .paused (some .user), 1000, none⟩,
         ⟨"row-w", "call-w", "flow-w", .completed, .awaitingUser, 2000, none⟩,
         ⟨"row-c", "call-c", "flow-p", .completed, .none, 3000, some "row-p"⟩], []⟩ ]
-
-private def verified (s : InputSample) : Option VerifiedScript :=
-  s.job.pin.bind fun p => verifiedScript p s.step verifiedSource
 
 private def wireInputJson (s : InputSample) : Json :=
   let j := s.job
@@ -1363,15 +1299,12 @@ private def wireInputJson (s : InputSample) : Json :=
       ("correlation", Json.null), ("cwd", toJson j.callerCwd),
       ("started_by_job", toJson c.startedByJob)]),
     ("argv", toJson j.call.argv)] ++
-    optField "args" (j.call.args.map argsJson) ++ optField "path" (j.call.path.map toJson) ++
+    optField "args" (j.call.args.map argsJson) ++
     optField "script" (j.call.script.map toJson) ++
     optField "agent_budget" (j.call.agentBudget.map toJson) ++
     optField "root_call" (echo.rootCall.map wireRootCallJson) ++
     [("pin", toJson (j.pin.map wirePinJson)),
-     ("origin", toJson (j.pin.map fun p => originJson p.origin))] ++
-    optField "verified_script" ((verified s).map fun v =>
-      Json.mkObj [("source", toJson v.source), ("digest", toJson v.digest)]) ++
-    [("mounts", toJson (s.mounts.map (wireMountJson c.policy.trustedPacks))),
+     ("origin", toJson (j.pin.map fun p => originJson p.origin)),
      ("ceiling", Json.mkObj [("targets", scopeTargets c.live.targets),
         ("max_live", toJson c.live.maxLive),
         ("remaining_spawns", toJson (Step.remainingSpawns c.live.maxSpawns j)),
@@ -1423,21 +1356,18 @@ def hostCodes : List String :=
   ([.terminal, .notAvailable, .engineChanged, .policyDenied, .stalled, .depthExceeded, .timedOut,
     .stepFailed, .resumeUnknown, .resumeNotHead] : List Refusal).filterMap Refusal.code
 
-/-- The origin, the verified script's digest, the echoed control kind, whether
-`root_call` is echoed, the `jobs[]` states and the mount trust hints. -/
+/-- The origin, the echoed control kind, whether `root_call` is echoed and the
+`jobs[]` states. -/
 structure InputVerdict where
   origin : Option Origin
-  digest : Option String
   echoKind : Option String
   rootCall : Bool
   jobs : List JobState
-  hints : List Bool
   deriving DecidableEq
 
 private def inputVerdict (s : InputSample) : InputVerdict :=
-  ⟨s.job.pin.map (·.origin), (verified s).map (·.digest), (stepEcho s.job).control.map (·.kind),
-    (stepEcho s.job).rootCall.isSome, s.jobs.map (fun r => JobState.of r.state r.note),
-    s.mounts.map (trustedHint · context.policy.trustedPacks)⟩
+  ⟨s.job.pin.map (·.origin), (stepEcho s.job).control.map (·.kind),
+    (stepEcho s.job).rootCall.isSome, s.jobs.map (fun r => JobState.of r.state r.note)⟩
 
 theorem wire_regressions :
     hostCodes =
@@ -1445,10 +1375,9 @@ theorem wire_regressions :
       , "plugin_job_stalled", "plugin_job_depth_exceeded", "plugin_job_timed_out"
       , "plugin_job_step_failed", "plugin_job_resume_unknown", "plugin_job_resume_not_head" ] ∧
     inputSamples.map inputVerdict =
-      [ ⟨some .installed, some "source-1", none, false, [], [true, false]⟩
-      , ⟨none, none, some "answer", true, [], []⟩
-      , ⟨some .installed, some "source-1", none, false, [.paused, .awaitingUser, .completed],
-          []⟩ ] ∧
+      [ ⟨some .installed, none, false, []⟩
+      , ⟨none, some "answer", true, []⟩
+      , ⟨some .installed, none, false, [.paused, .awaitingUser, .completed]⟩ ] ∧
     outputSamples.map (fun s => (s.out.pin.isSome, s.out.resume.isSome)) =
       [ (false, false), (false, false), (false, false), (false, false), (true, true)
       , (true, false), (true, false), (true, true), (true, true) ] ∧

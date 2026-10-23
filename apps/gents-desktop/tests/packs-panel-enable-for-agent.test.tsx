@@ -22,7 +22,6 @@ const job = {
     dynamic: "check",
     dynamic_targets: ["fixture/dynamic_worker"],
     trusted_packs: ["fixture/trusted"],
-    project_roots: ["/work/project"],
   },
 };
 
@@ -139,55 +138,6 @@ describe("PacksPanel Enable for agent", () => {
       }),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  });
-
-  it("a content pack wires the engine with targets-from, installing the engine first", async () => {
-    const user = userEvent.setup();
-    installPack
-      .mockRejectedValueOnce(
-        new Error("the plugin asks for authority; pass --grant-authority"),
-      )
-      .mockResolvedValueOnce(undefined);
-    show(["fixture/content"], {
-      plugins: [],
-      target_packs: [{ pack: "fixture/content", targets: ["fixture/worker"] }],
-    });
-    await user.click(await screen.findByRole("button", { name: "Enable for agent" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(
-      within(dialog).getByText("Installs gents/rhai_workflows first"),
-    ).toBeTruthy();
-    expect(wirePack).not.toHaveBeenCalled();
-    await user.click(within(dialog).getByRole("button", { name: "Install" }));
-    await within(dialog).findByText(/--grant-authority/);
-    expect(installPack).toHaveBeenLastCalledWith({
-      package: "gents/rhai_workflows",
-      edited: "refuse",
-      grantAuthority: false,
-    });
-    await user.click(within(dialog).getByRole("button", { name: "Allow" }));
-    await waitFor(() =>
-      expect(installPack).toHaveBeenLastCalledWith({
-        package: "gents/rhai_workflows",
-        edited: "refuse",
-        grantAuthority: true,
-      }),
-    );
-    await within(dialog).findByText("Max spawns: 12");
-    expect(wirePack).toHaveBeenCalledTimes(1);
-    expect(wirePack).toHaveBeenCalledWith({
-      plugin: "gents/workflow",
-      agent: "default",
-      targetsFrom: ["fixture/content"],
-      remove: false,
-      preview: true,
-    });
-    await user.click(within(dialog).getByRole("button", { name: "Enable" }));
-    await waitFor(() =>
-      expect(wirePack).toHaveBeenLastCalledWith(
-        expect.objectContaining({ plugin: "gents/workflow", preview: false }),
-      ),
-    );
   });
 
   it("a preview without a job block shows the next call", async () => {
