@@ -511,8 +511,13 @@ where
                     Err(failure) => {
                         let (classified, error_text) = failure.classify();
                         drop(stream);
+                        // A usage limit or a model refusal is permanent while
+                        // streaming too: resampling after partial output earns
+                        // the same result, so neither takes the mid-stream
+                        // retract-and-resample lane.
                         if !saw_stream_item
                             || matches!(classified, InferenceError::UsageLimited(_))
+                            || crate::error::provider_message_is_model_refusal(&error_text)
                         {
                             match retry.on_pre_stream_failure(
                                 &classified,
