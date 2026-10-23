@@ -61,6 +61,7 @@ pub async fn run_openai_oneshot_with_tools(
     );
 
     let client = crate::llm::backend_client::build_backend_client(
+        tool_runtime.usage_cache.clone(),
         node.clone(),
         agent,
         &api_key,

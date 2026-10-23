@@ -1390,6 +1390,7 @@ mod tests {
                 .expect("embedded node"),
         );
         let state = ShimState {
+            usage_cache: Arc::default(),
             codex_home: temp.path().to_path_buf(),
             trace_path: temp.path().join("reasoning.jsonl"),
             cwd: temp.path().to_path_buf(),

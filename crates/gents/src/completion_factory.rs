@@ -439,6 +439,7 @@ mod tests;
 
 /// The enclosing request later supplies deadline and ledger.
 pub(crate) async fn build_compaction_engine(
+    cache: std::sync::Arc<crate::usage_observation::UsageCache>,
     node: std::sync::Arc<EmbeddedNode>,
     agent_config: &ResolvedAgent,
     admission: AdmissionRegistry,
@@ -499,9 +500,14 @@ pub(crate) async fn build_compaction_engine(
         crate::document_config::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
         _ => summary.completion_client_api_key()?,
     };
-    let client =
-        crate::llm::backend_client::build_backend_client(node, &summary, &api_key, build_timeout)
-            .await?;
+    let client = crate::llm::backend_client::build_backend_client(
+        cache,
+        node,
+        &summary,
+        &api_key,
+        build_timeout,
+    )
+    .await?;
     let provider_family = client.provider_family().to_owned();
     let source_counter = std::sync::Arc::new(crate::provider_input::ProviderInputCounter::new(
         agent_config.backend_provider_kind,
