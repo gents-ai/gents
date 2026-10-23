@@ -61,6 +61,10 @@ pub async fn session_provenance(
         .map(|row| row.request_id),
         None => None,
     };
+    let related_sessions =
+        related_session_metadata(core, lineage.started.iter().chain(&lineage.sent))
+            .await
+            .map_err(fail)?;
     let senders = turn_senders(&lineage);
     let link = |link: &SessionLink| LinkedSessionView {
         node_did: link.scope.node_did.clone(),
@@ -83,6 +87,7 @@ pub async fn session_provenance(
             .collect(),
         opening_request_id,
         calls,
+        related_sessions: Some(related_sessions),
     })
 }
 
@@ -474,4 +479,64 @@ mod tests {
             node.shutdown().await;
         }
     }
+}
+
+/// Read headers, never transcripts or retained images, for the canonical links.
+/// Each node retains its existing operator-or-replica observation authority.
+async fn related_session_metadata<'a>(
+    core: &ClientCore,
+    links: impl Iterator<Item = &'a SessionLink>,
+) -> anyhow::Result<Vec<crate::types::SessionSummary>> {
+    let mut scopes =
+        BTreeMap::<String, std::collections::BTreeSet<(String, Option<String>)>>::new();
+    for link in links {
+        scopes
+            .entry(link.scope.node_did.clone())
+            .or_default()
+            .insert((
+                link.scope.session_id.clone(),
+                link.scope.requester_did.clone(),
+            ));
+    }
+    let mut result = Vec::new();
+    for (node, scopes) in scopes {
+        let access = crate::snapshot::node_reads(core, &node);
+        let filters: Vec<_> = scopes
+            .iter()
+            .map(|(session, requester)| {
+                format!(
+                    "{{{}}}",
+                    session_scope_filter(&node, session, requester.as_deref())
+                )
+            })
+            .collect();
+        for filters in filters.chunks(128) {
+            let query = format!(
+                "{{ AgentSession(filter: {{_or: [{}]}}) {{ {} }} }}",
+                filters.join(","),
+                gents::session::AGENT_SESSION_FIELDS
+            );
+            let sessions: Vec<_> = rows(&access, &query, "AgentSession")
+                .await?
+                .iter()
+                .map(gents::session::decode_session_row)
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .map(|row| row.session)
+                .filter(|session| {
+                    session.node_did == node
+                        && scopes
+                            .contains(&(session.session_id.clone(), session.requester_did.clone()))
+                })
+                .collect();
+            result.extend(crate::snapshot::session_summaries(
+                &sessions,
+                &[],
+                &node,
+                &[],
+                &[],
+            ));
+        }
+    }
+    Ok(result)
 }

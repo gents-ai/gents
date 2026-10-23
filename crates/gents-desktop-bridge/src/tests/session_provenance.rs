@@ -25,6 +25,19 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
         .await
         .expect("provenance");
 
+    let metadata = view.related_sessions.as_ref().expect("related metadata");
+    let mut related: Vec<_> = metadata
+        .iter()
+        .map(|summary| summary.session_id.as_str())
+        .collect();
+    related.sort_unstable();
+    assert_eq!(related, ["sess_child", "sess_existing", "sess_peer"]);
+    assert!(
+        metadata
+            .iter()
+            .all(|summary| summary.message_count.is_none() && summary.tool_call_count.is_none()),
+        "metadata reads must not hydrate transcript aggregates"
+    );
     assert_eq!(view.session_id, "sess_parent");
     assert!(view.started_by.is_none() && view.received.is_empty());
     assert!(view.opening_request_id.is_none());
