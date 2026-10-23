@@ -9,6 +9,12 @@ DESKTOP_DIR := apps/gents-desktop
 DESKTOP_LOCAL_TAURI_CONFIG := src-tauri/tauri.local-sign.conf.json
 PROOFS_DIR := crates/gents/proofs
 FUZZ_TIME ?= 30s
+# Cargo profile for the build and test recipes; agent worktrees use
+# PROFILE=fast-dev, which keeps file:line backtraces for workspace crates and
+# drops dependency debug info.
+PROFILE ?=
+CARGO_PROFILE_FLAG := $(if $(PROFILE),--profile $(PROFILE),)
+SWEEP_DAYS ?= 7
 
 .DEFAULT_GOAL := help
 
@@ -19,6 +25,8 @@ help:
 	@echo "  make build-cli             Build the Gents CLI"
 	@echo "  make build-cli-headless    Build CLI without embedded Codex TUI"
 	@echo "  make fast-dev-cli          Build CLI with lean dev debug artifacts"
+	@echo "  PROFILE=<profile>          Cargo profile for build/test recipes (agents: fast-dev)"
+	@echo "  make sweep [SWEEP_DAYS=7]  Delete target artifacts untouched for SWEEP_DAYS days"
 	@echo "  make build-desktop         Build the Tauri Rust shell"
 	@echo "  make build-desktop-ui      Build the desktop frontend"
 	@echo
@@ -77,6 +85,11 @@ help:
 	@echo "                             Create a worktree with target/ and proofs/.lake"
 	@echo "                             cloned from this checkout (APFS clonefile)"
 
+.PHONY: sweep
+sweep:
+	@command -v cargo-sweep >/dev/null 2>&1 || $(CARGO) install cargo-sweep --locked
+	$(CARGO) sweep --time $(SWEEP_DAYS)
+
 .PHONY: worktree
 worktree:
 	@test -n "$(BRANCH)" || { echo "usage: make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]" >&2; exit 2; }
@@ -84,16 +97,16 @@ worktree:
 
 .PHONY: build build-cli build-cli-headless build-desktop build-desktop-ui
 build:
-	$(CARGO) build
+	$(CARGO) build $(CARGO_PROFILE_FLAG)
 
 build-cli:
-	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli $(CARGO_TARGET_FLAG)
+	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG) $(CARGO_TARGET_FLAG)
 
 build-cli-headless:
-	$(CARGO) build -p gents-cli --no-default-features
+	$(CARGO) build -p gents-cli --no-default-features $(CARGO_PROFILE_FLAG)
 
 build-desktop:
-	$(CARGO) build -p gents-desktop-tauri
+	$(CARGO) build -p gents-desktop-tauri $(CARGO_PROFILE_FLAG)
 
 build-desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run build
@@ -152,7 +165,7 @@ fmt-check:
 	$(NPM) --prefix $(DESKTOP_DIR) run format:check
 
 check-cli-headless:
-	$(CARGO) check -p gents-cli --no-default-features
+	$(CARGO) check -p gents-cli --no-default-features $(CARGO_PROFILE_FLAG)
 
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
@@ -161,26 +174,26 @@ proofs:
 test: test-agent test-cli
 
 test-agent:
-	$(CARGO) test -p gents
+	$(CARGO) test -p gents $(CARGO_PROFILE_FLAG)
 
 test-agent-conformance:
-	$(CARGO) test -p gents --test conformance
+	$(CARGO) test -p gents --test conformance $(CARGO_PROFILE_FLAG)
 
 test-evals:
-	$(CARGO) test -p gents --test onboarding_evals
-	$(CARGO) test -p gents --test eval_runner_canary
+	$(CARGO) test -p gents --test onboarding_evals $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents --test eval_runner_canary $(CARGO_PROFILE_FLAG)
 
 live-configurator-eval:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} scripts/evals/run-ladder.sh $${GENTS_EVAL_SUITE:-all} $${GENTS_EVAL_TRIALS:-3} $${GENTS_EVAL_CONCURRENCY:-4}
 
 test-agent-e2e:
-	$(CARGO) test -p gents --test e2e_lifecycle
-	$(CARGO) test -p gents --test e2e_runtime
-	$(CARGO) test -p gents --test e2e_background
-	$(CARGO) test -p gents --test e2e_triggers
+	$(CARGO) test -p gents --test e2e_lifecycle $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents --test e2e_runtime $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents --test e2e_background $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents --test e2e_triggers $(CARGO_PROFILE_FLAG)
 
 test-cli:
-	$(CARGO) test -p gents-cli -- --nocapture --test-threads=1
+	$(CARGO) test -p gents-cli $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
 
 .PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-invariants desktop-ui-screenshots desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-agent desktop-ui-visual desktop-ui-live-e2e desktop-ui-live-e2e-real desktop-native-preflight desktop-native-dev desktop-native-build
 desktop-ui:
@@ -238,7 +251,7 @@ desktop-native-build: desktop-native-stage-sidecar
 
 .PHONY: live-cli live-agent live-desktop-smoke
 live-cli:
-	$(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
+	$(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-agent:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live -- --ignored --nocapture --test-threads=1

@@ -195,7 +195,11 @@ metadata.
   `hash_maps_use_rapidhash` ratchets this and its allowlist only shrinks.
 - Treat flaky tests as defects: reproduce, file, and fix them.
 - Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are
-  cloned efficiently.
+  cloned efficiently. In agent worktrees build and test with
+  `PROFILE=fast-dev`; the default dev profile keeps full dependency debug info
+  and fills the disk across concurrent worktrees. Run `make sweep` to delete
+  stale artifacts, and remove a worktree (`git worktree remove`) once its
+  branch merges.
 
 Before pushing, run `cargo test -p gents` and
 `cargo check --workspace --all-targets`. Run `lake build` for proof changes and
