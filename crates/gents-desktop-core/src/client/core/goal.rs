@@ -255,32 +255,37 @@ mod tests {
 
         let server = MockServer::start().await;
         let root = tempfile::tempdir()?;
-        let source =
-            gents::identity::KeyIdentity::load_or_create(root.path().join("source.key"), None)?;
+        let source_key = root.path().join("source.key");
+        let source = tokio::task::spawn_blocking(move || {
+            gents::identity::KeyIdentity::load_or_create(source_key, None)
+        })
+        .await??;
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(root.path().join("client")),
             ClientCoreOptions::local_only(),
         )
         .await?;
         let home = root.path().join("runtime");
-        std::fs::create_dir(&home)?;
+        tokio::fs::create_dir(&home).await?;
         let endpoint = format!("{}/api/v0/graphql", server.uri());
-        std::fs::write(
+        tokio::fs::write(
             home.join("init.json"),
             json!({
                 "node_name":"Hosted runtime", "node_did":source.did(),
                 "key_path":root.path().join("source.key"),
             })
             .to_string(),
-        )?;
-        std::fs::write(
+        )
+        .await?;
+        tokio::fs::write(
             home.join("runtime.json"),
             json!({
                 "node_name":"Hosted runtime", "node_did":source.did(), "graphql":endpoint,
                 "p2p_transport":"iroh",
             })
             .to_string(),
-        )?;
+        )
+        .await?;
         core.persist_local_standard_peer(
             "Hosted runtime",
             "endpoint:hosted-goal-owner",
@@ -428,25 +433,31 @@ mod tests {
         let server = MockServer::start().await;
         let root = tempfile::tempdir()?;
         let key = root.path().join("runtime.key");
-        let identity = gents::identity::load_or_create_file_identity(&key)?;
-        let did = identity.did()?.to_string();
+        let source_key = key.clone();
+        let did = tokio::task::spawn_blocking(move || -> Result<String> {
+            let identity = gents::identity::load_or_create_file_identity(&source_key)?;
+            Ok(identity.did()?.to_string())
+        })
+        .await??;
         let endpoint = format!("{}/api/v0/graphql", server.uri());
-        std::fs::write(
+        tokio::fs::write(
             root.path().join("init.json"),
             json!({
                 "node_name":"Goal runtime", "node_did":did, "key_path":key,
             })
             .to_string(),
-        )?;
-        std::fs::write(
+        )
+        .await?;
+        tokio::fs::write(
             root.path().join("runtime.json"),
             json!({
                 "node_name":"Goal runtime", "node_did":did, "graphql":endpoint,
                 "p2p_transport":"iroh",
             })
             .to_string(),
-        )?;
-        let original_key = std::fs::read(&key)?;
+        )
+        .await?;
+        let original_key = tokio::fs::read(&key).await?;
         assert!(!gents::identity::can_mint_defradb_bearer(&did));
         Mock::given(method("POST"))
             .and(path("/api/v0/tx"))
@@ -491,7 +502,11 @@ mod tests {
             .into_iter()
             .filter(|request| String::from_utf8_lossy(&request.body).contains("cold-goal-session"))
             .count();
-        let _unlocked = gents::identity::KeyIdentity::load_or_create(&key, None)?;
+        let source_key = key.clone();
+        let _unlocked = tokio::task::spawn_blocking(move || {
+            gents::identity::KeyIdentity::load_or_create(source_key, None)
+        })
+        .await??;
         assert!(gents::identity::can_mint_defradb_bearer(&did));
         let warm = core
             .session_goal_observation(&did, "warm-goal-session")
@@ -507,7 +522,7 @@ mod tests {
             "background observation must not unlock the runtime identity"
         );
         assert!(
-            std::fs::read(&key)? == original_key,
+            tokio::fs::read(&key).await? == original_key,
             "runtime key must remain unchanged"
         );
         assert!(
