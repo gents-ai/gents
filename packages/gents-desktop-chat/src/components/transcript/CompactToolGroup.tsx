@@ -33,6 +33,10 @@ export function coalesceToolGroups(items: RenderedTimelineItem[]) {
       continue;
     }
     const owner = physicalGroupOwner(item);
+    if (!owner) {
+      result.push(item);
+      continue;
+    }
     const chunks = [item.tools];
     for (
       let next = items[index + 1];
@@ -41,7 +45,7 @@ export function coalesceToolGroups(items: RenderedTimelineItem[]) {
     ) {
       chunks.push(next.tools);
     }
-    result.push({ ...item, tools: chunks.flat() });
+    result.push(chunks.length === 1 ? item : { ...item, tools: chunks.flat() });
   }
   return result;
 }
