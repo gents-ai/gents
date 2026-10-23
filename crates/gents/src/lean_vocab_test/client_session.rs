@@ -48,6 +48,7 @@ pub(crate) struct LeanSessionTurnRow {
     pub(crate) retry_parent_doc: Option<usize>,
     pub(crate) completed: bool,
     pub(crate) public_input: bool,
+    pub(crate) background_wake: bool,
     pub(crate) authored_input_materialized: bool,
 }
 
@@ -56,6 +57,11 @@ pub(crate) struct LeanSessionTurnRow {
 pub(crate) struct LeanSessionTurnCase {
     pub(crate) name: String,
     pub(crate) rows: Vec<LeanSessionTurnRow>,
+    pub(crate) selected_doc: usize,
+    pub(crate) page_request_docs: Vec<usize>,
+    pub(crate) seed_docs: Vec<usize>,
+    pub(crate) native_completion_premise: bool,
+    pub(crate) expected_display_turn_doc: usize,
     pub(crate) expected_read_docs: Vec<usize>,
     pub(crate) expected_turn_doc: usize,
     pub(crate) expected_answer_doc: usize,

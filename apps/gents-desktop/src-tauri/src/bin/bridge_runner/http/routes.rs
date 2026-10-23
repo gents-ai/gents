@@ -743,12 +743,9 @@ pub(super) fn handle_request(
                 decode(&request.body, "decoding background tool request")?;
             let core = fixture.desktop_core();
             let result = runtime
-                .block_on(gents::background_tools::request_foreground_backgrounding(
-                    &gents::config_client::ConfigAccess::local(core.node_arc()),
-                    &background.node_did,
-                    &background.session_id,
-                    &background.request_id,
-                    &background.tool_call_id,
+                .block_on(gents_desktop_bridge::commands::background_tool(
+                    core.as_ref(),
+                    background,
                 ))
                 .map_err(|error| anyhow!("{error}"))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))

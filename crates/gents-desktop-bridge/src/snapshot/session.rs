@@ -56,13 +56,9 @@ pub use timeline_page::{apply_session_timeline_page, apply_session_timeline_page
 
 pub(super) fn message_is_runtime_control(
     message: &TranscriptMessageRow,
-    requests_by_id: &HashMap<&str, &AgentRequestRow>,
+    input_request: Option<&AgentRequestRow>,
 ) -> bool {
-    let request_input = message
-        .message
-        .request_doc_id
-        .as_deref()
-        .and_then(|request_id| requests_by_id.get(request_id))
+    let request_input = input_request
         .and_then(|request| request.input.as_ref())
         .cloned()
         .unwrap_or_default();
@@ -116,7 +112,7 @@ pub(super) fn request_origin_view(
 pub(super) fn message_origin(
     store: &ClientStore,
     message: &TranscriptMessageRow,
-    requests_by_id: &HashMap<&str, &AgentRequestRow>,
+    input_request: Option<&AgentRequestRow>,
 ) -> Option<RequestOriginView> {
     if message.message.role != gents_protocol::output::MessageRole::User {
         return None;
@@ -126,12 +122,7 @@ pub(super) fn message_origin(
     ) {
         return Some(RequestOriginView::BackgroundCompletion);
     }
-    message
-        .message
-        .request_doc_id
-        .as_deref()
-        .and_then(|request_id| requests_by_id.get(request_id))
-        .and_then(|request| request_origin_view(store, request))
+    input_request.and_then(|request| request_origin_view(store, request))
 }
 
 pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {

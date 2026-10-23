@@ -8,9 +8,10 @@ open ClientShell.SessionTurn Conformance.Contracts
 def row (doc request : Nat) (state : RowState) (requester : Nat := 1)
     (foldedInto : Option Nat := none) (queuedAfter retryParent : Option Nat := none)
     (retryParentDoc : Option Nat := none) (completed : Bool := false)
-    (publicInput : Bool := true) (authoredInputMaterialized : Bool := false) : Row :=
+    (publicInput : Bool := true) (authoredInputMaterialized : Bool := false)
+    (backgroundWake : Bool := false) : Row :=
   { doc, request, requester, state, foldedInto, queuedAfter, retryParent,
-    retryParentDoc, completed, publicInput, authoredInputMaterialized }
+    retryParentDoc, completed, publicInput, authoredInputMaterialized, backgroundWake }
 
 def scenarios : List (String × List Row) :=
   [ ("retry_waiting_behind_another_turn_has_no_answer_yet",
@@ -91,7 +92,7 @@ def scenarios : List (String × List Row) :=
         [row 1 100 .unclaimed (queuedAfter := some 101),
          row 2 101 .unclaimed (queuedAfter := some 100)])
      , ("physical_retry_parent_is_retained_for_prompt_ownership",
-        [ row 1 100 .terminal (completed := true)
+        [ row 1 100 .terminal (completed := true) (authoredInputMaterialized := true)
         , row 2 101 .active (retryParent := some 100) (retryParentDoc := some 1) ])
      , ("completed_without_authored_input_is_retained",
         [ row 1 100 .terminal (completed := true)
@@ -127,26 +128,38 @@ def rowJson (r : Row) : String :=
   ",\"retry_parent_doc\":" ++ optNat r.retryParentDoc ++
   ",\"completed\":" ++ (if r.completed then "true" else "false") ++
   ",\"public_input\":" ++ (if r.publicInput then "true" else "false") ++
+  ",\"background_wake\":" ++ (if r.backgroundWake then "true" else "false") ++
   ",\"authored_input_materialized\":" ++
     (if r.authoredInputMaterialized then "true" else "false") ++ "}"
 
 def rowsJson (rows : List Row) : String :=
   "[" ++ String.intercalate "," (rows.map rowJson) ++ "]"
 
-def caseJsonWithPage (name : String) (rows : List Row) (pageRequestDocs : List Nat) : String :=
+def caseJsonWithSelection (name : String) (rows : List Row) (pageRequestDocs : List Nat)
+    (selectedDoc : Option Nat := none) : String :=
   match newest rows with
   | none => "null"
   | some last =>
-    let turn := turnOf rows last
-    let readRows := requestReadRows rows last.requester last.doc last.doc pageRequestDocs
+    let selected := (selectedDoc.bind (fun doc => rows.find? (fun row => row.doc == doc))).getD last
+    let turn := turnOf rows selected
+    let display := displayTurn rows selected
+    let readRows := requestReadRows rows selected.requester selected.doc selected.doc pageRequestDocs
     "{\"name\":" ++ jsonString name ++
     ",\"rows\":" ++ rowsJson rows ++
+    ",\"selected_doc\":" ++ toString selected.doc ++
+    ",\"page_request_docs\":" ++ natList pageRequestDocs ++
+    ",\"seed_docs\":" ++ natList ((requestReadSeeds rows selected.requester selected.doc selected.doc pageRequestDocs).map (·.doc)) ++
+    ",\"native_completion_premise\":" ++ (if nativeCompletionPremise rows then "true" else "false") ++
+    ",\"expected_display_turn_doc\":" ++ toString display.doc ++
     ",\"expected_read_docs\":" ++ natList (readRows.map (·.doc)) ++
     ",\"expected_turn_doc\":" ++ toString turn.doc ++
-    ",\"expected_answer_doc\":" ++ toString (answerOf rows last).doc ++
-    ",\"expected_queued_docs\":" ++ natList ((queuedBehind rows turn).map (·.doc)) ++
+    ",\"expected_answer_doc\":" ++ toString (answerOf rows selected).doc ++
+    ",\"expected_queued_docs\":" ++ natList ((queuedBehind rows display).map (·.doc)) ++
     ",\"expected_folded_requests\":" ++
-      natList ((foldedIn rows last.requester).map (·.request)) ++ "}"
+      natList ((foldedIn rows selected.requester).map (·.request)) ++ "}"
+
+def caseJsonWithPage (name : String) (rows : List Row) (pageRequestDocs : List Nat) : String :=
+  caseJsonWithSelection name rows pageRequestDocs
 
 def caseJson (entry : String × List Row) : String :=
   caseJsonWithPage entry.1 entry.2 []
@@ -156,8 +169,32 @@ def casesJson : String :=
     [ row 1 100 .terminal (completed := true) (authoredInputMaterialized := true)
     , row 2 101 .active ]
   "[" ++ String.intercalate "," (scenarios.map caseJson ++
-    [caseJsonWithPage "page_request_is_retained" pageRows [1]]) ++ "]"
+    [caseJsonWithPage "page_request_is_retained" pageRows [1],
+     caseJsonWithSelection "stale_terminal_observation_yields_to_active_background_turn"
+       [row 1 100 .terminal, row 2 101 .active (backgroundWake := true),
+        row 3 102 .terminal (foldedInto := some 2)] [] (some 1),
+     caseJsonWithSelection "stale_terminal_observation_keeps_active_background_without_new_input"
+       [row 1 100 .terminal, row 2 101 .active (backgroundWake := true)] [] (some 1),
+     caseJsonWithSelection "active_turn_does_not_cross_requester_scope"
+       [row 1 100 .terminal, row 2 101 .active (requester := 2)] [] (some 1),
+     caseJsonWithSelection "active_observed_turn_is_preserved"
+       [row 1 100 .active, row 2 101 .active] [] (some 1),
+     caseJsonWithSelection "unclaimed_observed_turn_is_preserved"
+       [row 1 100 .unclaimed, row 2 101 .active] [] (some 1),
+     caseJsonWithSelection "title_audit_does_not_replace_a_terminal_observation"
+       [row 1 100 .terminal, row 2 101 .active (publicInput := false)] [] (some 1),
+     caseJsonWithSelection "completed_background_does_not_restore_an_older_stopped_notice"
+       [row 1 100 .terminal,
+        row 2 101 .terminal (completed := true) (backgroundWake := true)
+          (authoredInputMaterialized := true)] [] (some 1),
+     caseJsonWithSelection "completed_background_keeps_its_folded_input_owner"
+       [row 1 100 .terminal,
+        row 2 101 .terminal (completed := true) (backgroundWake := true)
+          (authoredInputMaterialized := true),
+        row 3 102 .terminal (foldedInto := some 2)] [] (some 1),
+     caseJsonWithSelection "older_active_row_does_not_revive_a_newer_terminal_turn"
+       [row 1 100 .active, row 2 101 .terminal] [] (some 2)]) ++ "]"
 
-def caseCount : Nat := scenarios.length + 1
+def caseCount : Nat := scenarios.length + 10
 
 end Conformance.ClientShellContracts.SessionTurnCases
