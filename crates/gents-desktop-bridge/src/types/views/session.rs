@@ -3,9 +3,21 @@ use ts_rs::TS;
 
 use super::operations::DerivedCancelCauseView;
 
+/// Observed physical request ownership; absent lifecycle facts remain unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestTurnView {
+    pub request_doc_id: String,
+    pub request_id: String,
+    pub settled: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub request_turn: Option<RequestTurnView>,
     pub message_key: String,
     pub request_id: Option<String>,
     pub owns_turn: bool,
@@ -88,6 +100,9 @@ pub struct MessageReconstructionView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub request_turn: Option<RequestTurnView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub background_available: Option<bool>,
@@ -248,6 +263,9 @@ pub enum ToolPresentationView {
 pub struct RenderedToolCallView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
+    pub request_turn: Option<RequestTurnView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub background_available: Option<bool>,
     pub item_key: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -379,6 +397,9 @@ pub enum RenderedTimelineItem {
     },
     #[serde(rename_all = "camelCase")]
     AssistantMessage {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        request_turn: Option<RequestTurnView>,
         item_key: String,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]

@@ -905,6 +905,7 @@ fn active_store() -> ClientStore {
 
 fn assistant_item(key: &str, sequence: i64) -> RenderedTimelineItem {
     RenderedTimelineItem::AssistantMessage {
+        request_turn: None,
         item_key: key.into(),
         request_id: None,
         sequence: Some(sequence),
@@ -1132,4 +1133,71 @@ fn context_events_page_with_their_durable_message_anchor() {
             "session-compaction:checkpoint-1"
         ]
     );
+}
+
+#[test]
+fn rendered_request_turns_preserve_physical_owners_and_unknown_lifecycle() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: [
+            ("physical-completed", Some(RequestLifecycleState::Completed)),
+            ("physical-active", Some(RequestLifecycleState::Processing)),
+            ("physical-unknown", None),
+        ]
+        .into_iter()
+        .map(|(id, state)| AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some(id.into()),
+            request_id: "same-logical-id".into(),
+            node_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: state,
+            ..Default::default()
+        })
+        .collect(),
+        ..ClientStoreRows::default()
+    };
+    for (index, physical) in [
+        "physical-completed",
+        "physical-active",
+        "physical-unknown",
+        "missing-owner",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        push_canonical_text_message(
+            &mut rows,
+            &format!("answer-{index}"),
+            "sess-1",
+            Some(physical),
+            index as u32 + 1,
+            MessageRole::Assistant,
+            "Result",
+        );
+    }
+    let snapshot = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
+        .expect("snapshot");
+    let turns = snapshot
+        .timeline_items
+        .iter()
+        .filter_map(|item| match item {
+            RenderedTimelineItem::AssistantMessage { request_turn, .. } => {
+                Some(request_turn.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(turns.len(), 4);
+    for (turn, physical, settled) in [
+        (&turns[0], "physical-completed", Some(true)),
+        (&turns[1], "physical-active", Some(false)),
+        (&turns[2], "physical-unknown", None),
+    ] {
+        let turn = turn.as_ref().expect("exact observed owner");
+        assert_eq!(turn.request_doc_id, physical);
+        assert_eq!(turn.request_id, "same-logical-id");
+        assert_eq!(turn.settled, settled);
+    }
+    assert!(turns[3].is_none());
 }

@@ -3,6 +3,16 @@ use gents_desktop_core::client::canonical_output::{
     project_canonical_live, CanonicalMessageProjection,
 };
 
+fn request_turn(request: &AgentRequestRow) -> Option<crate::types::RequestTurnView> {
+    Some(crate::types::RequestTurnView {
+        request_doc_id: request.doc_id.clone()?,
+        request_id: request.request_id.clone(),
+        settled: request
+            .lifecycle_state
+            .map(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal),
+    })
+}
+
 fn project_message_with_dependencies(
     row: &gents::session::canonical_rows::TranscriptMessageRow,
     observed_messages: &[gents_protocol::output::origin::ObservedMessage<'_>],
@@ -649,6 +659,12 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
             };
 
             MessageView {
+                request_turn: row
+                    .message
+                    .request_doc_id
+                    .as_deref()
+                    .and_then(|id| requests_by_doc_id.get(id))
+                    .and_then(|request| request_turn(request)),
                 message_key: row.message.message_key.clone(),
                 request_id: row
                     .message
@@ -779,6 +795,11 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 None => (None, None, None),
             };
             ToolCallView {
+                request_turn: row
+                    .request_doc_id
+                    .as_deref()
+                    .and_then(|id| requests_by_doc_id.get(id))
+                    .and_then(|request| request_turn(request)),
                 background_available: Some(
                     row.lifecycle_state.as_deref() == Some("running")
                         && row.await_mode.as_deref() == Some("foreground")

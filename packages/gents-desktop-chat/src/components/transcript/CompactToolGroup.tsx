@@ -15,6 +15,15 @@ import {
   type ActionEntry,
 } from "./actionPresentation.js";
 
+function physicalGroupOwner(
+  item: Extract<RenderedTimelineItem, { kind: "toolGroup" }>,
+) {
+  const owners = new Set(
+    item.tools.map((tool) => tool.requestTurn?.requestDocId),
+  );
+  return owners.size === 1 ? owners.values().next().value : null;
+}
+
 export function coalesceToolGroups(items: RenderedTimelineItem[]) {
   const result: RenderedTimelineItem[] = [];
   for (let index = 0; index < items.length; index += 1) {
@@ -23,10 +32,11 @@ export function coalesceToolGroups(items: RenderedTimelineItem[]) {
       result.push(item);
       continue;
     }
+    const owner = physicalGroupOwner(item);
     const chunks = [item.tools];
     for (
       let next = items[index + 1];
-      next?.kind === "toolGroup";
+      next?.kind === "toolGroup" && physicalGroupOwner(next) === owner;
       next = items[++index + 1]
     ) {
       chunks.push(next.tools);

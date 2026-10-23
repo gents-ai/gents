@@ -34,6 +34,7 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         project_tool_presentation(&unavailable)
     };
     RenderedToolCallView {
+        request_turn: tool.request_turn.clone(),
         background_available: tool.background_available,
         item_key: tool.tool_call_key.clone(),
         tool_call_doc_id: tool.tool_call_doc_id.clone(),
@@ -223,6 +224,7 @@ pub(super) fn build_rendered_timeline(
             (
                 true,
                 Some(RenderedTimelineItem::AssistantMessage {
+                    request_turn: message.request_turn.clone(),
                     item_key: message.message_key.clone(),
                     request_id: message.request_id.clone(),
                     sequence: message.sequence,
@@ -296,6 +298,7 @@ mod tests {
 
     fn user_message(key: &str, sequence: i64, content: &str) -> MessageView {
         MessageView {
+            request_turn: None,
             message_key: key.to_string(),
             request_id: Some("request-1".to_string()),
             owns_turn: false,
@@ -349,6 +352,11 @@ mod tests {
     #[test]
     fn session_message_identity_and_await_mode_reach_rendered_tool() {
         let tool = ToolCallView {
+            request_turn: Some(crate::types::RequestTurnView {
+                request_doc_id: "physical-parent".into(),
+                request_id: "parent-1".into(),
+                settled: Some(false),
+            }),
             background_available: None,
             tool_call_doc_id: Some("physical-tool".into()),
             tool_call_key: "start-1".to_string(),
@@ -382,6 +390,7 @@ mod tests {
             job_next_calls: Vec::new(),
         };
         let rendered = render_tool_call(tool.clone());
+        assert_eq!(rendered.request_turn, tool.request_turn);
         assert_eq!(rendered.tool_call_doc_id.as_deref(), Some("physical-tool"));
 
         assert_eq!(rendered.tool_name, "agent_new");
@@ -406,6 +415,7 @@ mod tests {
         }
 
         let unresolved = render_tool_call(ToolCallView {
+            request_turn: None,
             tool_name: Some("custom".to_string()),
             args: Some("private arguments".to_string()),
             result: Some("partial result".to_string()),

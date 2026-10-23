@@ -21,6 +21,7 @@ export type ChatTranscriptPanelProps = {
   session: DesktopSessionSnapshot | null;
   optimisticPendingTurn?: OptimisticPendingTurn | null;
   activity?: ReactNode;
+  renderAfterItem?: (item: RenderedTimelineItem) => ReactNode;
   onEditUserMessage?: (
     item: Extract<RenderedTimelineItem, { kind: "userMessage" }>,
   ) => void;
@@ -46,6 +47,7 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
             item.itemKey,
             item.content?.length ?? 0,
             item.reasoning?.length ?? 0,
+            item.kind === "assistantMessage" ? item.requestTurn : null,
           ];
         case "userMessage":
         case "automatedInput":
@@ -75,6 +77,7 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
             item.tools.map((tool) => [
               tool.itemKey,
               tool.statusKind,
+              tool.requestTurn,
               tool.presentation,
               tool.partialOutputTail?.length ?? 0,
               tool.cancelCause?.cause ?? "",
@@ -95,6 +98,7 @@ export function ChatTranscriptPanel({
   session,
   optimisticPendingTurn,
   activity,
+  renderAfterItem,
   onEditUserMessage,
   onRetryMessage,
   retryUnavailableHint,
@@ -505,6 +509,7 @@ export function ChatTranscriptPanel({
             </div>
           ) : null}
           <MessageList
+            renderAfterItem={renderAfterItem}
             onEditUserMessage={onEditUserMessage}
             compactTools={compactTools}
             timelineItems={visibleTimelineItems}

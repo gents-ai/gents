@@ -111,3 +111,30 @@ test("keeps attachment-only optimistic input visible before its receipt", () => 
   expect(html).toContain("scratch.rs");
   expect(html).toContain("Sending message");
 });
+
+test("keeps turn attachments inside their measured transcript row", () => {
+  const html = renderToStaticMarkup(
+    <ChatTranscriptPanel
+      selectedSessionId="session"
+      session={{
+        ...session,
+        timelineItems: [
+          {
+            kind: "assistantMessage",
+            itemKey: "answer",
+            content: "Finished answer",
+            reconstruction: { state: "ready" },
+          },
+        ],
+      }}
+      activity={null}
+      renderAfterItem={(item) => (
+        <section data-after={item.itemKey}>Recorded changes</section>
+      )}
+    />,
+  );
+  const after = html.indexOf('data-after="answer"');
+  expect(after).toBeGreaterThan(html.indexOf("Finished answer"));
+  expect(after).toBeLessThan(html.indexOf("</li>"));
+  expect(html.match(/Recorded changes/g)).toHaveLength(1);
+});
