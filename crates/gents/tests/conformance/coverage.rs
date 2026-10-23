@@ -690,6 +690,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_reply_journal_cases,
         ),
         (
+            "file_inventory_preparation_cases",
+            "FileInventoryPreparationCases",
+            &snapshot.file_inventory_preparation_cases,
+        ),
+        (
             "file_inventory_completion_cases",
             "FileInventoryCompletionCases",
             &snapshot.file_inventory_completion_cases,

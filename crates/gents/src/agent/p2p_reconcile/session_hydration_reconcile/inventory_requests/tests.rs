@@ -65,10 +65,15 @@ async fn receive_page(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn enrolled_inventory_pages_sixty_five_changes_without_hydrating_images() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(120), exercise_inventory_delivery()).await?
+    tokio::time::timeout(Duration::from_secs(120), exercise_inventory_delivery(false)).await?
 }
 
-async fn exercise_inventory_delivery() -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn enrolled_inventory_retries_keep_preparation_and_refusal_after_revocation() -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(120), exercise_inventory_delivery(true)).await?
+}
+
+async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
     let contracts: Value =
         tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>).await??;
     let model = contracts["file_inventory_receiver_cases"]
@@ -303,12 +308,13 @@ async fn exercise_inventory_delivery() -> Result<()> {
         native.entries().len() == expected_paths.len(),
         "native inventory omitted real mutations"
     );
+    let source_cancel = cancel.child_token();
     let source_task =
         tokio_util::task::AbortOnDropHandle::new(tokio::spawn(run_session_hydration_reconciler(
             source_node.clone(),
             authority.clone(),
             source.clone(),
-            cancel.clone(),
+            source_cancel.clone(),
         )));
     let mut receiver = FileInventoryReceiver {
         admission: demand.admission.clone(),
@@ -340,6 +346,25 @@ async fn exercise_inventory_delivery() -> Result<()> {
             && prefix.known_inventory() == expected["known_inventory"].as_bool().unwrap(),
         "transport did not complete modeled coverage"
     );
+    source_cancel.cancel();
+    source_task.await??;
+    if recovery {
+        exercise_recovery(RecoveryContext {
+            store: &store,
+            client_node: &client_node,
+            client: &client,
+            request: &mut request,
+            workspace: &workspace,
+            output: &output,
+            demand: &demand,
+            snapshot: &native,
+            expected_count: expected_paths.len(),
+            enrollment: &enrollment,
+            client_address: &client_addresses[0],
+            contracts: &contracts,
+        })
+        .await?;
+    }
     for collection in ["ToolFileChange", "ToolFileInventory"] {
         let response = ConfigAccess::local(client_node.clone())
             .execute(&format!("{{ {collection} {{ _docID }} }}"))
@@ -358,7 +383,7 @@ async fn exercise_inventory_delivery() -> Result<()> {
         )
         .await?;
         anyhow::ensure!(
-            source_documents.len() == expected_paths.len(),
+            source_documents.len() == expected_paths.len() + usize::from(recovery),
             "source capture set is incomplete"
         );
         let as_creator = ConfigAccess::transact_local_readonly(
@@ -398,10 +423,380 @@ async fn exercise_inventory_delivery() -> Result<()> {
         }
     }
     cancel.cancel();
-    source_task.await??;
     enrollment_task.await??;
     pairing_task.await??;
     client_node.shutdown().await;
     source_node.shutdown().await;
     Ok(())
+}
+
+struct RecoveryContext<'a> {
+    store: &'a GraphqlHydrationStore,
+    client_node: &'a Arc<EmbeddedNode>,
+    client: &'a Arc<dyn NodeIdentity>,
+    request: &'a mut RequestLifecycle,
+    workspace: &'a std::path::Path,
+    output: &'a LiveToolOutputRegistry,
+    demand: &'a FileInventoryPageDemand,
+    snapshot: &'a FileInventorySnapshot,
+    expected_count: usize,
+    enrollment: &'a str,
+    client_address: &'a str,
+    contracts: &'a Value,
+}
+
+async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
+    let RecoveryContext {
+        store,
+        client_node,
+        client,
+        request,
+        workspace,
+        output,
+        demand,
+        snapshot,
+        expected_count,
+        enrollment,
+        client_address,
+        contracts,
+    } = context;
+    let source_node = &store.node;
+    let source = &store.identity;
+    let mut retry = demand.clone();
+    retry.cursor = None;
+    retry.attempt_id.push_str("-lost-ack");
+    admit_demand(client_node, &retry).await?;
+    let row = wait_request(source_node, &retry).await?;
+    let lost = LostAcknowledgment {
+        inner: EmbeddedHydrationDelivery {
+            node: source_node.clone(),
+        },
+        documents: std::sync::Mutex::new(Vec::new()),
+    };
+    serve_inventory(store, &lost, &row).await?;
+    anyhow::ensure!(
+        completion_case(contracts, true, true, false)?["expected"].is_null(),
+        "model settled an unacknowledged page"
+    );
+    let waiting = wait_request(source_node, &retry).await?;
+    anyhow::ensure!(
+        waiting.response.is_none()
+            && crate::file_inventory::load_recorded_reply(source_node, &retry, source.as_ref())
+                .await?
+                .is_none(),
+        "lost acknowledgment settled a pending request"
+    );
+    let prepared = load_prepared_page(source_node, &retry, source.as_ref())
+        .await?
+        .context("prepared retry page")?;
+    let calls = lost.documents.lock().unwrap().clone();
+    anyhow::ensure!(
+        calls.len() == HYDRATION_DELIVERY_MAX_ATTEMPTS
+            && calls
+                .iter()
+                .all(|document| document == &prepared.document_id),
+        "retry changed its prepared document"
+    );
+    let path = "src/late.rs";
+    tokio::fs::write(workspace.join(path), "late before\n").await?;
+    let arguments =
+        json!({"path":path, "content":"late after\n", "overwrite":true, "raw_json":true});
+    let mut late = publish_accepted_on_claimed_request(
+        source_node.clone(),
+        request,
+        source.did(),
+        expected_count,
+        "write_file",
+        "inventory-late-write",
+        arguments.clone(),
+        AwaitMode::Foreground,
+        true,
+    )
+    .await?;
+    let physical = late.doc_id().context("late physical tool")?.to_owned();
+    let writer = output.writer_for(physical.clone()).await;
+    let mutator = crate::toolset::write_file_for_test(workspace);
+    let result = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None, CancellationToken::new(), None, Some(writer), None, None, Default::default(), false,
+        mutator.call(arguments.to_string())).await?;
+    late.stage_deferred_writes(output.deferred_writes(&physical).await);
+    late.complete(&result).await?;
+    let changed = FileInventorySnapshot::load(source_node, &retry.admission).await?;
+    anyhow::ensure!(
+        changed.binding() != snapshot.binding(),
+        "later native mutation did not change the snapshot"
+    );
+    let delivered = EmbeddedHydrationDelivery {
+        node: source_node.clone(),
+    };
+    serve_inventory(store, &delivered, &waiting).await?;
+    let response = wait_request(source_node, &retry)
+        .await?
+        .response
+        .context("recovered response")?;
+    VerifiedInventoryResponse::verify(response.clone(), &retry, client.as_ref()).await?;
+    let recovered = receive_page(client_node, &retry, client.as_ref()).await?;
+    let preparation = contracts["file_inventory_preparation_cases"]
+        .as_array()
+        .context("preparation cases")?
+        .iter()
+        .find(|case| case["name"] == "membership_changed_after_preparation")
+        .context("changed preparation case")?;
+    anyhow::ensure!(
+        preparation["expected"] == preparation["prior"],
+        "model replaced an existing preparation"
+    );
+    anyhow::ensure!(
+        recovered == prepared.receipt,
+        "reply loss changed the original signed snapshot"
+    );
+    reset_request(source_node, &retry).await?;
+    let no_delivery = NoDelivery(std::sync::atomic::AtomicUsize::new(0));
+    serve_inventory(
+        store,
+        &no_delivery,
+        &wait_request(source_node, &retry).await?,
+    )
+    .await?;
+    anyhow::ensure!(
+        no_delivery.0.load(std::sync::atomic::Ordering::SeqCst) == 0,
+        "settled reply was redelivered"
+    );
+    let replay = wait_request(source_node, &retry)
+        .await?
+        .response
+        .context("replayed response")?;
+    anyhow::ensure!(
+        replay == response,
+        "reply replay changed its signed reference"
+    );
+    let mut continuation = retry.clone();
+    continuation.cursor = prepared.receipt.page.next.clone();
+    admit_demand(client_node, &continuation).await?;
+    serve_inventory(
+        store,
+        &no_delivery,
+        &wait_request(source_node, &continuation).await?,
+    )
+    .await?;
+    let stale = wait_request(source_node, &continuation)
+        .await?
+        .response
+        .context("stale response")?;
+    let verified = VerifiedInventoryResponse::verify(stale, &continuation, client.as_ref()).await?;
+    let FileInventoryResponse::Refused(receipt) = verified.response() else {
+        anyhow::bail!("stale continuation became a page");
+    };
+    anyhow::ensure!(
+        serde_json::to_value(receipt.reason)? == preparation["unprepared_continuation"]["kind"],
+        "native stale continuation disagrees with model execution"
+    );
+    let mut revoked = retry.clone();
+    revoked.attempt_id.push_str("-revoked");
+    admit_demand(client_node, &revoked).await?;
+    let fence = store
+        .inventory_admission(&revoked)
+        .await?
+        .authorization
+        .context("current fence")?;
+    let revocation = RevokeAfterAcknowledgment {
+        inner: EmbeddedHydrationDelivery {
+            node: source_node.clone(),
+        },
+        enrollment: GraphqlEnrollmentStore::new(source_node.clone(), source.clone()),
+        request: enrollment.into(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    };
+    serve_inventory(
+        store,
+        &revocation,
+        &wait_request(source_node, &revoked).await?,
+    )
+    .await?;
+    anyhow::ensure!(
+        revocation.calls.load(std::sync::atomic::Ordering::SeqCst) == 1
+            && !store.inventory_current(&revoked, &fence).await?,
+        "delivery did not observe real enrollment revocation"
+    );
+    let refusal = wait_request(source_node, &revoked)
+        .await?
+        .response
+        .context("revoked response")?;
+    let verified =
+        VerifiedInventoryResponse::verify(refusal.clone(), &revoked, client.as_ref()).await?;
+    let FileInventoryResponse::Refused(receipt) = verified.response() else {
+        anyhow::bail!("revoked delivery became a page grant");
+    };
+    anyhow::ensure!(
+        serde_json::to_value(receipt.reason)?
+            == completion_case(contracts, true, false, true)?["expected"]["reason"],
+        "real revocation disagrees with model execution"
+    );
+    let mut authority_changes = crate::subscribe_collections(
+        source_node,
+        [
+            "NetworkEnrollmentRequest",
+            "NetworkEnrollmentDecision",
+            "NetworkAuthorizationRevision",
+            "PeerPairingApplied",
+        ],
+    )?;
+    let _new_enrollment = authorize_enrollment_peer(
+        source_node.clone(),
+        source.clone(),
+        client.clone(),
+        &revoked.admission.request.peer_id,
+        client_address,
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let admission = store.inventory_admission(&revoked).await?;
+            if matches!(
+                decide_hydration(&revoked.admission.request, &admission.catalog),
+                HydrationVerdict::Admit(_)
+            ) {
+                return Ok::<_, anyhow::Error>(());
+            }
+            authority_changes
+                .recv()
+                .await
+                .context("restored enrollment observation closed")?;
+        }
+    })
+    .await
+    .context("reenrollment did not restore the inventory route")??;
+    reset_request(source_node, &revoked).await?;
+    serve_inventory(
+        store,
+        &no_delivery,
+        &wait_request(source_node, &revoked).await?,
+    )
+    .await?;
+    anyhow::ensure!(
+        wait_request(source_node, &revoked).await?.response == Some(refusal),
+        "reenrollment replaced a terminal refusal"
+    );
+    let mut fresh = revoked.clone();
+    fresh.attempt_id.push_str("-fresh");
+    admit_demand(client_node, &fresh).await?;
+    serve_inventory(store, &delivered, &wait_request(source_node, &fresh).await?).await?;
+    VerifiedInventoryResponse::verify(
+        wait_request(source_node, &fresh)
+            .await?
+            .response
+            .context("fresh response")?,
+        &fresh,
+        client.as_ref(),
+    )
+    .await?;
+    let page = receive_page(client_node, &fresh, client.as_ref()).await?;
+    anyhow::ensure!(
+        &page.page.binding == changed.binding(),
+        "explicit retry did not select the current snapshot"
+    );
+    Ok(())
+}
+
+fn completion_case(
+    contracts: &Value,
+    before: bool,
+    after: bool,
+    confirmed: bool,
+) -> Result<&Value> {
+    contracts["file_inventory_completion_cases"]
+        .as_array()
+        .context("completion cases")?
+        .iter()
+        .find(|case| {
+            case["candidate"]["kind"] == "page"
+                && case["before"] == before
+                && case["after"] == after
+                && case["confirmed"] == confirmed
+                && case["committed"] == true
+        })
+        .context("modeled delivery observation")
+}
+
+async fn wait_request(
+    node: &Arc<EmbeddedNode>,
+    demand: &FileInventoryPageDemand,
+) -> Result<InventoryRequestRow> {
+    let mut changes = crate::subscribe_collections(node, ["FileInventoryRequest"])?;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Some(row) = ConfigAccess::transact_local_readonly(
+                node,
+                None,
+                "test.inventory.wait_request",
+                |txn| {
+                    Box::pin(crate::file_inventory::requests::load_request_in_txn(
+                        txn, demand,
+                    ))
+                },
+            )
+            .await?
+            {
+                return Ok(row);
+            }
+            changes
+                .recv()
+                .await
+                .context("inventory request observation closed")?;
+        }
+    })
+    .await
+    .context("inventory request did not arrive")?
+}
+
+async fn reset_request(node: &Arc<EmbeddedNode>, demand: &FileInventoryPageDemand) -> Result<()> {
+    let row = wait_request(node, demand).await?;
+    ConfigAccess::write_local(node, "test.inventory.lose_response", &format!(
+        r#"mutation {{ update_FileInventoryRequest(docID: "{}", input: {{ status: "pending", response: null }}) {{ _docID }} }}"#,
+        escape_graphql_string(&row.document_id))).await?;
+    Ok(())
+}
+
+struct LostAcknowledgment {
+    inner: EmbeddedHydrationDelivery,
+    documents: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl HydrationDelivery for LostAcknowledgment {
+    async fn push_documents_to_peer(&self, peer: &str, target: DeliveryTarget<'_>) -> Result<()> {
+        let DeliveryTarget::FileInventory(document) = target else {
+            anyhow::bail!("unexpected delivery target");
+        };
+        self.documents.lock().unwrap().push(document.to_owned());
+        self.inner.push_documents_to_peer(peer, target).await?;
+        anyhow::bail!("injected lost acknowledgment after actual metadata delivery")
+    }
+}
+
+struct NoDelivery(std::sync::atomic::AtomicUsize);
+
+#[async_trait]
+impl HydrationDelivery for NoDelivery {
+    async fn push_documents_to_peer(&self, _: &str, _: DeliveryTarget<'_>) -> Result<()> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        anyhow::bail!("settled attempts must not perform another transfer")
+    }
+}
+
+struct RevokeAfterAcknowledgment {
+    inner: EmbeddedHydrationDelivery,
+    enrollment: GraphqlEnrollmentStore,
+    request: String,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl HydrationDelivery for RevokeAfterAcknowledgment {
+    async fn push_documents_to_peer(&self, peer: &str, target: DeliveryTarget<'_>) -> Result<()> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.push_documents_to_peer(peer, target).await?;
+        self.enrollment.revoke_request(&self.request).await?;
+        Ok(())
+    }
 }

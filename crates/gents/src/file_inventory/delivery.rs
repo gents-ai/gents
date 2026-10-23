@@ -105,20 +105,35 @@ pub(crate) async fn prepare_page(
         "file inventory preparation requires the source node"
     );
     ConfigAccess::transact_local_write(node, None, "file_inventory.prepare_page", |txn| {
-        Box::pin(async move {
-            if let Some(prior) = load_prepared_in_txn(txn, demand, verifier).await? { return Ok(prior); }
-            super::verify_reply(demand, &FileInventoryReply::Page(candidate.clone()), verifier).await?;
-            let response = txn.execute_with_variables(
+        Box::pin(prepare_page_in_txn(txn, demand, candidate, verifier))
+    })
+    .await
+}
+
+pub(super) async fn prepare_page_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    demand: &FileInventoryPageDemand,
+    candidate: &FileInventoryPageReceipt,
+    verifier: &dyn NodeIdentity,
+) -> Result<PreparedInventoryPage> {
+    if let Some(prior) = load_prepared_in_txn(txn, demand, verifier).await? {
+        return Ok(prior);
+    }
+    super::verify_reply(
+        demand,
+        &FileInventoryReply::Page(candidate.clone()),
+        verifier,
+    )
+    .await?;
+    let response = txn.execute_with_variables(
                 "mutation($input: FileInventoryPageMutationInputArg!) { create_FileInventoryPage(input: $input) { _docID } }",
                 &serde_json::json!({"input": { "request_key": demand.derive_request_key()?,
                     "node_did": demand.admission.request.node_did, "demand": demand, "receipt": candidate }}),
             ).await?;
-            Ok(PreparedInventoryPage {
-                document_id: crate::graphql::created_doc_id(&response, "FileInventoryPage")?,
-                receipt: candidate.clone(),
-            })
-        })
-    }).await
+    Ok(PreparedInventoryPage {
+        document_id: crate::graphql::created_doc_id(&response, "FileInventoryPage")?,
+        receipt: candidate.clone(),
+    })
 }
 
 pub(crate) async fn sign_page_grant(

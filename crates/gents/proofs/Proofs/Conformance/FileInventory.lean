@@ -163,6 +163,12 @@ private def pageJson (value : Page) : String := object
   [("snapshot", snapshotJson value.snapshot), ("offset", toString value.offset),
    ("entries", jsonArray (value.entries.map entryJson)), ("next", optional cursorJson value.next)]
 
+private def refusalReasonJson : RefusalReason → String
+  | .rejected => jsonString "rejected"
+  | .stale => jsonString "stale"
+  | .unavailable => jsonString "unavailable"
+
+
 private def sourceProjectionCaseJson (value : SelectionCase) : String :=
   let pages := match snapshot value.source.model admission with
     | .error _ => []
@@ -170,6 +176,9 @@ private def sourceProjectionCaseJson (value : SelectionCase) : String :=
         (fun index => pageJson (makePage current (index * pageLimit)))
   object [("name", jsonString value.name), ("source", sourceJson value.source),
     ("admission", hydrationRequestJson admission), ("expected", selectionJson value.source admission),
+    ("refusal", match snapshot value.source.model admission with
+      | .error error => refusalReasonJson error.refusal
+      | .ok _ => "null"),
     ("pages", jsonArray pages)]
 
 /-- Native projection checks refine this subset of the executable source cases.
@@ -308,10 +317,6 @@ def demandCasesJson : String :=
      ("initial_page", wirePageJson firstEnvelope.page),
      ("matches_initial_page", boolString (value.matchesPage firstEnvelope.page true))])
 
-private def refusalReasonJson : RefusalReason → String
-  | .rejected => jsonString "rejected"
-  | .stale => jsonString "stale"
-  | .unavailable => jsonString "unavailable"
 
 private def replyJson : Reply → String
   | .page value => object [("kind", jsonString "page"), ("page", wirePageJson value)]
@@ -366,6 +371,35 @@ def replyJournalCasesJson : String := jsonArray (replyJournalInputs.map fun valu
    ("prior", optional replyJson value.prior), ("candidate", replyJson value.candidate),
    ("committed", boolString (value.write == .committed)),
    ("expected", optional replyJson (recordReply value.prior value.candidate value.write))])
+
+structure PreparationInput where
+  name : String
+  prior : Option WirePage := none
+  candidate : WirePage := firstEnvelope.page
+  write : TerminalWriteResult := .committed
+  demand : PageDemand := initialDemand
+
+private def changedPreparedPage : WirePage :=
+  (makePage (getSnapshot lateAfter) 0).toWire "changed-snapshot-digest"
+
+private def preparationInputs : List PreparationInput :=
+  [ {name := "first_preparation"}
+  , {name := "rollback_preparation", write := .failed}
+  , {name := "retry_preparation", prior := some firstEnvelope.page}
+  , {name := "membership_changed_after_preparation", prior := some firstEnvelope.page,
+      candidate := changedPreparedPage}
+  , {name := "rollback_retry_preserves_preparation", prior := some firstEnvelope.page,
+      candidate := changedPreparedPage, write := .failed}
+  , {name := "new_attempt_selects_current_snapshot", candidate := changedPreparedPage,
+      demand := {initialDemand with attempt := "attempt-2"}} ]
+
+def preparationCasesJson : String := jsonArray (preparationInputs.map fun value => object
+  [("name", jsonString value.name), ("demand", demandJson value.demand),
+   ("prior", optional wirePageJson value.prior), ("candidate", wirePageJson value.candidate),
+   ("committed", boolString (value.write == .committed)),
+   ("expected", optional wirePageJson (preparePage value.prior value.candidate value.write)),
+   ("unprepared_continuation", pageResultJson (page lateAfter.model admission
+      (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩)))])
 
 def completionCasesJson : String :=
   let candidates := [Reply.page firstEnvelope.page, .refused .stale,

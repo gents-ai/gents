@@ -93,7 +93,8 @@ async fn serve_inventory(
                     return store
                         .commit_inventory(
                             row,
-                            &refuse(store, demand, FileInventoryRefusalReason::Unavailable).await?,
+                            &refuse(store, demand, super::inventory::refusal_reason(&error))
+                                .await?,
                         )
                         .await;
                 }

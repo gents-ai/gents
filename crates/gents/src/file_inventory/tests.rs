@@ -990,3 +990,104 @@ async fn native_inventory_admission_and_response_commit_preserve_attempts_and_ro
     drop(names);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
+
+#[tokio::test]
+async fn generated_preparation_retries_keep_the_original_snapshot() {
+    use crate::config_client::ConfigAccess;
+    use crate::tool_call_lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+    use gents_protocol::file_inventory::FileInventoryReply;
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_preparation_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "inventory-preparation-retries".into(),
+        real_identity: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let path = fixture.path.clone();
+    let names = tokio::task::spawn_blocking(move || Names {
+        source: KeyIdentity::load_or_create(path.join("test-agent.key"), None).unwrap(),
+        other: KeyIdentity::load_or_create(path.join("other.key"), None).unwrap(),
+    })
+    .await
+    .unwrap();
+    for case in cases {
+        let mut demand = names.demand(&case["demand"]);
+        demand.attempt_id.push_str(case["name"].as_str().unwrap());
+        let sign = |page: &Value| serde_json::json!({"kind":"page", "page":page});
+        let mut prior_id = None;
+        if !case["prior"].is_null() {
+            let FileInventoryReply::Page(receipt) =
+                names.reply(&sign(&case["prior"]), &demand).await
+            else {
+                unreachable!()
+            };
+            prior_id = Some(
+                delivery::prepare_page(&fixture.node, &demand, &receipt, &names.source)
+                    .await
+                    .unwrap()
+                    .document_id,
+            );
+        }
+        let FileInventoryReply::Page(candidate) =
+            names.reply(&sign(&case["candidate"]), &demand).await
+        else {
+            unreachable!()
+        };
+        let result = ConfigAccess::transact_local_write(
+            &fixture.node,
+            None,
+            "test.inventory.prepare_commit",
+            |txn| {
+                let (demand, candidate, verifier) = (&demand, &candidate, &names.source);
+                Box::pin(async move {
+                    let prepared =
+                        delivery::prepare_page_in_txn(txn, demand, candidate, verifier).await?;
+                    anyhow::ensure!(case["committed"] == true, "rollback after preparation");
+                    Ok(prepared)
+                })
+            },
+        )
+        .await;
+        assert_eq!(
+            result.is_ok(),
+            case["committed"] == true,
+            "{}",
+            case["name"]
+        );
+        let retained = delivery::load_prepared_page(&fixture.node, &demand, &names.source)
+            .await
+            .unwrap();
+        if case["expected"].is_null() {
+            assert!(retained.is_none(), "{}", case["name"]);
+        } else {
+            let retained = retained.unwrap();
+            assert_eq!(
+                retained.receipt.page,
+                names.page(&case["expected"]),
+                "{}",
+                case["name"]
+            );
+            if let Some(id) = prior_id {
+                assert_eq!(retained.document_id, id);
+            }
+        }
+        assert!(load_recorded_reply(&fixture.node, &demand, &names.source)
+            .await
+            .unwrap()
+            .is_none());
+    }
+    fixture.node.shutdown().await;
+    drop(names);
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+}

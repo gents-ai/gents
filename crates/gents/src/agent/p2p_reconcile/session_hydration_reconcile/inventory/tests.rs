@@ -282,10 +282,14 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
         let result = FileInventorySnapshot::load(&node, &admission).await;
         let expected = &case["expected"];
         match expected["kind"].as_str().unwrap() {
-            "rejected" => assert!(
-                result.is_err(),
-                "{name}: accepted invalid source projection"
-            ),
+            "rejected" => {
+                let error = result.expect_err("accepted invalid source projection");
+                assert_eq!(
+                    serde_json::to_value(refusal_reason(&error)).unwrap(),
+                    case["refusal"],
+                    "{name}"
+                );
+            }
             "selected" => {
                 let actual = result.unwrap_or_else(|error| panic!("{name}: {error:#}"));
                 let facts = expected["snapshot"]["tools"].as_array().unwrap();

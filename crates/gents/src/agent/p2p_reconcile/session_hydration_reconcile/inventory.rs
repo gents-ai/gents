@@ -13,6 +13,21 @@ use gents_protocol::session_hydration::SessionHydrationCollection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct InventoryRejection(&'static str);
+
+pub(super) fn refusal_reason(
+    error: &anyhow::Error,
+) -> gents_protocol::file_inventory::FileInventoryRefusalReason {
+    use gents_protocol::file_inventory::FileInventoryRefusalReason;
+    if error.is::<InventoryRejection>() {
+        FileInventoryRefusalReason::Rejected
+    } else {
+        FileInventoryRefusalReason::Unavailable
+    }
+}
+
 /// Source-local facts, not transfer authorization. The delivery owner must
 /// still validate current enrollment and pairing before signing or transferring
 /// metadata. Construction reads membership, accepted tools, projections and
@@ -125,7 +140,7 @@ impl FileInventorySnapshot {
                 ]
                 .iter()
                 .all(|value| !value.is_empty()),
-            "file inventory requires an exact source-local session reference"
+            InventoryRejection("file inventory requires an exact source-local session reference")
         );
         ConfigAccess::transact_local_readonly(node, None, "file_inventory.snapshot", |txn| {
             Box::pin(Self::load_in_txn(txn, node, admission))
@@ -149,7 +164,7 @@ impl FileInventorySnapshot {
         .context("file inventory session is unavailable")?;
         anyhow::ensure!(
             session.doc_id == admission.session_doc_id,
-            "file inventory session identity changed"
+            InventoryRejection("file inventory session identity changed")
         );
         let selected = load_hydration_selection_in_txn(txn, request).await?;
         let mut facts = Vec::new();
@@ -170,10 +185,12 @@ impl FileInventorySnapshot {
             )
             .await?
             .context("file inventory accepted tool is unavailable")?;
-            let request_doc_id = tool
-                .request_doc_id()
-                .map(str::to_owned)
-                .context("file inventory tool omitted its physical request")?;
+            let request_doc_id =
+                tool.request_doc_id()
+                    .map(str::to_owned)
+                    .ok_or(InventoryRejection(
+                        "file inventory tool omitted its physical request",
+                    ))?;
             let scope = FileImageScope {
                 node_did: tool.node_did().to_owned(),
                 session_id: tool.session_id().to_owned(),
@@ -181,7 +198,9 @@ impl FileInventorySnapshot {
                     .requester_did()
                     .map(str::to_owned)
                     .filter(|value| !value.is_empty())
-                    .context("file inventory tool omitted its requester")?,
+                    .ok_or(InventoryRejection(
+                        "file inventory tool omitted its requester",
+                    ))?,
             };
             let query = format!(
                 r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
@@ -193,12 +212,12 @@ impl FileInventorySnapshot {
             let mut projections = required_rows::<Projection>(&response, "ToolFileInventory")?;
             anyhow::ensure!(
                 projections.len() <= 1,
-                "file inventory has ambiguous projections"
+                InventoryRejection("file inventory has ambiguous projections")
             );
             let capture = if !tool.state().is_terminal() {
                 anyhow::ensure!(
                     projections.is_empty(),
-                    "active tool has an uncommitted file inventory"
+                    InventoryRejection("active tool has an uncommitted file inventory")
                 );
                 pending += 1;
                 Capture::Pending
@@ -212,7 +231,9 @@ impl FileInventorySnapshot {
                         && projection.session_id == scope.session_id
                         && projection.requester_did == scope.requester_did
                         && !projection.changes.is_empty(),
-                    "file inventory projection conflicts with its accepted physical tool"
+                    InventoryRejection(
+                        "file inventory projection conflicts with its accepted physical tool"
+                    )
                 );
                 let owners = txn
                     .document_owners(
@@ -227,7 +248,7 @@ impl FileInventorySnapshot {
                             .owner
                             .as_ref()
                             .is_some_and(|owner| owner.as_str() == scope.node_did),
-                    "file inventory projection is not owned by its source node"
+                    InventoryRejection("file inventory projection is not owned by its source node")
                 );
                 entries.extend(projection.changes.iter().map(|change| FileInventoryEntry {
                     tool_call_doc_id: document.doc_id.clone(),
@@ -250,20 +271,18 @@ impl FileInventorySnapshot {
                 request_doc_id,
                 scope,
                 state: tool.state().as_str().to_owned(),
-                accepted_header_doc_id: tool
-                    .accepted_header_doc_id()
-                    .map(str::to_owned)
-                    .context("file inventory tool omitted its accepted header")?,
-                execution_generation: tool
-                    .execution_generation()
-                    .map(str::to_owned)
-                    .context("file inventory tool omitted its execution generation")?,
+                accepted_header_doc_id: tool.accepted_header_doc_id().map(str::to_owned).ok_or(
+                    InventoryRejection("file inventory tool omitted its accepted header"),
+                )?,
+                execution_generation: tool.execution_generation().map(str::to_owned).ok_or(
+                    InventoryRejection("file inventory tool omitted its execution generation"),
+                )?,
                 capture,
             });
         }
         anyhow::ensure!(
             coherent_inventory_entries(&entries),
-            "file inventory entries are incoherent"
+            InventoryRejection("file inventory entries are incoherent")
         );
         let documents = selected
             .documents

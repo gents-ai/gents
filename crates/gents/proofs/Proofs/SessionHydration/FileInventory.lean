@@ -479,6 +479,14 @@ inductive RefusalReason where
   | rejected | stale | unavailable
   deriving DecidableEq, Repr
 
+def Error.refusal : Error → RefusalReason
+  | .rejected => .rejected
+  | .unknown => .unavailable
+
+theorem invalid_source_is_rejected : Error.rejected.refusal = .rejected := rfl
+
+theorem unavailable_source_is_not_empty : Error.unknown.refusal = .unavailable := rfl
+
 /-- A refusal carries only the client's exact demand and a fixed reason. It
 contains no selected membership, metadata or image grant. Native verification
 binds its disjoint versioned purpose and full demand, including the cursor. -/
@@ -509,6 +517,23 @@ theorem failed_reply_is_not_retained (candidate : Reply) :
 
 theorem stale_reply_is_not_upgraded (candidate : Reply) :
     recordReply (some (.refused .stale)) candidate .committed = some (.refused .stale) := rfl
+
+/-- Preparation is an immutable source-local choice for one exact demand.
+The native owner verifies its signature, correlation and current document
+owner before observing a prior choice. A retry does not reselect from a newer
+snapshot, and preparation does not establish delivery or terminal settlement. -/
+def preparePage (prior : Option WirePage) (candidate : WirePage)
+    (write : TerminalWriteResult) : Option WirePage :=
+  (recordReply (prior.map Reply.page) (.page candidate) write).bind fun reply =>
+    match reply with
+    | .page value => some value
+    | .refused _ => none
+
+theorem prepared_page_is_immutable (prior candidate : WirePage) (write : TerminalWriteResult) :
+    preparePage (some prior) candidate write = some prior := rfl
+
+theorem preparation_rollback_retains_nothing (candidate : WirePage) :
+    preparePage none candidate .failed = none := rfl
 
 /-- A page is prepared locally before explicit delivery. Only a confirmed
 transfer with both current authority observations may settle a page; a lost

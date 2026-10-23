@@ -84,6 +84,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_reply_journals_preserve_immutable_outcomes",
         },
         ConformanceConsumer::RustTest {
+            id: "file_inventory::tests::generated_preparation_retries_keep_the_original_snapshot",
+            package: "gents",
+            source_path: "crates/gents/src/file_inventory/tests.rs",
+            module_path: "file_inventory::tests",
+            function: "generated_preparation_retries_keep_the_original_snapshot",
+        },
+        ConformanceConsumer::RustTest {
             id: "file_inventory::tests::generated_completion_requires_confirmed_authorized_delivery",
             package: "gents",
             source_path: "crates/gents/src/file_inventory/tests.rs",
