@@ -1871,13 +1871,6 @@ pub(crate) struct InitArgs {
         help = "Restrict the defra_query tool to these collections when a package enables it (repeatable); omit for all collections"
     )]
     pub(crate) defra_query_collections: Vec<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        conflicts_with = "identity_only",
-        help = "After init, install gents/rhai_workflows as an operator install and wire it into the default agent (grants the engine pack's declared authority)"
-    )]
-    pub(crate) workflows: bool,
 }
 
 impl InitArgs {

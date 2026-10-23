@@ -4,6 +4,14 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- `gents init --workflows` is removed and `gents init` no longer suggests
+  installing `gents/rhai_workflows`: a workflow is an ordinary job plugin a
+  content pack ships (`gents pack install <pack> --grant-authority`, then
+  `gents pack wire <ns>/<plugin> --agent <agent> --targets-from <pack>`), and
+  `gents pack new <name> --template workflow` scaffolds one.
+
 ## 0.21.0 - 2026-10-22
 
 - Rendered request captures (capture v4) store shared, content-defined
