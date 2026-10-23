@@ -350,6 +350,52 @@ async fn exercise_inventory_delivery() -> Result<()> {
                 .is_some_and(Vec::is_empty),
             "metadata transport replicated {collection}"
         );
+        let source_documents = ConfigAccess::transact_local_readonly(
+            &source_node,
+            None,
+            "test.inventory.source_image_identities",
+            |txn| Box::pin(async move { txn.cursor_rows_local(collection, "_docID", "").await }),
+        )
+        .await?;
+        anyhow::ensure!(
+            source_documents.len() == expected_paths.len(),
+            "source capture set is incomplete"
+        );
+        let as_creator = ConfigAccess::transact_local_readonly(
+            &client_node,
+            Some(source.did().parse()?),
+            "test.inventory.client_image_absence",
+            |txn| {
+                Box::pin(async move {
+                    let response = txn
+                        .execute_local_response(&format!("{{ {collection} {{ _docID }} }}"))
+                        .await?;
+                    crate::graphql::required_rows::<Value>(&response, collection)
+                })
+            },
+        )
+        .await?;
+        anyhow::ensure!(
+            as_creator.is_empty(),
+            "source-owned {collection} records reached the metadata client"
+        );
+        for document in source_documents {
+            let id = document["_docID"]
+                .as_str()
+                .context("source capture identity")?;
+            let owner = client_node
+                .document_acp()
+                .get_doc_owner(
+                    gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID,
+                    gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
+                    id,
+                )
+                .await?;
+            anyhow::ensure!(
+                owner.is_none(),
+                "metadata transport registered {collection} document {id}"
+            );
+        }
     }
     cancel.cancel();
     source_task.await??;
