@@ -34,6 +34,7 @@ use crate::session::canonical_rows::{
 mod file_images;
 mod inventory;
 mod inventory_requests;
+pub(crate) use inventory::refusal_reason as file_inventory_refusal_reason;
 pub use inventory::{FileInventoryPageError, FileInventorySnapshot};
 mod selection;
 use selection::load_hydration_selection;

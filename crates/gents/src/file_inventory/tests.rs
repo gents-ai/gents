@@ -1367,3 +1367,172 @@ async fn generated_client_progress_survives_reload_and_rollback() {
         tokio::fs::remove_dir_all(path).await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn generated_operator_inventory_requires_the_native_owner() {
+    use crate::config_client::ConfigAccess;
+    use crate::tool_call_lifecycle::admission_fixture::{
+        ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
+    };
+    use gents_protocol::file_inventory::{
+        FileInventoryCoverage, FileInventoryPageDemand, FileInventoryReply,
+    };
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_operator_owner_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    let (fixture, _) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "inventory-operator-owner".into(),
+        real_identity: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let path = fixture.path.clone();
+    let names = tokio::task::spawn_blocking(move || Names {
+        source: KeyIdentity::load_or_create(path.join("test-agent.key"), None).unwrap(),
+        other: KeyIdentity::load_or_create(path.join("other.key"), None).unwrap(),
+    })
+    .await
+    .unwrap();
+    let session = "operator-empty-inventory";
+    ensure_fixture_session(
+        &fixture.node,
+        session,
+        names.source.did(),
+        Some(names.source.did()),
+        "2026-10-24T00:00:00Z",
+    )
+    .await;
+    let session_row = ConfigAccess::transact_local_readonly(
+        &fixture.node,
+        None,
+        "test.inventory.operator_session",
+        |txn| {
+            let source = names.source.did();
+            Box::pin(crate::session::load_agent_session_row_in_txn(
+                txn,
+                source,
+                session,
+                Some(source),
+            ))
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    for case in cases {
+        assert_eq!(names.actor(&case["owner"]), fixture.node_did);
+        assert!(case["source"]["catalog"]["applied_pairing_routes"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(case["source"]["catalog"]["verified_active_memberships"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(case["source"]["tools"].as_array().unwrap().is_empty());
+        assert!(case["source"]["projections"].as_array().unwrap().is_empty());
+        let demand = FileInventoryPageDemand {
+            admission: FileInventoryAdmission {
+                request: HydrationRequest {
+                    request_key: format!("operator:{}", case["name"]),
+                    peer_id: "operator-client".into(),
+                    requester_did: names.source.did().into(),
+                    node_did: names.actor(&case["admission"]["node"]),
+                    session_id: session.into(),
+                },
+                session_doc_id: session_row.doc_id.clone(),
+            },
+            attempt_id: text(&case["name"]),
+            cursor: None,
+        };
+        let signer: &dyn NodeIdentity = if names.actor(&case["signer"]) == names.source.did() {
+            &names.source
+        } else {
+            &names.other
+        };
+        let actor = names.actor(&case["actor"]);
+        let result = read_operator_inventory(&fixture.node, signer, &actor, &demand).await;
+        assert_eq!(
+            result.is_ok(),
+            case["allowed"] == true,
+            "{}: {result:?}",
+            case["name"]
+        );
+        if case["allowed"] == false {
+            assert!(result.unwrap_err().is::<OperatorInventoryDenied>());
+            continue;
+        }
+        let reply = result.unwrap();
+        verify_reply(&demand, &reply, &names.source).await.unwrap();
+        let FileInventoryReply::Page(page) = &reply else {
+            panic!("operator read did not return an empty page");
+        };
+        assert_eq!(
+            page.page.entries.len(),
+            case["page"]["entries"].as_array().unwrap().len()
+        );
+        let prefix = FileInventoryReceiver {
+            admission: demand.admission.clone(),
+            pages: vec![],
+        }
+        .receive_for_demand(&demand, page.clone(), &names.source)
+        .await
+        .unwrap()
+        .validated(&names.source)
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            prefix.known_inventory(),
+            case["expected"]["known_empty"].as_bool().unwrap()
+        );
+        assert_eq!(
+            page.page.binding.coverage,
+            serde_json::from_value::<FileInventoryCoverage>(
+                case["page"]["binding"]["coverage"].clone()
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            read_operator_inventory(&fixture.node, signer, &actor, &demand)
+                .await
+                .unwrap(),
+            reply
+        );
+        assert!(
+            load_recorded_reply(&fixture.node, &demand, &names.source)
+                .await
+                .unwrap()
+                .is_none(),
+            "HTTP preparation must not claim an explicit-transfer acknowledgment"
+        );
+        let mut changed = demand.clone();
+        changed.attempt_id.push_str("-wrong-physical-session");
+        changed.admission.session_doc_id = document(&serde_json::json!(999));
+        let refused = read_operator_inventory(&fixture.node, signer, &actor, &changed)
+            .await
+            .unwrap();
+        assert!(
+            matches!(&refused, FileInventoryReply::Refused(receipt) if receipt.reason == serde_json::from_value(case["wrong_physical_refusal"].clone()).unwrap())
+        );
+        verify_reply(&changed, &refused, &names.source)
+            .await
+            .unwrap();
+        assert_eq!(
+            load_recorded_reply(&fixture.node, &changed, &names.source)
+                .await
+                .unwrap(),
+            Some(refused)
+        );
+    }
+    fixture.node.shutdown().await;
+    drop(names);
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+}

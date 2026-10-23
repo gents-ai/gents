@@ -116,12 +116,15 @@ private def snapshotJson (value : Snapshot) : String := object
    ("tools", jsonArray (value.tools.map fun row => object
       [("tool", toolJson row.tool), ("capture", captureJson row.capture)]))]
 
-private def selectionJson (source : SourceInput) (request : Request) : String :=
-  match snapshot source.model request with
+private def selectionResultJson (result : Except Error Snapshot) : String :=
+  match result with
   | .error .rejected => tagged "rejected"
   | .error .unknown => tagged "unknown"
   | .ok value => tagged "selected" [("snapshot", snapshotJson value),
       ("known_empty", boolString value.knownEmpty)]
+
+private def selectionJson (source : SourceInput) (request : Request) : String :=
+  selectionResultJson (snapshot source.model request)
 
 private def selectionCaseJson (value : SelectionCase) : String := object
   [("name", jsonString value.name), ("source", sourceJson value.source),
@@ -476,6 +479,31 @@ def clientProgressCasesJson : String :=
     [("name", jsonString name), ("admission", hydrationRequestJson admission),
      ("attempt", jsonString "attempt-1"),
      ("steps", jsonArray (clientStepsJson (beginClient admission "attempt-1") steps))])
+
+def operatorOwnerCasesJson : String :=
+  let inputs : List (String × String × String × String × String) :=
+    [("native_owner", "node-1", "node-1", "node-1", "node-1"),
+     ("anonymous", "node-1", "", "node-1", "node-1"),
+     ("foreign_authenticated_actor", "node-1", "node-2", "node-1", "node-1"),
+     ("different_requested_source", "node-1", "node-1", "node-1", "node-2"),
+     ("different_signing_identity", "node-1", "node-1", "node-2", "node-1")]
+  let source : SourceInput := {Examples.source 0 with catalog :=
+    {catalog [] with appliedPairingRoutes := [], verifiedActiveMemberships := []}}
+  jsonArray (inputs.map fun (name, owner, actor, signer, node) =>
+    let request := {admission with node := node}
+    let result := operatorSnapshot source.model owner actor signer request
+    object [("name", jsonString name), ("owner", jsonString owner),
+      ("actor", jsonString actor), ("signer", jsonString signer),
+      ("admission", hydrationRequestJson request), ("source", sourceJson source),
+      ("allowed", boolString (operatorAdmitted owner actor signer request)),
+      ("expected", selectionResultJson result),
+      ("page", match result with
+        | .error _ => "null"
+        | .ok current => wirePageJson ((makePage current 0).toWire "operator-snapshot")),
+      ("wrong_physical_refusal", match operatorSnapshot source.model owner actor signer
+          {request with nativeSession := request.nativeSession + 1} with
+        | .error error => refusalReasonJson error.refusal
+        | .ok _ => "null")])
 
 def completionCasesJson : String :=
   let candidates := [Reply.page firstEnvelope.page, .refused .stale,

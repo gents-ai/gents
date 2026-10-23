@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 #[error("{0}")]
 struct InventoryRejection(&'static str);
 
-pub(super) fn refusal_reason(
+pub(crate) fn refusal_reason(
     error: &anyhow::Error,
 ) -> gents_protocol::file_inventory::FileInventoryRefusalReason {
     use gents_protocol::file_inventory::FileInventoryRefusalReason;
@@ -44,6 +44,19 @@ pub enum FileInventoryPageError {
     StaleSnapshot,
     #[error("file inventory cursor is not a continuation boundary")]
     InvalidCursor,
+}
+
+impl FileInventoryPageError {
+    pub fn refusal_reason(&self) -> gents_protocol::file_inventory::FileInventoryRefusalReason {
+        match self {
+            Self::StaleSnapshot => {
+                gents_protocol::file_inventory::FileInventoryRefusalReason::Stale
+            }
+            Self::InvalidCursor => {
+                gents_protocol::file_inventory::FileInventoryRefusalReason::Rejected
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]

@@ -1385,6 +1385,12 @@ def caseCoverage : List CoverageEntry :=
       "Drives signed terminal replies and source-local immutable storage. Durable demands, delivery and installed client acceptance remain obligations.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_operator_owner_cases"
+      "FileInventoryOperatorOwnerCases"
+      "file_inventory::tests::generated_operator_inventory_requires_the_native_owner"
+      "Drives actual operator reads and signed pages under the native source identity. HTTP extraction and installed consumption remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_client_progress_cases"
       "FileInventoryClientProgressCases"
       "file_inventory::tests::generated_client_progress_survives_reload_and_rollback"

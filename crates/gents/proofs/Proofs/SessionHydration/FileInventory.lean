@@ -233,8 +233,7 @@ theorem selected_manifest_uses_canonical_closure (catalog : Catalog) (admission 
 visible transcript window or request-turn closure. Unselected parent-session
 tools do not enter a fork's inventory. Physical sorting is only a stable page
 order; the existing before/after chain planner still owns review authority. -/
-def snapshot (source : Source) (admission : Request) : Except Error Snapshot := do
-  if !decide (admits source.catalog admission) then .error .rejected else pure ()
+private def assembleSnapshot (source : Source) (admission : Request) : Except Error Snapshot := do
   if source.boundary != .atomicExhaustive then .error .unknown else pure ()
   let selected ← selectedManifest source.catalog admission
   let toolIds := (selected.filter (fun key => key.collection == .agentToolCall)).map (·.id)
@@ -245,6 +244,39 @@ def snapshot (source : Source) (admission : Request) : Except Error Snapshot := 
   if !(observed.map (·.id)).Nodup || !(observed.map (·.observation)).Nodup then
     .error .rejected
   else .ok ⟨admission, selected, tools⟩
+
+def snapshot (source : Source) (admission : Request) : Except Error Snapshot := do
+  if !decide (admits source.catalog admission) then .error .rejected else pure ()
+  assembleSnapshot source admission
+
+/-- DefraDB authenticates the HTTP actor. Its native node DID owns the NAC
+policy and always admits that DID; this is not an enrollment or an authored
+owner claim. The signer and requested source must be that same native owner.
+Canonical closure selection and native document ACP still govern the read. -/
+def operatorAdmitted (owner actor signer : String) (admission : Request) : Bool :=
+  !owner.isEmpty && actor == owner && signer == owner && admission.node == owner
+
+def operatorSnapshot (source : Source) (owner actor signer : String) (admission : Request) :
+    Except Error Snapshot := do
+  if !operatorAdmitted owner actor signer admission then .error .rejected else pure ()
+  let sessions := source.catalog.sessions.filter (fun session =>
+    session.node == admission.node && session.session == admission.session)
+  if sessions.card != 1 then .error .unknown
+  else if !decide (∀ session ∈ sessions, session.requester = admission.requester) then .error .unknown
+  else if !decide (ownedSession admission ∈ sessions) then .error .rejected
+  else assembleSnapshot source admission
+
+theorem anonymous_operator_is_denied (owner signer : String) (admission : Request) :
+    operatorAdmitted owner "" signer admission = false := by
+  by_cases h : owner = ""
+  · subst owner; rfl
+  · simp [operatorAdmitted, Ne.symm h]
+
+theorem denied_operator_cannot_select (source : Source)
+    (owner actor signer : String) (admission : Request)
+    (denied : operatorAdmitted owner actor signer admission = false) :
+    operatorSnapshot source owner actor signer admission = .error .rejected := by
+  simp [operatorSnapshot, denied, Bind.bind, Except.bind]
 
 structure Entry where
   tool : DocId

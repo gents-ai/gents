@@ -285,6 +285,9 @@ pub(crate) async fn settle_reply(
     }
 }
 
+mod operator;
+pub use operator::{read_operator_inventory, OperatorInventoryDenied};
+
 mod client;
 pub use client::{
     begin_client_progress, load_client_progress, receive_client_reply, ClientInventoryAttempt,

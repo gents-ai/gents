@@ -102,12 +102,7 @@ async fn serve_inventory(
             let page = match snapshot.page(demand.cursor.as_ref()) {
                 Ok(page) => page,
                 Err(error) => {
-                    let reason = match error {
-                        FileInventoryPageError::StaleSnapshot => FileInventoryRefusalReason::Stale,
-                        FileInventoryPageError::InvalidCursor => {
-                            FileInventoryRefusalReason::Rejected
-                        }
-                    };
+                    let reason = error.refusal_reason();
                     return store
                         .commit_inventory(row, &refuse(store, demand, reason).await?)
                         .await;

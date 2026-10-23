@@ -432,6 +432,21 @@ impl Gents {
             .await
     }
 
+    /// The HTTP boundary must authenticate `actor` with DefraDB before calling.
+    pub async fn operator_file_inventory(
+        &self,
+        actor: &str,
+        demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
+    ) -> anyhow::Result<gents_protocol::file_inventory::FileInventoryReply> {
+        crate::file_inventory::read_operator_inventory(
+            &self.node,
+            self.runtime_node.identity.as_ref(),
+            actor,
+            demand,
+        )
+        .await
+    }
+
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
         runtime::run_agent(self, shutdown).await
     }

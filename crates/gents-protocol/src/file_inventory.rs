@@ -8,6 +8,7 @@ use crate::file_image_hydration::FileImageScope;
 use crate::session_hydration::HydrationRequest;
 
 pub const FILE_INVENTORY_PAGE_LIMIT: usize = 64;
+pub const FILE_INVENTORY_OPERATOR_PATH: &str = "/file-inventory/operator/page";
 pub const FILE_INVENTORY_RECEIPT_VERSION: u8 = 2;
 const RECEIPT_DOMAIN: &str = "gents-file-inventory-page-v2";
 

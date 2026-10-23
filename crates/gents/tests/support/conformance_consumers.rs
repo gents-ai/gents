@@ -84,6 +84,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_reply_journals_preserve_immutable_outcomes",
         },
         ConformanceConsumer::RustTest {
+            id: "file_inventory::tests::generated_operator_inventory_requires_the_native_owner",
+            package: "gents",
+            source_path: "crates/gents/src/file_inventory/tests.rs",
+            module_path: "file_inventory::tests",
+            function: "generated_operator_inventory_requires_the_native_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "file_inventory::tests::generated_client_progress_survives_reload_and_rollback",
             package: "gents",
             source_path: "crates/gents/src/file_inventory/tests.rs",
