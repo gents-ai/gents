@@ -52,6 +52,8 @@ it("updates physical ownership and terminal facts even when assistant text is un
     itemKey: "answer",
     requestId: "logical",
     content: "Done",
+    reasoning: null,
+    timestamp: null,
     requestTurn: {
       requestDocId: "physical",
       requestId: "logical",
