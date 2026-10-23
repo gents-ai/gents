@@ -71,9 +71,6 @@ pub fn build_pack(
     for plugin in &manifest.metadata.plugins {
         build_plugin(dir, &manifest, plugin, compiler)?;
     }
-    if manifest.metadata.kind == crate::pack::PackKind::Graph {
-        build_graph_plans(dir, &manifest)?;
-    }
     // A file-produced UX plugin the webview would refuse never gets packed;
     // an .afb-produced one is linted when its producer runs.
     let refused: Vec<String> = crate::ux_plugin::lint_pack_dir(dir, &manifest.metadata.ux)?
@@ -143,61 +140,6 @@ pub fn build_pack(
             })
             .collect(),
     })
-}
-
-pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
-    let plans = crate::graph_package::compile_pack_graphs(
-        manifest,
-        &|path| std::fs::read(dir.join(path)).with_context(|| format!("reading {path}")),
-        "did:key:zPackBuildPlaceholderOwner",
-    )?;
-    let mut missing = Vec::new();
-    for plan in &plans {
-        let path = crate::graph_package::graph_plan_path(&plan.graph_id);
-        let target = dir.join(&path);
-        std::fs::create_dir_all(target.parent().context("plan path has no parent")?)?;
-        write_if_changed(
-            &target,
-            (serde_json::to_string_pretty(plan)? + "\n").as_bytes(),
-        )?;
-        if !manifest.metadata.assets.contains(&path) {
-            missing.push(path);
-        }
-    }
-    if missing.is_empty() {
-        return Ok(());
-    }
-    let manifest_path = dir.join("manifest.json");
-    let text = std::fs::read_to_string(&manifest_path).context("reading manifest.json")?;
-    let mut assets = manifest.metadata.assets.clone();
-    assets.extend(missing);
-    std::fs::write(&manifest_path, replace_assets(&text, &assets)?).context("writing manifest.json")
-}
-
-fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
-    let key = text
-        .find("\"assets\"")
-        .context("manifest.json has no assets list")?;
-    let open = key
-        + text[key..]
-            .find('[')
-            .context("manifest.json assets is not a list")?;
-    let close = open
-        + text[open..]
-            .find(']')
-            .context("manifest.json assets list is not closed")?;
-    let line_start = text[..key].rfind('\n').map_or(0, |i| i + 1);
-    let indent = &text[line_start..key];
-    let items = assets
-        .iter()
-        .map(|asset| format!("{indent}  {}", serde_json::Value::from(asset.as_str())))
-        .collect::<Vec<_>>()
-        .join(",\n");
-    Ok(format!(
-        "{}[\n{items}\n{indent}]{}",
-        &text[..open],
-        &text[close + 1..]
-    ))
 }
 
 pub fn build_plugin(
@@ -555,17 +497,6 @@ mod tests {
         assert!(
             !called.load(std::sync::atomic::Ordering::SeqCst),
             "a malformed source is refused before the compiler seam is asked"
-        );
-    }
-
-    #[test]
-    fn declaring_a_plan_touches_only_the_assets_list() {
-        let text = "{\n  \"name\": \"x\",\n  \"assets\": [\n    \"README.md\"\n  ],\n  \"kind\": \"graph\"\n}\n";
-        let updated =
-            replace_assets(text, &["README.md".into(), "graphs/x.plan.json".into()]).unwrap();
-        assert_eq!(
-            updated,
-            "{\n  \"name\": \"x\",\n  \"assets\": [\n    \"README.md\",\n    \"graphs/x.plan.json\"\n  ],\n  \"kind\": \"graph\"\n}\n"
         );
     }
 

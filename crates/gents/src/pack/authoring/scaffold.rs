@@ -32,7 +32,6 @@ impl Template {
         match self {
             Template::Minimal => "minimal",
             Template::Automation => "automation",
-            Template::Graph => "graph",
             Template::PluginTool => "plugin-tool",
             Template::Assets => "assets",
             Template::Workflow => "workflow",
@@ -60,7 +59,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     }
     match template {
         Template::Assets => {}
-        Template::Minimal | Template::Automation | Template::Graph => {
+        Template::Minimal | Template::Automation => {
             output_paths.extend([
                 "agents/worker/system_prompt.md".to_owned(),
                 "tasks/worker_task/prompt.md".to_owned(),
@@ -68,10 +67,6 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
             ]);
             if template != Template::Minimal {
                 output_paths.push(format!("schemas/{}_job.graphql", names.name));
-            }
-            if template == Template::Graph {
-                output_paths.push(format!("schemas/{}_result.graphql", names.name));
-                output_paths.push(format!("graphs/{}.plan.json", names.kebab));
             }
         }
         Template::PluginTool => {
@@ -125,7 +120,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     });
     match template {
         Template::Assets => manifest["kind"] = json!(template.manifest_kind()),
-        Template::Minimal | Template::Automation | Template::Graph => {
+        Template::Minimal | Template::Automation => {
             manifest["kind"] = json!(template.manifest_kind());
             manifest["config"] = json!("pack_config.json");
             manifest["inference_slots"] = json!([{
@@ -154,20 +149,6 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
                     ),
                 ));
                 manifest["schemas"] = json!([format!("schemas/{}_job.graphql", names.name)]);
-            }
-            if template == Template::Graph {
-                files.push((
-                    format!("schemas/{}_result.graphql", names.name),
-                    format!(
-                        "type {}Result {{\n  run_id: String @index(unique: true) @immutable\n  summary: String\n}}\n",
-                        names.title
-                    ),
-                ));
-                manifest["schemas"]
-                    .as_array_mut()
-                    .context("schemas list")?
-                    .push(json!(format!("schemas/{}_result.graphql", names.name)));
-                manifest["compiler_version"] = json!(crate::graph_pipeline::COMPILER_VERSION);
             }
             files.push((
                 "pack_config.json".into(),
@@ -270,12 +251,6 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
         serde_json::to_string_pretty(&manifest)? + "\n",
     )
     .context("writing manifest.json")?;
-    if template == Template::Graph {
-        let manifest: crate::pack::PackManifest =
-            serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
-        super::build::build_graph_plans(dir, &manifest)?;
-        super::check::write_topology(dir)?;
-    }
 
     let mut written = Vec::new();
     list_files(dir, dir, &mut written)?;
@@ -479,64 +454,6 @@ fn config(names: &Names, template: Template) -> Value {
                 "concurrency": "serial",
             }]);
         }
-        Template::Graph => {
-            let job = format!("{}Job", names.title);
-            let result = format!("{}Result", names.title);
-            config["tools"][0]["datastore"] =
-                json!({"datastore_tool_surface_ids": [format!("{kebab}-worker-writes")]});
-            config["datastore_tool_surfaces"] = json!([{
-                "surface_id": format!("{kebab}-worker-writes"),
-                "display_name": format!("{} result writes", names.title),
-                "entries": [{
-                    "tool_name": "write_result",
-                    "collection": result,
-                    "description": "Write the one result for this run; run_id is filled by the runtime.",
-                    "output_obligation": {"scope": "trigger", "minimum_writes": 1},
-                    "fields": [
-                        {"name": "run_id", "required": false, "fill": "correlation"},
-                        {"name": "summary", "required": true},
-                    ],
-                }],
-            }]);
-            config["graphs"] = json!([{ "graph_id": kebab }]);
-            config["graph_capabilities"] = json!([{
-                "capability_id": format!("{kebab}-worker"),
-                "allowed_callers": ["${GENTS_PACK_NODE_DID}"],
-                "revision": "v1",
-                "target": {"kind": "task", "task_id": format!("{kebab}-worker-task")},
-                "input_ports": [{
-                    "name": "job", "collection": job, "schema": format!("{job}/v1"),
-                    "correlation_field": "run_id", "cardinality": "one", "required": true,
-                }],
-                "output_ports": [{
-                    "name": "result", "collection": result, "schema": format!("{result}/v1"),
-                    "correlation_field": "run_id", "cardinality": "one",
-                }],
-            }]);
-            config["graph_intents"] = json!([{
-                "graph_id": kebab,
-                "nodes": [{
-                    "node_id": "worker",
-                    "capability_id": format!("{kebab}-worker"),
-                    "capability_revision": "v1",
-                }],
-                "entries": [{
-                    "name": "start", "collection": job, "schema": format!("{job}/v1"),
-                    "input_contract": format!("{kebab}-input/v1"),
-                    "to": {"node_id": "worker", "port": "job"},
-                }],
-                "results": [{
-                    "name": "result",
-                    "from": {"node_id": "worker", "port": "result"},
-                    "cardinality": {"kind": "exactly", "count": 1},
-                    "terminal": true,
-                }],
-                "limits": {
-                    "max_nodes": 4, "max_edges": 4, "max_depth": 4, "max_fan_out": 1,
-                    "max_total_invocations": 4, "max_runtime_secs": 1800,
-                },
-            }]);
-        }
         Template::Minimal | Template::PluginTool | Template::Assets | Template::Workflow => {}
     }
     config
@@ -679,10 +596,6 @@ fn workflow_fixture(names: &Names) -> Value {
 
 fn task_prompt(names: &Names, template: Template) -> String {
     match template {
-        Template::Graph => format!(
-            "Read the {}Job for this run and write exactly one result with `write_result`.\n",
-            names.title
-        ),
         Template::Automation => format!(
             "A {}Job was created: {{{{ doc.request }}}}\n\nDo what it asks.\n",
             names.title
@@ -698,10 +611,6 @@ fn readme(names: &Names, template: Template) -> String {
         Template::Automation => (
             "runs its worker whenever a job document is created",
             "Input: a `Job` document. Output: whatever the task writes.",
-        ),
-        Template::Graph => (
-            "runs a one-stage graph from a job to one result",
-            "Input: a `Job` document at the `start` entry. Output: one `Result`.",
         ),
         Template::PluginTool => (
             "ships one plugin tool",
@@ -744,12 +653,7 @@ mod tests {
 
     #[test]
     fn every_document_template_manifest_is_valid() {
-        for template in [
-            Template::Assets,
-            Template::Minimal,
-            Template::Automation,
-            Template::Graph,
-        ] {
+        for template in [Template::Assets, Template::Minimal, Template::Automation] {
             let root = tempfile::tempdir().unwrap();
             let dir = root.path().join("review_toolkit");
             let report = scaffold(&dir, "review_toolkit", &input(template)).unwrap();
@@ -759,22 +663,6 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
             crate::pack::validate_manifest("review_toolkit", &manifest)
                 .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
-            if template == Template::Graph {
-                assert_eq!(
-                    manifest.compiler_version.as_deref(),
-                    Some(crate::graph_pipeline::COMPILER_VERSION)
-                );
-                assert!(
-                    dir.join("graphs/review_toolkit.plan.json").is_file(),
-                    "a graph template ships its compiled plan"
-                );
-                assert!(
-                    std::fs::read_to_string(dir.join("README.md"))
-                        .unwrap()
-                        .contains("pack-topology:start"),
-                    "a graph template's README carries the topology diagram"
-                );
-            }
         }
     }
 

@@ -355,55 +355,6 @@ pub(super) async fn project_tools(
     Ok(projection)
 }
 
-pub(crate) struct SessionToolResult {
-    pub doc_id: String,
-    pub result: Result<Option<String>>,
-}
-
-pub(crate) async fn session_tool_results(
-    node: &Arc<EmbeddedNode>,
-    node_did: &str,
-    session_id: &str,
-    tool_name: &str,
-    skip: &std::collections::HashSet<String>,
-) -> Result<Vec<SessionToolResult>> {
-    let scope = gents::session::session_scope_filter(node_did, session_id, Some(node_did));
-    let query = format!(
-        r#"{{ AgentToolCall(filter: {{ {scope}, tool_name: {{_eq: "{}"}} }}, order: {{started_at: ASC}}) {{ _docID }} }}"#,
-        escape_graphql_string(tool_name)
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "grok shim session tool call query").await?;
-    #[derive(Deserialize)]
-    struct Row {
-        #[serde(rename = "_docID")]
-        doc_id: String,
-    }
-    let rows: Vec<Row> = serde_json::from_value(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentToolCall"))
-            .cloned()
-            .context("missing AgentToolCall rows")?,
-    )
-    .context("invalid AgentToolCall identity")?;
-    let access = ConfigAccess::local(node.clone());
-    let mut results = Vec::new();
-    for Row { doc_id } in rows {
-        if skip.contains(&doc_id) {
-            continue;
-        }
-        let result =
-            load_tool_call_presentation(&access, &doc_id, node_did, session_id, Some(node_did))
-                .await
-                .map(|presentation| presentation.result)
-                .with_context(|| format!("canonical tool presentation for {doc_id}"));
-        results.push(SessionToolResult { doc_id, result });
-    }
-    Ok(results)
-}
-
 fn tool_call_row_sort_key(row: &ToolCallRow) -> (i64, String) {
     (
         row.message_sequence.unwrap_or(i64::MAX),

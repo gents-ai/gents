@@ -45,15 +45,11 @@ impl PackEdit {
     pub(super) fn config(&mut self) -> Result<&mut Map<String, Value>> {
         if self.config.is_none() {
             anyhow::ensure!(
-                matches!(self.kind(), "assets" | "documents" | "graph"),
+                matches!(self.kind(), "assets" | "documents"),
                 "a {} pack carries no configuration",
                 self.kind()
             );
-            self.manifest["kind"] = json!(if self.kind() == "graph" {
-                "graph"
-            } else {
-                "documents"
-            });
+            self.manifest["kind"] = json!("documents");
             self.manifest["config"] = json!(CONFIG);
             self.add_asset(CONFIG);
             self.config = Some(json!({ "node": {} }));
@@ -272,63 +268,6 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
             language,
             prebuilt,
         } => add_plugin(pack, &name, language.as_deref(), prebuilt.as_deref()),
-        PackAddCommand::Graph { graph_id } => {
-            check_id(&graph_id)?;
-            pack.require_new("graph_intents", "graph_id", &graph_id)?;
-            pack.config()?;
-            pack.manifest["kind"] = json!("graph");
-            pack.manifest["compiler_version"] = json!(gents::graph_pipeline::COMPILER_VERSION);
-            pack.list("graphs")?.push(json!({ "graph_id": graph_id }));
-            pack.list("graph_intents")?.push(json!({
-                "graph_id": graph_id,
-                "nodes": [],
-                "entries": [],
-                "results": [],
-                "limits": {
-                    "max_nodes": 8, "max_edges": 16, "max_depth": 8, "max_fan_out": 16,
-                    "max_total_invocations": 128, "max_runtime_secs": 3600,
-                },
-            }));
-            Ok(())
-        }
-        PackAddCommand::Stage {
-            node,
-            graph,
-            task,
-            plugin,
-            input,
-            output,
-            from,
-        } => {
-            let target = match (task, plugin) {
-                (Some(task), _) => {
-                    anyhow::ensure!(
-                        pack.has("tasks", "task_id", &task),
-                        "the pack has no task {task:?}; add it first"
-                    );
-                    json!({"kind": "task", "task_id": task})
-                }
-                (None, Some(plugin)) => {
-                    anyhow::ensure!(
-                        pack.manifest["plugins"]
-                            .as_array()
-                            .is_some_and(|rows| rows.iter().any(|row| row["name"] == plugin)),
-                        "the pack has no plugin {plugin:?}; add it first"
-                    );
-                    json!({"kind": "plugin", "plugin": plugin})
-                }
-                (None, None) => anyhow::bail!("name the stage's --task or --plugin"),
-            };
-            add_stage(
-                pack,
-                &node,
-                &graph,
-                target,
-                &input,
-                &output,
-                from.as_deref(),
-            )
-        }
     }
 }
 
@@ -442,85 +381,6 @@ fn add_plugin(
     Ok(())
 }
 
-fn add_stage(
-    pack: &mut PackEdit,
-    node: &str,
-    graph: &str,
-    target: Value,
-    input: &str,
-    output: &str,
-    from: Option<&str>,
-) -> Result<()> {
-    check_id(node)?;
-    let capability = format!("{graph}-{node}");
-    pack.require_new("graph_capabilities", "capability_id", &capability)?;
-    pack.list("graph_capabilities")?.push(json!({
-        "capability_id": capability,
-        "allowed_callers": ["${GENTS_PACK_NODE_DID}"],
-        "revision": "v1",
-        "target": target,
-        "input_ports": [{
-            "name": "input", "collection": input, "schema": format!("{input}/v1"),
-            "correlation_field": "run_id", "cardinality": "one", "required": true,
-        }],
-        "output_ports": [{
-            "name": "output", "collection": output, "schema": format!("{output}/v1"),
-            "correlation_field": "run_id", "cardinality": "one",
-        }],
-    }));
-    let intents = pack.list("graph_intents")?;
-    let intent = intents
-        .iter_mut()
-        .find(|intent| intent["graph_id"] == graph)
-        .with_context(|| format!("the pack has no graph {graph:?}; add it first"))?;
-    let intent = intent
-        .as_object_mut()
-        .context("a graph intent is not an object")?;
-    anyhow::ensure!(
-        !list_in(intent, "nodes")?
-            .iter()
-            .any(|existing| existing["node_id"] == node),
-        "graph {graph:?} already has a stage {node:?}"
-    );
-    list_in(intent, "nodes")?.push(json!({
-        "node_id": node, "capability_id": capability, "capability_revision": "v1",
-    }));
-    match from {
-        None => {
-            anyhow::ensure!(
-                list_in(intent, "entries")?.is_empty(),
-                "graph {graph:?} already has an entry; name the upstream stage with --from node.port"
-            );
-            list_in(intent, "entries")?.push(json!({
-                "name": "start", "collection": input, "schema": format!("{input}/v1"),
-                "input_contract": format!("{graph}-input/v1"),
-                "to": {"node_id": node, "port": "input"},
-            }));
-        }
-        Some(from) => {
-            let (from_node, from_port) = from
-                .split_once('.')
-                .context("--from is node.port, for example scan.output")?;
-            list_in(intent, "edges")?.push(json!({
-                "from": {"node_id": from_node, "port": from_port},
-                "to": {"node_id": node, "port": "input"},
-                "concurrency": "serial",
-            }));
-            list_in(intent, "results")?.retain(|result| result["from"]["node_id"] != from_node);
-        }
-    }
-    let results = list_in(intent, "results")?;
-    if results.is_empty() {
-        results.push(json!({
-            "name": "result",
-            "from": {"node_id": node, "port": "output"},
-            "cardinality": {"kind": "exactly", "count": 1},
-            "terminal": true,
-        }));
-    }
-    Ok(())
-}
-
 pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
     let dir = args.dir.unwrap_or_else(|| PathBuf::from("."));
     let mut pack = PackEdit::load(&dir)?;
@@ -610,16 +470,6 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
                         .with_context(|| format!("removing {}", source.display()))?;
                 }
             }
-        }
-        PackPart::Graph => {
-            pack.remove_row("graph_intents", "graph_id", id)?;
-            let _ = pack.remove_row("graphs", "graph_id", id);
-            let prefix = format!("{id}-");
-            pack.list("graph_capabilities")?.retain(|capability| {
-                !capability["capability_id"]
-                    .as_str()
-                    .is_some_and(|capability| capability.starts_with(&prefix))
-            });
         }
     }
     pack.save()
@@ -721,63 +571,6 @@ mod tests {
             json!(["README.md", "pack_config.json"]),
             "every file an add wrote is removed with its part"
         );
-    }
-
-    #[tokio::test]
-    async fn a_graph_is_built_stage_by_stage_and_compiles() {
-        let (_root, dir) = scaffolded(PackTemplate::Minimal);
-        add(
-            &dir,
-            PackAddCommand::Schema {
-                collection: "ReviewJob".into(),
-            },
-        );
-        add(
-            &dir,
-            PackAddCommand::Schema {
-                collection: "ReviewNotes".into(),
-            },
-        );
-        add(
-            &dir,
-            PackAddCommand::Schema {
-                collection: "ReviewReport".into(),
-            },
-        );
-        add(
-            &dir,
-            PackAddCommand::Graph {
-                graph_id: "review".into(),
-            },
-        );
-        add(
-            &dir,
-            PackAddCommand::Stage {
-                node: "scan".into(),
-                graph: "review".into(),
-                task: Some("review-toolkit-worker-task".into()),
-                plugin: None,
-                input: "ReviewJob".into(),
-                output: "ReviewNotes".into(),
-                from: None,
-            },
-        );
-        add(
-            &dir,
-            PackAddCommand::Stage {
-                node: "report".into(),
-                graph: "review".into(),
-                task: Some("review-toolkit-worker-task".into()),
-                plugin: None,
-                input: "ReviewNotes".into(),
-                output: "ReviewReport".into(),
-                from: Some("scan.output".into()),
-            },
-        );
-        super::super::check::write_topology(&dir).unwrap();
-        let report = super::super::check::check_dir(&dir).await;
-        assert!(report.problems.is_empty(), "{:#?}", report.problems);
-        assert_eq!(report.graphs, vec!["review".to_owned()]);
     }
 
     #[test]

@@ -6,7 +6,6 @@ use defra_node::EmbeddedNode;
 pub(crate) mod acp;
 mod binding;
 mod goals;
-mod graph_runs;
 mod job_runs;
 mod observation_cursor;
 pub(crate) mod projection;
