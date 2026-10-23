@@ -5,9 +5,10 @@ use super::write_telemetry::ConflictSource;
 
 pub(super) const TRANSACT_CONFLICT_MAX_RETRIES: u32 = 3;
 pub(super) const RECEIPT_WRITE_MAX_RETRIES: u32 = 4;
-/// One admission commits per conflict round, so a full request's contenders
-/// settle within one round per slot plus the round that refuses the rest.
-pub(super) const BACKGROUND_SLOT_MAX_ATTEMPTS: u32 =
+/// Qualifies a full admitted cohort plus two overflow receipts sharing the
+/// request publication owner. This is bounded retry, not a progress guarantee
+/// under unbounded concurrent writes.
+pub(super) const BACKGROUND_BATCH_MAX_ATTEMPTS: u32 =
     crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u32 + 2;
 
 #[derive(Debug)]

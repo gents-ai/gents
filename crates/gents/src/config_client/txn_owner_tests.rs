@@ -488,7 +488,7 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
                     rollback_on_drop: Some(rollback_on_drop),
                     affected_documents: std::sync::atomic::AtomicU64::new(0),
                     operation: Some(operation.as_str()),
-                    contends_for_background_slot: std::sync::atomic::AtomicBool::new(false),
+                    contends_for_background_batch: std::sync::atomic::AtomicBool::new(false),
                 })
             })
         },
