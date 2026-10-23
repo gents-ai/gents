@@ -839,6 +839,7 @@ mod paging_coverage_tests {
             .timeline_items
             .push(RenderedTimelineItem::AssistantMessage {
                 item_key: "assistant-2".into(),
+                request_id: None,
                 sequence: Some(2),
                 content: None,
                 reasoning: None,

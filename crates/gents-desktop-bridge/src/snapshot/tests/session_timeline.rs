@@ -906,6 +906,7 @@ fn active_store() -> ClientStore {
 fn assistant_item(key: &str, sequence: i64) -> RenderedTimelineItem {
     RenderedTimelineItem::AssistantMessage {
         item_key: key.into(),
+        request_id: None,
         sequence: Some(sequence),
         content: Some(key.into()),
         reasoning: None,

@@ -224,6 +224,7 @@ pub(super) fn build_rendered_timeline(
                 true,
                 Some(RenderedTimelineItem::AssistantMessage {
                     item_key: message.message_key.clone(),
+                    request_id: message.request_id.clone(),
                     sequence: message.sequence,
                     content: normalized_content.clone(),
                     reasoning: normalized_reasoning.clone(),
@@ -314,6 +315,34 @@ mod tests {
             origin: None,
             input_text: None,
             timestamp: None,
+        }
+    }
+
+    #[test]
+    fn assistant_projection_retains_each_request_identity_without_guessing_legacy_ownership() {
+        let messages = [Some("request-first"), Some("request-second"), None]
+            .into_iter()
+            .enumerate()
+            .map(|(index, request)| {
+                let mut message =
+                    user_message(&format!("assistant-{index}"), index as i64, "Result");
+                message.role = Some("assistant".into());
+                message.display_role = Some("assistant".into());
+                message.request_id = request.map(str::to_owned);
+                message
+            })
+            .collect::<Vec<_>>();
+        let rendered = build_rendered_timeline(&messages, &[], &[]);
+        assert_eq!(rendered.len(), 3);
+        for (item, expected) in
+            rendered
+                .iter()
+                .zip([Some("request-first"), Some("request-second"), None])
+        {
+            let RenderedTimelineItem::AssistantMessage { request_id, .. } = item else {
+                panic!("expected assistant result");
+            };
+            assert_eq!(request_id.as_deref(), expected);
         }
     }
 

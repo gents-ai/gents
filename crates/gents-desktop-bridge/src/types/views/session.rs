@@ -380,6 +380,9 @@ pub enum RenderedTimelineItem {
     #[serde(rename_all = "camelCase")]
     AssistantMessage {
         item_key: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        request_id: Option<String>,
         sequence: Option<i64>,
         content: Option<String>,
         reasoning: Option<String>,
