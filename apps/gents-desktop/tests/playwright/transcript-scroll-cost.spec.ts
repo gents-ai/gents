@@ -116,10 +116,25 @@ async function loadEveryPage(page: Page) {
   );
 }
 
+/* rows near the foot are measured as they mount on the way back, so a
+   chunk's cost is taken once the view rests at the foot and the content
+   holds its height for a few frames */
 async function backToBottom(page: Page) {
   await page.getByRole("button", { name: "Back to bottom" }).click();
   await expect(scroller(page)).toHaveAttribute("data-following", "true");
-  await page.waitForTimeout(300);
+  await expect
+    .poll(() =>
+      scroller(page).evaluate(async (scroller) => {
+        const height = scroller.scrollHeight;
+        for (let frame = 0; frame < 6; frame += 1)
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        const foot = scroller.scrollHeight - scroller.clientHeight;
+        return (
+          scroller.scrollHeight === height && Math.abs(scroller.scrollTop - foot) < 1
+        );
+      }),
+    )
+    .toBe(true);
 }
 
 test.describe("what a transcript scroll costs", () => {

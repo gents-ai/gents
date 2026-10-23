@@ -35,6 +35,20 @@ test.describe("moving between turns", () => {
         : null;
     });
 
+  /* a jump is written once the reader's scroll has rested, so wait for a turn
+     other than `from` to reach the reading line rather than sampling once */
+  async function landed(page: import("@playwright/test").Page, from?: string) {
+    let at: Awaited<ReturnType<typeof current>> = null;
+    await expect
+      .poll(async () => {
+        const turn = await current(page);
+        at = turn && turn.key !== from && Math.abs(turn.offset - 56) <= 1 ? turn : null;
+        return at !== null;
+      })
+      .toBe(true);
+    return at!;
+  }
+
   test("brings the previous turn to the reading line, then the next", async ({
     page,
   }) => {
@@ -43,20 +57,19 @@ test.describe("moving between turns", () => {
     const start = await current(page);
     await page.getByTestId("transcript-panel").hover();
     await page.keyboard.press("Alt+Meta+ArrowUp");
-    await expect.poll(() => current(page).then((c) => c?.following)).toBe("false");
-    const up = (await current(page))!;
-    expect(up.key).not.toBe(start?.key);
-
-    expect(Math.abs(up.offset - 56)).toBeLessThanOrEqual(1);
+    const up = await landed(page, start?.key);
+    expect(up.following).toBe("false");
 
     await page.keyboard.press("Alt+Meta+ArrowUp");
-    await expect.poll(() => current(page).then((c) => c?.key)).not.toBe(up.key);
-    const upAgain = (await current(page))!;
-    expect(Math.abs(upAgain.offset - 56)).toBeLessThanOrEqual(1);
+    await landed(page, up.key);
 
     await page.keyboard.press("Alt+Meta+ArrowDown");
-    await expect.poll(() => current(page).then((c) => c?.key)).toBe(up.key);
-    expect(Math.abs((await current(page))!.offset - 56)).toBeLessThanOrEqual(1);
+    await expect
+      .poll(async () => {
+        const turn = await current(page);
+        return turn?.key === up.key && Math.abs(turn.offset - 56) <= 1;
+      })
+      .toBe(true);
   });
 });
 
