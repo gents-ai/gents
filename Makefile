@@ -13,6 +13,7 @@ FUZZ_TIME ?= 30s
 # PROFILE=fast-dev, which keeps file:line backtraces for workspace crates and
 # drops dependency debug info.
 PROFILE ?=
+export RUST_MIN_STACK ?= 16777216
 CARGO_PROFILE_FLAG := $(if $(PROFILE),--profile $(PROFILE),)
 SWEEP_DAYS ?= 7
 

@@ -445,7 +445,10 @@ fn non_empty_clone(value: &str) -> Option<String> {
 
 /// Drives a live fixture to completion on the runtime it owns. Callers are
 /// synchronous process or test entry points outside any runtime.
-pub(crate) fn run_on_live_runtime<F: std::future::Future>(future: F) -> Result<F::Output> {
+pub(crate) fn run_on_live_runtime<F>(future: F) -> Result<F::Output>
+where
+    F: std::future::Future,
+{
     const STACK_BYTES: usize = 16 * 1024 * 1024;
     Ok(tokio::runtime::Builder::new_multi_thread()
         .enable_all()

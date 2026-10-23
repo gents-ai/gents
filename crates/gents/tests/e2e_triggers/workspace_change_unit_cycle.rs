@@ -600,8 +600,19 @@ fn ensure_native_fs_runner_for_test() {
             .nth(2)
             .expect("gents manifest should be under workspace crates/");
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+        let current = std::env::current_exe().expect("integration-test binary path");
+        let parent = current.parent().expect("integration-test binary directory");
+        let profile_dir = parent.parent().expect("Cargo profile directory");
+        let profile = profile_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("Cargo profile directory has a name");
+        let profile = if profile == "debug" { "dev" } else { profile };
         let status = Command::new(cargo)
             .args(["build", "-p", "gents-fs-runner"])
+            .args(["--profile", profile])
+            .arg("--target-dir")
+            .arg(profile_dir.parent().expect("Cargo target directory"))
             .current_dir(repo_root)
             .status()
             .expect("building native filesystem runner for workspace cycle test");
@@ -614,14 +625,12 @@ fn ensure_native_fs_runner_for_test() {
         } else {
             "gents-fs-runner"
         };
-        let current = std::env::current_exe().expect("integration-test binary path");
-        let parent = current.parent().expect("integration-test binary directory");
         assert!(
             [
                 parent.to_path_buf(),
                 parent
                     .parent()
-                    .expect("target debug directory")
+                    .expect("Cargo profile directory")
                     .to_path_buf()
             ]
             .into_iter()
