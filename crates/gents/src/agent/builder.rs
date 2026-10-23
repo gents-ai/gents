@@ -604,6 +604,7 @@ impl PendingAgent {
         };
         compaction.validate()?;
         Ok(ResolvedAgent {
+            profile_id: None,
             agent_id: self.name,
             node: principal,
             backend_id: backend_fields.backend_id,

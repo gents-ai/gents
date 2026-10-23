@@ -88,7 +88,7 @@ async fn current_session_id_reflects_request_scope() {
     assert_eq!(super::current_session_id(), None);
 
     let context = AdmissionCallContext::for_request(&request("req-x"), "default", "backend-1");
-    let pending = context.next_call("runtime-test");
+    let pending = context.next_call("runtime-test", None, None);
     assert_eq!(pending.request_id, "req-x");
     assert_eq!(pending.request_doc_id, "doc-req-x");
     scope_request(context, async {
@@ -112,12 +112,12 @@ async fn current_call_join_reflects_the_minted_call() {
     scope_request(context, async move {
         assert!(super::current_call_join().is_none());
 
-        let first = minting_handle.next_call("runtime-test");
+        let first = minting_handle.next_call("runtime-test", None, None);
         let join = super::current_call_join().expect("join after mint");
         assert_eq!(join.call_id, first.call_id);
         assert_eq!(join.call_seq, 1);
 
-        let second = minting_handle.next_call("runtime-test");
+        let second = minting_handle.next_call("runtime-test", None, None);
         let join = super::current_call_join().expect("join after second mint");
         assert_eq!(join.call_id, second.call_id);
         assert_eq!(join.call_seq, 2);
@@ -135,12 +135,12 @@ async fn concurrent_call_scopes_return_their_own_exact_join() {
         let compaction = scope_call_with_join(CallKind::Compaction, 1, async {
             super::client::current_context()
                 .unwrap()
-                .next_call("runtime-test")
+                .next_call("runtime-test", None, None)
         });
         let title = scope_call_with_join(CallKind::OneOff, 1, async {
             super::client::current_context()
                 .unwrap()
-                .next_call("runtime-test")
+                .next_call("runtime-test", None, None)
         });
         let ((compaction_call, compaction_join), (title_call, title_join)) =
             tokio::join!(compaction, title);
@@ -1225,6 +1225,9 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
 
 fn pending_call(request_id: &str, backend_id: &str) -> super::controller::PendingCallMetadata {
     super::controller::PendingCallMetadata {
+        session_id: "session-test".to_string(),
+        model_name: None,
+        profile_id: None,
         call_id: format!("call-{request_id}"),
         runtime_instance_id: "runtime-test".to_string(),
         request_id: request_id.to_string(),

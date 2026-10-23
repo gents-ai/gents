@@ -511,6 +511,7 @@ pub(crate) fn agent_config_from_documents(
     let backend = inference.backend.backend_fields();
     let resolved_max_turns = inference.max_turns()?;
     Ok(ResolvedAgent {
+        profile_id: Some(inference.profile.profile_id.clone()),
         agent_id: agent_config.agent_id.clone(),
         node: principal,
         backend_id: backend.backend_id,

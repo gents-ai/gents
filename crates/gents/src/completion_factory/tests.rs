@@ -528,6 +528,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
     });
 
     ResolvedAgent {
+        profile_id: None,
         agent_id: "general".to_string(),
         node,
         backend_id: Some("backend-general".to_string()),

@@ -8,6 +8,8 @@ struct Case {
     observations: Vec<TokenUsage>,
     expected: Vec<Expected>,
     summary: Option<TokenUsageSummary>,
+    charged_total: Option<u64>,
+    fresh_input: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -71,9 +73,17 @@ fn usage_observations_and_summaries_follow_the_executable_model() {
                 Err(_) => assert!(!expected.valid, "{}", case.name),
             }
         }
+        let summary = TokenUsageSummary::from_observations(case.observations).ok();
+        assert_eq!(summary, case.summary, "{}", case.name);
         assert_eq!(
-            TokenUsageSummary::from_observations(case.observations).ok(),
-            case.summary,
+            summary.and_then(|summary| summary.charged_total()),
+            case.charged_total,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            summary.and_then(|summary| summary.fresh_input()),
+            case.fresh_input,
             "{}",
             case.name
         );

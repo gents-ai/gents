@@ -3,6 +3,9 @@ type InferenceCall @branchable {
     runtime_instance_id: String @index
     request_id: String @index
     request_doc_id: String @index @immutable
+    session_id: String @index @immutable
+    model_name: String @index @immutable
+    profile_id: String @index @immutable
     call_seq: Int
     backend_id: String @index
     agent_id: String @index
@@ -25,5 +28,9 @@ type InferenceCall @branchable {
     prompt_tokens: Int
     completion_tokens: Int
     cached_input_tokens: Int
+    cache_creation_input_tokens: Int
+    reasoning_output_tokens: Int
+    provider_total_tokens: Int
+    usage_completeness: String
     context_accounting_json: String
 }
