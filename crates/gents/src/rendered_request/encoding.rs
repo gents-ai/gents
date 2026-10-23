@@ -313,10 +313,18 @@ const APPEND_GROWING_FIELDS: [&str; 5] = [
     "threaded_tool_results",
 ];
 
-/// Small fields that change on every provider call. Laid out after the growing
-/// lists they ride in the tail block every append rewrites anyway; ahead of
-/// them they re-cut the first block and its whole manifest group per call.
-const PER_CALL_TRAILING_FIELDS: [&str; 2] = ["context_accounting", "effective_message_count"];
+/// Small fields that can change on every provider call: the trace's context
+/// accounting, and the output budget a tight context window recomputes from
+/// the remaining tokens. Laid out after the growing lists they ride in the
+/// tail block every append rewrites anyway; ahead of them they re-cut the
+/// first block and its whole manifest group per call.
+const PER_CALL_TRAILING_FIELDS: [&str; 5] = [
+    "context_accounting",
+    "effective_message_count",
+    "max_completion_tokens",
+    "max_output_tokens",
+    "max_tokens",
+];
 
 pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
     let Value::Object(map) = super::canonical_json(value) else {
@@ -362,33 +370,25 @@ pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
     blocks
 }
 
-pub(crate) fn chunk_capture_payloads(payloads: [&str; 2]) -> [Vec<ChunkedBlock>; 2] {
-    let ranges = payloads.map(long_json_strings);
-    let mut occurrences = rapidhash::RapidHashMap::<&str, usize>::default();
-    for (payload, ranges) in payloads.iter().zip(&ranges) {
-        for &(start, end) in ranges {
-            *occurrences.entry(&payload[start..end]).or_default() += 1;
-        }
+/// Cuts every JSON string of at least `CHUNK_MIN_SIZE` bytes on its own, so a
+/// long string has the same blocks in the wire body and the native trace,
+/// wherever it sits. The cut must not depend on whether the other payload
+/// repeats the string: a trace that starts retaining `effective_messages`
+/// would otherwise re-cut the whole history of the wire body once.
+pub(crate) fn chunk_capture_layout(payload: &str) -> Vec<ChunkedBlock> {
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    for (value_start, value_end) in long_json_strings(payload) {
+        blocks.extend(chunk_capture_body(&payload[start..value_start]));
+        blocks.extend(chunk_capture_body(&payload[value_start..value_end]));
+        start = value_end;
     }
-    std::array::from_fn(|index| {
-        let payload = payloads[index];
-        let mut blocks = Vec::new();
-        let mut start = 0;
-        for &(value_start, value_end) in &ranges[index] {
-            if occurrences[&payload[value_start..value_end]] < 2 {
-                continue;
-            }
-            blocks.extend(chunk_capture_body(&payload[start..value_start]));
-            blocks.extend(chunk_capture_body(&payload[value_start..value_end]));
-            start = value_end;
-        }
-        blocks.extend(chunk_capture_body(&payload[start..]));
-        if blocks.len() > MAX_MANIFEST_BLOCKS {
-            chunk_capture_body(payload)
-        } else {
-            blocks
-        }
-    })
+    blocks.extend(chunk_capture_body(&payload[start..]));
+    if blocks.len() > MAX_MANIFEST_BLOCKS {
+        chunk_capture_body(payload)
+    } else {
+        blocks
+    }
 }
 
 fn long_json_strings(encoded: &str) -> Vec<(usize, usize)> {
@@ -1359,7 +1359,9 @@ mod tests {
         let layouts = values
             .each_ref()
             .map(|value| capture_block_layout(value).unwrap());
-        let shared = chunk_capture_payloads([&layouts[0], &layouts[1]]);
+        let shared = layouts
+            .each_ref()
+            .map(|layout| chunk_capture_layout(layout));
         let baseline = layouts.each_ref().map(|layout| chunk_capture_body(layout));
         let unique_bytes = |payloads: &[Vec<ChunkedBlock>; 2]| {
             let mut unique = BTreeMap::new();
@@ -1395,26 +1397,31 @@ mod tests {
     }
 
     #[test]
-    fn unshared_json_strings_keep_existing_chunk_boundaries() {
-        let values = [
-            json!({"text": deterministic_capture_text(4000)}),
-            json!({"text": deterministic_capture_text(5000)}),
-        ];
-        let layouts = values
-            .each_ref()
-            .map(|value| capture_block_layout(value).unwrap());
-        let chunks = chunk_capture_payloads([&layouts[0], &layouts[1]]);
-        for (layout, actual) in layouts.iter().zip(chunks) {
-            let expected = chunk_capture_body(layout);
-            assert_eq!(
-                actual
-                    .iter()
-                    .map(|block| &block.content_key)
-                    .collect::<Vec<_>>(),
-                expected
-                    .iter()
-                    .map(|block| &block.content_key)
-                    .collect::<Vec<_>>()
+    fn a_long_string_chunks_the_same_wherever_it_appears() {
+        let text = deterministic_capture_text(5000);
+        let string_blocks = chunk_capture_body(&serde_json::to_string(&text).unwrap())
+            .into_iter()
+            .map(|block| block.content_key)
+            .collect::<Vec<_>>();
+        for (name, value) in [
+            (
+                "wire",
+                json!({"model": "m", "messages": [{"role": "assistant", "content": text}]}),
+            ),
+            (
+                "trace",
+                json!({"effective_messages": [{"content": [{"text": text}]}], "trace_version": 4}),
+            ),
+            ("bare", json!({"text": text})),
+        ] {
+            let keys = chunk_capture_layout(&capture_block_layout(&value).unwrap())
+                .into_iter()
+                .map(|block| block.content_key)
+                .collect::<Vec<_>>();
+            assert!(
+                keys.windows(string_blocks.len())
+                    .any(|run| run == string_blocks),
+                "{name}: the string must keep its own blocks"
             );
         }
     }
@@ -1423,7 +1430,7 @@ mod tests {
     fn repeated_string_framing_cannot_exceed_the_existing_manifest_limit() {
         let text = deterministic_capture_text(CHUNK_MIN_SIZE);
         let payload = serde_json::to_string(&vec![&text; MAX_MANIFEST_BLOCKS / 2 + 1]).unwrap();
-        let [chunks, _] = chunk_capture_payloads([&payload, "{}"]);
+        let chunks = chunk_capture_layout(&payload);
         let baseline = chunk_capture_body(&payload);
         assert!(chunks.len() <= MAX_MANIFEST_BLOCKS);
         assert_eq!(
