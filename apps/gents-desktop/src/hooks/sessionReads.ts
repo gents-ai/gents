@@ -1,6 +1,8 @@
 import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
+  SessionRowsView,
+  SessionRowsWindow,
 } from "@source-inc/gents-desktop-client";
 import {
   BridgeInvokeError,
@@ -9,10 +11,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 import { acceptsAsyncResult } from "./observationOrdering";
 import { timingConfig } from "./timing";
-import {
-  mergeOlderSessionTimelinePage,
-  mergeSessionTipSnapshot,
-} from "@source-inc/gents-desktop-client";
+import { mergeSessionTipSnapshot } from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
 import {
@@ -32,8 +31,6 @@ type SessionReadParams = {
   trackedRequestId: () => string | null;
   setError: (error: string | null) => void;
 };
-
-const MAX_HIDDEN_PAGE_HOPS = 8;
 
 export function createSessionReads({
   api,
@@ -176,53 +173,29 @@ export function createSessionReads({
     }
   }
 
-  async function loadOlderSessionTimeline(): Promise<boolean> {
+  /* a stretch of the open session's rows by message number; a result that
+     arrives after the reader moved to another session or node is dropped */
+  async function loadSessionRows(
+    window: SessionRowsWindow,
+    limit = SESSION_TIMELINE_PAGE_SIZE,
+  ): Promise<SessionRowsView | null> {
     const capturedRun = runEpoch;
-    const capturedNodeDid = store.getState().nodeDid;
-    const capturedSessionId = store.getState().sessionId;
-    try {
-      for (let hop = 0; hop < MAX_HIDDEN_PAGE_HOPS; hop += 1) {
-        const current = readSession(sessionStore);
-        const cursor = current?.timelinePage?.oldestItemKey ?? null;
-        if (!current || !current.timelinePage?.hasOlder || !cursor) return false;
-        const older = await api.fetchSessionSnapshot(
-          current.sessionId,
-          current.nodeDid ?? store.getState().nodeDid,
-          trackedRequestId(),
-          { limit: SESSION_TIMELINE_PAGE_SIZE, beforeItemKey: cursor },
-        );
-        if (
-          capturedRun !== runEpoch ||
-          capturedNodeDid !== store.getState().nodeDid ||
-          !older ||
-          store.getState().sessionId !== current.sessionId
-        )
-          return false;
-        const previousItemCount = readSession(sessionStore)?.timelineItems.length ?? 0;
-        setSession((latest) => mergeOlderSessionTimelinePage(latest, older));
-        const next = readSession(sessionStore);
-        if ((next?.timelineItems.length ?? 0) > previousItemCount) return true;
-        if (
-          !next?.timelinePage?.hasOlder ||
-          !next.timelinePage.oldestItemKey ||
-          next.timelinePage.oldestItemKey === cursor
-        ) {
-          return false;
-        }
-      }
-      return false;
-    } catch (error) {
-      if (
-        capturedRun !== runEpoch ||
-        capturedNodeDid !== store.getState().nodeDid ||
-        capturedSessionId !== store.getState().sessionId
-      )
-        return false;
-      if (error instanceof BridgeInvokeError && error.code === "projectionPending")
-        return false;
-      setError(String(error));
-      return false;
-    }
+    const current = readSession(sessionStore);
+    if (!current) return null;
+    const nodeDid = current.nodeDid ?? store.getState().nodeDid;
+    const rows = await api.fetchSessionRows({
+      sessionId: current.sessionId,
+      nodeDid,
+      window,
+      limit,
+    });
+    if (
+      capturedRun !== runEpoch ||
+      store.getState().sessionId !== current.sessionId ||
+      (store.getState().nodeDid ?? nodeDid) !== nodeDid
+    )
+      return null;
+    return rows;
   }
 
   return {
@@ -234,6 +207,6 @@ export function createSessionReads({
     refreshSession,
     retrySessionHydration,
     refreshSessionLiveDelta,
-    loadOlderSessionTimeline,
+    loadSessionRows,
   };
 }

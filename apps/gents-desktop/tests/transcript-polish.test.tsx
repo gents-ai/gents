@@ -106,7 +106,6 @@ const panel = (
     inFlight={inFlight}
     stopping={stopping}
     scroller={null}
-    content={null}
     session={snapshot}
     workers={NO_WORKERS}
     parentWork={NO_PARENT}

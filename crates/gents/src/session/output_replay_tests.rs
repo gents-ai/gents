@@ -1926,7 +1926,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         ]
     });
     let layout = crate::rendered_request::encoding::capture_block_layout(&body).unwrap();
-    let chunks = crate::rendered_request::encoding::chunk_capture_body(&layout);
+    let chunks = crate::rendered_request::encoding::chunk_capture_layout(&layout);
     let index = chunks
         .iter()
         .position(|chunk| {

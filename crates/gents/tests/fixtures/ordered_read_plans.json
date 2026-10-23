@@ -121,12 +121,13 @@
     "read": {
       "path": "crates/gents-cli/src/http/prometheus.rs",
       "collection": "InferenceCall",
-      "arguments": "filter: { call_kind: { _eq: \"inference\" }, call_state: { _in: [\"completed\", \"failed\", \"cancelled\"] } }, order: [{ ended_at: DESC }, { call_id: DESC }], limit: $GENTS_limit$, offset: $GENTS_offset$"
+      "arguments": "filter: { call_kind: { _eq: \"inference\" }, call_state: { _in: [\"completed\", \"failed\", \"cancelled\"] }, ended_at: { _ge: \"$GENTS_ended_after$\" } }, order: [{ ended_at: DESC }, { call_id: DESC }], limit: $GENTS_limit$, offset: $GENTS_offset$"
     },
     "bindings": [
       {
         "limit": "1",
-        "offset": "1"
+        "offset": "1",
+        "ended_after": "2026-01-01T00:00:00Z"
       }
     ]
   },
@@ -235,11 +236,44 @@
       },
       {
         "escaped_session_id": "probe",
+        "node_filter": ", node_did: {_eq: \"probe\"}",
+        "requester_filter": ", requester_did: {_eq: \"probe\"}",
+        "message_sequence_filter": ", sequence: {_gt: 100}",
+        "message_query_limit": "1",
+        "message_order": "[{sequence: ASC}]"
+      },
+      {
+        "escaped_session_id": "probe",
         "node_filter": "",
         "requester_filter": "",
         "message_sequence_filter": "",
         "message_query_limit": "1",
         "message_order": "[{sequence: DESC}, {message_key: DESC}]"
+      }
+    ]
+  },
+  {
+    "read": {
+      "path": "crates/gents-desktop-core/src/client/query/session_transcript.rs",
+      "collection": "AgentMessage",
+      "arguments": "filter: { session_id: { _eq: \"$GENTS_escaped_session_id$\" }$GENTS_node_filter$$GENTS_requester_filter$, role: { _eq: \"user\" }, sequence: { _gt: $GENTS_after$ }, request_doc_id: { _in: $GENTS_owners$ } }, order: [{ sequence: ASC }], limit: $GENTS_0$"
+    },
+    "bindings": [
+      {
+        "escaped_session_id": "probe",
+        "node_filter": ", node_did: {_eq: \"probe\"}",
+        "requester_filter": ", requester_did: {_eq: \"probe\"}",
+        "after": "100",
+        "owners": "[\"probe\"]",
+        "0": "1"
+      },
+      {
+        "escaped_session_id": "probe",
+        "node_filter": "",
+        "requester_filter": ", requester_did: { _eq: null }",
+        "after": "100",
+        "owners": "[\"probe\", \"other\"]",
+        "0": "2"
       }
     ]
   },
@@ -262,21 +296,31 @@
     "read": {
       "path": "crates/gents-desktop-core/src/client/query/session_transcript.rs",
       "collection": "AgentToolCall",
-      "arguments": "filter: { session_id: { _eq: \"$GENTS_escaped_session_id$\" }$GENTS_node_filter$$GENTS_requester_filter$$GENTS_tool_before_sequence_filter$ }, order: [{ message_sequence: DESC }, { tool_call_key: DESC }], limit: $GENTS_tool_call_query_limit$"
+      "arguments": "filter: { session_id: { _eq: \"$GENTS_escaped_session_id$\" }$GENTS_node_filter$$GENTS_requester_filter$$GENTS_tool_sequence_filter$ }, order: [{ message_sequence: $GENTS_direction$ }, { tool_call_key: $GENTS_direction$ }], limit: $GENTS_tool_call_query_limit$"
     },
     "bindings": [
       {
         "escaped_session_id": "probe",
         "node_filter": ", node_did: {_eq: \"probe\"}",
         "requester_filter": ", requester_did: {_eq: \"probe\"}",
-        "tool_before_sequence_filter": ", message_sequence: {_lt: 100}",
+        "tool_sequence_filter": ", message_sequence: {_lt: 100}",
+        "direction": "DESC",
+        "tool_call_query_limit": "1"
+      },
+      {
+        "escaped_session_id": "probe",
+        "node_filter": ", node_did: {_eq: \"probe\"}",
+        "requester_filter": ", requester_did: {_eq: \"probe\"}",
+        "tool_sequence_filter": ", message_sequence: {_gt: 100}",
+        "direction": "ASC",
         "tool_call_query_limit": "1"
       },
       {
         "escaped_session_id": "probe",
         "node_filter": "",
         "requester_filter": "",
-        "tool_before_sequence_filter": "",
+        "tool_sequence_filter": "",
+        "direction": "DESC",
         "tool_call_query_limit": "1"
       }
     ]

@@ -33,6 +33,8 @@ pub(crate) use gents_loop::execution_policy;
 pub(crate) use terminal_tools::ToolAccountingRejection;
 pub mod manual;
 pub(crate) mod materialize;
+mod session_message_presentation;
+pub use session_message_presentation::session_message_display_body;
 mod query;
 pub(crate) mod queue;
 mod recovery;

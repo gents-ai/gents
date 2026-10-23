@@ -973,6 +973,31 @@ async fn source_rows(
     )
 }
 
+/// One source's segments in a write transaction, read through the
+/// `(request_doc_id, source)` index. Scope fields beside `request_doc_id` in
+/// the filter let the planner pick a scope field's index instead, which scans
+/// every segment the node owns, so scope is checked on the decoded rows.
+pub(crate) async fn load_source_rows_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    source: &OutputSource,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<super::canonical_rows::OutputSegmentRow>> {
+    Ok(source_rows(
+        ReadAccess::Txn(txn),
+        request_doc_id,
+        source,
+        node_did,
+        requester_did,
+    )
+    .await?
+    .into_iter()
+    .filter(|row| row.segment.session_id == session_id)
+    .collect())
+}
+
 /// Load output segments for the pass's referenced request documents
 /// through the indexed request field, in chunks. The per-pass cache still
 /// owns freshness: if reconstruction detects an incomplete reused scan, its

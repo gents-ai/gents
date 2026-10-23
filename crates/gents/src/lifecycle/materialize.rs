@@ -584,18 +584,12 @@ pub(crate) struct SessionMessageTarget {
 /// A same-node session message is signed by the operator's own DID, so this
 /// line is how the target model tells another agent's text from its operator's.
 pub(crate) fn session_message_sender_header(cause: &SessionMessageCause, at: &str) -> String {
-    let did = &cause.caller_node_did;
-    let node = match (did.get(..16), did.get(did.len().saturating_sub(4)..)) {
-        (Some(head), Some(tail)) if did.len() > 20 => format!("{head}..{tail}"),
-        _ => did.clone(),
-    };
-    let agent = cause
-        .caller_agent_id
-        .strip_prefix(&format!("{did}:"))
-        .unwrap_or(&cause.caller_agent_id);
-    format!(
-        "[message agent:{agent} session:{} node:{node} · at:{at} · cause:{}]",
-        cause.caller_session_id, cause.caller_request_id
+    super::session_message_presentation::sender_header(
+        &cause.caller_node_did,
+        &cause.caller_agent_id,
+        &cause.caller_session_id,
+        &cause.caller_request_id,
+        at,
     )
 }
 

@@ -807,7 +807,25 @@ static SESSION_STOPPED_AT_FIELDS: &[OrdinaryIndexField<'static>] = &[OrdinaryInd
     descending: false,
 }];
 
+/// The metrics scrape reads terminal inference calls that ended inside its
+/// trailing window; without this range every scrape read every call.
+static INFERENCE_CALL_TERMINAL_WINDOW_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "call_kind",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "ended_at",
+        descending: false,
+    },
+];
+
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
+        name: "InferenceCall_kind_ended_at",
+        fields: INFERENCE_CALL_TERMINAL_WINDOW_FIELDS,
+    },
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         name: "AgentToolCall_session_sequence_key",

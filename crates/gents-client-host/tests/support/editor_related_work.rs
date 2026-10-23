@@ -18,11 +18,13 @@ const WORKERS: [(&str, &str); 2] = [
 
 pub struct Provider {
     gates: [Arc<Semaphore>; 2],
+    fail_history: bool,
 }
 impl Provider {
-    pub fn new() -> Self {
+    pub fn new(fail_history: bool) -> Self {
         Self {
             gates: std::array::from_fn(|_| Arc::new(Semaphore::new(0))),
+            fail_history,
         }
     }
     pub fn reply(&self, request: &Value) -> Option<ChatAction> {
@@ -43,6 +45,13 @@ impl Provider {
         };
         for (index, (_, prompt)) in WORKERS.iter().enumerate() {
             if has_user(prompt) {
+                if index == 1 && self.fail_history {
+                    return Some(ChatAction::WaitThenHttpError(
+                        self.gates[index].clone(),
+                        axum::http::StatusCode::BAD_REQUEST,
+                        json!({"error":{"message":"Related history fixture refused the provider request","type":"invalid_request_error"}}).to_string(),
+                    ));
+                }
                 return Some(ChatAction::WaitThenSse(
                     self.gates[index].clone(),
                     fake_llm::completion_text_sse(&format!("{} complete.", WORKERS[index].0)),
@@ -110,6 +119,7 @@ pub async fn verify(
     session: &str,
     author: &str,
     root: &Path,
+    fail_history: bool,
 ) -> Result<Value> {
     use anyhow::ensure;
     use gents::graphql::escape_graphql_string as escape;
@@ -154,13 +164,22 @@ pub async fn verify(
     );
     let mut sessions = std::collections::BTreeSet::new();
     for child in &children {
+        let expected = if fail_history
+            && child
+                .content
+                .as_deref()
+                .is_some_and(|text| text.ends_with(WORKERS[1].1))
+        {
+            gents_protocol::request_lifecycle::RequestLifecycleState::Failed
+        } else {
+            gents_protocol::request_lifecycle::RequestLifecycleState::Completed
+        };
         gents::verify_request_receipt_signature(child)?;
         ensure!(
             child.caused_by_parent_request_doc_id == parent.doc_id
                 && child.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
                 && child.requester_did.as_deref() == Some(node)
-                && child.lifecycle_state
-                    == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Completed),
+                && child.lifecycle_state == Some(expected),
             "related request lost its signed physical ancestry or completion: {child:?}"
         );
         ensure!(
@@ -183,7 +202,8 @@ pub async fn verify(
             && ui["independentlyObservedCompletion"] == true
             && ui["reloadPreservedRowsAndMarkers"] == true
             && ui["separatePanelVerified"] == true
-            && ui["parentDraftPreserved"] == true,
+            && ui["parentDraftPreserved"] == true
+            && (!fail_history || ui["failedWorkerObserved"] == true),
         "installed related-work evidence is incomplete"
     );
     Ok(

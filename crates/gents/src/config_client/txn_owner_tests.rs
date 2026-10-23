@@ -1314,7 +1314,9 @@ struct StorageWriteGateCase {
     expected_gate_held: bool,
 }
 
-#[tokio::test(start_paused = true)]
+/// Embedded workers run outside the paused Tokio clock; real setup and shutdown
+/// must complete before and after the modeled cleanup-timeout interval.
+#[tokio::test]
 async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
     let cases: Vec<StorageWriteGateCase> =
         serde_json::from_str(include_str!("../../tests/fixtures/storage_write_gate.json"))
@@ -1335,6 +1337,7 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
         started: started.clone(),
         release,
     }));
+    tokio::time::pause();
     drop(txn);
 
     let gate = super::mutation_write_gate(&node);
@@ -1347,6 +1350,7 @@ async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
     if scenario.cleanup_times_out {
         tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
     }
+    tokio::time::resume();
     if !scenario.expected_gate_held {
         tokio::time::timeout(Duration::from_secs(1), async {
             while gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY {

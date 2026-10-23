@@ -236,6 +236,7 @@ pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> Inferen
                         || provider_msg_lower.contains("unauthorized")
                         || provider_msg_lower.contains("invalid_request")
                         || provider_msg_lower.contains("invalid request")
+                        || provider_message_is_model_refusal(provider_msg)
                     {
                         InferenceError::PermanentFailure { reason }
                     } else {
@@ -275,6 +276,14 @@ pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) ->
 
 pub(crate) fn provider_message_is_fail_closed_tool_use(message: &str) -> bool {
     message.contains("fail-closed: ") && message.contains("tool_use")
+}
+
+/// The model declined the request. The Claude Messages parser raises
+/// `MessagesParseError::ProviderRefusal` when a turn closes with
+/// `stop_reason: refusal` and no usable content. Resending the identical body
+/// earns the identical refusal, so this is permanent and never resampled.
+pub(crate) fn provider_message_is_model_refusal(message: &str) -> bool {
+    message.contains("stop_reason: refusal")
 }
 
 pub(crate) fn provider_message_is_reasoning_rejection(message: &str) -> bool {

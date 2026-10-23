@@ -16,6 +16,9 @@ use crate::streaming::DefraStreamWriter;
 use crate::test_support::first_content;
 use crate::watcher::AgentRequest;
 
+#[path = "stream_cadence_tests.rs"]
+mod cadence;
+
 #[test]
 fn claude_signed_final_seals_preview_without_duplicating_bytes() {
     use crate::llm::message::ReasoningContent;

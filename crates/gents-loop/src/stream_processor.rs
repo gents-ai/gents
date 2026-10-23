@@ -166,7 +166,13 @@ where
                 if self
                     .assistant_turn
                     .apply_provider_audit(&observation.event)?
-                    && self.stream_writer.mark_pending_output(self.doc_id).await?
+                    && self
+                        .stream_writer
+                        .mark_pending_output(
+                            self.doc_id,
+                            crate::stream_writer::PendingOutput::of_audit(&observation.event),
+                        )
+                        .await?
                 {
                     self.flush_pending().await?;
                 }

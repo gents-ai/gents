@@ -149,6 +149,10 @@ impl GraphqlEndpoint {
         &self.url
     }
 
+    pub fn is_anonymous(&self) -> bool {
+        self.principal_did.is_none() && self.delegated_authorization.is_none()
+    }
+
     pub fn authorization(&self) -> Result<Option<String>> {
         if let Some(value) = &self.delegated_authorization {
             return Ok(Some(value.to_str()?.to_owned()));

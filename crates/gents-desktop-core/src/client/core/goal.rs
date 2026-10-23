@@ -43,6 +43,9 @@ impl ClientCore {
         .await
     }
 
+    /// DefraDB returns successful empty data for an anonymous NAC denial. A cold
+    /// operator identity therefore leaves observation on the authorized replica;
+    /// it does not establish that the session has no Goal or unlock the identity.
     pub async fn session_goal_observation(
         &self,
         node_did: &str,
@@ -57,6 +60,7 @@ impl ClientCore {
         gents::goal::load_session_goal_observation(
             &self
                 .operator_observation_graphql(node_did)
+                .filter(|endpoint| !endpoint.is_anonymous())
                 .map(gents::config_client::ConfigAccess::Graphql)
                 .unwrap_or_else(|| gents::config_client::ConfigAccess::local(self.node_arc())),
             &self.node_identity,
@@ -251,11 +255,35 @@ mod tests {
 
         let server = MockServer::start().await;
         let root = tempfile::tempdir()?;
-        let source =
-            gents::identity::KeyIdentity::load_or_create(root.path().join("source.key"), None)?;
+        let source_key = root.path().join("source.key");
+        let source = tokio::task::spawn_blocking(move || {
+            gents::identity::KeyIdentity::load_or_create(source_key, None)
+        })
+        .await??;
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(root.path().join("client")),
             ClientCoreOptions::local_only(),
+        )
+        .await?;
+        let home = root.path().join("runtime");
+        tokio::fs::create_dir(&home).await?;
+        let endpoint = format!("{}/api/v0/graphql", server.uri());
+        tokio::fs::write(
+            home.join("init.json"),
+            json!({
+                "node_name":"Hosted runtime", "node_did":source.did(),
+                "key_path":root.path().join("source.key"),
+            })
+            .to_string(),
+        )
+        .await?;
+        tokio::fs::write(
+            home.join("runtime.json"),
+            json!({
+                "node_name":"Hosted runtime", "node_did":source.did(), "graphql":endpoint,
+                "p2p_transport":"iroh",
+            })
+            .to_string(),
         )
         .await?;
         core.persist_local_standard_peer(
@@ -263,7 +291,7 @@ mod tests {
             "endpoint:hosted-goal-owner",
             source.did(),
             &format!("{}/api/v0/graphql", server.uri()),
-            "/tmp/disposable-goal-owner",
+            home.to_str().unwrap(),
         )
         .await?;
         let expected = GoalAssignmentInput {
@@ -341,6 +369,16 @@ mod tests {
             let actual = core
                 .prepare_user_message_input(source.did(), "chat", RequestInput::default())
                 .await;
+            assert!(
+                server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .filter(|request| request.url.path() == "/api/v0/graphql")
+                    .all(|request| request.headers.contains_key("authorization")),
+                "hosted assignment reads must carry the bound cached identity"
+            );
             if ["missing", "tampered", "foreign-session"].contains(&mode) {
                 let error = actual.unwrap_err();
                 assert!(
@@ -380,6 +418,129 @@ mod tests {
         );
         assert!(server.received_requests().await.unwrap().is_empty());
         Arc::new(core).shutdown().await?;
+        Ok(())
+    }
+    #[tokio::test]
+    async fn cold_operator_goal_observation_stays_unknown_without_unlocking() -> Result<()> {
+        use crate::client::{ClientCoreOptions, DesktopPaths};
+        use identity::Identity as _;
+        use std::sync::Arc;
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        let root = tempfile::tempdir()?;
+        let key = root.path().join("runtime.key");
+        let source_key = key.clone();
+        let did = tokio::task::spawn_blocking(move || -> Result<String> {
+            let identity = gents::identity::load_or_create_file_identity(&source_key)?;
+            Ok(identity.did()?.to_string())
+        })
+        .await??;
+        let endpoint = format!("{}/api/v0/graphql", server.uri());
+        tokio::fs::write(
+            root.path().join("init.json"),
+            json!({
+                "node_name":"Goal runtime", "node_did":did, "key_path":key,
+            })
+            .to_string(),
+        )
+        .await?;
+        tokio::fs::write(
+            root.path().join("runtime.json"),
+            json!({
+                "node_name":"Goal runtime", "node_did":did, "graphql":endpoint,
+                "p2p_transport":"iroh",
+            })
+            .to_string(),
+        )
+        .await?;
+        let original_key = tokio::fs::read(&key).await?;
+        assert!(!gents::identity::can_mint_defradb_bearer(&did));
+        Mock::given(method("POST"))
+            .and(path("/api/v0/tx"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"goal-read"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/api/v0/tx/goal-read"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v0/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":{}})))
+            .mount(&server)
+            .await;
+        let core = ClientCore::start_with_paths_and_options(
+            DesktopPaths::from_root(root.path().join("client")),
+            ClientCoreOptions {
+                operator_identity_interaction:
+                    crate::local_runtime::OperatorIdentityInteraction::Prevent,
+                ..ClientCoreOptions::local_only()
+            },
+        )
+        .await?;
+        core.persist_local_standard_peer(
+            "Goal runtime",
+            "endpoint:cold-goal",
+            &did,
+            &endpoint,
+            root.path().to_str().unwrap(),
+        )
+        .await?;
+        let cold = core
+            .session_goal_observation(&did, "cold-goal-session")
+            .await;
+        let remained_cold = !gents::identity::can_mint_defradb_bearer(&did);
+        let cold_reads = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| String::from_utf8_lossy(&request.body).contains("cold-goal-session"))
+            .count();
+        let source_key = key.clone();
+        let _unlocked = tokio::task::spawn_blocking(move || {
+            gents::identity::KeyIdentity::load_or_create(source_key, None)
+        })
+        .await??;
+        assert!(gents::identity::can_mint_defradb_bearer(&did));
+        let warm = core
+            .session_goal_observation(&did, "warm-goal-session")
+            .await;
+        let requests = server.received_requests().await.unwrap();
+        let warm_read = requests
+            .iter()
+            .find(|request| String::from_utf8_lossy(&request.body).contains("warm-goal-session"));
+        Arc::new(core).shutdown().await?;
+
+        assert!(
+            remained_cold,
+            "background observation must not unlock the runtime identity"
+        );
+        assert!(
+            tokio::fs::read(&key).await? == original_key,
+            "runtime key must remain unchanged"
+        );
+        assert!(
+            matches!(cold, Ok(None)),
+            "cold observation must remain Unknown: {cold:?}"
+        );
+        assert_eq!(
+            cold_reads, 0,
+            "a cold identity must not make an anonymous operator read"
+        );
+        assert!(
+            warm.is_err(),
+            "an authenticated source refusal must remain explicit"
+        );
+        assert!(warm_read
+            .expect("authenticated operator read")
+            .headers
+            .contains_key("authorization"));
         Ok(())
     }
 }

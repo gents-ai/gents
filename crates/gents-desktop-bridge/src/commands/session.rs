@@ -2,7 +2,7 @@ use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_snapshot_for_node_with_transcript,
 };
-use crate::types::DesktopSessionSnapshot;
+use crate::types::{DesktopSessionSnapshot, SessionRowsView, SessionRowsWindow};
 
 pub async fn session_snapshot(
     core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
@@ -13,30 +13,7 @@ pub async fn session_snapshot(
     timeline_before_item_key: Option<String>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let started = std::time::Instant::now();
-    let node_did = match node_did {
-        Some(node_did) => Some(node_did),
-        None => {
-            let node_dids = core
-                .store()
-                .snapshot()
-                .sessions
-                .iter()
-                .filter(|session| session.session_id == session_id)
-                .map(|session| session.node_did.clone())
-                .collect::<std::collections::BTreeSet<_>>();
-            if node_dids.len() > 1 {
-                return Err(BridgeError::untyped(format!(
-                    "session {session_id} is ambiguous across multiple node owners"
-                )));
-            }
-            node_dids.into_iter().next()
-        }
-    };
-    if node_did.is_none() {
-        return Err(BridgeError::untyped(format!(
-            "session {session_id} has no resolved node owner"
-        )));
-    }
+    let node_did = Some(resolve_session_node(core, &session_id, node_did)?);
     let mut request_id = request_id;
 
     let hydrate_started = std::time::Instant::now();
@@ -83,28 +60,10 @@ pub async fn session_snapshot(
     }
     let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
     let transcript_started = std::time::Instant::now();
-    let node_scope = node_did
-        .as_deref()
-        .and_then(|node_did| core.transcript_node_scope(node_did));
-    let operator_access = node_did
-        .as_deref()
-        .and_then(|node_did| core.operator_observation_graphql(node_did))
-        .map(gents::config_client::ConfigAccess::Graphql);
-    let requester_scope = {
-        let store = core.store().snapshot();
-        let session = node_did.as_deref().and_then(|node_did| {
-            store
-                .sessions
-                .iter()
-                .find(|row| row.session_id == session_id && row.node_did == node_did)
-        });
-        gents_desktop_core::client::session_transcript_requester_scope(
-            session,
-            node_did.as_deref(),
-            node_scope.as_deref(),
-            operator_access.is_some(),
-        )
-    };
+    let TranscriptReadScope {
+        operator_access,
+        requester_scope,
+    } = transcript_read_scope(core, &session_id, node_did.as_deref().unwrap_or_default());
     let page_read = async {
         match operator_access.as_ref() {
             Some(access) => {
@@ -326,4 +285,215 @@ pub async fn session_snapshot(
         );
     }
     Ok(snapshot)
+}
+
+/// The node that owns a session, from the caller or the sessions this client
+/// knows; a session id held by two nodes is refused rather than guessed.
+fn resolve_session_node(
+    core: &gents_desktop_core::client::ClientCore,
+    session_id: &str,
+    node_did: Option<String>,
+) -> Result<String, BridgeError> {
+    if let Some(node_did) = node_did {
+        return Ok(node_did);
+    }
+    let node_dids = core
+        .store()
+        .snapshot()
+        .sessions
+        .iter()
+        .filter(|session| session.session_id == session_id)
+        .map(|session| session.node_did.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    if node_dids.len() > 1 {
+        return Err(BridgeError::untyped(format!(
+            "session {session_id} is ambiguous across multiple node owners"
+        )));
+    }
+    node_dids.into_iter().next().ok_or_else(|| {
+        BridgeError::untyped(format!("session {session_id} has no resolved node owner"))
+    })
+}
+
+struct TranscriptReadScope {
+    operator_access: Option<gents::config_client::ConfigAccess>,
+    requester_scope: Option<String>,
+}
+
+/// Where a session's transcript is read and under which requester: the
+/// node's own runtime when this client operates it, else this computer's
+/// copy, scoped to the requester the session was started under.
+fn transcript_read_scope(
+    core: &gents_desktop_core::client::ClientCore,
+    session_id: &str,
+    node_did: &str,
+) -> TranscriptReadScope {
+    let node_scope = core.transcript_node_scope(node_did);
+    let operator_access = core
+        .operator_observation_graphql(node_did)
+        .map(gents::config_client::ConfigAccess::Graphql);
+    let store = core.store().snapshot();
+    let session = store
+        .sessions
+        .iter()
+        .find(|row| row.session_id == session_id && row.node_did == node_did);
+    let requester_scope = gents_desktop_core::client::session_transcript_requester_scope(
+        session,
+        Some(node_did),
+        node_scope.as_deref(),
+        operator_access.is_some(),
+    );
+    TranscriptReadScope {
+        operator_access,
+        requester_scope,
+    }
+}
+
+/// A stretch of a session's display rows by message number, read without
+/// the session's request state, so a reader can page in either direction and
+/// open around any message. The rows of the newest stretch match what the
+/// session snapshot shows, less its pending turns and live reply.
+pub async fn session_rows(
+    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    session_id: String,
+    node_did: Option<String>,
+    window: SessionRowsWindow,
+    limit: Option<usize>,
+) -> Result<SessionRowsView, BridgeError> {
+    use gents_desktop_core::client::{SessionTranscriptQueryPage, TranscriptWindow};
+    let node_did = resolve_session_node(core, &session_id, node_did)?;
+    let empty = |unreadable: Option<String>| SessionRowsView {
+        session_id: session_id.clone(),
+        node_did: Some(node_did.clone()),
+        rows: Vec::new(),
+        covered_from: None,
+        covered_through: None,
+        has_older: false,
+        has_newer: false,
+        complete: false,
+        unreadable,
+        query_count: 0,
+    };
+    if let Some(reason) = core.session_unreadable_reason(&session_id, &node_did) {
+        return Ok(empty(Some(reason.to_string())));
+    }
+    let TranscriptReadScope {
+        operator_access,
+        requester_scope,
+    } = transcript_read_scope(core, &session_id, &node_did);
+    let read = |window: TranscriptWindow, limit: Option<usize>| {
+        let operator_access = operator_access.clone();
+        let requester_scope = requester_scope.clone();
+        let session_id = session_id.clone();
+        let node_did = node_did.clone();
+        async move {
+            match operator_access.as_ref() {
+                Some(access) => {
+                    gents_desktop_core::client::load_session_transcript_window_on(
+                        access,
+                        &session_id,
+                        Some(&node_did),
+                        requester_scope.as_deref(),
+                        window,
+                        limit,
+                    )
+                    .await
+                }
+                None => {
+                    gents_desktop_core::client::load_session_transcript_window(
+                        core.node(),
+                        &session_id,
+                        Some(&node_did),
+                        requester_scope.as_deref(),
+                        window,
+                        limit,
+                    )
+                    .await
+                }
+            }
+        }
+    };
+    let error = |error: anyhow::Error| match error.downcast::<BridgeError>() {
+        Ok(error) => error,
+        Err(error) => BridgeError::untyped(format!("{error:#}")),
+    };
+    let store = core.store().snapshot();
+    let render = |page: &SessionTranscriptQueryPage| {
+        crate::snapshot::render_transcript_rows(&store, page, &session_id)
+    };
+    let mut view = empty(None);
+    let mut messages = Vec::new();
+    /* a read against the node's own runtime sees every message it has; a
+    read of this computer's copy may run ahead of what has arrived */
+    view.complete = operator_access.is_some();
+    match window {
+        SessionRowsWindow::Tip
+        | SessionRowsWindow::Before { .. }
+        | SessionRowsWindow::After { .. } => {
+            let page = read(
+                match window {
+                    SessionRowsWindow::Tip => TranscriptWindow::Tip,
+                    SessionRowsWindow::Before { sequence } => TranscriptWindow::Before(sequence),
+                    SessionRowsWindow::After { sequence } => TranscriptWindow::After(sequence),
+                    SessionRowsWindow::Around { .. } => unreachable!(),
+                },
+                limit,
+            )
+            .await
+            .map_err(error)?;
+            view.rows = render(&page);
+            view.covered_from = page.covered.from;
+            view.covered_through = page.covered.through;
+            view.has_older = match window {
+                SessionRowsWindow::After { .. } => true,
+                _ => !page.source_exhausted,
+            };
+            view.has_newer = match window {
+                SessionRowsWindow::Tip => false,
+                SessionRowsWindow::Before { .. } => true,
+                _ => !page.source_exhausted,
+            };
+            view.query_count = page.query_count as i64;
+            messages = page.store.transcript_messages;
+        }
+        SessionRowsWindow::Around { sequence } => {
+            /* the message itself opens the newer half, so it is drawn even
+            when the older half is cut short */
+            let half = limit.map(|limit| limit.div_ceil(2));
+            let older = read(TranscriptWindow::Before(sequence), half)
+                .await
+                .map_err(error)?;
+            let newer = read(TranscriptWindow::After(sequence - 1), half)
+                .await
+                .map_err(error)?;
+            let mut rows = render(&older);
+            rows.extend(render(&newer));
+            view.rows = rows;
+            view.covered_from = older.covered.from;
+            view.covered_through = newer.covered.through;
+            view.has_older = !older.source_exhausted;
+            view.has_newer = !newer.source_exhausted;
+            view.query_count = (older.query_count + newer.query_count) as i64;
+            messages.extend(older.store.transcript_messages);
+            messages.extend(newer.store.transcript_messages);
+        }
+    }
+    let requester = store
+        .sessions
+        .iter()
+        .find(|session| session.session_id == session_id && session.node_did == node_did)
+        .map(|session| session.requester_did.clone());
+    if let Some(requester) = requester {
+        let local_access = gents::config_client::ConfigAccess::local(core.node_arc());
+        crate::snapshot::attach_context_history_rows(
+            operator_access.as_ref().unwrap_or(&local_access),
+            &session_id,
+            &node_did,
+            requester.as_deref(),
+            &messages,
+            &mut view.rows,
+        )
+        .await;
+    }
+    Ok(view)
 }

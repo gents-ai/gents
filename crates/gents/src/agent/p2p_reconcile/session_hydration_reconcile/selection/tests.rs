@@ -164,3 +164,31 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
     .unwrap();
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn hydration_segment_selection_uses_the_session_index() {
+    use gents_protocol::session_hydration::SessionHydrationCollection;
+    let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
+        .await
+        .unwrap();
+    let node = Arc::new(builder.build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let request = HydrationRequest {
+        request_key: "plan-test".into(),
+        peer_id: "peer-1".into(),
+        session_id: "session-1".into(),
+        node_did: "did:key:agent-1".into(),
+        requester_did: "did:key:requester-1".into(),
+    };
+    let collection = SessionHydrationCollection::AgentOutputSegment;
+    let filter = pages::session_filter(collection, &request);
+    let query = pages::page_query(collection, &filter, None);
+    let plan = ConfigAccess::local(node.clone())
+        .execute(&format!("query @explain {query}"))
+        .await
+        .unwrap()
+        .to_string();
+    assert!(plan.contains("AgentOutputSegment_session_id_ASC"), "{plan}");
+    assert!(!plan.contains("AgentOutputSegment_node_did_ASC"), "{plan}");
+    node.shutdown().await;
+}

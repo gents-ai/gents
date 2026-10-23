@@ -1,5 +1,4 @@
 import { act, fireEvent, screen } from "@testing-library/react";
-import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -115,64 +114,4 @@ describe("SessionScreen transcript render boundary", () => {
     view.rerender(<TranscriptPanel {...props} session={session("changed markdown")} />);
     expect(markdownRender).toHaveBeenCalledTimes(2);
   });
-
-  it.each([true, false])(
-    "adjusts reading position only when an older page adds rows (%s)",
-    async (loaded) => {
-      let scrollHeight = 100;
-      const viewport = document.createElement("div");
-      Object.defineProperty(viewport, "scrollHeight", {
-        configurable: true,
-        get: () => scrollHeight,
-      });
-      viewport.scrollTop = 20;
-      const original = session("stable markdown");
-      original.timelinePage = {
-        totalItems: 41,
-        pageItems: 1,
-        hasOlder: true,
-        hasNewer: false,
-        oldestItemKey: "assistant-1",
-        newestItemKey: "assistant-1",
-      };
-      const older = assistantMessage({
-        itemKey: "assistant-0",
-        sequence: 0,
-        content: "older markdown",
-      });
-      const withOlder: DesktopSessionSnapshot = {
-        ...original,
-        timelineItems: [older, ...original.timelineItems],
-      };
-      let setSession: (next: DesktopSessionSnapshot) => void = () => {};
-      function Owner() {
-        const [current, setCurrent] = useState(original);
-        setSession = setCurrent;
-        return (
-          <TranscriptPanel
-            {...UNRELATED}
-            inFlight={false}
-            scroller={viewport}
-            content={viewport.firstElementChild as HTMLElement | null}
-            session={current}
-          />
-        );
-      }
-      const app = testApp();
-      vi.spyOn(app.actions, "loadOlderSessionTimeline").mockImplementation(async () => {
-        if (loaded) {
-          scrollHeight = 180;
-          setSession(withOlder);
-        }
-        return loaded;
-      });
-
-      renderIn(app, <Owner />);
-      await act(async () => {
-        fireEvent.wheel(viewport, { deltaY: -20 });
-      });
-
-      expect(viewport.scrollTop).toBe(loaded ? 100 : 20);
-    },
-  );
 });

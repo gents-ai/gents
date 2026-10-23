@@ -72,6 +72,13 @@ export function createDesktopApiAdapter(
         sessionId,
         nodeDid: nodeDid ?? null,
       }),
+    fetchSessionRows: (request) =>
+      invokeDesktop("desktop_session_rows", {
+        sessionId: request.sessionId,
+        nodeDid: request.nodeDid ?? null,
+        window: request.window,
+        limit: request.limit ?? null,
+      }),
     fetchSessionLiveDelta: (request) =>
       invokeDesktop("desktop_session_live_delta", {
         sessionId: request.sessionId,

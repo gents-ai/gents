@@ -7,6 +7,7 @@ use gents_loop::provider_audit::{
     AuxiliaryObserve, AuxiliaryOutputEvent, AuxiliaryOutputObservation, AuxiliaryOutputSink,
 };
 use gents_loop::stream_processor::AssistantTurnAccumulator;
+use gents_loop::stream_writer::PendingOutput;
 use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::CaptureScope;
 use tokio::sync::Mutex;
@@ -53,6 +54,15 @@ pub(crate) fn sink(
         &request.node_did,
         batch_interval,
     ));
+    sink_with_writer(writer, request, generation, profile)
+}
+
+pub(crate) fn sink_with_writer(
+    writer: Arc<DefraStreamWriter>,
+    request: crate::watcher::AgentRequest,
+    generation: String,
+    profile: gents_loop::provider_input::ProviderInputProfile,
+) -> AuxiliaryOutputSink {
     let request = Arc::new(request);
     let state = Arc::new(Mutex::new(State::default()));
     let deadline_writer = Arc::clone(&writer);
@@ -123,6 +133,12 @@ pub(crate) fn sink(
                 "auxiliary output belongs to another attempt"
             );
             let mut close = None;
+            let pending = match &observation.event {
+                AuxiliaryOutputEvent::Audit(event) => PendingOutput::of_audit(event),
+                AuxiliaryOutputEvent::ReasoningDelta { .. }
+                | AuxiliaryOutputEvent::Reasoning(_) => PendingOutput::Reasoning,
+                _ => PendingOutput::Visible,
+            };
             match observation.event {
                 AuxiliaryOutputEvent::AttemptStarted => unreachable!(),
                 AuxiliaryOutputEvent::Audit(event) => {
@@ -164,7 +180,7 @@ pub(crate) fn sink(
                 AuxiliaryOutputEvent::ClosePartial => close = Some(ProviderAttemptClose::Partial),
             }
             if !matches!(close, Some(ProviderAttemptClose::AuxiliaryComplete))
-                && (close.is_some() || writer.mark_pending_output(&request.doc_id).await?)
+                && (close.is_some() || writer.mark_pending_output(&request.doc_id, pending).await?)
             {
                 if let Some(message) = state.content.message_snapshot() {
                     writer

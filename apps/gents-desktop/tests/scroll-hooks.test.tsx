@@ -47,7 +47,8 @@ describe("a capped box that follows its newest row", () => {
   it("follows new rows while at its foot, and stays where the reader scrolled", () => {
     const { view, viewport } = renderBox({ rows: 1 });
     view.rerender(<Box rows={2} />);
-    expect(viewport.scrollTop).toBe(500);
+    /* the foot: the content's height less the view's */
+    expect(viewport.scrollTop).toBe(400);
 
     scrollTo(viewport, 0);
     view.rerender(<Box rows={3} />);
@@ -62,7 +63,7 @@ describe("a capped box that follows its newest row", () => {
     view.rerender(<Box rows={1} />);
     expect(viewport.scrollTop).toBe(400);
     view.rerender(<Box rows={2} />);
-    expect(viewport.scrollTop).toBe(500);
+    expect(viewport.scrollTop).toBe(400);
   });
 });
 
