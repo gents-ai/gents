@@ -78,7 +78,7 @@ enum Capture {
     Pending,
     Unknown,
     Observed {
-        projection: Projection,
+        projection: Box<Projection>,
         owner: String,
     },
 }
@@ -272,7 +272,7 @@ impl FileInventorySnapshot {
                     change: change.clone(),
                 }));
                 Capture::Observed {
-                    projection,
+                    projection: Box::new(projection),
                     owner: scope.node_did.clone(),
                 }
             } else {

@@ -282,7 +282,7 @@ impl ToolCallLifecycle {
                 "plugin effect must remain foreground work"
             );
         }
-        let arguments = if plugin_effect.is_some() {
+        let arguments = if let Some(effect) = &plugin_effect {
             let binding = super::delivery::ToolOutputBinding {
                 node: node.clone(),
                 tool_call_doc_id: row.doc_id.clone(),
@@ -292,11 +292,7 @@ impl ToolCallLifecycle {
                 requester_did: row.requester_did.clone(),
             };
             let mut parent_binding = binding.clone();
-            parent_binding.tool_call_doc_id = plugin_effect
-                .as_ref()
-                .unwrap()
-                .parent_tool_call_doc_id
-                .clone();
+            parent_binding.tool_call_doc_id = effect.parent_tool_call_doc_id.clone();
             super::plugin_effect::validate_parent(
                 txn,
                 &parent_binding,
