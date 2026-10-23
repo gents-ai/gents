@@ -52,7 +52,10 @@ impl Drop for GeneratorDropProbe {
     }
 }
 
-fn poll_once<F: Future + ?Sized>(future: Pin<&mut F>) -> Poll<F::Output> {
+fn poll_once<F>(future: Pin<&mut F>) -> Poll<F::Output>
+where
+    F: Future + ?Sized,
+{
     let waker = futures::task::noop_waker();
     let mut context = Context::from_waker(&waker);
     future.poll(&mut context)
@@ -145,7 +148,7 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
         {
             let stream_ref = stream.as_mut().expect("stream generator is alive");
             let mut borrowed_next = Box::pin(stream_ref.next());
-            while let Some(event) = events.next() {
+            for event in events.by_ref() {
                 match event {
                     Event::PollNext => assert!(poll_once(borrowed_next.as_mut()).is_pending()),
                     Event::ConsumerWait => {}

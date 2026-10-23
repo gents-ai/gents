@@ -186,26 +186,6 @@ pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) ->
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::request_output_state;
-
-    #[test]
-    fn terminal_diagnostic_history_cannot_keep_voice_waiting_for_a_complete_answer() {
-        let state = request_output_state(Some(
-            gents::session::CanonicalRequestOutput::RetainedPartial(Vec::new()),
-        ));
-        assert!(matches!(
-            state,
-            crate::types::RequestOutputStateView::Unavailable { .. }
-        ));
-        assert!(matches!(
-            request_output_state(None),
-            crate::types::RequestOutputStateView::Loading
-        ));
-    }
-}
-
 pub async fn edit_pending_queue(
     core: &ClientCore,
     request: super::super::types::PendingQueueEditRequest,
@@ -250,4 +230,24 @@ pub async fn steer_pending_message(
         request_doc_ids: result.request_doc_ids,
         request_ids: result.request_ids,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::request_output_state;
+
+    #[test]
+    fn terminal_diagnostic_history_cannot_keep_voice_waiting_for_a_complete_answer() {
+        let state = request_output_state(Some(
+            gents::session::CanonicalRequestOutput::RetainedPartial(Vec::new()),
+        ));
+        assert!(matches!(
+            state,
+            crate::types::RequestOutputStateView::Unavailable { .. }
+        ));
+        assert!(matches!(
+            request_output_state(None),
+            crate::types::RequestOutputStateView::Loading
+        ));
+    }
 }

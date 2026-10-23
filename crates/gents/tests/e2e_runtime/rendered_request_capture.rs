@@ -2127,7 +2127,7 @@ async fn serialized_input_threshold_equality_and_one_over_select_actual_compacti
     )
     .expect("rebuilt inference HTTP input estimate");
     assert!(
-        rebuilt <= measured - 1,
+        rebuilt < measured,
         "rebuilt inference {rebuilt} must fit the one-over threshold {}",
         measured - 1
     );

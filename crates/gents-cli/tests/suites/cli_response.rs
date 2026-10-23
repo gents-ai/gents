@@ -156,7 +156,7 @@ async fn insert_materialized_response(
         attempt: 0,
     };
     let text_stream = message_content.map(str::as_bytes);
-    let reasoning_stream = (!message_reasoning.is_empty()).then(|| message_reasoning.as_bytes());
+    let reasoning_stream = (!message_reasoning.is_empty()).then_some(message_reasoning.as_bytes());
     let reasoning_stream_index = u32::from(text_stream.is_some());
     let mut payload = String::new();
     let mut runs: Vec<SegmentRun> = Vec::new();

@@ -53,12 +53,15 @@ impl ProviderAttemptFailure {
     }
 }
 
-pub(super) async fn within_provider_idle<F: Future>(
+pub(super) async fn within_provider_idle<F>(
     future: F,
     idle: Option<Duration>,
     activity: Option<&ProviderActivity>,
     first_item: bool,
-) -> Result<F::Output, ProviderAttemptFailure> {
+) -> Result<F::Output, ProviderAttemptFailure>
+where
+    F: Future,
+{
     let (Some(idle), Some(activity)) = (idle, activity) else {
         return Ok(future.await);
     };

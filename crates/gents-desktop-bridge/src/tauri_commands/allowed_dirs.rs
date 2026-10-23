@@ -55,10 +55,13 @@ pub fn desktop_allowed_dirs_remove(
 }
 
 #[tauri::command]
-pub fn desktop_plugin_approvals_pending<R: Runtime>(
+pub fn desktop_plugin_approvals_pending<R>(
     window: WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<PluginApprovalsView, BridgeError> {
+) -> Result<PluginApprovalsView, BridgeError>
+where
+    R: Runtime,
+{
     let subscribed = state
         .bridge
         .lock()
@@ -86,11 +89,14 @@ pub fn desktop_plugin_approval_decide(
 }
 
 #[tauri::command]
-pub fn desktop_plugin_approval_subscribe<R: Runtime>(
+pub fn desktop_plugin_approval_subscribe<R>(
     window: WebviewWindow<R>,
     token: String,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     home(&state)?;
     let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
     if bridge.has_window(window.label()) {
@@ -102,11 +108,14 @@ pub fn desktop_plugin_approval_subscribe<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn desktop_plugin_approval_unsubscribe<R: Runtime>(
+pub fn desktop_plugin_approval_unsubscribe<R>(
     window: WebviewWindow<R>,
     token: String,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     state
         .bridge
         .lock()

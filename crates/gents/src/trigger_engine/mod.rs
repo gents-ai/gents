@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
 use tokio::sync::{watch, Mutex};
@@ -21,7 +21,7 @@ mod tests;
 
 type TriggerLockKey = (String, String, Option<String>);
 type TriggerLock = Arc<Mutex<()>>;
-type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
+type TriggerLockMap = RapidHashMap<TriggerLockKey, TriggerLock>;
 
 pub(crate) fn durable_fire_key(namespace: &str, components: &[&str]) -> String {
     let mut key = format!("{}:{namespace}", namespace.chars().count());
@@ -183,6 +183,10 @@ pub trait TriggerSource: Send + Sync {
 }
 
 pub(crate) trait MaterializerHandle: Send + Sync {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "positional contract shared by the production and spy materializers"
+    )]
     fn materialize(
         &self,
         task: &crate::runtime_snapshot::ResolvedTask,
@@ -266,7 +270,7 @@ impl TriggerEngine {
         Self {
             snapshot_rx,
             materializer,
-            per_trigger_locks: Mutex::new(HashMap::new()),
+            per_trigger_locks: Mutex::new(RapidHashMap::new()),
         }
     }
 
@@ -939,7 +943,7 @@ impl TriggerEngine {
 
     async fn prune_trigger_lock(&self, lock_key: &TriggerLockKey, lock: &TriggerLock) {
         let mut map = self.per_trigger_locks.lock().await;
-        if Arc::strong_count(&lock) == 2
+        if Arc::strong_count(lock) == 2
             && map
                 .get(lock_key)
                 .is_some_and(|stored| Arc::ptr_eq(stored, lock))

@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -368,7 +369,7 @@ impl CancelBeforeIdLatch {
 struct PendingPrompt {
     response_tx: Option<oneshot::Sender<Result<Value>>>,
     request: Option<gents_protocol::row::AgentRequestRow>,
-    cancel_before_id: Arc<Mutex<CancelBeforeIdLatch>>,
+    cancel_before_id: CancelLatch,
     drained: bool,
 }
 
@@ -381,10 +382,14 @@ impl PendingPrompt {
     }
 }
 
+/// A pending prompt's session id and prompt id.
+type PromptKey = (String, String);
+type CancelLatch = Arc<Mutex<CancelBeforeIdLatch>>;
+
 #[derive(Default)]
 struct ConnectionState {
     closed: bool,
-    entries: HashMap<(String, String), PendingPrompt>,
+    entries: RapidHashMap<PromptKey, PendingPrompt>,
 }
 
 struct ObservedRequest {
@@ -409,7 +414,7 @@ impl ObservedRequest {
 
 type ObservedRequests = BTreeMap<(String, String), Arc<Mutex<ObservedRequest>>>;
 
-type ForegroundDeliveries = Arc<std::sync::Mutex<HashMap<String, usize>>>;
+type ForegroundDeliveries = Arc<std::sync::Mutex<RapidHashMap<String, usize>>>;
 
 pub(super) struct ForegroundDelivery {
     sessions: ForegroundDeliveries,
@@ -443,9 +448,9 @@ pub(super) struct TurnManager {
     state: Mutex<ConnectionState>,
     delivery_gate: Mutex<()>,
     foreground_deliveries: ForegroundDeliveries,
-    autonomous_delivery: Mutex<HashMap<String, String>>,
+    autonomous_delivery: Mutex<RapidHashMap<String, String>>,
     observed: Mutex<ObservedRequests>,
-    observers: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    observers: Mutex<RapidHashMap<String, tokio::task::JoinHandle<()>>>,
     #[cfg(test)]
     insertion_gate: Mutex<Option<TestGate>>,
     #[cfg(test)]
@@ -470,10 +475,10 @@ impl TurnManager {
             config,
             state: Mutex::new(ConnectionState::default()),
             delivery_gate: Mutex::new(()),
-            foreground_deliveries: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            autonomous_delivery: Mutex::new(HashMap::new()),
+            foreground_deliveries: Arc::new(std::sync::Mutex::new(RapidHashMap::new())),
+            autonomous_delivery: Mutex::new(RapidHashMap::new()),
             observed: Mutex::new(BTreeMap::new()),
-            observers: Mutex::new(HashMap::new()),
+            observers: Mutex::new(RapidHashMap::new()),
             #[cfg(test)]
             insertion_gate: Mutex::new(None),
             #[cfg(test)]
@@ -1175,7 +1180,7 @@ impl TurnManager {
             "Grok shim received session/cancel"
         );
         let target_prompt_id = notification.prompt_id.clone();
-        let targets: Vec<((String, String), Arc<Mutex<CancelBeforeIdLatch>>)> = {
+        let targets: Vec<(PromptKey, CancelLatch)> = {
             let state = self.state.lock().await;
             state
                 .entries
@@ -1271,8 +1276,8 @@ impl TurnManager {
         let mut state = self.state.lock().await;
         state.closed = true;
         let drained: Vec<(
-            (String, String),
-            Arc<Mutex<CancelBeforeIdLatch>>,
+            PromptKey,
+            CancelLatch,
             Option<gents_protocol::row::AgentRequestRow>,
         )> = std::mem::take(&mut state.entries)
             .into_iter()
@@ -1416,7 +1421,27 @@ impl TurnManager {
             )
             .await
         } else {
-            let prepared = crate::request_helpers::prepare_agent_request(
+            // The shim owns the destination node, so it binds the canonical
+            // Goal directly; the signed remote observation exists for callers
+            // that cannot read it, and lags a session the shim just opened.
+            let mut options = options;
+            let (node_did, agent_id) = (&*self.config.node_did, &*self.config.agent_id);
+            let session_id = &*request.session_id;
+            options.input = Some(
+                gents::ConfigAccess::local(self.node.clone())
+                    .transact_readonly("grok.prompt.goal_input", |txn| {
+                        Box::pin(gents::goal::prepare_goal_input_in_txn(
+                            txn,
+                            node_did,
+                            session_id,
+                            agent_id,
+                            Some(node_did),
+                            Default::default(),
+                        ))
+                    })
+                    .await?,
+            );
+            let prepared = crate::request_helpers::prepare_agent_request_with_input(
                 &graphql,
                 &self.config.node_did,
                 &content,
@@ -1654,6 +1679,10 @@ impl TurnManager {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "per-prompt stream state borrowed from separate owners"
+    )]
     async fn stream_projection_updates(
         &self,
         session_id: &str,
@@ -1681,6 +1710,10 @@ impl TurnManager {
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "per-prompt stream state borrowed from separate owners"
+    )]
     async fn stream_projection_updates_mode(
         &self,
         session_id: &str,
@@ -1778,6 +1811,10 @@ impl TurnManager {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "per-prompt stream state borrowed from separate owners"
+    )]
     async fn send_projection_event(
         &self,
         session_id: &str,
@@ -1929,7 +1966,7 @@ impl TurnManager {
             session,
             child.requester_did.as_deref(),
         ));
-        let mut seen = HashSet::new();
+        let mut seen = RapidHashSet::new();
         let mut requests = Vec::new();
         let mut offset = 0usize;
         loop {
@@ -5541,7 +5578,7 @@ mod tests {
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            if buffer.lock().await.len() >= 1 {
+            if !buffer.lock().await.is_empty() {
                 break;
             }
             assert!(

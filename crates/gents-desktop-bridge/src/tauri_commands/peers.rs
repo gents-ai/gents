@@ -49,10 +49,13 @@ pub async fn desktop_peer_enroll_status(
 }
 
 #[tauri::command]
-pub async fn desktop_p2p_repair<R: Runtime>(
+pub async fn desktop_p2p_repair<R>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -64,11 +67,14 @@ pub async fn desktop_p2p_repair<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_peer_remove<R: Runtime>(
+pub async fn desktop_peer_remove<R>(
     app: AppHandle<R>,
     peer_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<PeerRemoveResponse, BridgeError> {
+) -> Result<PeerRemoveResponse, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -81,12 +87,15 @@ pub async fn desktop_peer_remove<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_peer_rename<R: Runtime>(
+pub async fn desktop_peer_rename<R>(
     app: AppHandle<R>,
     peer_id: String,
     label: String,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };

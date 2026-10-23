@@ -294,6 +294,10 @@ fn canonical_live_tool_output(
     (!text.is_empty()).then_some(text)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "projection inputs come from separate stores and request options"
+)]
 pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     store: &ClientStore,
     transcript_store: &ClientStore,
@@ -416,7 +420,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 .iter()
                 .find(|row| row.request_id == request_id)
                 .map_or(request_id, |row| {
-                    gents_desktop_core::client::session_turn_request(&requests, row)
+                    gents_desktop_core::client::session_display_request(&requests, row)
                         .request_id
                         .clone()
                 })
@@ -509,7 +513,6 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let pending_turn = (include_live_tail && latest_request.is_some_and(owner_absent))
         .then_some(latest_request_id.as_deref())
         .flatten()
-        .as_deref()
         .and_then(|request_id| {
             build_pending_turn(store, context_store, node_did, session_id, request_id)
         });
@@ -528,17 +531,36 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         context_totals_exact,
     );
 
-    let requests_by_doc_id: HashMap<&str, &AgentRequestRow> = requests
+    let requests_by_doc_id: RapidHashMap<&str, &AgentRequestRow> = requests
         .iter()
         .filter_map(|request| request.doc_id.as_deref().map(|doc_id| (doc_id, *request)))
         .collect();
-    let input_owners: HashMap<(String, String), &str> = requests
+    let input_owners: RapidHashMap<(String, String), &AgentRequestRow> = requests
         .iter()
         .filter_map(|request| {
-            gents::lifecycle::input_message_owner(request)
-                .map(|owner| (owner, request.request_id.as_str()))
+            gents::lifecycle::input_message_owner(request).map(|owner| (owner, *request))
         })
         .collect();
+    let input_request_for_message = |row: &TranscriptMessageRow| {
+        row.message.request_doc_id.as_ref().and_then(|doc| {
+            input_owners
+                .get(&(doc.clone(), row.message.message_key.clone()))
+                .copied()
+                .filter(|request| {
+                    request.doc_id.as_ref() == Some(doc)
+                        || (request.node_did.as_deref() == Some(row.message.node_did.as_str())
+                            && request.session_id.as_deref()
+                                == Some(row.message.session_id.as_str())
+                            && request.requester_did == row.message.requester_did)
+                })
+        })
+    };
+    let execution_request_for_message = |row: &TranscriptMessageRow| {
+        row.message
+            .request_doc_id
+            .as_deref()
+            .and_then(|doc| requests_by_doc_id.get(doc).copied())
+    };
     let mut observed_messages = transcript
         .messages
         .iter()
@@ -577,6 +599,8 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         .iter()
         .copied()
         .map(|row| {
+            let input_request = input_request_for_message(row);
+            let source_request = input_request.or_else(|| execution_request_for_message(row));
             let projection = project_message_with_dependencies(
                 row,
                 &observed_messages,
@@ -707,17 +731,12 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 reconstruction_state,
                 reconstruction_error,
                 denied_dependency_doc_id,
-                runtime_control: runtime_context
-                    || message_is_runtime_control(row, &requests_by_doc_id),
-                input_request_id: row.message.request_doc_id.as_ref().and_then(|doc| {
-                    input_owners
-                        .get(&(doc.clone(), row.message.message_key.clone()))
-                        .map(|id| (*id).to_owned())
-                }),
+                runtime_control: runtime_context || message_is_runtime_control(row, source_request),
+                input_request_id: input_request.map(|request| request.request_id.clone()),
                 origin: if runtime_context {
                     None
                 } else {
-                    message_origin(store, row, &requests_by_doc_id)
+                    message_origin(store, row, source_request)
                 },
                 input_text,
                 timestamp: Some(row.message.created_at.clone()),
@@ -825,7 +844,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 started_at: normalize_optional(row.started_at.as_deref()),
                 deadline_at: normalize_optional(row.deadline_at.as_deref()),
                 completed_at: normalize_optional(row.completed_at.as_deref()),
-                denial: command_denial_from_row(&row),
+                denial: command_denial_from_row(row),
                 cancel_cause,
                 job_progress,
                 job_handle,
@@ -901,7 +920,11 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                         && requests[index..].iter().any(|later| {
                             later.doc_id.is_some() && later.doc_id == row.message.request_doc_id
                         })
-                        && !message_is_runtime_control(row, &requests_by_doc_id)
+                        && !message_is_runtime_control(
+                            row,
+                            input_request_for_message(row)
+                                .or_else(|| execution_request_for_message(row)),
+                        )
                 })
                 .map(|row| i64::from(row.message.sequence))
                 .min();
@@ -1177,7 +1200,7 @@ mod canonical_projection_tests {
             &tool,
             &messages,
             &observed_rows,
-            &[args.clone()],
+            std::slice::from_ref(&args),
             &[],
             &[],
             &[],
@@ -1188,7 +1211,7 @@ mod canonical_projection_tests {
             &tool,
             &messages,
             &observed_rows,
-            &[args.clone()],
+            std::slice::from_ref(&args),
             &[],
             &["missing-close".to_string()],
             &[],

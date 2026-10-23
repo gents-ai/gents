@@ -72,7 +72,7 @@ pub(crate) async fn retry_has_published_input(
     let Some(mut parent_id) = request.retry_parent_request_doc_id.clone() else {
         return Ok(false);
     };
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = rapidhash::RapidHashSet::default();
     loop {
         anyhow::ensure!(
             visited.insert(parent_id.clone()),

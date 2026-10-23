@@ -16,9 +16,11 @@ pub struct AcceptedTurnSpec<'a> {
     pub child_plans: Vec<StreamPlan>,
     pub valid_until: Option<&'a str>,
     pub request_hop: Option<u32>,
-    pub request_setup:
-        Option<Box<dyn FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate) + 'a>>,
+    pub request_setup: Option<RequestSetup<'a>>,
 }
+
+pub type RequestSetup<'a> =
+    Box<dyn FnOnce(&mut gents_protocol::request_admission::AgentRequestCreate) + 'a>;
 
 pub struct PreparedAcceptedTurn {
     pub backend: MockStreamingBackend,

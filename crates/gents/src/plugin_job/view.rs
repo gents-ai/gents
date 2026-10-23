@@ -68,7 +68,10 @@ fn unavailable(error: anyhow::Error) -> JobReadError {
     }
 }
 
-fn decode<T: serde::de::DeserializeOwned>(value: &Value, what: &str) -> Result<T, JobReadError> {
+fn decode<T>(value: &Value, what: &str) -> Result<T, JobReadError>
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_json::from_value(value.clone()).map_err(|error| malformed(format!("{what}: {error}")))
 }
 

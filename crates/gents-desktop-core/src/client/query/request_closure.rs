@@ -7,8 +7,9 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
+use rapidhash::{HashSetExt, RapidHashSet};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -121,8 +122,8 @@ pub(super) async fn close_request_rows_with<'a>(
 ) -> Result<Vec<AgentRequestRow>> {
     let mut rows = Vec::with_capacity(seeds.len());
     let mut frontier = Vec::new();
-    let mut seen = HashSet::with_capacity(seeds.len());
-    let mut queried = HashSet::new();
+    let mut seen = RapidHashSet::with_capacity(seeds.len());
+    let mut queried = RapidHashSet::new();
 
     for row in seeds {
         if let Some(scope) = Scope::from_row(&row) {

@@ -144,11 +144,17 @@ pub(super) fn review_route(
         .unwrap_or(super::Route::Deny)
 }
 
-pub(crate) async fn scope<F: Future>(context: Option<Context>, future: F) -> F::Output {
+pub(crate) async fn scope<F>(context: Option<Context>, future: F) -> F::Output
+where
+    F: Future,
+{
     CURRENT.scope(context, future).await
 }
 
-pub(crate) fn carry<F: Future>(future: F) -> impl Future<Output = F::Output> {
+pub(crate) fn carry<F>(future: F) -> impl Future<Output = F::Output>
+where
+    F: Future,
+{
     let context = CURRENT.try_with(Clone::clone).ok().flatten();
     scope(context, future)
 }

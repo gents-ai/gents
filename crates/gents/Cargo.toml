@@ -30,6 +30,7 @@ required-features = ["live-e2e"]
 [dependencies]
 schema.workspace = true
 storage.workspace = true
+rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow.workspace = true
 async-stream = "0.3"

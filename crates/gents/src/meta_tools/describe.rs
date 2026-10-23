@@ -1,9 +1,9 @@
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
+use rapidhash::RapidHashSet;
 use rmcp::model::{ListToolsResult, Tool as McpTool};
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use std::collections::HashSet;
 
 use crate::truncation::{truncate_text, TruncationLimits, TruncationMode};
 
@@ -143,7 +143,7 @@ impl Tool for DescribeToolTool {
             &list_result,
         ) {
             Ok(result) => Ok(result),
-            Err(error) => Err(MetaToolError::structured(error)),
+            Err(error) => Err(MetaToolError::structured(*error)),
         }
     }
 
@@ -157,7 +157,7 @@ fn describe_tool_result(
     requested_tool_name: &str,
     raw_schema: bool,
     list_result: &ListToolsResult,
-) -> Result<String, StructuredToolError> {
+) -> Result<String, Box<StructuredToolError>> {
     let tool = list_result
         .tools
         .iter()
@@ -171,11 +171,11 @@ fn describe_tool_result(
                 .iter()
                 .map(|tool| tool.name.to_string())
                 .collect::<Vec<_>>();
-            Err(StructuredToolError::describe_tool_not_found(
+            Err(Box::new(StructuredToolError::describe_tool_not_found(
                 service_id,
                 requested_tool_name,
                 available_tools,
-            ))
+            )))
         }
     }
 }
@@ -413,7 +413,7 @@ fn push_field_section(out: &mut String, heading: &str, fields: &[&ArgumentField]
     out.push('\n');
 }
 
-fn required_names(schema: &Map<String, Value>) -> HashSet<&str> {
+fn required_names(schema: &Map<String, Value>) -> RapidHashSet<&str> {
     schema
         .get("required")
         .and_then(Value::as_array)

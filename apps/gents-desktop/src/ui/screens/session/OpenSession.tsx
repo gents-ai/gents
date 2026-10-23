@@ -37,7 +37,6 @@ import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
 import { sentTurnKey } from "../stream-reveal";
 import { TranscriptPanel } from "../Transcript";
 import { type WorkerActions } from "../WorkerActions";
-import { WorkerList } from "../WorkerStep";
 import { useSessionProvenance, useWorkers } from "../workers";
 import { OpenSessionComposer } from "./OpenSessionComposer";
 
@@ -224,11 +223,6 @@ export function OpenSession() {
                   {parentWork.parent && (
                     <div className="mt-1 mb-1">
                       <ParentLine work={parentWork} />
-                    </div>
-                  )}
-                  {workers.all.length > 0 && (
-                    <div className="mt-1 mb-1">
-                      <WorkerList workers={workers} />
                     </div>
                   )}
                   {summary &&

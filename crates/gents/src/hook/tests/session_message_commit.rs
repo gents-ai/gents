@@ -2,11 +2,10 @@ use super::*;
 use crate::config_client::ConfigApplyTxn;
 use crate::identity::NodeIdentity;
 
-async fn write_config<T: serde::Serialize>(
-    node: &Arc<EmbeddedNode>,
-    collection: crate::Collection,
-    document: &T,
-) {
+async fn write_config<T>(node: &Arc<EmbeddedNode>, collection: crate::Collection, document: &T)
+where
+    T: serde::Serialize,
+{
     let value = serde_json::to_value(document).unwrap();
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {

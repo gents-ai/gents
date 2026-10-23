@@ -52,10 +52,13 @@ pub(crate) trait CanonicalCompactionAdapter {
     ) -> ExecutionFuture<'a, Result<LeanCanonicalCompactionObservation, Self::Error>>;
 }
 
-pub(crate) async fn assert_canonical_compaction_cases<A: CanonicalCompactionAdapter>(
+pub(crate) async fn assert_canonical_compaction_cases<A>(
     cases: &[LeanCanonicalCompactionCase],
     adapter: &mut A,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    A: CanonicalCompactionAdapter,
+{
     for case in cases {
         let actual = adapter.observe(&case.input).await.map_err(|error| {
             format!("{}: native canonical compaction failed: {error}", case.name)
@@ -106,10 +109,13 @@ pub(crate) trait RepairedProjectionAdapter {
     ) -> ExecutionFuture<'a, Result<LeanRepairedProjectionObservation, Self::Error>>;
 }
 
-pub(crate) async fn assert_repaired_projection_cases<A: RepairedProjectionAdapter>(
+pub(crate) async fn assert_repaired_projection_cases<A>(
     cases: &[LeanRepairedProjectionCase],
     adapter: &mut A,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    A: RepairedProjectionAdapter,
+{
     for case in cases {
         let actual = adapter.observe(&case.input).await.map_err(|error| {
             format!("{}: native repaired projection failed: {error}", case.name)

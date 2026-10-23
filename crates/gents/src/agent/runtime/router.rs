@@ -117,16 +117,16 @@ pub(super) async fn run_router(
         return Ok(());
     }
     let watcher = DefraWatcher::new(node.clone(), &node_did)?;
-    let result = run_router_with_watcher(
+    let result = run_router_with_watcher(RouterInputs {
         node,
         node_did,
         watcher,
         active_snapshot_rx,
         shutdown,
-        admission_gate.clone(),
+        admission_gate: admission_gate.clone(),
         runtime_status,
         runtime_snapshot_observer,
-    )
+    })
     .await;
     if result.is_err() {
         // Close locally before reporting: no concurrent watcher may dispatch
@@ -136,19 +136,31 @@ pub(super) async fn run_router(
     result
 }
 
-pub(in crate::agent) async fn run_router_with_watcher<W>(
-    node: Arc<defra_node::EmbeddedNode>,
-    node_did: String,
-    mut watcher: W,
-    mut active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    mut shutdown: watch::Receiver<bool>,
-    admission_gate: RuntimeAdmissionGate,
-    runtime_status: RuntimeStatusHandle,
-    runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
-) -> Result<()>
+pub(in crate::agent) struct RouterInputs<W> {
+    pub(in crate::agent) node: Arc<defra_node::EmbeddedNode>,
+    pub(in crate::agent) node_did: String,
+    pub(in crate::agent) watcher: W,
+    pub(in crate::agent) active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    pub(in crate::agent) shutdown: watch::Receiver<bool>,
+    pub(in crate::agent) admission_gate: RuntimeAdmissionGate,
+    pub(in crate::agent) runtime_status: RuntimeStatusHandle,
+    pub(in crate::agent) runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+}
+
+pub(in crate::agent) async fn run_router_with_watcher<W>(inputs: RouterInputs<W>) -> Result<()>
 where
     W: Watcher,
 {
+    let RouterInputs {
+        node,
+        node_did,
+        mut watcher,
+        mut active_snapshot_rx,
+        mut shutdown,
+        admission_gate,
+        runtime_status,
+        runtime_snapshot_observer,
+    } = inputs;
     let mut active_snapshot = active_snapshot_rx.borrow().clone();
     let mut admission_changed = admission_gate.subscribe();
     let mut readiness_changed = runtime_status.readiness().subscribe_observation();
@@ -159,13 +171,15 @@ where
             wait_for_next_request_with_latest_snapshot(
                 &node_did,
                 &mut watcher,
-                &mut active_snapshot,
-                &mut active_snapshot_rx,
+                RouterWaitState {
+                    active_snapshot: &mut active_snapshot,
+                    active_snapshot_rx: &mut active_snapshot_rx,
+                    admission_gate: &admission_gate,
+                    admission_changed: &mut admission_changed,
+                    readiness_changed: &mut readiness_changed,
+                    pending_request: &mut pending_request,
+                },
                 &mut shutdown,
-                &admission_gate,
-                &mut admission_changed,
-                &mut readiness_changed,
-                &mut pending_request,
                 Some(&runtime_status),
                 runtime_snapshot_observer.as_deref(),
             )
@@ -204,7 +218,7 @@ where
                 .dispatchers
                 .contains_key(&resolution.agent_id),
             routed_snapshot.unavailable_agents.get(&resolution.agent_id),
-            startup_diagnostic.as_deref(),
+            startup_diagnostic,
         ) {
             EffectiveAgentAdmission::Ready => {
                 let dispatcher = routed_snapshot
@@ -300,18 +314,21 @@ where
     }
 }
 
+pub(super) struct RouterWaitState<'a> {
+    pub(super) active_snapshot: &'a mut Arc<ActiveRuntimeSnapshot>,
+    pub(super) active_snapshot_rx: &'a mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    pub(super) admission_gate: &'a RuntimeAdmissionGate,
+    pub(super) admission_changed: &'a mut watch::Receiver<bool>,
+    pub(super) readiness_changed:
+        &'a mut watch::Receiver<crate::node_readiness_publisher::AgentAdmissionObservation>,
+    pub(super) pending_request: &'a mut Option<AgentRequest>,
+}
+
 pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
     node_did: &str,
     watcher: &mut W,
-    active_snapshot: &mut Arc<ActiveRuntimeSnapshot>,
-    active_snapshot_rx: &mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    wait_state: RouterWaitState<'_>,
     shutdown: &mut watch::Receiver<bool>,
-    admission_gate: &RuntimeAdmissionGate,
-    admission_changed: &mut watch::Receiver<bool>,
-    readiness_changed: &mut watch::Receiver<
-        crate::node_readiness_publisher::AgentAdmissionObservation,
-    >,
-    pending_request: &mut Option<AgentRequest>,
     runtime_status: Option<&RuntimeStatusHandle>,
     runtime_snapshot_observer: Option<&dyn RuntimeSnapshotObserver>,
 ) -> Result<
@@ -324,6 +341,14 @@ pub(super) async fn wait_for_next_request_with_latest_snapshot<W>(
 where
     W: Watcher,
 {
+    let RouterWaitState {
+        active_snapshot,
+        active_snapshot_rx,
+        admission_gate,
+        admission_changed,
+        readiness_changed,
+        pending_request,
+    } = wait_state;
     loop {
         let routed_snapshot = active_snapshot_rx.borrow_and_update().clone();
         let readiness_observation = readiness_changed.borrow_and_update().clone();

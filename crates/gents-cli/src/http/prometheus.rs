@@ -1,5 +1,6 @@
 use gents::config_client::GraphqlEndpoint;
-use std::collections::{BTreeMap, HashMap};
+use rapidhash::RapidHashMap;
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -185,7 +186,7 @@ pub(crate) struct P2pMetricsSnapshot {
 pub(crate) async fn render_prometheus_metrics(
     graphql: &GraphqlEndpoint,
     local_node_did: &str,
-    measured_backend_health: &HashMap<String, gents::BackendHealthSnapshot>,
+    measured_backend_health: &RapidHashMap<String, gents::BackendHealthSnapshot>,
     p2p: Option<&P2pMetricsSnapshot>,
 ) -> Result<String> {
     let data = load_metrics_query_data(graphql, local_node_did).await?;
@@ -1446,7 +1447,7 @@ pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> Metrics
 pub(crate) fn push_backend_metrics(
     lines: &mut Vec<String>,
     backends: &[MetricsBackendRow],
-    measured: &HashMap<String, gents::BackendHealthSnapshot>,
+    measured: &RapidHashMap<String, gents::BackendHealthSnapshot>,
 ) {
     for backend in backends {
         push_metric_sample(
@@ -1746,7 +1747,7 @@ mod tests {
             doc_row("codex", "healthy", Some("2026-07-06T00:00:00Z")),
             doc_row("unprobed-unknown", "unknown", None),
         ];
-        let measured = HashMap::from([
+        let measured = RapidHashMap::from_iter([
             (
                 "sparks-cluster".to_string(),
                 measured_entry(

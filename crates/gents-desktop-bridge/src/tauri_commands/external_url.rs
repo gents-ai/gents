@@ -14,7 +14,7 @@ pub async fn desktop_open_external_url(url: String) -> Result<(), BridgeError> {
             "Only web and mail links can be opened.",
         ));
     }
-    host_browser::open_url(url).map_err(|error| {
+    host_browser::open_url(url).await.map_err(|error| {
         BridgeError::new(
             BridgeErrorCode::Backend,
             format!("Could not open a browser for this link: {error}. Copy the address into your browser instead."),

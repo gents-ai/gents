@@ -46,16 +46,22 @@ pub(crate) struct AdmittedCompletionClient<C> {
     connection: std::sync::Arc<str>,
 }
 
-impl<C: ProviderClient> CompletionClient for AdmittedCompletionClient<C> {
+impl<C> CompletionClient for AdmittedCompletionClient<C>
+where
+    C: ProviderClient,
+{
     type CompletionModel = AdmittedCompletionModel<C::CompletionModel>;
 }
 
-pub(crate) fn admitted_model<C: ProviderClient>(
+pub(crate) fn admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
     connection: String,
     model_name: &str,
-) -> AdmittedCompletionModel<C::CompletionModel> {
+) -> AdmittedCompletionModel<C::CompletionModel>
+where
+    C: ProviderClient,
+{
     AdmittedCompletionClient {
         inner: client,
         admission,
@@ -64,7 +70,10 @@ pub(crate) fn admitted_model<C: ProviderClient>(
     .completion_model(model_name)
 }
 
-impl<M: ProviderModel> CompletionModel for AdmittedCompletionModel<M> {
+impl<M> CompletionModel for AdmittedCompletionModel<M>
+where
+    M: ProviderModel,
+{
     type Response = M::Response;
     type StreamingResponse = M::StreamingResponse;
     type Client = AdmittedCompletionClient<M::Client>;

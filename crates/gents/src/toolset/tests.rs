@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -386,8 +386,21 @@ fn ensure_native_fs_runner_for_test() {
             .expect("gents manifest should be under workspace crates/")
             .to_path_buf();
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let executable = std::env::current_exe().expect("current native test executable");
+        let profile_dir = executable
+            .parent()
+            .and_then(Path::parent)
+            .expect("native test executable is under a Cargo profile's deps directory");
+        let profile = profile_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("Cargo profile directory has a name");
+        let profile = if profile == "debug" { "dev" } else { profile };
         let status = std::process::Command::new(cargo)
             .args(["build", "-p", "gents-fs-runner"])
+            .args(["--profile", profile])
+            .arg("--target-dir")
+            .arg(profile_dir.parent().expect("Cargo target directory"))
             .current_dir(repo_root)
             .status()
             .expect("building gents-fs-runner test binary");

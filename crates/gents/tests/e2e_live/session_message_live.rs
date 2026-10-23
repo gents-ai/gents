@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Once;
@@ -1403,8 +1403,8 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .into_iter()
         .flatten()
         .filter_map(|entry| entry["agent"].as_str())
-        .collect::<HashSet<_>>();
-    assert_eq!(listed_agents, HashSet::from(["alpha", "beta"]));
+        .collect::<RapidHashSet<_>>();
+    assert_eq!(listed_agents, RapidHashSet::from_iter(["alpha", "beta"]));
     assert_eq!(
         wait_for_request_terminal(&db.node, list_request_id, Duration::from_secs(180)).await,
         "completed"
@@ -2585,7 +2585,7 @@ async fn live_goal_does_not_suppress_completion_wake() -> Result<()> {
             "a Goal continuation overtook the completion wake: {row:?}; wake={wake:?}"
         );
     }
-    let mut continued = HashSet::new();
+    let mut continued = RapidHashSet::new();
     for row in requests
         .iter()
         .filter(|row| row.caused_by_trigger_kind.as_deref() == Some("goal"))
@@ -3364,18 +3364,18 @@ async fn soak_violations(fx: &LiveNode) -> Vec<String> {
     let by_id = requests
         .iter()
         .map(|row| (row.request_id.as_str(), row))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     let by_doc = requests
         .iter()
         .map(|row| (row.doc_id.as_str(), row))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     let rows_by_doc = rows
         .iter()
         .map(|row| (row.doc_id.as_str(), row))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     let hop = |row: &SessionRequestRow| row.request_hop.unwrap_or(0);
     let mut violations = Vec::new();
-    let mut caused_per_row = std::collections::HashMap::<&str, usize>::new();
+    let mut caused_per_row = rapidhash::RapidHashMap::<&str, usize>::default();
 
     for request in &requests {
         let state = request.lifecycle_state.as_deref().unwrap_or("<none>");
@@ -3503,7 +3503,7 @@ async fn soak_violations(fx: &LiveNode) -> Vec<String> {
             violations.push(format!("row caused {caused} requests: {row:?}"));
         }
     }
-    let mut addressed = HashSet::new();
+    let mut addressed = RapidHashSet::new();
     let mut interrupting = 0;
     for request in requests.iter().filter(|row| !row.is_title_audit()) {
         for tool in timeline_tools(&fx.db.node, &request.request_id)
@@ -3706,7 +3706,7 @@ fn assert_standard_backgrounding_tool_surfaces(
         .agents()
         .iter()
         .map(|agent_config| agent_config.agent_id.clone())
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     let parent = agent
         .agents()
         .iter()

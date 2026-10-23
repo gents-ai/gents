@@ -233,6 +233,7 @@ pub(super) async fn trial(
         );
         Some(
             gents::eval::runner::embedded::inspect_retained_requests(
+                &ctx.runtime,
                 &ctx.runs_dir(),
                 &gents::eval::runner::TrialLocator {
                     trial_node_did: latest.trial_node_did.clone(),

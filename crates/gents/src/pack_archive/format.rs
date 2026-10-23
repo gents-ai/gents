@@ -412,7 +412,10 @@ struct HashingReader<'a, R> {
     digest: &'a mut PackDigester,
 }
 
-impl<R: Read> Read for HashingReader<'_, R> {
+impl<R> Read for HashingReader<'_, R>
+where
+    R: Read,
+{
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.digest.update(&buf[..n]);
@@ -438,7 +441,10 @@ struct CountingWriter<W> {
     written: u64,
 }
 
-impl<W: Write> Write for CountingWriter<W> {
+impl<W> Write for CountingWriter<W>
+where
+    W: Write,
+{
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let n = self.inner.write(buf)?;
         self.written += n as u64;
@@ -468,7 +474,10 @@ impl<R> BoundedReader<R> {
     }
 }
 
-impl<R: Read> Read for BoundedReader<R> {
+impl<R> Read for BoundedReader<R>
+where
+    R: Read,
+{
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.read += n as u64;

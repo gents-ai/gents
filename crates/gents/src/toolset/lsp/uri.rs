@@ -23,11 +23,11 @@ pub fn file_uri_to_path(uri: &str) -> Result<PathBuf, String> {
         return Err(format!("unsupported URI scheme: {uri}"));
     }
     if uri.contains('#') || uri.contains('?') {
-        return Ok(PathBuf::from(lax_file_uri_to_path(uri)));
+        return Ok(lax_file_uri_to_path(uri));
     }
     match strict_file_uri_to_path(uri) {
         Ok(path) => Ok(path),
-        Err(_) => Ok(PathBuf::from(lax_file_uri_to_path(uri))),
+        Err(_) => Ok(lax_file_uri_to_path(uri)),
     }
 }
 

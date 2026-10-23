@@ -181,6 +181,7 @@ struct LiveTopologyGuard {
     peer_a: Option<TestDb>,
     peer_b: Option<TestDb>,
     shut_down: bool,
+    runtime: gents::drop_cleanup::DropCleanup,
 }
 
 impl LiveTopologyGuard {
@@ -191,6 +192,7 @@ impl LiveTopologyGuard {
             peer_a: Some(peer_a),
             peer_b: Some(peer_b),
             shut_down: false,
+            runtime: gents::drop_cleanup::DropCleanup::current(),
         }
     }
 
@@ -235,18 +237,16 @@ impl Drop for LiveTopologyGuard {
         if let Some(agent) = self.agent.take() {
             drop(agent);
         }
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let nodes: Vec<_> = [self.owner.take(), self.peer_a.take(), self.peer_b.take()]
-                .into_iter()
-                .flatten()
-                .map(|db| db.node.clone())
-                .collect();
-            handle.spawn(async move {
-                for node in nodes {
-                    node.shutdown().await;
-                }
-            });
-        }
+        let nodes: Vec<_> = [self.owner.take(), self.peer_a.take(), self.peer_b.take()]
+            .into_iter()
+            .flatten()
+            .map(|db| db.node.clone())
+            .collect();
+        self.runtime.spawn(async move {
+            for node in nodes {
+                node.shutdown().await;
+            }
+        });
     }
 }
 

@@ -282,8 +282,8 @@ mod tests {
             .claimed_deadline_at()
             .expect("claimed request deadline");
         let registry = BackgroundExecutionRegistry::default();
-        let mut tokens = std::collections::HashMap::new();
-        let mut reservations = std::collections::HashMap::new();
+        let mut tokens = rapidhash::RapidHashMap::default();
+        let mut reservations = rapidhash::RapidHashMap::default();
         for accepted in published.accepted_tools {
             let id = accepted.id.clone();
             let mut lifecycle = ToolCallLifecycle::from_accepted(

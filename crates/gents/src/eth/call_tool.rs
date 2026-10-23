@@ -1019,7 +1019,7 @@ fn parse_int(value: &Value) -> Result<I256> {
 
 fn decode_hex(value: &str) -> Result<Vec<u8>> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         bail!("odd-length hex {value}");
     }
     (0..hex.len())

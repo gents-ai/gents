@@ -58,30 +58,45 @@ pub struct Input<W, A> {
     pub grant: Option<Grant<W, A>>,
 }
 
-pub fn valid_grant<W: PartialEq, A: PartialEq>(input: &Input<W, A>) -> bool {
+pub fn valid_grant<W, A>(input: &Input<W, A>) -> bool
+where
+    W: PartialEq,
+    A: PartialEq,
+{
     input
         .grant
         .as_ref()
         .is_some_and(|grant| grant.scope == input.current && grant.action == input.action)
 }
 
-pub fn approval_scope_matches<W: PartialEq>(available: &[Scope<W>], expected: &Scope<W>) -> bool {
+pub fn approval_scope_matches<W>(available: &[Scope<W>], expected: &Scope<W>) -> bool
+where
+    W: PartialEq,
+{
     available
         .iter()
         .find(|current| current.workspace == expected.workspace)
         == Some(expected)
 }
 
-pub fn consume_approval<W: PartialEq, A: PartialEq>(
+pub fn consume_approval<W, A>(
     available: &[Scope<W>],
     expected: &Grant<W, A>,
     received: &Grant<W, A>,
     allowed: bool,
-) -> Option<bool> {
+) -> Option<bool>
+where
+    W: PartialEq,
+    A: PartialEq,
+{
     (approval_scope_matches(available, &expected.scope) && expected == received).then_some(allowed)
 }
 
-pub fn route<W: PartialEq, A: PartialEq>(input: &Input<W, A>) -> Route {
+pub fn route<W, A>(input: &Input<W, A>) -> Route
+where
+    W: PartialEq,
+    A: PartialEq,
+{
     if !input.ceiling_allows {
         return Route::Deny;
     }
@@ -109,11 +124,11 @@ pub enum Review {
     Unavailable,
 }
 
-pub fn reviewed_route<W: PartialEq, A: PartialEq>(
-    input: &Input<W, A>,
-    review: Review,
-    grant: &Grant<W, A>,
-) -> Route {
+pub fn reviewed_route<W, A>(input: &Input<W, A>, review: Review, grant: &Grant<W, A>) -> Route
+where
+    W: PartialEq,
+    A: PartialEq,
+{
     let current = route(input);
     if current != Route::Review {
         return current;
@@ -152,12 +167,15 @@ pub enum SelectionError {
     RevisionExhausted,
 }
 
-pub fn select_mode<T: Clone + PartialEq>(
+pub fn select_mode<T>(
     previous: Option<&Preference<T>>,
     expected: u64,
     mode: Mode,
     requested_task: Option<T>,
-) -> Result<Selection<T>, SelectionError> {
+) -> Result<Selection<T>, SelectionError>
+where
+    T: Clone + PartialEq,
+{
     let revision = previous.map_or(0, |value| value.revision);
     if revision != expected {
         return Err(SelectionError::Stale);

@@ -103,7 +103,7 @@ impl LayeredPromptBuilder {
     }
 
     pub fn selected_skill_reminders(&self, selected_ids: &[String]) -> Vec<Message> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = rapidhash::RapidHashSet::default();
         let mut reminders = Vec::new();
         for id in selected_ids {
             let id = id.trim();

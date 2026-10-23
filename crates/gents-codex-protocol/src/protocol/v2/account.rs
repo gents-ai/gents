@@ -1,8 +1,8 @@
 use crate::core_types::PlanType;
 use crate::protocol::common::AuthMode;
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -105,7 +105,7 @@ pub struct ChatgptAuthTokensRefreshResponse {
 #[serde(rename_all = "camelCase")]
 pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
-    pub rate_limits_by_limit_id: Option<HashMap<String, RateLimitSnapshot>>,
+    pub rate_limits_by_limit_id: Option<RapidHashMap<String, RateLimitSnapshot>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

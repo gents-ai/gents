@@ -244,7 +244,7 @@ impl DeniedTarget {
                         binary_path: "/bin/echo".into(),
                         description: String::new(),
                         allowed_argv_prefixes: vec![vec!["status".into()]],
-                        env_vars: HashMap::new(),
+                        env_vars: RapidHashMap::new(),
                         working_dir: Some(root.to_path_buf()),
                         timeout_secs: 5,
                         max_output_chars: 4096,

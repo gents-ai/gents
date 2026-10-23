@@ -14,8 +14,9 @@ use crate::message::{
     Video,
 };
 use base64::Engine;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::cell::{OnceCell, RefCell};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -245,12 +246,12 @@ fn validate_reference_source(
 
 struct SealedExtent {
     streams: Vec<ReconstructedStream>,
-    signatures: HashMap<(u32, u32), Vec<usize>>,
+    signatures: RapidHashMap<(u32, u32), Vec<usize>>,
 }
 
 impl SealedExtent {
     fn new(streams: Vec<ReconstructedStream>) -> Self {
-        let mut signatures: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+        let mut signatures: RapidHashMap<(u32, u32), Vec<usize>> = RapidHashMap::new();
         for (index, stream) in streams.iter().enumerate() {
             if matches!(
                 stream.declaration.payload,
@@ -273,14 +274,14 @@ impl SealedExtent {
 }
 
 struct ObservationIndex<'a> {
-    by_doc: HashMap<&'a str, Vec<ObservedSegment<'a>>>,
-    by_source: HashMap<(&'a str, &'a OutputSource), Vec<ObservedSegment<'a>>>,
+    by_doc: RapidHashMap<&'a str, Vec<ObservedSegment<'a>>>,
+    by_source: RapidHashMap<(&'a str, &'a OutputSource), Vec<ObservedSegment<'a>>>,
 }
 
 impl<'a> ObservationIndex<'a> {
     fn new(records: &[ObservedSegment<'a>]) -> Self {
-        let mut by_doc: HashMap<&'a str, Vec<ObservedSegment<'a>>> = HashMap::new();
-        let mut by_source: HashMap<(&'a str, &'a OutputSource), Vec<_>> = HashMap::new();
+        let mut by_doc: RapidHashMap<&'a str, Vec<ObservedSegment<'a>>> = RapidHashMap::new();
+        let mut by_source: RapidHashMap<(&'a str, &'a OutputSource), Vec<_>> = RapidHashMap::new();
         for record in records {
             by_doc.entry(record.doc_id).or_default().push(*record);
             by_source
@@ -302,8 +303,8 @@ struct Extents<'s, 'a> {
     #[cfg(test)]
     reuse: bool,
     index: OnceCell<ObservationIndex<'a>>,
-    closings: RefCell<HashMap<&'a str, ObservedSegment<'a>>>,
-    extents: RefCell<HashMap<&'a str, Rc<SealedExtent>>>,
+    closings: RefCell<RapidHashMap<&'a str, ObservedSegment<'a>>>,
+    extents: RefCell<RapidHashMap<&'a str, Rc<SealedExtent>>>,
     #[cfg(test)]
     closing_scans: std::cell::Cell<usize>,
     #[cfg(test)]
@@ -703,13 +704,17 @@ fn media_data(
 }
 
 fn validate_media_shape(media: &super::MediaBlock) -> bool {
-    match (&media.kind, &media.media_type, &media.detail) {
-        (MediaKind::Image, Some(MediaType::Image(_)) | None, _) => true,
-        (MediaKind::Audio, Some(MediaType::Audio(_)) | None, None) => true,
-        (MediaKind::Video, Some(MediaType::Video(_)) | None, None) => true,
-        (MediaKind::Document, Some(MediaType::Document(_)) | None, None) => true,
-        _ => false,
-    }
+    matches!(
+        (&media.kind, &media.media_type, &media.detail),
+        (MediaKind::Image, Some(MediaType::Image(_)) | None, _)
+            | (MediaKind::Audio, Some(MediaType::Audio(_)) | None, None)
+            | (MediaKind::Video, Some(MediaType::Video(_)) | None, None)
+            | (
+                MediaKind::Document,
+                Some(MediaType::Document(_)) | None,
+                None
+            )
+    )
 }
 
 fn reconstruct_media(

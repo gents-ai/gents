@@ -47,7 +47,7 @@ pub(super) async fn catalog(core: &ClientCore, node_did: &str) -> Result<Vec<Con
         let rows = response["data"][target.collection_name()]
             .as_array()
             .context("Runtime Settings returned an incomplete catalog.")?;
-        let mut identities = std::collections::HashSet::new();
+        let mut identities = rapidhash::RapidHashSet::default();
         for row in rows {
             let id = row[target.unique_field()]
                 .as_str()

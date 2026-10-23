@@ -17,7 +17,7 @@ import { ToolBody } from "./tool-views";
 import { duration } from "./tool-summary";
 import { useMinute, when } from "./time";
 import { isLive } from "@/lib/live";
-import { scopeKey, type Reached, type Worker, type Workers } from "./workers";
+import { type Reached, type Workers } from "./workers";
 import { RequestStop } from "./WorkerActions";
 
 type Tone = "running" | "done" | "failed" | "stopped" | "unknown";
@@ -319,39 +319,5 @@ export function WorkerStep({
     >
       <ToolBody tool={tool} />
     </Row>
-  );
-}
-
-const workerName = (worker: Worker | null) => worker?.summary?.title ?? "a session";
-
-export function WorkerList({ workers }: { workers: Workers }) {
-  const deployment = useSelectedNode();
-  if (workers.all.length === 0) return null;
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-      <span>Started sessions</span>
-      {workers.all.map((worker) => {
-        const name = workerName(worker);
-        const agentId = worker.summary?.agentId ?? null;
-        const state = worker.summary?.turnState ?? null;
-        return (
-          <span key={scopeKey(worker.link)} className="flex min-w-0 items-center gap-1">
-            <a
-              href={href({ name: "session", sessionId: worker.sessionId })}
-              className="flex min-w-0 items-center gap-1 hover:text-foreground hover:underline"
-            >
-              {agentId && (
-                <AgentInitials
-                  name={agentName(agentId, deployment)}
-                  className="size-4 text-[8px]"
-                />
-              )}
-              <span className="truncate">{name}</span>
-              {state && <span className="shrink-0">· {state}</span>}
-            </a>
-          </span>
-        );
-      })}
-    </div>
   );
 }

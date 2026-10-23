@@ -166,7 +166,10 @@ async fn validate_or_persist_metadata(path: &Path, expected: &NodeIdentityMetada
     }
 }
 
-async fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+async fn write_json_atomically<T>(path: &Path, value: &T) -> Result<()>
+where
+    T: Serialize,
+{
     let bytes = serde_json::to_vec_pretty(value)?;
     let tmp_path = path.with_extension("tmp");
 

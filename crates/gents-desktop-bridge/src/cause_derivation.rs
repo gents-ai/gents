@@ -35,7 +35,7 @@ pub fn derive_tool_call_cause(
             confidence: "derived".into(),
             at: tool.completed_at.clone(),
             evidence: vec![
-                format!("AgentToolCall.lifecycle_state = \"timedOut\""),
+                "AgentToolCall.lifecycle_state = \"timedOut\"".to_string(),
                 format!(
                     "deadline_at = {:?}",
                     tool.deadline_at.as_deref().unwrap_or("(unset)")

@@ -25,6 +25,7 @@ pub struct RetainedRequest {
 /// until shutdown, even if the caller drops its future; a query panic also
 /// unwinds only after shutdown.
 pub async fn inspect_retained_requests(
+    runtime: &tokio::runtime::Handle,
     runs_dir: &Path,
     locator: &TrialLocator,
 ) -> Result<Vec<RetainedRequest>> {
@@ -35,26 +36,23 @@ pub async fn inspect_retained_requests(
     let trial_dir = retained_trial_dir(runs_dir, hint)?;
     let home_dir = trial_dir.join("home");
     let did = locator.trial_node_did.clone();
-    let runtime = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
-        runtime.block_on(async move {
-            let home = EmbeddedHome::open_for_inspection(&home_dir, &did)
-                .await
-                .with_context(|| {
-                    format!(
-                        "opening retained trial home {} for inspection",
-                        home_dir.display()
-                    )
-                })?;
-            let result = std::panic::AssertUnwindSafe(read_requests(&home))
-                .catch_unwind()
-                .await;
-            home.node.shutdown().await;
-            match result {
-                Ok(result) => result,
-                Err(panic) => std::panic::resume_unwind(panic),
-            }
-        })
+    crate::storage_backend::drive_unsendable(runtime, move || async move {
+        let home = EmbeddedHome::open_for_inspection(&home_dir, &did)
+            .await
+            .with_context(|| {
+                format!(
+                    "opening retained trial home {} for inspection",
+                    home_dir.display()
+                )
+            })?;
+        let result = std::panic::AssertUnwindSafe(read_requests(&home))
+            .catch_unwind()
+            .await;
+        home.node.shutdown().await;
+        match result {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     })
     .await
     .context("inspecting retained trial requests")?
@@ -244,7 +242,10 @@ resources:
         let key = std::fs::read(path.join("node.key")).unwrap();
         let at = locator(&did, "trial");
         for _ in 0..2 {
-            let requests = inspect_retained_requests(runs.path(), &at).await.unwrap();
+            let requests =
+                inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
+                    .await
+                    .unwrap();
             assert_eq!(requests.len(), 2);
             assert_eq!(requests[0].request.content.as_deref(), Some(content));
             assert!(!requests[0].request_doc_id.is_empty());
@@ -265,9 +266,10 @@ resources:
         let path = runs.path().join("trial/home");
         let home = EmbeddedHome::create_retained(&path).await.unwrap();
         let at = locator(home.did(), "trial");
-        let held = inspect_retained_requests(runs.path(), &at)
-            .await
-            .unwrap_err();
+        let held =
+            inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
+                .await
+                .unwrap_err();
         let held_text = format!("{held:#}");
         assert!(
             held_text.contains("already open in this process")
@@ -275,30 +277,42 @@ resources:
             "{held:#}"
         );
         close(home).await;
-        let mismatch = inspect_retained_requests(runs.path(), &locator("did:key:other", "trial"))
-            .await
-            .unwrap_err();
+        let mismatch = inspect_retained_requests(
+            &crate::test_support::runtime_handle(),
+            runs.path(),
+            &locator("did:key:other", "trial"),
+        )
+        .await
+        .unwrap_err();
         assert!(
             format!("{mismatch:#}").contains("does not match recorded DID"),
             "{mismatch:#}"
         );
-        assert!(inspect_retained_requests(runs.path(), &at)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(inspect_retained_requests(
+            &crate::test_support::runtime_handle(),
+            runs.path(),
+            &at
+        )
+        .await
+        .unwrap()
+        .is_empty());
         std::fs::remove_file(path.join("node.key")).unwrap();
-        let missing = inspect_retained_requests(runs.path(), &at)
-            .await
-            .unwrap_err();
+        let missing =
+            inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
+                .await
+                .unwrap_err();
         assert!(
             format!("{missing:#}").contains("identity key does not exist"),
             "{missing:#}"
         );
         assert!(!path.join("node.key").exists());
-        let missing =
-            inspect_retained_requests(runs.path(), &locator(&at.trial_node_did, "missing"))
-                .await
-                .unwrap_err();
+        let missing = inspect_retained_requests(
+            &crate::test_support::runtime_handle(),
+            runs.path(),
+            &locator(&at.trial_node_did, "missing"),
+        )
+        .await
+        .unwrap_err();
         assert!(format!("{missing:#}").contains("is missing"), "{missing:#}");
         assert!(!runs.path().join("missing").exists());
     }
@@ -310,9 +324,10 @@ resources:
         std::fs::create_dir_all(&path).unwrap();
         let identity = KeyIdentity::load_or_create(path.join("node.key"), None).unwrap();
         let at = locator(identity.did(), "trial");
-        let missing = inspect_retained_requests(runs.path(), &at)
-            .await
-            .unwrap_err();
+        let missing =
+            inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
+                .await
+                .unwrap_err();
         assert!(
             format!("{missing:#}").contains("no existing database"),
             "{missing:#}"
@@ -328,9 +343,10 @@ resources:
         node.shutdown().await;
         drop(node);
         for _ in 0..2 {
-            let error = inspect_retained_requests(runs.path(), &at)
-                .await
-                .unwrap_err();
+            let error =
+                inspect_retained_requests(&crate::test_support::runtime_handle(), runs.path(), &at)
+                    .await
+                    .unwrap_err();
             let error = format!("{error:#}");
             assert!(error.contains("AgentRequest"), "{error}");
             assert!(!error.contains("already open"), "{error}");

@@ -14,9 +14,9 @@ pub(super) const USER_MESSAGE_CHUNK: &str = "user_message_chunk";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum MessageUpdate {
-    AgentMessageChunk { text: String },
-    AgentThoughtChunk { text: String },
-    UserMessageChunk { text: String },
+    AgentMessage { text: String },
+    AgentThought { text: String },
+    UserMessage { text: String },
 }
 
 impl MessageUpdate {
@@ -28,9 +28,9 @@ impl MessageUpdate {
 
     pub fn session_update_kind(&self) -> &'static str {
         match self {
-            MessageUpdate::AgentMessageChunk { .. } => AGENT_MESSAGE_CHUNK,
-            MessageUpdate::AgentThoughtChunk { .. } => AGENT_THOUGHT_CHUNK,
-            MessageUpdate::UserMessageChunk { .. } => USER_MESSAGE_CHUNK,
+            MessageUpdate::AgentMessage { .. } => AGENT_MESSAGE_CHUNK,
+            MessageUpdate::AgentThought { .. } => AGENT_THOUGHT_CHUNK,
+            MessageUpdate::UserMessage { .. } => USER_MESSAGE_CHUNK,
         }
     }
 
@@ -122,12 +122,15 @@ pub(super) async fn project_messages(
     .await
 }
 
-async fn project_messages_with_sink<S: QuerySink>(
+async fn project_messages_with_sink<S>(
     sink: &S,
     message_sequence_high_water: Option<i64>,
     request: &gents_protocol::row::AgentRequestRow,
     context_window_tokens: u64,
-) -> Result<MessageProjection> {
+) -> Result<MessageProjection>
+where
+    S: QuerySink,
+{
     use gents::session::canonical_rows::{
         decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
         AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -376,14 +379,14 @@ fn project_native_message(message: &Message, updates: &mut Vec<MessageUpdate>) {
             for item in content {
                 if let AssistantContent::Reasoning(reasoning) = item {
                     for text in reasoning_texts(reasoning) {
-                        push_nonempty(updates, MessageUpdate::AgentThoughtChunk { text });
+                        push_nonempty(updates, MessageUpdate::AgentThought { text });
                     }
                 }
             }
             for item in content {
                 if let AssistantContent::Text(text) = item {
                     if let Some(text) = streamable_owned(&text.text) {
-                        updates.push(MessageUpdate::AgentMessageChunk { text });
+                        updates.push(MessageUpdate::AgentMessage { text });
                     }
                 }
             }
@@ -392,7 +395,7 @@ fn project_native_message(message: &Message, updates: &mut Vec<MessageUpdate>) {
             for item in content {
                 if let UserContent::Text(text) = item {
                     if let Some(text) = streamable_owned(&text.text) {
-                        updates.push(MessageUpdate::UserMessageChunk { text });
+                        updates.push(MessageUpdate::UserMessage { text });
                     }
                 }
             }
@@ -409,9 +412,9 @@ fn rfc3339_millis(value: &str) -> Option<i64> {
 
 fn push_nonempty(updates: &mut Vec<MessageUpdate>, update: MessageUpdate) {
     let is_empty = match &update {
-        MessageUpdate::AgentMessageChunk { text }
-        | MessageUpdate::AgentThoughtChunk { text }
-        | MessageUpdate::UserMessageChunk { text } => text.trim().is_empty(),
+        MessageUpdate::AgentMessage { text }
+        | MessageUpdate::AgentThought { text }
+        | MessageUpdate::UserMessage { text } => text.trim().is_empty(),
     };
     if !is_empty {
         updates.push(update);
@@ -546,7 +549,7 @@ mod canonical_selection_tests {
         };
         let projection = project(&facts).await.expect("canonical selection");
         assert!(projection.updates.iter().any(|update| matches!(update,
-            MessageUpdate::AgentMessageChunk { text } if text == "published old")));
+            MessageUpdate::AgentMessage { text } if text == "published old")));
         assert_eq!(
             projection.live_tail.content.as_deref(),
             Some("current live")

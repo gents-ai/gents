@@ -268,7 +268,7 @@ struct RemoteEdit<'a> {
 struct ModeledEdit {
     session_id: String,
     command: SessionInputEdit,
-    request_ids: std::collections::HashMap<u64, String>,
+    request_ids: rapidhash::RapidHashMap<u64, String>,
     _active: gents::RequestLifecycle,
 }
 
@@ -375,8 +375,8 @@ impl RemoteEdit<'_> {
         );
         session.requester_did = Some(requester.into());
         support::create_session_document(&self.runtime.node, &session).await;
-        let mut request_ids = std::collections::HashMap::new();
-        let mut doc_ids = std::collections::HashMap::new();
+        let mut request_ids = rapidhash::RapidHashMap::default();
+        let mut doc_ids = rapidhash::RapidHashMap::default();
         let initial = &case["initial"]["queue"];
         assert_eq!(initial["folding"], serde_json::json!([]), "{name}: folding");
         let active_id = initial["active"].as_u64().expect("modeled active request");

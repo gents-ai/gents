@@ -64,6 +64,39 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(self.errors(), [])
         self.assertEqual(self.errors(lambda case: case.pop("deadline")), [])
 
+    def test_boxed_generic_preserves_inner_validation(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "pub(crate) payload: T,", "pub(crate) payload: std::boxed::Box<Box<T>>,"))
+        self.assertEqual(self.errors(), [])
+        self.assertIn("expected bool", "\n".join(
+            self.errors(lambda case: case.__setitem__("payload", "true"))))
+        self.assertIn("missing field `payload`", "\n".join(
+            self.errors(lambda case: case.pop("payload"))))
+
+    def test_boxed_option_preserves_missing_and_null(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "pub(crate) deadline: Option<u64>,",
+            "pub(crate) deadline: Box<Option<u64>>,"))
+        self.assertEqual(self.errors(), [])
+        self.assertEqual(self.errors(lambda case: case.pop("deadline")), [])
+        self.assertIn("expected u64", "\n".join(
+            self.errors(lambda case: case.__setitem__("deadline", "5"))))
+
+    def test_boxed_tagged_payload_preserves_shape_checks(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "    Release,", "    Release,\n    Record(Box<RecordPayload>),") + '''
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordPayload { value: u64 }
+''')
+        def record(case):
+            case["steps"] = [{"operation": "record", "value": 7}]
+        self.assertEqual(self.errors(record), [])
+        def invalid(case):
+            record(case)
+            case["steps"][0]["value"] = "7"
+        self.assertIn("expected u64", "\n".join(self.errors(invalid)))
+
     def test_required_nullable_accepts_null_but_rejects_missing(self):
         self.items = decoders.parse_items(RUST.replace(
             "pub(crate) deadline: Option<u64>,",

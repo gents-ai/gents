@@ -119,7 +119,7 @@ async fn an_uncached_missing_request_does_not_reload_the_projection() {
         revision_before.provenance_version
     );
     assert!(store.snapshot().requests.is_empty());
-    assert!(after.docs_fetched >= before.docs_fetched + 1);
+    assert!(after.docs_fetched > before.docs_fetched);
     handle.shutdown().await;
 }
 
@@ -163,11 +163,13 @@ async fn a_missing_cached_request_still_reloads_and_removes_the_request() {
     let (_tempdir, node, store, handle) =
         build_observer_fixture_for_selection(Some("did:test:selected".to_owned())).await;
     let missing_doc_id = "bae-7ae82f02-e54f-5f76-bbd5-f03cf03d0951";
-    let mut cached = AgentRequestRow::default();
-    cached.doc_id = Some(missing_doc_id.to_owned());
-    cached.request_id = "cached-request".to_owned();
-    cached.node_did = Some("did:test:cached-request".to_owned());
-    cached.purpose = Some(gents_protocol::request_admission::RequestPurpose::Normal);
+    let cached = AgentRequestRow {
+        doc_id: Some(missing_doc_id.to_owned()),
+        request_id: "cached-request".to_owned(),
+        node_did: Some("did:test:cached-request".to_owned()),
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        ..AgentRequestRow::default()
+    };
     store.merge_observer_patch(crate::client::store::ClientStore::from_rows(
         ClientStoreRows {
             requests: vec![cached],

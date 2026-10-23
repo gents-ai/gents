@@ -113,6 +113,10 @@ pub(crate) fn empty_activation_state() -> (
     (Arc::new(OnceCell::new()), receiver)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate shared handle owned by the router state"
+)]
 pub(crate) fn runtime_contract_router(
     graphql: String,
     node_name: String,
@@ -627,7 +631,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             Some(issuer) => match issuer.mint().await {
                 Ok(offer) => crate::http::enrollment::EnrollmentStatus::Available {
                     token: offer.token,
-                    offer: offer.offer,
+                    offer: Box::new(offer.offer),
                 },
                 Err(error) => {
                     tracing::warn!(error = %error, "failed to mint authenticated enrollment offer");

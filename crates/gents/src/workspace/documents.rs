@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -144,10 +144,10 @@ pub trait WorkspaceDocuments {
 
 #[derive(Debug, Default)]
 pub struct MemoryWorkspaceDocuments {
-    pub workspaces: HashMap<String, IsolatedWorkspaceDoc>,
-    pub placements: HashMap<String, WorkspacePlacementDoc>,
-    pub bindings: HashMap<String, WorkspaceBindingDoc>,
-    pub receipts: HashMap<String, WorkspaceReceiptDoc>,
+    pub workspaces: RapidHashMap<String, IsolatedWorkspaceDoc>,
+    pub placements: RapidHashMap<String, WorkspacePlacementDoc>,
+    pub bindings: RapidHashMap<String, WorkspaceBindingDoc>,
+    pub receipts: RapidHashMap<String, WorkspaceReceiptDoc>,
 }
 
 impl WorkspaceDocuments for MemoryWorkspaceDocuments {
@@ -198,6 +198,10 @@ impl WorkspaceDocuments for MemoryWorkspaceDocuments {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fields of the IsolatedWorkspace document"
+)]
 pub(crate) fn new_isolated_workspace(
     identity: &LogicalWorkspaceIdentity,
     creation_policy: CreationPolicy,
@@ -560,16 +564,17 @@ mod capability_string {
     use super::super::WorkspacePathCapability;
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(
-        value: &WorkspacePathCapability,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S>(value: &WorkspacePathCapability, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(&value.canonical_json())
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<WorkspacePathCapability, D::Error> {
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<WorkspacePathCapability, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         let encoded = String::deserialize(deserializer)?;
         let value: WorkspacePathCapability =
             serde_json::from_str(&encoded).map_err(serde::de::Error::custom)?;

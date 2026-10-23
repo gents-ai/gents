@@ -5,7 +5,7 @@
 //! operator/bootstrap intent knob, and the prober's only doc write is the
 //! recurring `unknown → healthy` promotion.
 
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,7 +87,7 @@ pub struct BackendHealthSnapshot {
 
 #[derive(Clone, Default)]
 pub struct BackendHealthMap {
-    inner: Arc<RwLock<HashMap<String, BackendHealthEntry>>>,
+    inner: Arc<RwLock<RapidHashMap<String, BackendHealthEntry>>>,
 }
 
 impl BackendHealthMap {
@@ -103,7 +103,7 @@ impl BackendHealthMap {
             .map(|entry| snapshot_from_entry(backend_id, entry))
     }
 
-    pub async fn snapshot(&self) -> HashMap<String, BackendHealthSnapshot> {
+    pub async fn snapshot(&self) -> RapidHashMap<String, BackendHealthSnapshot> {
         self.inner
             .read()
             .await
@@ -112,7 +112,7 @@ impl BackendHealthMap {
             .collect()
     }
 
-    pub async fn vetoed_backend_ids(&self) -> HashSet<String> {
+    pub async fn vetoed_backend_ids(&self) -> RapidHashSet<String> {
         self.inner
             .read()
             .await
@@ -143,7 +143,7 @@ impl BackendHealthMap {
         self.inner.write().await.insert(backend_id, entry);
     }
 
-    async fn retain_backends(&self, backend_ids: &HashSet<String>) {
+    async fn retain_backends(&self, backend_ids: &RapidHashSet<String>) {
         self.inner
             .write()
             .await
@@ -207,11 +207,11 @@ pub struct ProbeCycleOutcome {
 
 #[derive(Default)]
 struct ProbeSchedule {
-    known: HashMap<String, InferenceBackend>,
+    known: RapidHashMap<String, InferenceBackend>,
 }
 
 impl ProbeSchedule {
-    fn select(&mut self, backends: &[InferenceBackend], periodic: bool) -> HashSet<String> {
+    fn select(&mut self, backends: &[InferenceBackend], periodic: bool) -> RapidHashSet<String> {
         let due = backends
             .iter()
             .filter(|backend| backend.enabled)
@@ -349,24 +349,32 @@ pub async fn probe_backends_cycle(
     options: &BackendProberOptions,
     oauth: Option<OAuthProbeContext<'_>>,
 ) -> ProbeCycleOutcome {
-    probe_selected_backends(
-        node, client, backends, now, health_map, options, oauth, None,
-    )
-    .await
+    let env = ProbeEnv {
+        now,
+        health_map,
+        options,
+    };
+    probe_selected_backends(node, client, backends, env, oauth, None).await
+}
+
+#[derive(Clone, Copy)]
+struct ProbeEnv<'a> {
+    now: DateTime<Utc>,
+    health_map: &'a BackendHealthMap,
+    options: &'a BackendProberOptions,
 }
 
 async fn probe_selected_backends(
     node: &Arc<EmbeddedNode>,
     client: &reqwest::Client,
     backends: &[InferenceBackend],
-    now: DateTime<Utc>,
-    health_map: &BackendHealthMap,
-    options: &BackendProberOptions,
+    env: ProbeEnv<'_>,
     oauth: Option<OAuthProbeContext<'_>>,
-    selected: Option<&HashSet<String>>,
+    selected: Option<&RapidHashSet<String>>,
 ) -> ProbeCycleOutcome {
+    let ProbeEnv { health_map, .. } = env;
     let mut outcome = ProbeCycleOutcome::default();
-    let mut probed_ids = HashSet::new();
+    let mut probed_ids = RapidHashSet::new();
 
     for backend in backends {
         if backend.provider_kind.is_node_scoped_oauth() && oauth.is_none() {
@@ -385,7 +393,7 @@ async fn probe_selected_backends(
                     let probe_result = tokio::time::timeout(
                         probe_timeout(backend),
                         crate::backend_provider::discover_models(
-                            &client,
+                            client,
                             backend.provider_kind,
                             &backend.endpoint,
                             None,
@@ -410,17 +418,7 @@ async fn probe_selected_backends(
                 }
                 Err(error) => (ProbeEvent::ProbeFail, Some(format!("{error:#}"))),
             };
-            record_probe_event(
-                node,
-                backend,
-                event,
-                error_text,
-                now,
-                health_map,
-                options,
-                &mut outcome,
-            )
-            .await;
+            record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
             continue;
         }
 
@@ -450,17 +448,7 @@ async fn probe_selected_backends(
             }
         };
 
-        record_probe_event(
-            node,
-            backend,
-            event,
-            error_text,
-            now,
-            health_map,
-            options,
-            &mut outcome,
-        )
-        .await;
+        record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
     }
 
     health_map.retain_backends(&probed_ids).await;
@@ -472,11 +460,14 @@ async fn record_probe_event(
     backend: &InferenceBackend,
     event: ProbeEvent,
     error_text: Option<String>,
-    now: DateTime<Utc>,
-    health_map: &BackendHealthMap,
-    options: &BackendProberOptions,
+    env: ProbeEnv<'_>,
     outcome: &mut ProbeCycleOutcome,
 ) {
+    let ProbeEnv {
+        now,
+        health_map,
+        options,
+    } = env;
     let previous = health_map.get_model(&backend.backend_id).await;
     let next = step_backend(previous, event, options.failure_threshold_k);
     let veto_flipped = previous.0.blocks_routing() != next.0.blocks_routing();
@@ -572,9 +563,11 @@ async fn run_scheduled_backend_probe_cycle(
         &node,
         client,
         &backends,
-        now,
-        health_map,
-        options,
+        ProbeEnv {
+            now,
+            health_map,
+            options,
+        },
         Some(OAuthProbeContext {
             node: node.clone(),
             node_did,
@@ -773,14 +766,14 @@ mod tests {
                 .due
                 .iter()
                 .map(|id| format!("backend-{id}"))
-                .collect::<HashSet<_>>();
+                .collect::<RapidHashSet<_>>();
             assert_eq!(selected, expected, "{}", case.name);
             let observed = case
                 .observed
                 .iter()
                 .map(configuration)
                 .map(|backend| (backend.backend_id.clone(), backend))
-                .collect::<HashMap<_, _>>();
+                .collect::<RapidHashMap<_, _>>();
             assert_eq!(
                 serde_json::to_value(&schedule.known).unwrap(),
                 serde_json::to_value(observed).unwrap(),
@@ -851,7 +844,7 @@ mod tests {
                     .due
                     .iter()
                     .map(|id| format!("backend-{id}"))
-                    .collect::<HashSet<_>>();
+                    .collect::<RapidHashSet<_>>();
                 assert_eq!(
                     schedule.select(std::slice::from_ref(&changed), false),
                     expected,

@@ -171,9 +171,9 @@ pub(super) async fn account_tools_in_txn(
                 continue;
             }
             let binding = directly_bound(headers, parent, generation)?;
-            if binding.is_some() {
+            if let Some(binding) = &binding {
                 anyhow::ensure!(
-                    binding.unwrap().1 == "spawn_process"
+                    binding.1 == "spawn_process"
                         && tool.row.await_mode.as_deref() == Some("background"),
                     "invalid spawned execution provenance"
                 );
@@ -198,10 +198,8 @@ pub(super) async fn account_tools_in_txn(
             "owned tool has invalid lifecycle"
         );
         if completed && state != "pending" {
-            if state == "running" {
-                if tool.row.await_mode.as_deref() != Some("background") {
-                    return Err(ToolAccountingRejection::ForegroundRunning.into());
-                }
+            if state == "running" && tool.row.await_mode.as_deref() != Some("background") {
+                return Err(ToolAccountingRejection::ForegroundRunning.into());
             }
             if spawned.is_none()
                 && plugin_parent.is_none()
@@ -302,7 +300,7 @@ mod tests {
             let (fixture, request_owner) =
                 crate::tool_call_lifecycle::admission_fixture::published_admission_with_owner(
                     crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
-                        name: (&format!("account-{name}")).to_owned(),
+                        name: format!("account-{name}"),
                         ..Default::default()
                     },
                 )

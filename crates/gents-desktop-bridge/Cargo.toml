@@ -37,6 +37,7 @@ notify = { version = "8.2", default-features = false, features = ["macos_kqueue"
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rapidhash = { workspace = true }
 tauri = { version = "2", features = [], optional = true }
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["codec", "rt"] }

@@ -367,20 +367,20 @@ mod tests {
                 .await
                 .data
         );
-        let limited = node.execute(r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"budget_limited"}) {_docID}}"#).await;
-        ensure_no_errors(&limited, "budget-limited fixture").unwrap();
+        let blocked = node.execute(r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"blocked"}) {_docID}}"#).await;
+        ensure_no_errors(&blocked, "blocked fixture").unwrap();
         let reply = GoalCommand::Pause
             .execute(&node, "principal", "session")
             .await
             .unwrap();
-        assert!(reply.contains("Goal remains budget_limited"));
+        assert!(reply.contains("Goal remains blocked"), "{reply}");
         assert_eq!(
             gents::goal::load_canonical_goal(&node, "principal", "session")
                 .await
                 .unwrap()
                 .unwrap()
                 .status,
-            "budget_limited"
+            "blocked"
         );
         let removed = node
             .execute(r#"mutation {delete_Goal(filter:{goal_id:{_eq:"owned"}}) {_docID}}"#)

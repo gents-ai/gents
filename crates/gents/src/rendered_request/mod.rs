@@ -24,7 +24,7 @@ pub use sink::DefraRenderedRequestSink;
 fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
     let join = crate::admission::current_call_join()?;
     let scope_kind = capture_scope.parse::<CaptureScope>().ok()?.kind;
-    admission_kind_matches_scope(join.call_kind, scope_kind).then(|| AdmissionJoin {
+    admission_kind_matches_scope(join.call_kind, scope_kind).then_some(AdmissionJoin {
         call_id: join.call_id,
         call_seq: join.call_seq,
     })
@@ -633,8 +633,7 @@ mod tests {
             &mut cache,
         )
         .await
-        .err()
-        .expect("the misreferencing turn must fail closed");
+        .expect_err("the misreferencing turn must fail closed");
         assert!(
             error.downcast_ref::<CaptureStoreReadError>().is_none(),
             "a misreferenced block is a verification failure, not a store failure: {error:#}"
@@ -667,8 +666,7 @@ mod tests {
             &mut cache,
         )
         .await
-        .err()
-        .expect("a manifest naming an absent document must fail closed");
+        .expect_err("a manifest naming an absent document must fail closed");
         assert!(
             error.downcast_ref::<CaptureStoreReadError>().is_none(),
             "an absent block is a verification failure, not a store failure: {error:#}"
@@ -836,13 +834,16 @@ pub(crate) async fn load_shared_json(
     canonical_json_string(&value)
 }
 
-async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
+async fn decode_capture_json_from_cached<R>(
     reader: &R,
     capture_version: u32,
     stored: &str,
     kind: CapturePayloadKind,
     cache: &mut CaptureReadCache,
-) -> Result<Value> {
+) -> Result<Value>
+where
+    R: CaptureBaseReader + Sync,
+{
     let mut next_version = capture_version;
     let mut next_stored = stored.to_owned();
     let mut bases = std::collections::BTreeMap::new();
@@ -952,20 +953,26 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
     )
 }
 
-async fn read_manifest_tree<R: CaptureBaseReader + Sync>(
+async fn read_manifest_tree<R>(
     reader: &R,
     tree: &encoding::ManifestTree,
     cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,
-) -> Result<()> {
+) -> Result<()>
+where
+    R: CaptureBaseReader + Sync,
+{
     let leaves = manifest_tree_leaves(reader, tree, cache).await?;
     read_manifest_blocks(reader, &leaves, cache).await
 }
 
-async fn manifest_tree_leaves<R: CaptureBaseReader + Sync>(
+async fn manifest_tree_leaves<R>(
     reader: &R,
     tree: &encoding::ManifestTree,
     cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,
-) -> Result<Vec<encoding::ManifestEntry>> {
+) -> Result<Vec<encoding::ManifestEntry>>
+where
+    R: CaptureBaseReader + Sync,
+{
     tree.validate()?;
     let mut entries = vec![tree.root.clone()];
     let mut remaining = encoding::TREE_RESOLUTION_FUEL;
@@ -1004,11 +1011,14 @@ fn manifest_children_cached(
     Ok(children)
 }
 
-async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
+async fn read_manifest_blocks<R>(
     reader: &R,
     entries: &[encoding::ManifestEntry],
     cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,
-) -> Result<()> {
+) -> Result<()>
+where
+    R: CaptureBaseReader + Sync,
+{
     anyhow::ensure!(
         entries.len() <= encoding::MAX_MANIFEST_BLOCKS,
         "capture manifest names {} blocks, above the {} the reader resolves",
@@ -1099,11 +1109,14 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
     Ok(())
 }
 
-pub(crate) async fn preload_manifest_blocks<R: CaptureBaseReader + Sync>(
+pub(crate) async fn preload_manifest_blocks<R>(
     reader: &R,
     manifests: &[Vec<encoding::ManifestEntry>],
     cache: &mut CaptureReadCache,
-) -> Result<()> {
+) -> Result<()>
+where
+    R: CaptureBaseReader + Sync,
+{
     let mut union = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for entries in manifests {
@@ -1124,11 +1137,14 @@ pub(crate) async fn preload_manifest_blocks<R: CaptureBaseReader + Sync>(
     Ok(())
 }
 
-pub(crate) async fn preload_manifest_trees<R: CaptureBaseReader + Sync>(
+pub(crate) async fn preload_manifest_trees<R>(
     reader: &R,
     trees: &[encoding::ManifestTree],
     cache: &mut CaptureReadCache,
-) -> Result<()> {
+) -> Result<()>
+where
+    R: CaptureBaseReader + Sync,
+{
     let mut pending = trees
         .iter()
         .filter(|tree| tree.validate().is_ok())
@@ -1166,10 +1182,13 @@ pub(crate) async fn preload_manifest_trees<R: CaptureBaseReader + Sync>(
 }
 
 #[cfg(test)]
-pub(crate) async fn manifest_leaf_entries<R: CaptureBaseReader + Sync>(
+pub(crate) async fn manifest_leaf_entries<R>(
     reader: &R,
     record: encoding::DecodedRecord,
-) -> Result<Vec<encoding::ManifestEntry>> {
+) -> Result<Vec<encoding::ManifestEntry>>
+where
+    R: CaptureBaseReader + Sync,
+{
     match record {
         encoding::DecodedRecord::Manifest { blocks } => Ok(blocks),
         encoding::DecodedRecord::Tree(tree) => {
@@ -1179,12 +1198,15 @@ pub(crate) async fn manifest_leaf_entries<R: CaptureBaseReader + Sync>(
     }
 }
 
-async fn preload_isolate_verification_failures<R: CaptureBaseReader + Sync>(
+async fn preload_isolate_verification_failures<R>(
     reader: &R,
     manifests: &[Vec<encoding::ManifestEntry>],
     error: anyhow::Error,
     cache: &mut CaptureReadCache,
-) -> Result<()> {
+) -> Result<()>
+where
+    R: CaptureBaseReader + Sync,
+{
     if error.downcast_ref::<CaptureStoreReadError>().is_some() {
         return Err(error);
     }
@@ -1201,12 +1223,15 @@ async fn preload_isolate_verification_failures<R: CaptureBaseReader + Sync>(
     Ok(())
 }
 
-async fn decode_capture_json_from<R: CaptureBaseReader + Sync>(
+async fn decode_capture_json_from<R>(
     reader: &R,
     capture_version: u32,
     stored: &str,
     kind: CapturePayloadKind,
-) -> Result<Value> {
+) -> Result<Value>
+where
+    R: CaptureBaseReader + Sync,
+{
     decode_capture_json_from_cached(
         reader,
         capture_version,
@@ -1217,13 +1242,16 @@ async fn decode_capture_json_from<R: CaptureBaseReader + Sync>(
     .await
 }
 
-async fn decode_capture_pair_selected_from<R: CaptureBaseReader + Sync>(
+async fn decode_capture_pair_selected_from<R>(
     reader: &R,
     capture_version: u32,
     stored: &str,
     want_request: bool,
     want_provenance: bool,
-) -> Result<(Option<Value>, Option<Value>)> {
+) -> Result<(Option<Value>, Option<Value>)>
+where
+    R: CaptureBaseReader + Sync,
+{
     let mut cache = CaptureReadCache::default();
     let request = if want_request {
         Some(
@@ -1256,11 +1284,14 @@ async fn decode_capture_pair_selected_from<R: CaptureBaseReader + Sync>(
     Ok((request, provenance))
 }
 
-async fn decode_capture_pair_from<R: CaptureBaseReader + Sync>(
+async fn decode_capture_pair_from<R>(
     reader: &R,
     capture_version: u32,
     stored: &str,
-) -> Result<(Value, Value)> {
+) -> Result<(Value, Value)>
+where
+    R: CaptureBaseReader + Sync,
+{
     let (request, provenance) =
         decode_capture_pair_selected_from(reader, capture_version, stored, true, true).await?;
     Ok((

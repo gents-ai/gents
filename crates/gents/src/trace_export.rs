@@ -141,7 +141,7 @@ pub fn analyze_tool_call_with_persisted_outcome(
     analysis.native_tool_output = native_tool_output_from_result(tool_name, result);
 
     let persisted_failure_class = persisted_failure_class.and_then(failure_class_from_str);
-    let failure_class = persisted_failure_class.or_else(|| match lifecycle_state {
+    let failure_class = persisted_failure_class.or(match lifecycle_state {
         ToolCallState::TimedOut => Some(ToolFailureClass::External),
         ToolCallState::Failed => Some(ToolFailureClass::ToolReturnedError),
         _ => None,

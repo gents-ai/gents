@@ -133,6 +133,17 @@ pub struct ProviderAuditSender {
     sender: mpsc::Sender<ProviderAuditObservation>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditCapacityExceeded;
+
+impl std::fmt::Display for AuditCapacityExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("provider audit channel closed or out of capacity")
+    }
+}
+
+impl std::error::Error for AuditCapacityExceeded {}
+
 pub struct ProviderAuditReservation<'a> {
     capture_scope: CaptureScope,
     turn: usize,
@@ -141,8 +152,8 @@ pub struct ProviderAuditReservation<'a> {
 }
 
 impl ProviderAuditReservation<'_> {
-    pub fn emit(&mut self, event: ClaudeAuditEvent) -> Result<(), ()> {
-        let permit = self.permits.next().ok_or(())?;
+    pub fn emit(&mut self, event: ClaudeAuditEvent) -> Result<(), AuditCapacityExceeded> {
+        let permit = self.permits.next().ok_or(AuditCapacityExceeded)?;
         permit.send(ProviderAuditObservation {
             capture_scope: self.capture_scope,
             turn: self.turn,
@@ -168,12 +179,12 @@ impl ProviderAuditSender {
         }
     }
 
-    pub async fn reserve(&self) -> Result<ProviderAuditReservation<'_>, ()> {
+    pub async fn reserve(&self) -> Result<ProviderAuditReservation<'_>, AuditCapacityExceeded> {
         let permits = self
             .sender
             .reserve_many(MAX_AUDIT_EVENTS_PER_SSE)
             .await
-            .map_err(|_| ())?;
+            .map_err(|_| AuditCapacityExceeded)?;
         Ok(ProviderAuditReservation {
             capture_scope: self.capture_scope,
             turn: self.turn,

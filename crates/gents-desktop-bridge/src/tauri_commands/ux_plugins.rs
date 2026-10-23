@@ -56,8 +56,7 @@ where
     Fut: std::future::Future<Output = anyhow::Result<T>>,
     T: Send + 'static,
 {
-    let handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || handle.block_on(operation()))
+    gents::storage_backend::drive_unsendable(tauri::async_runtime::handle().inner(), operation)
         .await
         .map_err(|error| BridgeError::untyped(format!("the ux plugin operation stopped: {error}")))?
         .map_err(failed)

@@ -8,7 +8,7 @@ use tokio::task::JoinSet;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::admission::BackendAdmissionConfig;
-use crate::agent::worker_capacity::{scope_slot_capacity, WorkerCapacity};
+use crate::agent::worker_capacity::WorkerCapacity;
 use crate::config::ResolvedAgent;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -16,13 +16,13 @@ use crate::startup_readiness::{BuildOutcome, BuildStanding};
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
 
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 const AGENT_EXECUTOR_QUEUE_CAPACITY: usize = 32;
 const MAX_BEHAVIOR_WORKERS: usize = 256;
 
 fn bounded_active_limit(requested: usize) -> usize {
-    requested.max(1).min(MAX_BEHAVIOR_WORKERS)
+    requested.clamp(1, MAX_BEHAVIOR_WORKERS)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +158,24 @@ async fn park_until_retired(
     }
 }
 
+#[derive(Clone)]
+pub(super) struct SlotConfig {
+    pub(super) agent_config: Arc<ResolvedAgent>,
+    pub(super) tool_surface: Arc<ToolSurface>,
+    pub(super) generation: u64,
+    pub(super) retry_policy: RetryPolicy,
+    pub(super) failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
+}
+
+#[derive(Clone)]
+struct SlotRuntime {
+    request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+    capacity: Arc<WorkerCapacity>,
+    shutdown: watch::Receiver<bool>,
+    state_rx: watch::Receiver<AgentSlotState>,
+    standing: Arc<std::sync::Mutex<BuildStanding>>,
+}
+
 pub(super) fn spawn_slots<F, Fut>(
     resolved_snapshot: &ResolvedRuntimeSnapshot,
     generation: u64,
@@ -165,12 +183,13 @@ pub(super) fn spawn_slots<F, Fut>(
     runner: F,
     shutdown: watch::Receiver<bool>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
-) -> HashMap<String, AgentSlot>
+) -> RapidHashMap<String, AgentSlot>
 where
     F: Fn(
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -180,7 +199,7 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    let mut slots = HashMap::with_capacity(resolved_snapshot.agents.len());
+    let mut slots = RapidHashMap::with_capacity(resolved_snapshot.agents.len());
     for (agent_id, agent_config) in &resolved_snapshot.agents {
         let tool_surface = resolved_snapshot
             .tool_surfaces
@@ -190,14 +209,16 @@ where
         slots.insert(
             agent_id.clone(),
             spawn_slot_with_capacity(
-                agent_config.clone(),
-                tool_surface,
+                SlotConfig {
+                    agent_config: agent_config.clone(),
+                    tool_surface,
+                    generation,
+                    retry_policy: retry_policy.clone(),
+                    failure_policy: failure_policy.clone(),
+                },
                 agent_executor_capacity(agent_config, &resolved_snapshot.backend_admission_configs),
-                generation,
-                retry_policy.clone(),
                 runner.clone(),
                 shutdown.clone(),
-                failure_policy.clone(),
             ),
         );
     }
@@ -217,6 +238,7 @@ where
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -227,32 +249,31 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     spawn_slot_with_capacity(
-        agent_config,
-        tool_surface,
+        SlotConfig {
+            agent_config,
+            tool_surface,
+            generation: 1,
+            retry_policy,
+            failure_policy: None,
+        },
         1,
-        1,
-        retry_policy,
         runner,
         shutdown,
-        None,
     )
 }
 
 pub(super) fn spawn_slot_with_capacity<F, Fut>(
-    agent_config: Arc<ResolvedAgent>,
-    tool_surface: Arc<ToolSurface>,
+    slot: SlotConfig,
     executor_capacity: usize,
-    generation: u64,
-    retry_policy: RetryPolicy,
     runner: F,
     shutdown: watch::Receiver<bool>,
-    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
 ) -> AgentSlot
 where
     F: Fn(
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -262,6 +283,13 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
+    let SlotConfig {
+        agent_config,
+        tool_surface,
+        generation,
+        retry_policy,
+        failure_policy,
+    } = slot;
     let requested_capacity = executor_capacity;
     let executor_capacity = bounded_active_limit(executor_capacity);
     if requested_capacity > executor_capacity {
@@ -282,18 +310,22 @@ where
 
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
     let handle = AbortOnDropHandle::new(tokio::spawn(run_slot_workers(
-        agent_config,
-        tool_surface,
-        request_rx,
+        SlotConfig {
+            agent_config,
+            tool_surface,
+            generation,
+            retry_policy,
+            failure_policy,
+        },
+        SlotRuntime {
+            request_rx,
+            capacity,
+            shutdown,
+            state_rx,
+            standing,
+        },
         executor_capacity,
-        capacity,
-        retry_policy,
         runner,
-        generation,
-        shutdown,
-        state_rx,
-        failure_policy,
-        standing,
     )));
 
     AgentSlot {
@@ -312,7 +344,7 @@ where
 
 pub(super) fn agent_executor_capacity(
     agent_config: &ResolvedAgent,
-    backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
+    backend_admission_configs: &RapidHashMap<String, BackendAdmissionConfig>,
 ) -> usize {
     let Some(backend_id) = agent_config
         .backend_id
@@ -346,23 +378,13 @@ pub(super) fn retire_slot(slot: AgentSlot) {
     });
 }
 
-async fn run_slot_loop<F, Fut>(
-    agent_config: Arc<ResolvedAgent>,
-    tool_surface: Arc<ToolSurface>,
-    request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
-    generation: u64,
-    retry_policy: RetryPolicy,
-    runner: F,
-    mut shutdown: watch::Receiver<bool>,
-    mut state_rx: watch::Receiver<AgentSlotState>,
-    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
-    standing: Arc<std::sync::Mutex<BuildStanding>>,
-) -> Result<()>
+async fn run_slot_loop<F, Fut>(slot: SlotConfig, runtime: SlotRuntime, runner: F) -> Result<()>
 where
     F: Fn(
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -372,6 +394,20 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
+    let SlotConfig {
+        agent_config,
+        tool_surface,
+        generation,
+        retry_policy,
+        failure_policy,
+    } = slot;
+    let SlotRuntime {
+        request_rx,
+        capacity,
+        mut shutdown,
+        mut state_rx,
+        standing,
+    } = runtime;
     let mut failure_count = 0u32;
     loop {
         if *shutdown.borrow() || *state_rx.borrow() == AgentSlotState::Retiring {
@@ -390,6 +426,7 @@ where
             agent_config.clone(),
             tool_surface.clone(),
             request_rx.clone(),
+            capacity.clone(),
             generation,
             shutdown.clone(),
         ))
@@ -477,24 +514,17 @@ where
 }
 
 async fn run_slot_workers<F, Fut>(
-    agent_config: Arc<ResolvedAgent>,
-    tool_surface: Arc<ToolSurface>,
-    request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+    slot: SlotConfig,
+    runtime: SlotRuntime,
     executor_capacity: usize,
-    capacity: Arc<WorkerCapacity>,
-    retry_policy: RetryPolicy,
     runner: F,
-    generation: u64,
-    shutdown: watch::Receiver<bool>,
-    state_rx: watch::Receiver<AgentSlotState>,
-    failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
-    standing: Arc<std::sync::Mutex<BuildStanding>>,
 ) -> Result<()>
 where
     F: Fn(
             Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+            Arc<WorkerCapacity>,
             u64,
             watch::Receiver<bool>,
         ) -> Fut
@@ -505,8 +535,9 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let worker_count = executor_capacity;
+    let agent_id = slot.agent_config.agent_id.clone();
     tracing::info!(
-        agent_id = %agent_config.agent_id,
+        agent_id = %agent_id,
         executor_capacity,
         worker_count,
         queue_capacity = AGENT_EXECUTOR_QUEUE_CAPACITY,
@@ -514,23 +545,9 @@ where
     );
     let mut workers = JoinSet::new();
     for worker_index in 0..worker_count {
-        workers.spawn(scope_slot_capacity(
-            capacity.clone(),
-            run_slot_loop(
-                agent_config.clone(),
-                tool_surface.clone(),
-                request_rx.clone(),
-                generation,
-                retry_policy.clone(),
-                runner.clone(),
-                shutdown.clone(),
-                state_rx.clone(),
-                failure_policy.clone(),
-                standing.clone(),
-            ),
-        ));
+        workers.spawn(run_slot_loop(slot.clone(), runtime.clone(), runner.clone()));
         tracing::debug!(
-            agent_id = %agent_config.agent_id,
+            agent_id = %agent_id,
             worker_index,
             executor_capacity,
             "agent executor worker spawned"
@@ -544,7 +561,7 @@ where
             Ok(Err(error)) => error,
             Err(error) => anyhow::anyhow!("agent executor worker task join failed: {error}"),
         };
-        tracing::error!(agent_id = %agent_config.agent_id, error = %error, "agent executor worker failed");
+        tracing::error!(agent_id = %agent_id, error = %error, "agent executor worker failed");
         if first_error.is_none() {
             first_error = Some(error);
         }

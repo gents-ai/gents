@@ -8,7 +8,7 @@ use anyhow::Result;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::admission::AdmissionRegistry;
-use crate::agent::daemon::AgentDaemon;
+use crate::agent::daemon::{AgentDaemon, AgentDaemonInit};
 use crate::completion_factory::build_admitted_model;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
@@ -118,6 +118,7 @@ impl RuntimeContext {
         agent_config: Arc<crate::config::ResolvedAgent>,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
@@ -175,6 +176,7 @@ impl RuntimeContext {
                 provider_family,
                 replay_issuer,
                 request_rx,
+                capacity,
                 slot_generation,
                 shutdown,
                 prompt_builder,
@@ -198,6 +200,7 @@ impl RuntimeContext {
         provider_family: Option<String>,
         replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
         prompt_builder: LayeredPromptBuilder,
@@ -205,7 +208,7 @@ impl RuntimeContext {
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
         remote_tools: Option<crate::document_config::RemoteTools>,
-        job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
+        job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
         output_obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
         root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
         client: C,
@@ -230,23 +233,23 @@ impl RuntimeContext {
             self.startup_readiness.build_timeout,
         )
         .await?;
-        let mut daemon = AgentDaemon::new(
-            self.node.clone(),
+        let mut daemon = AgentDaemon::new(AgentDaemonInit {
+            node: self.node.clone(),
             agent_config,
             provider_family,
             model,
             preamble,
             loop_tools,
             prompt_builder,
-            self.hook_failure_policy,
-            self.rendered_request_capture_factory.clone(),
+            hook_failure_policy: self.hook_failure_policy,
+            rendered_request_capture_factory: self.rendered_request_capture_factory.clone(),
             background_tool_registry,
-            self.background_execution_registry.clone(),
-            self.startup_barrier.clone(),
-            self.runtime_status.clone(),
+            background_execution_registry: self.background_execution_registry.clone(),
+            startup_barrier: self.startup_barrier.clone(),
+            runtime_status: self.runtime_status.clone(),
             slot_generation,
             request_admission,
-        )?
+        })?
         .with_replay_issuer(replay_issuer)
         .with_approval_home(
             self.tool_runtime
@@ -261,7 +264,7 @@ impl RuntimeContext {
         if let Some((compactor, provider_family)) = summary_compactor {
             daemon = daemon.with_compactor(compactor, provider_family);
         }
-        daemon.run(request_rx, shutdown).await
+        daemon.run(request_rx, capacity, shutdown).await
     }
 }
 

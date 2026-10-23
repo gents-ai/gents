@@ -4,7 +4,7 @@
 //! DID attestation only; the secret lives behind [`ChainKeyMaterialStore`].
 
 #[cfg(test)]
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 
@@ -36,7 +36,7 @@ pub fn binding_storage_key(principal_did: &str, binding_id: &str) -> String {
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub(crate) struct MemoryChainKeyStore {
-    inner: Arc<Mutex<HashMap<String, [u8; 32]>>>,
+    inner: Arc<Mutex<RapidHashMap<String, [u8; 32]>>>,
 }
 
 #[cfg(test)]
@@ -167,7 +167,7 @@ pub fn encode_attestation(signature: &[u8]) -> String {
 
 pub(crate) fn decode_attestation(value: &str) -> Result<Vec<u8>> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         bail!("chain key attestation has odd-length hex");
     }
     (0..hex.len())

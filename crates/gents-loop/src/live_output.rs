@@ -1,5 +1,5 @@
+use rapidhash::RapidHashMap;
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ pub enum LiveOutputStream {
 
 #[derive(Debug, Clone, Default)]
 pub struct LiveToolOutputRegistry {
-    inner: Arc<Mutex<HashMap<String, LiveToolOutputState>>>,
+    inner: Arc<Mutex<RapidHashMap<String, LiveToolOutputState>>>,
 }
 
 #[derive(Debug, Default)]
@@ -41,15 +41,21 @@ struct LiveToolOutputState {
 /// Distinct host producers must not replace each other's contributions. Each
 /// producer retains ownership of the batch stored under its concrete type.
 #[derive(Debug, Clone)]
-pub struct DeferredToolWrites(HashMap<TypeId, Arc<dyn Any + Send + Sync>>);
+pub struct DeferredToolWrites(RapidHashMap<TypeId, Arc<dyn Any + Send + Sync>>);
 
 impl DeferredToolWrites {
-    pub fn new<T: Any + Send + Sync>(writes: T) -> Self {
+    pub fn new<T>(writes: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
         let writes: Arc<dyn Any + Send + Sync> = Arc::new(writes);
-        Self(HashMap::from([(TypeId::of::<T>(), writes)]))
+        Self(RapidHashMap::from_iter([(TypeId::of::<T>(), writes)]))
     }
 
-    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+    pub fn downcast_ref<T>(&self) -> Option<&T>
+    where
+        T: Any,
+    {
         self.0.get(&TypeId::of::<T>())?.downcast_ref()
     }
 }

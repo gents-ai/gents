@@ -2,8 +2,9 @@ use crate::config_client::ConfigAccess;
 use crate::tool_surface::{
     measured_mcp_services_for_access, AgentToolSurfaceConfig, RuntimeToolAvailability, ToolCeiling,
 };
+use rapidhash::{HashSetExt, RapidHashSet};
 use serde_json::json;
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 #[test]
 fn document_explanation_resolves_target_owner_separately_from_destination() {
@@ -28,7 +29,7 @@ fn document_explanation_resolves_target_owner_separately_from_destination() {
     let explanation = config.explain_with_runtime_availability(
         RuntimeToolAvailability::from_online_mcp_services(Vec::<String>::new()),
         "owner",
-        &HashSet::new(),
+        &RapidHashSet::new(),
     );
     assert!(explanation.tool_names.contains(&"agent_new".to_owned()));
     assert!(build(&[]).is_err());

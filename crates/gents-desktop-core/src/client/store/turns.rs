@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 
 use gents_protocol::client_protocol::{
     derive_turn as derive_client_turn, AttemptView, RequestSnapshot,
@@ -49,10 +49,51 @@ pub fn session_turn_request<'a>(
     resolve(
         requests,
         requests.len() + 1,
-        &mut HashSet::new(),
+        &mut RapidHashSet::new(),
         newest,
         true,
     )
+}
+
+pub fn session_display_request<'a>(
+    requests: &[&'a AgentRequestRow],
+    selected: &'a AgentRequestRow,
+) -> &'a AgentRequestRow {
+    let turn = session_turn_request(requests, selected);
+    if !turn
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
+    {
+        return turn;
+    }
+    let in_scope = |row: &&AgentRequestRow| {
+        row.doc_id.is_some()
+            && row.node_did == selected.node_did
+            && row.session_id == selected.session_id
+            && row.requester_did == selected.requester_did
+            && row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+    };
+    let selected_index = requests
+        .iter()
+        .position(|row| in_scope(row) && row.doc_id == selected.doc_id)
+        .unwrap_or(requests.len());
+    let subsequent = &requests[selected_index..];
+    if let Some(active) = subsequent.iter().rev().copied().find(|row| {
+        in_scope(row)
+            && matches!(
+                row.lifecycle_state,
+                Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
+            )
+    }) {
+        return active;
+    }
+    subsequent
+        .iter()
+        .rev()
+        .copied()
+        .find(in_scope)
+        .map(|row| session_turn_request(requests, row))
+        .unwrap_or(turn)
 }
 
 pub fn request_answer_owner<'a>(
@@ -62,7 +103,7 @@ pub fn request_answer_owner<'a>(
     resolve(
         requests,
         requests.len() + 1,
-        &mut HashSet::new(),
+        &mut RapidHashSet::new(),
         request,
         false,
     )
@@ -82,7 +123,7 @@ fn in_scope<'a>(
 fn resolve<'a>(
     requests: &[&'a AgentRequestRow],
     fuel: usize,
-    seen: &mut HashSet<RequestRowIdentity<'a>>,
+    seen: &mut RapidHashSet<RequestRowIdentity<'a>>,
     row: &'a AgentRequestRow,
     follow_queue: bool,
 ) -> &'a AgentRequestRow {
@@ -198,7 +239,7 @@ pub(super) fn derive_turn_for_request_for_node(
 fn attempt_chain_for_request(store: &ClientStore, request_id: &str) -> Vec<AttemptView> {
     let mut attempts = Vec::new();
     let mut cursor = Some(request_id.to_string());
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
 
     while let Some(current_request_id) = cursor.take() {
         if !seen.insert(current_request_id.clone()) {
@@ -223,7 +264,7 @@ fn attempt_chain_for_request_for_node(
 ) -> Vec<AttemptView> {
     let mut attempts = Vec::new();
     let mut cursor = Some(request_id.to_string());
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
 
     while let Some(current_request_id) = cursor.take() {
         if !seen.insert(current_request_id.clone()) {

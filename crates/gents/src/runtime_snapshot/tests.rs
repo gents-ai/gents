@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use super::*;
@@ -40,21 +40,21 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
         node: None,
         local_did: String::new(),
         default_agent_id: "missing".to_string(),
-        agents: HashMap::new(),
-        tool_surfaces: HashMap::new(),
-        backend_admission_configs: HashMap::new(),
-        unavailable_agents: HashMap::from([(
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::from_iter([(
             "general".to_string(),
             UnavailableAgent::new(
                 AgentReadinessUnavailableReason::BackendNotConfigured,
                 "missing backend",
             ),
         )]),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
-        active_event_triggers: HashMap::new(),
-        unavailable_event_triggers: HashSet::new(),
-        active_tasks: HashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
     };
     assert!(resolved.validate_node_readiness_source().is_err());
 
@@ -71,15 +71,15 @@ fn configuration_fingerprint_reflects_schedule_set() {
         node: None,
         local_did: String::new(),
         default_agent_id: "general".to_string(),
-        agents: HashMap::new(),
-        tool_surfaces: HashMap::new(),
-        backend_admission_configs: HashMap::new(),
-        unavailable_agents: HashMap::new(),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
-        active_event_triggers: HashMap::new(),
-        unavailable_event_triggers: HashSet::new(),
-        active_tasks: HashMap::new(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
     };
     let baseline = base.configuration_fingerprint();
 
@@ -95,7 +95,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
         hooks: Vec::new(),
     };
     let with_schedule = base.clone().with_automation(ResolvedAutomation {
-        schedules: HashMap::from([(
+        schedules: RapidHashMap::from_iter([(
             "s1".to_string(),
             ResolvedSchedule {
                 session_id_template: None,
@@ -113,7 +113,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
     assert_ne!(baseline, with_schedule.configuration_fingerprint());
 
     let with_unavailable = base.clone().with_automation(ResolvedAutomation {
-        unavailable_schedules: HashSet::from(["s2".to_string()]),
+        unavailable_schedules: RapidHashSet::from_iter(["s2".to_string()]),
         ..Default::default()
     });
     assert_ne!(baseline, with_unavailable.configuration_fingerprint());
@@ -125,18 +125,18 @@ fn configuration_fingerprint_reflects_lsp_configuration() {
         node: None,
         local_did: String::new(),
         default_agent_id: "general".to_string(),
-        agents: HashMap::new(),
-        tool_surfaces: HashMap::from([(
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::from_iter([(
             "general".to_string(),
             fingerprint_tool_surface(Some("{}".to_string())),
         )]),
-        backend_admission_configs: HashMap::new(),
-        unavailable_agents: HashMap::new(),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
-        active_event_triggers: HashMap::new(),
-        unavailable_event_triggers: HashSet::new(),
-        active_tasks: HashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
     };
     let baseline = base.configuration_fingerprint();
 

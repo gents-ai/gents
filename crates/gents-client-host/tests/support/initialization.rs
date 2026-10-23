@@ -113,6 +113,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "synchronous probe process waiting on cross-process marker files"
+    )]
     fn probe_child() {
         let Ok(role) = std::env::var(ROLE) else {
             return;

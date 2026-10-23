@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -57,12 +57,12 @@ impl CallbackEngine {
             plugins: Arc::default(),
             subscription_source: subs,
             subscription: None,
-            desired_collections: HashSet::new(),
-            seen_docs: HashMap::new(),
-            cursor_bindings: HashMap::new(),
-            group_collections: HashSet::new(),
-            collection_id_to_name: HashMap::new(),
-            group_page_cursors: HashMap::new(),
+            desired_collections: RapidHashSet::new(),
+            seen_docs: RapidHashMap::new(),
+            cursor_bindings: RapidHashMap::new(),
+            group_collections: RapidHashSet::new(),
+            collection_id_to_name: RapidHashMap::new(),
+            group_page_cursors: RapidHashMap::new(),
             group_recovery_cursor: 0,
             rescan_tick: rescan_tick(),
             cancel,
@@ -78,10 +78,11 @@ impl CallbackEngine {
                 return;
             }
         };
-        let mut desired = HashSet::new();
-        let mut cursor_bindings = HashMap::new();
-        let mut group_collections = HashSet::new();
-        let mut consumers: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+        let mut desired = RapidHashSet::new();
+        let mut cursor_bindings = RapidHashMap::new();
+        let mut group_collections = RapidHashSet::new();
+        let mut consumers: RapidHashMap<String, Vec<(String, Option<String>)>> =
+            RapidHashMap::new();
         for binding in &bindings {
             match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
                 Ok(Some(source)) => {
@@ -142,7 +143,7 @@ impl CallbackEngine {
             _ = self.cancel.cancelled() => return Ok(()),
             ids = load_doc_ids(self.node.as_ref(), collection) => ids?,
         };
-        let mut ids: HashSet<String> = ids.into_iter().collect();
+        let mut ids: RapidHashSet<String> = ids.into_iter().collect();
         let live = crate::graph_pipeline::live_run_correlations(
             self.node.as_ref(),
             &self.node_did,
@@ -689,7 +690,7 @@ impl CallbackEngine {
         let active = grouped
             .iter()
             .map(|(binding, source)| Delivery::Callback { binding, source }.consumer_key())
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         self.group_page_cursors
             .retain(|key, _| active.contains(key));
         if grouped.is_empty() {

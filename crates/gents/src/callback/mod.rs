@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -44,12 +44,12 @@ pub(super) struct CallbackEngine {
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
-    desired_collections: HashSet<String>,
-    seen_docs: HashMap<String, HashSet<String>>,
-    cursor_bindings: HashMap<String, String>,
-    group_collections: HashSet<String>,
-    collection_id_to_name: HashMap<String, String>,
-    group_page_cursors: HashMap<String, String>,
+    desired_collections: RapidHashSet<String>,
+    seen_docs: RapidHashMap<String, RapidHashSet<String>>,
+    cursor_bindings: RapidHashMap<String, String>,
+    group_collections: RapidHashSet<String>,
+    collection_id_to_name: RapidHashMap<String, String>,
+    group_page_cursors: RapidHashMap<String, String>,
     group_recovery_cursor: usize,
     rescan_tick: tokio::time::Interval,
     cancel: CancellationToken,

@@ -209,7 +209,7 @@ async fn facts_of(
             _ => Err(Refusal::NotAvailable),
         }
     };
-    let deadline = pin.adopted_at + u64::from(pin.ceiling_at_pin.max_wall_secs) * 1000;
+    let deadline = pin.adopted_at + pin.ceiling_at_pin.max_wall_secs * 1000;
     let facts = RecoveryFacts {
         running: lifecycle.is_running(),
         session_stopped,

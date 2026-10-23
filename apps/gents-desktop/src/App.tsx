@@ -203,7 +203,7 @@ function AppBody() {
       <AppShell route={route} history={history}>
         <RouteScreen route={route} />
       </AppShell>
-      <Toaster />
+      <Toaster closeButton />
       {hasLocalNode && <PluginAccessPrompt />}
       <Shortcuts />
     </TooltipProvider>
@@ -213,7 +213,9 @@ function AppBody() {
 function RouteScreen({ route }: { route: Route }) {
   switch (route.name) {
     case "sessions":
-      return <SessionsScreen nodeDid={route.nodeDid} />;
+      return <SessionsScreen nodeDid={route.nodeDid} entry={route} />;
+    case "sessionsUnder":
+      return <SessionsScreen under={route.session} entry={route} />;
     case "session":
       return <SessionScreen />;
     case "mailbox":

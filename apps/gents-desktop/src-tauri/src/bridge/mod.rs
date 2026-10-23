@@ -175,7 +175,10 @@ fn native_local_e2e_context(mut context: tauri::Context<tauri::Wry>) -> tauri::C
 /// Held for the process lifetime from before any webview opens the shared
 /// WebKit store, so no reset clears it under this desktop.
 #[cfg(target_os = "macos")]
-fn browser_store_lock<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+fn browser_store_lock<R>() -> tauri::plugin::TauriPlugin<R>
+where
+    R: tauri::Runtime,
+{
     tauri::plugin::Builder::new("gents-browser-store")
         .setup(|app, _api| {
             app.manage(crate::browser_data::lock_store()?);
@@ -185,7 +188,10 @@ fn browser_store_lock<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 }
 
 #[cfg(desktop)]
-fn single_instance<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+fn single_instance<R>() -> tauri::plugin::TauriPlugin<R>
+where
+    R: tauri::Runtime,
+{
     tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app))
 }
 
@@ -395,7 +401,10 @@ fn managed_agent_tooltip(state: Option<&str>) -> &'static str {
 }
 
 #[cfg(desktop)]
-fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+fn show_main_window<R>(app: &tauri::AppHandle<R>)
+where
+    R: tauri::Runtime,
+{
     if let Some(window) = app.get_webview_window("main") {
         if window.show().is_ok() {
             if let Some(state) = app.try_state::<TrayRuntimeState>() {

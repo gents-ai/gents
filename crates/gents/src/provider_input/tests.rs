@@ -102,6 +102,10 @@ impl HttpClientExt for WireCapturingClient {
         }
     }
 
+    #[expect(
+        clippy::manual_async_fn,
+        reason = "the trait requires a 'static Send future; async fn would capture &self and the request generics"
+    )]
     fn send_multipart<U>(
         &self,
         _req: Request<MultipartForm>,
@@ -411,7 +415,7 @@ fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
     let part = |index: usize| {
         if as_images {
             ToolResultContent::Image(Image {
-                data: if index % 2 == 0 {
+                data: if index.is_multiple_of(2) {
                     DocumentSourceKind::Base64("iVBORw0KGgo=".into())
                 } else {
                     DocumentSourceKind::Url("https://example.com/a.png".into())

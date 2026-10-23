@@ -164,7 +164,7 @@ async fn terminal_code(h: &JobHarness, tool_call_id: &str) -> Option<String> {
 /// so its view is `NotAJob` and the refusal is read from the row's
 /// lifecycle state and canonical terminal output (71.1).
 enum Settled {
-    Running(JobView),
+    Running(Box<JobView>),
     Refused(String),
 }
 
@@ -190,7 +190,7 @@ async fn settle(h: &JobHarness, tool_call_id: &str, refusal: &str) -> Settled {
                     && view.children.len() == 1
                     && view.children[0].state == JobChildState::Live =>
             {
-                return Settled::Running(view.clone());
+                return Settled::Running(Box::new(view.clone()));
             }
             Ok(_) | Err(JobReadError::NotYetObservable) => {}
             Err(JobReadError::NotAJob) => {

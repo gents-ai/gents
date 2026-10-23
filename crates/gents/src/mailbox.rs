@@ -571,7 +571,7 @@ async fn stamp_notification(
     )
     .await;
     if let Ok(response) = &response {
-        let document = single_mutation_document(&response, "create_MailboxItem")?
+        let document = single_mutation_document(response, "create_MailboxItem")?
             .context("create stamped mailbox item returned no row")?;
         return Ok(MailboxWriteReceipt {
             outcome: MailboxWriteOutcome::Created,
@@ -1403,9 +1403,9 @@ mod tests {
             None,
             "test.mailbox_event",
             |txn| {
-                Box::pin(async move {
-                    claim_reply_in_txn(&txn, &request, &Utc::now().to_rfc3339()).await
-                })
+                Box::pin(
+                    async move { claim_reply_in_txn(txn, request, &Utc::now().to_rfc3339()).await },
+                )
             },
         )
         .await

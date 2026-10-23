@@ -204,7 +204,7 @@ fn selected_group<'a>(
         edit.messages.is_empty() || edit.messages.len() == count,
         "Replacement must preserve the selected message count."
     );
-    let mut sources = std::collections::HashSet::new();
+    let mut sources = rapidhash::RapidHashSet::default();
     for message in &edit.messages {
         anyhow::ensure!(
             edit.selected_request_doc_ids
@@ -228,18 +228,30 @@ pub(super) fn replacement_delivery_allowed(before: QueueDelivery, after: QueueDe
     before == after || (before == QueueDelivery::Queue && after == QueueDelivery::Steer)
 }
 
+struct ReplacementIdentity<'a> {
+    node_did: &'a str,
+    session_id: &'a str,
+    requester_did: &'a str,
+    request_id: String,
+    created_at: String,
+    delivery: QueueDelivery,
+}
+
 fn replacement_spec(
     selected: &[AgentRequestRow],
     slot: &AgentRequestRow,
     message: &PendingMessageEdit,
     admission: AgentRequestAdmissionRecord,
-    node_did: &str,
-    session_id: &str,
-    requester_did: &str,
-    request_id: String,
-    created_at: String,
-    delivery: QueueDelivery,
+    identity: ReplacementIdentity<'_>,
 ) -> Result<RequestSpec> {
+    let ReplacementIdentity {
+        node_did,
+        session_id,
+        requester_did,
+        request_id,
+        created_at,
+        delivery,
+    } = identity;
     let source = selected
         .iter()
         .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
@@ -368,12 +380,14 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
             slot,
             message,
             admission.clone(),
-            node_did,
-            session_id,
-            requester_did,
-            uuid::Uuid::new_v4().to_string(),
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            delivery,
+            ReplacementIdentity {
+                node_did,
+                session_id,
+                requester_did,
+                request_id: uuid::Uuid::new_v4().to_string(),
+                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                delivery,
+            },
         )?;
         creates.push(
             crate::lifecycle::build_signed_request(spec, RequestSigner::Identity(signer)).await?,
@@ -436,12 +450,14 @@ mod input_reissuance_tests {
                     content: "Edited text in the other slot".into(),
                 },
                 AgentRequestAdmissionRecord::local_self(signer.did()),
-                signer.did(),
-                "session",
-                signer.did(),
-                "replacement".into(),
-                "2026-10-21T00:00:00Z".into(),
-                QueueDelivery::Steer,
+                ReplacementIdentity {
+                    node_did: signer.did(),
+                    session_id: "session",
+                    requester_did: signer.did(),
+                    request_id: "replacement".into(),
+                    created_at: "2026-10-21T00:00:00Z".into(),
+                    delivery: QueueDelivery::Steer,
+                },
             )
             .unwrap();
             let create =
@@ -485,7 +501,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
             creates.len() == edit.messages.len(),
             "Replacement request count changed."
         );
-        let mut ids = std::collections::HashSet::new();
+        let mut ids = rapidhash::RapidHashSet::default();
         for ((slot, message), create) in selected.iter().zip(&edit.messages).zip(creates) {
             anyhow::ensure!(
                 ids.insert(&create.request_id) && !create.request_id.is_empty(),
@@ -505,17 +521,19 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                 slot,
                 message,
                 create.admission.clone(),
-                node_did,
-                session_id,
-                requester_did,
-                create.request_id.clone(),
-                create.created_at.clone(),
-                create
-                    .input
-                    .queue
-                    .as_ref()
-                    .context("Replacement has no queue input.")?
-                    .delivery,
+                ReplacementIdentity {
+                    node_did,
+                    session_id,
+                    requester_did,
+                    request_id: create.request_id.clone(),
+                    created_at: create.created_at.clone(),
+                    delivery: create
+                        .input
+                        .queue
+                        .as_ref()
+                        .context("Replacement has no queue input.")?
+                        .delivery,
+                },
             )?)?;
             anyhow::ensure!(
                 create == &expected,
@@ -730,16 +748,26 @@ pub fn pending_steer_edit(
 }
 
 #[cfg(test)]
+pub(super) struct PendingEditActor<'a> {
+    pub(super) node_did: &'a str,
+    pub(super) session_id: &'a str,
+    pub(super) requester_did: &'a str,
+}
+
+#[cfg(test)]
 pub(super) async fn replace_pending_user_messages(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
     admission: AgentRequestAdmissionRecord,
-    node_did: &str,
-    session_id: &str,
-    requester_did: &str,
+    actor: PendingEditActor<'_>,
     edit: PendingQueueEdit,
     deliveries: &[QueueDelivery],
 ) -> Result<PendingQueueReceipt> {
+    let PendingEditActor {
+        node_did,
+        session_id,
+        requester_did,
+    } = actor;
     let creates = prepare_pending_user_edit_with_deliveries(
         access,
         signer,

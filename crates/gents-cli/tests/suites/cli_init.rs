@@ -680,7 +680,7 @@ async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> R
     fs::create_dir_all(&home_dir)?;
 
     let agent_name = "store";
-    let first = run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
+    let first = run_init_json(&home_dir, &["--identity-only", "--node-name", agent_name])?;
     let first_node_did = node_did_from_init(&first)?;
     let identity_path = gents::home::default_key_path(&home_dir.join(".gents"), agent_name);
     let identity_bytes = fs::read(&identity_path)?;
@@ -696,7 +696,7 @@ async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> R
     );
     assert_eq!(first.get("init"), Some(&Value::Null));
 
-    let second = run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
+    let second = run_init_json(&home_dir, &["--identity-only", "--node-name", agent_name])?;
     let second_node_did = node_did_from_init(&second)?;
     assert_eq!(second_node_did, first_node_did);
     assert_eq!(fs::read(identity_path)?, identity_bytes);

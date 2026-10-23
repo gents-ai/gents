@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -14,15 +13,6 @@ pub(crate) struct ProviderCallUsage {
     pub(crate) input_tokens: u64,
     pub(crate) output_tokens: u64,
     pub(crate) cached_input_tokens: u64,
-}
-
-pub(super) fn spawn_persistence<F>(future: F)
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(future);
-    }
 }
 
 pub(super) fn completion_persistence_error(error: anyhow::Error) -> AdmissionError {

@@ -82,7 +82,7 @@ pub(super) fn event_delivery_source_instances_match_runtime() {
     let runtime_by_name = runtime_event_delivery_source_contracts()
         .iter()
         .map(|instance| (instance.name, *instance))
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
 
     for lean in lean_event_delivery_source_instances() {
         let runtime = runtime_by_name
@@ -167,7 +167,7 @@ pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation
         }
     }
 
-    let trace_instances: std::collections::HashSet<&str> =
+    let trace_instances: rapidhash::RapidHashSet<&str> =
         traces.iter().map(|t| t.instance_name.as_str()).collect();
     for name in lean_event_delivery_source_instances()
         .iter()
@@ -191,7 +191,7 @@ struct ProductionEventDeliveryDriver {
     runner: Option<tokio::task::JoinHandle<()>>,
     emitted_rx: Option<mpsc::Receiver<String>>,
     emitted_buffer: Vec<String>,
-    doc_ids: HashMap<String, String>,
+    doc_ids: RapidHashMap<String, String>,
 }
 
 enum ProductionRuntime {
@@ -225,7 +225,7 @@ impl ProductionEventDeliveryDriver {
                     runner: None,
                     emitted_rx: None,
                     emitted_buffer: Vec::new(),
-                    doc_ids: HashMap::new(),
+                    doc_ids: RapidHashMap::new(),
                 }
             }
             "EventSource" => {
@@ -249,7 +249,7 @@ impl ProductionEventDeliveryDriver {
                     runner: Some(runner),
                     emitted_rx: Some(emitted_rx),
                     emitted_buffer: Vec::new(),
-                    doc_ids: HashMap::new(),
+                    doc_ids: RapidHashMap::new(),
                 }
             }
             other => panic!("unhandled event-delivery source {other:?}"),
@@ -691,32 +691,32 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
         workspace_authority: None,
     };
     active_snapshot(
-        HashMap::from([(trigger.trigger_id.clone(), trigger)]),
-        HashMap::from([(task.task_id.clone(), task)]),
+        RapidHashMap::from_iter([(trigger.trigger_id.clone(), trigger)]),
+        RapidHashMap::from_iter([(task.task_id.clone(), task)]),
     )
 }
 
 fn active_snapshot(
-    active_event_triggers: HashMap<String, ResolvedEventTrigger>,
-    active_tasks: HashMap<String, ResolvedTask>,
+    active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
+    active_tasks: RapidHashMap<String, ResolvedTask>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
         local_did: NODE_DID.to_string(),
         default_agent_id: AGENT_NAME.to_string(),
-        agents: HashMap::from([(AGENT_NAME.to_string(), runtime_agent(AGENT_NAME))]),
-        tool_surfaces: HashMap::new(),
-        backend_admission_configs: HashMap::new(),
-        unavailable_agents: HashMap::new(),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
+        agents: RapidHashMap::from_iter([(AGENT_NAME.to_string(), runtime_agent(AGENT_NAME))]),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
         active_event_triggers,
-        unavailable_event_triggers: HashSet::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
         active_tasks,
-        dispatchers: HashMap::new(),
-        agent_executor_capacities: HashMap::new(),
-        agent_executor_queue_capacities: HashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
     })
 }
 

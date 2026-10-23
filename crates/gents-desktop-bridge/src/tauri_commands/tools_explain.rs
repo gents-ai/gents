@@ -2,7 +2,7 @@ use crate::commands::mcp_health::load_mcp_services_with_health_for_node;
 use crate::error::BridgeError;
 use crate::types::ToolSurfaceExplanationView;
 use gents::AgentToolSurfaceConfig;
-use std::collections::HashSet;
+use rapidhash::RapidHashSet;
 use tauri::State;
 
 use crate::state::{current_core, require_node_home, DesktopAppState};
@@ -38,7 +38,7 @@ pub async fn desktop_tool_surface_explain(
         .iter()
         .filter(|row| row.node_did == node_did && row.enabled)
         .map(|row| row.agent_id.clone())
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(
         &gents::ConfigAccess::local(core.node_arc()),
         &node_did,

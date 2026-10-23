@@ -290,9 +290,12 @@ async fn negative_external_capture_imports_reject_bad_mappings_without_partial_r
     for (name, value, expected_error) in cases {
         let tempdir = tempfile::tempdir().context("creating tempdir")?;
         let data_dir = tempdir.path().join("data");
+        let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("node.key"), None)
+            .context("creating node identity")?;
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
             .with_storage_backend(StorageBackend::Regolith)
+            .with_node_identity_did(gents::NodeIdentity::did(&identity))
             .build()
             .await
             .with_context(|| format!("opening embedded node for {name}"))?;

@@ -1,3 +1,5 @@
+type AssemblyCapture = (usize, u32, AssemblyBuildPath, AssemblyTrace);
+
 #[tokio::test]
 async fn rendered_request_sink_runs_before_provider_stream() {
     let model = ScriptedModel::new(vec![
@@ -145,8 +147,7 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
         ]),
     ]);
 
-    let captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath, AssemblyTrace)>>> =
-        Arc::new(Mutex::new(Vec::new()));
+    let captures: Arc<Mutex<Vec<AssemblyCapture>>> = Arc::new(Mutex::new(Vec::new()));
     let captures_for_sink = captures.clone();
     let captured_requests: Arc<Mutex<Vec<CompletionRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_requests_for_sink = captured_requests.clone();
@@ -312,8 +313,7 @@ async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
         ]),
     ]);
 
-    let captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath, AssemblyTrace)>>> =
-        Arc::new(Mutex::new(Vec::new()));
+    let captures: Arc<Mutex<Vec<AssemblyCapture>>> = Arc::new(Mutex::new(Vec::new()));
     let captures_for_sink = captures.clone();
     let mut loop_config = config(4);
     loop_config.on_rendered_request =

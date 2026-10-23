@@ -5,12 +5,15 @@ use crate::config::BridgeConfig;
 use crate::state::{resolve_policy, DesktopAppState};
 use crate::tauri_commands;
 
-pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
+pub fn init<R>(config: BridgeConfig) -> TauriPlugin<R>
+where
+    R: Runtime,
+{
     Builder::<R>::new("gents-desktop-bridge")
         .setup(move |app, _api| {
             let app_data_dir = app.path().app_data_dir().ok();
             let policy = resolve_policy(&config, app_data_dir)
-                .map_err(|error| Box::<dyn std::error::Error>::from(error))?;
+                .map_err(Box::<dyn std::error::Error>::from)?;
             tracing::info!(
                 app = %policy.app_meta.app_name,
                 version = %policy.app_meta.app_version,
@@ -39,29 +42,40 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                     .approvals_watch_task = Some(watch);
             }
             let handle = app.clone();
-            std::thread::spawn(move || {
-                let state = handle.state::<DesktopAppState>();
-                if let Err(error) =
-                    tauri_commands::managed_server::refresh_packaged_install(&handle, &state)
-                {
-                    tracing::warn!(
+            tauri::async_runtime::spawn(async move {
+                let refresh_handle = handle.clone();
+                let refreshed = tauri::async_runtime::spawn_blocking(move || {
+                    tauri_commands::managed_server::refresh_packaged_install(
+                        &refresh_handle,
+                        &refresh_handle.state::<DesktopAppState>(),
+                    )
+                })
+                .await;
+                match refreshed {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(
                         error = %error.message,
                         "could not bring the packaged Gents runtime up to date"
-                    );
+                    ),
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "could not bring the packaged Gents runtime up to date"
+                    ),
                 }
-                if let Err(error) = tauri::async_runtime::block_on(
-                    tauri_commands::managed_server::restart_outdated_managed_job(&handle, &state),
-                ) {
+                let state = handle.state::<DesktopAppState>();
+                if let Err(error) =
+                    tauri_commands::managed_server::restart_outdated_managed_job(&handle, &state)
+                        .await
+                {
                     tracing::warn!(
                         error = %error.message,
                         "could not restart the node service that predates this app"
                     );
                 }
-                if let Err(error) = tauri::async_runtime::block_on(
-                    tauri_commands::managed_server::start_configured_managed_server(
-                        &handle, &state,
-                    ),
-                ) {
+                if let Err(error) =
+                    tauri_commands::managed_server::start_configured_managed_server(&handle, &state)
+                        .await
+                {
                     tracing::warn!(
                         error = %error.message,
                         "could not start the configured local node"
@@ -213,7 +227,10 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
         .build()
 }
 
-fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
+fn register_window<R>(webview: tauri::Webview<R>)
+where
+    R: Runtime,
+{
     let window = webview.window();
     window
         .state::<DesktopAppState>()
@@ -221,10 +238,13 @@ fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
 }
 
 /// Holds the process lock across the reset reservation for the app lifetime.
-fn hold_desktop_process<R: Runtime>(
+fn hold_desktop_process<R>(
     app: &tauri::AppHandle<R>,
     paths: &gents_desktop_core::client::DesktopPaths,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    R: Runtime,
+{
     let reservation = gents_desktop_core::home_reset::lock_reset(paths)?;
     let process = gents_desktop_core::home_reset::lock_desktop_process(paths, false)?;
     anyhow::ensure!(

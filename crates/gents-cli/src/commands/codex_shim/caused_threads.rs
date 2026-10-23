@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 use anyhow::Result;
 use gents_protocol::client_protocol::{project_persisted_attempt, ClientHeadProjection};
@@ -104,8 +104,8 @@ pub(super) async fn load_caused_threads_for_root_ids(
         .collect::<Vec<_>>();
     let sessions = load_caused_sessions(&state.node, &roots).await?;
     let mut threads = Vec::with_capacity(sessions.len());
-    let mut labels = HashMap::<String, SessionScope>::new();
-    let mut models = HashMap::<(String, String), Option<String>>::new();
+    let mut labels = RapidHashMap::<String, SessionScope>::new();
+    let mut models = RapidHashMap::<(String, String), Option<String>>::new();
     for session in sessions {
         if let Some(existing) = labels.get(&session.scope.session_id) {
             anyhow::ensure!(

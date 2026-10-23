@@ -895,14 +895,30 @@ fn expected_illegal_guard_fragment(case: &LeanSessionRecoveryCase) -> &'static s
     }
 }
 
-fn request_from_store_for_test(core: &ClientCore, request_id: &str) -> Result<AgentRequestRow> {
-    core.store()
-        .snapshot()
-        .requests
-        .iter()
-        .find(|row| row.request_id == request_id)
-        .cloned()
-        .with_context(|| format!("expected request {request_id} in desktop store"))
+/// Waits for the store's own publication: the observer projects a local write
+/// asynchronously, and `refresh_store` hands a read that a concurrent
+/// publication made stale to the observer's resync loop.
+async fn request_from_store_for_test(
+    core: &ClientCore,
+    request_id: &str,
+) -> Result<AgentRequestRow> {
+    let mut updates = core.store_updates();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(row) = core
+                .store()
+                .snapshot()
+                .requests
+                .iter()
+                .find(|row| row.request_id == request_id)
+            {
+                return Ok(row.clone());
+            }
+            updates.changed().await?;
+        }
+    })
+    .await
+    .with_context(|| format!("expected request {request_id} in desktop store"))?
 }
 
 async fn fetch_request_row_for_test(
@@ -1132,7 +1148,8 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         );
     }
     let data = response.data.context("requester route query data")?;
-    for collection in ["AgentSession"] {
+    {
+        let collection = "AgentSession";
         assert!(
             data.get(collection)
                 .and_then(serde_json::Value::as_array)
@@ -1484,6 +1501,14 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         node_did: core.node_identity().did().to_owned(),
         agent_id: Some(RECOVERY_AGENT_ID.to_owned()),
     };
+    // The desktop snapshot holds live requests and session heads; this
+    // claim-free fixture has no session, so only the pending row is projected.
+    let hydrated = request_from_store_for_test(&core, &original.request_id).await?;
+    assert_eq!(
+        hydrated.input.as_ref(),
+        Some(&original_input),
+        "desktop hydration preserves typed input"
+    );
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(
         &core.node_arc(),
@@ -1491,14 +1516,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         &deadline.to_rfc3339(),
     )
     .await?;
-    core.refresh_store().await?;
-
-    let parent = request_from_store_for_test(&core, &original.request_id)?;
-    assert_eq!(
-        parent.input.as_ref(),
-        Some(&original_input),
-        "desktop hydration preserves typed input"
-    );
+    let parent = fetch_request_row_for_test(core.node(), &original.request_id).await?;
 
     let submitted = core.retry_request(&parent).await?;
     let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;

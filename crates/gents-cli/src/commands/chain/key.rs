@@ -236,7 +236,7 @@ async fn load_bindings(
             .execute(&list_chain_key_bindings_query(node_did)?)
             .await?,
     )?;
-    let mut ids = std::collections::HashSet::new();
+    let mut ids = rapidhash::RapidHashSet::default();
     for row in &rows {
         anyhow::ensure!(
             row.node_did == node_did && ids.insert(row.binding_id.clone()),

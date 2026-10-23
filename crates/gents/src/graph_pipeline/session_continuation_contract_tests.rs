@@ -230,16 +230,26 @@ async fn selector_authentication_uses_real_signed_graph_receipts() {
     assert!(select_graph_session(&eligibility, &context, &[candidate(&forged)]).is_none());
 }
 
+struct GraphTaskSource<'a> {
+    graph_node: &'a str,
+    collection: &'a str,
+    source_doc_id: &'a str,
+    session: Option<&'a str>,
+}
+
 async fn admit_session_graph_task(
     node: &Arc<EmbeddedNode>,
     plan: &GraphPlan,
     run: &super::super::GraphRunReceipt,
     identity: &crate::identity::KeyIdentity,
-    graph_node: &str,
-    collection: &str,
-    source_doc_id: &str,
-    session: Option<&str>,
+    source: GraphTaskSource<'_>,
 ) -> crate::lifecycle::EnqueuedAgentRequest {
+    let GraphTaskSource {
+        graph_node,
+        collection,
+        source_doc_id,
+        session,
+    } = source;
     use crate::identity::NodeIdentity;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -402,10 +412,12 @@ async fn native_same_behavior_graph_continues_session_with_distinct_stage_roots(
         &plan,
         &run,
         &identity,
-        "recon",
-        "ContinueInput",
-        &run.seed_doc_id,
-        None,
+        GraphTaskSource {
+            graph_node: "recon",
+            collection: "ContinueInput",
+            source_doc_id: &run.seed_doc_id,
+            session: None,
+        },
     )
     .await;
     let response = crate::graphql::graphql_with_transaction_retry(
@@ -466,10 +478,12 @@ async fn native_same_behavior_graph_continues_session_with_distinct_stage_roots(
             &plan,
             &run,
             &identity,
-            stage,
-            collection,
-            &source_id,
-            Some(&target),
+            GraphTaskSource {
+                graph_node: stage,
+                collection,
+                source_doc_id: &source_id,
+                session: Some(&target),
+            },
         )
         .await;
         assert_eq!(next.session_id, first.session_id);

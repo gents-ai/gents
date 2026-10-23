@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn row_node_matches(row_node_did: Option<&str>, node_did: &str) -> bool {
-    row_node_did.map_or(true, |row_node_did| row_node_did == node_did)
+    row_node_did.is_none_or(|row_node_did| row_node_did == node_did)
 }
 
 pub(super) fn row_is_in_node_scope(
@@ -21,7 +21,7 @@ pub(super) fn upsert_rows_by_key<T>(
         .iter()
         .enumerate()
         .map(|(index, row)| (key_fn(row), index))
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
 
     for row in incoming {
         let key = key_fn(&row);
@@ -62,7 +62,7 @@ pub(super) fn upsert_goal_rows(target: &mut Vec<GoalRow>, incoming: Vec<GoalRow>
         .iter()
         .enumerate()
         .map(|(index, row)| (goal_merge_key(row), index))
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
 
     for row in incoming {
         let key = goal_merge_key(&row);
@@ -99,9 +99,9 @@ pub(super) fn upsert_rows_with_sources_by_key<T>(
             let source = target_sources.get(index).and_then(|value| value.as_deref());
             (key_fn(row, source), index)
         })
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
 
-    for (row, source) in incoming.into_iter().zip(incoming_sources.into_iter()) {
+    for (row, source) in incoming.into_iter().zip(incoming_sources) {
         let key = key_fn(&row, source.as_deref());
         if let Some(index) = indexes.get(&key).copied() {
             target[index] = row;
@@ -140,7 +140,7 @@ pub(super) fn retire_request_placeholders(
     existing: &mut Vec<AgentRequestRow>,
     incoming: &[AgentRequestRow],
 ) {
-    let mut replacements = HashSet::with_capacity(incoming.len().saturating_mul(4));
+    let mut replacements = RapidHashSet::with_capacity(incoming.len().saturating_mul(4));
     for replacement in incoming
         .iter()
         .filter(|row| row.doc_id.is_some() || row.node_did.is_some())
@@ -168,11 +168,13 @@ pub(super) fn retire_request_placeholders(
 // Immutable canonical facts are set-unioned; a duplicated physical identity
 // with different bytes is retained so reconstruction can classify the
 // integrity conflict, never last-writer-wins.
-pub(super) fn union_immutable_rows<T: std::fmt::Debug>(
+pub(super) fn union_immutable_rows<T>(
     target: &mut Vec<T>,
     incoming: Vec<T>,
     doc_id: impl Fn(&T) -> &str,
-) {
+) where
+    T: std::fmt::Debug,
+{
     for row in incoming {
         let id = doc_id(&row).to_string();
         if target

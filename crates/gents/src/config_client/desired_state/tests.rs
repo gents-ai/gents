@@ -1219,8 +1219,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
             )],
         )
         .await
-        .err()
-        .expect("the field can never carry the expected count");
+        .expect_err("the field can never carry the expected count");
         let diagnostic = format!("{refused:#}");
         assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
         assert!(diagnostic.contains(reported_type), "{diagnostic}");
@@ -1236,8 +1235,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         )],
     )
     .await
-    .err()
-    .expect("the count field must exist on the target collection");
+    .expect_err("the count field must exist on the target collection");
     assert!(
         format!("{absent_field:#}").contains("does not exist on ObligationOutcome"),
         "{absent_field:#}"
@@ -1255,8 +1253,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
         .await
-        .err()
-        .expect("preflight refuses the same obligation");
+        .expect_err("preflight refuses the same obligation");
     assert!(
         format!("{previewed:#}").contains("expected_count_field"),
         "{previewed:#}"
@@ -1397,8 +1394,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         )],
     )
     .await
-    .err()
-    .expect("a creation publishes the add payload, whose count field is a Boolean");
+    .expect_err("a creation publishes the add payload, whose count field is a Boolean");
     assert!(
         format!("{refused:#}").contains("\"flag\" names a Boolean field"),
         "{refused:#}"
@@ -1412,8 +1408,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
         .await
-        .err()
-        .expect("preflight judges the same add payload");
+        .expect_err("preflight judges the same add payload");
     assert!(
         format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
         "{previewed:#}"
@@ -1462,8 +1457,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         )],
     )
     .await
-    .err()
-    .expect("a replacement publishes the update payload, whose count field is a Boolean");
+    .expect_err("a replacement publishes the update payload, whose count field is a Boolean");
     assert!(
         format!("{refused:#}").contains("\"flag\" names a Boolean field"),
         "{refused:#}"
@@ -1477,8 +1471,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
         .await
-        .err()
-        .expect("preflight judges the same update payload");
+        .expect_err("preflight judges the same update payload");
     assert!(
         format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
         "{previewed:#}"
@@ -1600,8 +1593,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
             )],
         )
         .await
-        .err()
-        .expect("the field can never carry the expected count");
+        .expect_err("the field can never carry the expected count");
         let diagnostic = format!("{refused:#}");
         assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
         assert!(diagnostic.contains(reported_type), "{diagnostic}");
@@ -1617,8 +1609,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         )],
     )
     .await
-    .err()
-    .expect("the count field must exist on the source collection");
+    .expect_err("the count field must exist on the source collection");
     assert!(
         format!("{absent_field:#}").contains("does not exist on EventProbeSource"),
         "{absent_field:#}"
@@ -1636,8 +1627,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
         .await
-        .err()
-        .expect("preflight refuses the same event source");
+        .expect_err("preflight refuses the same event source");
     assert!(
         format!("{previewed:#}").contains("expected_count_field"),
         "{previewed:#}"
@@ -1739,8 +1729,7 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
         )],
     )
     .await
-    .err()
-    .expect("a non-String correlation can never correlate");
+    .expect_err("a non-String correlation can never correlate");
     let diagnostic = format!("{mistyped:#}");
     assert!(
         diagnostic.contains("correlation_field \"expected_total\" must be String, found Int"),
@@ -1757,8 +1746,7 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
         )],
     )
     .await
-    .err()
-    .expect("the correlation field must exist on the source collection");
+    .expect_err("the correlation field must exist on the source collection");
     let diagnostic = format!("{absent:#}");
     assert!(
         diagnostic.contains("correlation_field \"missing\" does not exist on EventProbeSource"),
@@ -1816,8 +1804,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
         )],
     )
     .await
-    .err()
-    .expect("a creation publishes the add payload, whose count field is a Boolean");
+    .expect_err("a creation publishes the add payload, whose count field is a Boolean");
     assert!(
         format!("{refused:#}").contains("\"flag\" names a Boolean field"),
         "{refused:#}"
@@ -1835,8 +1822,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
         .await
-        .err()
-        .expect("preflight judges the same add payload");
+        .expect_err("preflight judges the same add payload");
     assert!(
         format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
         "{previewed:#}"
@@ -1886,8 +1872,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
         )],
     )
     .await
-    .err()
-    .expect("a replacement publishes the update payload, whose count field is a Boolean");
+    .expect_err("a replacement publishes the update payload, whose count field is a Boolean");
     assert!(
         format!("{refused:#}").contains("\"flag\" names a Boolean field"),
         "{refused:#}"
@@ -1905,8 +1890,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
         .await
-        .err()
-        .expect("preflight judges the same update payload");
+        .expect_err("preflight judges the same update payload");
     assert!(
         format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
         "{previewed:#}"
@@ -1971,8 +1955,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         vec![source("PlainPing"), task(true), trigger.clone()],
     )
     .await
-    .err()
-    .expect("a collection without handoff_id can never carry an outcome");
+    .expect_err("a collection without handoff_id can never carry an outcome");
     let diagnostic = format!("{refused:#}");
     let schema = refused.downcast_ref::<OutcomeSourceSchemaError>().unwrap();
     assert_eq!(schema.collection, "PlainPing");
@@ -1987,8 +1970,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         vec![source("NumberedPing"), task(true), trigger.clone()],
     )
     .await
-    .err()
-    .expect("a non-String handoff_id is not a handoff identity");
+    .expect_err("a non-String handoff_id is not a handoff identity");
     let schema = mistyped.downcast_ref::<OutcomeSourceSchemaError>().unwrap();
     assert_eq!(schema.collection, "NumberedPing");
     assert!(!schema.missing_handoff);
@@ -2005,8 +1987,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     .await?;
     let opted_in = apply(&access, vec![task(true)])
         .await
-        .err()
-        .expect("opting the retained delivery's Task in is the same refusal");
+        .expect_err("opting the retained delivery's Task in is the same refusal");
     assert!(
         format!("{opted_in:#}").contains("has no handoff_id field"),
         "{opted_in:#}"
@@ -2014,8 +1995,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     apply(&access, vec![source("HandoffPing"), task(true)]).await?;
     let rerouted = apply(&access, vec![source("PlainPing")])
         .await
-        .err()
-        .expect("rerouting the retained opted-in delivery is the same refusal");
+        .expect_err("rerouting the retained opted-in delivery is the same refusal");
     assert!(
         format!("{rerouted:#}").contains("has no handoff_id field"),
         "{rerouted:#}"

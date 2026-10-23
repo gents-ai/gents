@@ -10,8 +10,8 @@ use crate::lifecycle::queue::{
 };
 use crate::lifecycle::ExecutionOrigin;
 use crate::watcher::AgentRequest;
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
@@ -263,8 +263,8 @@ async fn insert_generated_pending(
 
 fn assert_generated_queue_row_metadata(
     case: &LeanInterruptQueueCase,
-    by_doc: &HashMap<String, &Value>,
-    bound: &HashMap<u64, String>,
+    by_doc: &RapidHashMap<String, &Value>,
+    bound: &RapidHashMap<u64, String>,
 ) {
     for event in &case.inputs {
         let LeanInterruptQueueInput::Enqueue { entry } = event else {
@@ -311,7 +311,7 @@ fn assert_generated_queue_row_metadata(
 
 #[tokio::test]
 async fn generated_interrupt_queue_events_bind_to_native_rows() {
-    let mut overlap_cases = HashSet::new();
+    let mut overlap_cases = RapidHashSet::new();
     for case in crate::lean_vocab_test::lean_interrupt_queue_cases() {
         let has_overlap_event = case.inputs.iter().any(|event| {
             matches!(
@@ -343,7 +343,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                 }
                 None => ConfigAccess::local(node.clone()),
             };
-            let mut bound: HashMap<u64, String> = HashMap::new();
+            let mut bound: RapidHashMap<u64, String> = RapidHashMap::new();
             let mut notification_bindings = Vec::new();
             let mut first_latch = None;
             for event in &case.inputs {
@@ -404,15 +404,15 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                 }
             }
             let actual = rows(&node, &parent.session_id).await;
-            let by_doc: HashMap<_, _> = actual
+            let by_doc: RapidHashMap<_, _> = actual
                 .iter()
                 .map(|row| (row["_docID"].as_str().unwrap().to_owned(), row))
                 .collect();
-            let expected_docs: HashSet<_> = std::iter::once(parent.doc_id.clone())
+            let expected_docs: RapidHashSet<_> = std::iter::once(parent.doc_id.clone())
                 .chain(bound.values().cloned())
                 .collect();
             assert_eq!(
-                by_doc.keys().cloned().collect::<HashSet<_>>(),
+                by_doc.keys().cloned().collect::<RapidHashSet<_>>(),
                 expected_docs,
                 "{}: exact physical row inventory",
                 case.name
@@ -424,12 +424,12 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                 case.name
             );
             assert_generated_queue_row_metadata(case, &by_doc, &bound);
-            let physical_pending: HashSet<_> = actual
+            let physical_pending: RapidHashSet<_> = actual
                 .iter()
                 .filter(|row| row["_docID"] != parent.doc_id && row["lifecycle_state"] == "pending")
                 .map(|row| row["_docID"].as_str().unwrap().to_owned())
                 .collect();
-            let physical_terminal: HashSet<_> = actual
+            let physical_terminal: RapidHashSet<_> = actual
                 .iter()
                 .filter(|row| {
                     row["_docID"] != parent.doc_id && row["lifecycle_state"] == "interrupted"
@@ -491,7 +491,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
     }
     assert_eq!(
         overlap_cases,
-        HashSet::from([
+        RapidHashSet::from_iter([
             "empty_scan_completion_before_latch_commit",
             "observed_old_then_later_same_key_completion",
         ]),
@@ -520,8 +520,8 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         cases
             .iter()
             .map(|case| case.name.as_str())
-            .collect::<HashSet<_>>(),
-        HashSet::from([
+            .collect::<RapidHashSet<_>>(),
+        RapidHashSet::from_iter([
             "empty_scan_completion_before_latch_commit",
             "observed_old_then_later_same_key_completion",
         ])
@@ -546,7 +546,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         let endpoint = format!("http://{address}/api/v0/graphql");
         let access = ConfigAccess::graphql(endpoint);
         wait_http_ready(&access).await;
-        let mut bound = HashMap::new();
+        let mut bound = RapidHashMap::new();
         if let Some(entry) = before_capture {
             bound.insert(
                 entry.request_id,
@@ -660,19 +660,19 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             .unwrap();
         assert_eq!(latched.is_some(), case.expected.latched);
         let after_commit = rows(&node, &parent.session_id).await;
-        let by_doc: HashMap<_, _> = after_commit
+        let by_doc: RapidHashMap<_, _> = after_commit
             .iter()
             .map(|row| (row["_docID"].as_str().unwrap().to_owned(), row))
             .collect();
         assert_generated_queue_row_metadata(case, &by_doc, &bound);
-        let expected_docs: HashSet<_> = std::iter::once(parent.doc_id.clone())
+        let expected_docs: RapidHashSet<_> = std::iter::once(parent.doc_id.clone())
             .chain(bound.values().cloned())
             .collect();
         assert_eq!(
             after_commit
                 .iter()
                 .map(|row| row["_docID"].as_str().unwrap().to_owned())
-                .collect::<HashSet<_>>(),
+                .collect::<RapidHashSet<_>>(),
             expected_docs
         );
         assert_eq!(
@@ -682,12 +682,12 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
                 .unwrap()["lifecycle_state"],
             "processing"
         );
-        let actual_pending: HashSet<_> = after_commit
+        let actual_pending: RapidHashSet<_> = after_commit
             .iter()
             .filter(|row| row["lifecycle_state"] == "pending")
             .map(|row| row["_docID"].as_str().unwrap().to_owned())
             .collect();
-        let actual_terminal: HashSet<_> = after_commit
+        let actual_terminal: RapidHashSet<_> = after_commit
             .iter()
             .filter(|row| row["lifecycle_state"] == "interrupted")
             .map(|row| row["_docID"].as_str().unwrap().to_owned())
@@ -728,7 +728,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
             records
                 .into_iter()
                 .map(|row| (row["_docID"].as_str().unwrap().to_owned(), row))
-                .collect::<HashMap<_, _>>()
+                .collect::<RapidHashMap<_, _>>()
         };
         assert_eq!(
             by_doc(after_replay),

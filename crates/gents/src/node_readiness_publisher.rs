@@ -407,7 +407,7 @@ impl NodeReadinessPublisherHandle {
             Ok(()) => {}
             Err(_) => return Err(anyhow!("agent readiness publisher stopped")),
         }
-        let acknowledgement = async { result.await };
+        let acknowledgement = result;
         let acknowledgement_result = match self.command_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, acknowledgement).await {
                 Ok(result) => result,

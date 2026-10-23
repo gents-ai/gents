@@ -22,6 +22,7 @@ describe("the chat folder picker", () => {
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
         "Couldn’t choose a folder: dialog unavailable",
+        { id: "Couldn’t choose a folder: dialog unavailable" },
       ),
     );
   });

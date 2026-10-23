@@ -142,7 +142,7 @@ async fn streaming_commits_converge_without_a_forced_batch_window() {
         "more fetches than committed documents: {fetches}"
     );
     assert!(
-        flushes >= 1 && flushes <= 51,
+        (1..=51).contains(&flushes),
         "expected 1..=51 flushes, got {flushes}"
     );
 

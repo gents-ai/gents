@@ -318,11 +318,14 @@ pub(crate) async fn watch_queue(
 }
 
 #[cfg(feature = "tauri-host")]
-pub fn spawn_plugin_approvals_watch<R: tauri::Runtime>(
+pub fn spawn_plugin_approvals_watch<R>(
     app: tauri::AppHandle<R>,
     home: PathBuf,
     subscriptions: watch::Receiver<bool>,
-) -> tauri::async_runtime::JoinHandle<()> {
+) -> tauri::async_runtime::JoinHandle<()>
+where
+    R: tauri::Runtime,
+{
     use tauri::Emitter;
     tauri::async_runtime::spawn(watch_queue(
         home,

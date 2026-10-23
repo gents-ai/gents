@@ -1084,7 +1084,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         |_| Vec::new(),
         &[],
     );
-    let projected = vec![gents_loop::loop_stream::TaggedMessage {
+    let projected = [gents_loop::loop_stream::TaggedMessage {
         message: Message::Assistant {
             id: selected[0].id.clone(),
             content: selected[0].content.clone(),
@@ -1452,7 +1452,7 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
     let unselected_tag = ReplayTag {
         request_doc_id: selected_tag.request_doc_id.clone(),
         source: OutputSource::ProviderTurn {
-            scope: tag_scope.clone(),
+            scope: *tag_scope,
             turn_index: *turn_index,
             attempt: *attempt + 1,
         },
@@ -1662,7 +1662,7 @@ async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_
     );
 
     let (dispatch, dispatch_scans) = crate::session::count_request_output_scans(
-        gents_loop::loop_stream::resolve_replay_evidence(&replay, &[tag.clone()]),
+        gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag)),
     )
     .await;
     assert_eq!(
@@ -1676,7 +1676,7 @@ async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_
     );
 
     let (next, next_scans) = crate::session::count_request_output_scans(
-        gents_loop::loop_stream::resolve_replay_evidence(&replay, &[tag.clone()]),
+        gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag)),
     )
     .await;
     assert_eq!(next.unwrap(), estimate);
@@ -1730,16 +1730,18 @@ async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_wait
         .await;
     assert!(!created.has_errors(), "{:?}", created.errors);
 
-    let dispatch = gents_loop::loop_stream::resolve_replay_evidence(&replay, &[tag.clone()])
-        .await
-        .unwrap();
+    let dispatch =
+        gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
+            .await
+            .unwrap();
     assert_eq!(
         dispatch, estimate,
         "the seeded dispatch answers the estimate's window, not the replicated twin"
     );
-    let observed = gents_loop::loop_stream::resolve_replay_evidence(&replay, &[tag.clone()])
-        .await
-        .unwrap();
+    let observed =
+        gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag))
+            .await
+            .unwrap();
     assert_eq!(
         observed.len(),
         2,

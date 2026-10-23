@@ -108,6 +108,10 @@ fn resolve_provision_node_name(args: &ProvisionArgs) -> String {
         .to_string()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the provision command's identity flags"
+)]
 async fn ensure_home_identity(
     home_dir: &Path,
     node_name: &str,

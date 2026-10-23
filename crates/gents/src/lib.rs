@@ -33,6 +33,7 @@ pub mod configuration_discovery;
 pub mod defra_query;
 pub mod defra_write;
 pub mod document_config;
+pub mod drop_cleanup;
 pub mod error;
 pub mod eth;
 pub mod eval;
@@ -90,6 +91,16 @@ pub mod xai_oauth_refresh;
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    /// A test's `#[tokio::test]` runtime is its entry point; constructors take
+    /// that runtime's handle from here.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a test's #[tokio::test] runtime is its entry-point runtime"
+    )]
+    pub(crate) fn runtime_handle() -> tokio::runtime::Handle {
+        tokio::runtime::Handle::current()
+    }
+
     /// Fixtures that reopen a store must retain its original signing identity.
     pub(crate) fn node_builder() -> defra_node::NodeBuilder {
         use crate::NodeIdentity as _;

@@ -2,7 +2,8 @@ use super::rows::dedupe_paths;
 use super::*;
 use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
 use anyhow::Context;
-use std::collections::{BTreeSet, HashSet};
+use rapidhash::RapidHashSet;
+use std::collections::BTreeSet;
 
 #[derive(Serialize)]
 struct FilePathDelta<'a> {
@@ -129,12 +130,15 @@ pub fn compaction_key(
     )
 }
 
-pub(super) fn validate_compaction_chain<T: CompactionProjection>(
+pub(super) fn validate_compaction_chain<T>(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     rows: &[T],
-) -> Result<()> {
+) -> Result<()>
+where
+    T: CompactionProjection,
+{
     let mut prior_cursor = None;
     for (index, row) in rows.iter().enumerate() {
         let expected_sequence = u32::try_from(index + 1).context("compaction sequence overflow")?;
@@ -161,7 +165,10 @@ pub(super) fn validate_compaction_chain<T: CompactionProjection>(
     Ok(())
 }
 
-fn compaction_generation<T: CompactionProjection>(rows: &[T]) -> Result<String> {
+fn compaction_generation<T>(rows: &[T]) -> Result<String>
+where
+    T: CompactionProjection,
+{
     let projection = rows
         .iter()
         .map(|row| {
@@ -483,7 +490,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                         requester_did,
                         request_id,
                         request_doc_id,
-                        &summary,
+                        summary,
                         files_read,
                         files_modified,
                         messages_compacted,
@@ -550,7 +557,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                     }}) {{ _docID }}
                 }}"#,
                     compaction_key = escape_graphql_string(&compaction_key),
-                    summary = escape_graphql_string(&summary),
+                    summary = escape_graphql_string(summary),
                     files_read_json =
                         escape_graphql_string(&encode_file_path_delta(&file_read_delta)?),
                     files_modified_json =
@@ -584,7 +591,7 @@ fn new_file_paths(cumulative: &[String], current: &[String]) -> Vec<String> {
     let mut seen = cumulative
         .iter()
         .map(String::as_str)
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     let mut delta = current
         .iter()
         .filter(|path| seen.insert(path.as_str()))
@@ -668,6 +675,73 @@ fn validate_file_path_projection_chain(
         validate_compaction_chain(node_did, session_id, requester_did, rows)?;
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reconcile_exact_redelivery(
+    rows: &[CompactionGenerationRow],
+    expected_generation: &str,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    request_id: &str,
+    request_doc_id: &str,
+    summary: &str,
+    files_read: &[String],
+    files_modified: &[String],
+    messages_compacted: u32,
+    compacted_through_sequence: Option<u32>,
+    original_tokens: usize,
+    compacted_tokens: usize,
+) -> Result<Option<CompactionEntry>> {
+    let Some(predecessor_len) = (0..rows.len()).find(|length| {
+        compaction_generation(&rows[..*length]).ok().as_deref() == Some(expected_generation)
+    }) else {
+        return Ok(None);
+    };
+    let predecessor = &rows[..predecessor_len];
+    let persisted = &rows[predecessor_len];
+
+    let mut expected_files_read = cumulative_file_paths(predecessor, |row| &row.files_read)?;
+    expected_files_read.extend(files_read.iter().cloned());
+    dedupe_paths(&mut expected_files_read);
+    let mut expected_files_modified =
+        cumulative_file_paths(predecessor, |row| &row.files_modified)?;
+    expected_files_modified.extend(files_modified.iter().cloned());
+    dedupe_paths(&mut expected_files_modified);
+
+    let persisted_files_read =
+        cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_read)?;
+    let persisted_files_modified =
+        cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_modified)?;
+    let requester_matches = persisted.requester_did.as_deref() == requester_did;
+    let matches = persisted.node_did == node_did
+        && requester_matches
+        && persisted.request_id.as_deref() == Some(request_id)
+        && persisted.request_doc_id.as_deref() == Some(request_doc_id)
+        && persisted.summary == summary
+        && persisted.messages_compacted == messages_compacted
+        && persisted.compacted_through_sequence == compacted_through_sequence
+        && usize::try_from(persisted.original_tokens).ok() == Some(original_tokens)
+        && usize::try_from(persisted.compacted_tokens).ok() == Some(compacted_tokens)
+        && persisted_files_read == expected_files_read
+        && persisted_files_modified == expected_files_modified;
+    if !matches {
+        return Ok(None);
+    }
+
+    Ok(Some(CompactionEntry {
+        session_id: session_id.to_string(),
+        sequence: persisted.sequence,
+        summary: persisted.summary.clone(),
+        files_read: persisted_files_read,
+        files_modified: persisted_files_modified,
+        messages_compacted: persisted.messages_compacted,
+        compacted_through_sequence: persisted.compacted_through_sequence,
+        original_tokens,
+        compacted_tokens,
+        created_at: persisted.created_at.clone(),
+    }))
 }
 
 #[cfg(test)]
@@ -775,71 +849,4 @@ mod file_path_tests {
             vec!["/x.rs"]
         );
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn reconcile_exact_redelivery(
-    rows: &[CompactionGenerationRow],
-    expected_generation: &str,
-    session_id: &str,
-    node_did: &str,
-    requester_did: Option<&str>,
-    request_id: &str,
-    request_doc_id: &str,
-    summary: &str,
-    files_read: &[String],
-    files_modified: &[String],
-    messages_compacted: u32,
-    compacted_through_sequence: Option<u32>,
-    original_tokens: usize,
-    compacted_tokens: usize,
-) -> Result<Option<CompactionEntry>> {
-    let Some(predecessor_len) = (0..rows.len()).find(|length| {
-        compaction_generation(&rows[..*length]).ok().as_deref() == Some(expected_generation)
-    }) else {
-        return Ok(None);
-    };
-    let predecessor = &rows[..predecessor_len];
-    let persisted = &rows[predecessor_len];
-
-    let mut expected_files_read = cumulative_file_paths(predecessor, |row| &row.files_read)?;
-    expected_files_read.extend(files_read.iter().cloned());
-    dedupe_paths(&mut expected_files_read);
-    let mut expected_files_modified =
-        cumulative_file_paths(predecessor, |row| &row.files_modified)?;
-    expected_files_modified.extend(files_modified.iter().cloned());
-    dedupe_paths(&mut expected_files_modified);
-
-    let persisted_files_read =
-        cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_read)?;
-    let persisted_files_modified =
-        cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_modified)?;
-    let requester_matches = persisted.requester_did.as_deref() == requester_did;
-    let matches = persisted.node_did == node_did
-        && requester_matches
-        && persisted.request_id.as_deref() == Some(request_id)
-        && persisted.request_doc_id.as_deref() == Some(request_doc_id)
-        && persisted.summary == summary
-        && persisted.messages_compacted == messages_compacted
-        && persisted.compacted_through_sequence == compacted_through_sequence
-        && usize::try_from(persisted.original_tokens).ok() == Some(original_tokens)
-        && usize::try_from(persisted.compacted_tokens).ok() == Some(compacted_tokens)
-        && persisted_files_read == expected_files_read
-        && persisted_files_modified == expected_files_modified;
-    if !matches {
-        return Ok(None);
-    }
-
-    Ok(Some(CompactionEntry {
-        session_id: session_id.to_string(),
-        sequence: persisted.sequence,
-        summary: persisted.summary.clone(),
-        files_read: persisted_files_read,
-        files_modified: persisted_files_modified,
-        messages_compacted: persisted.messages_compacted,
-        compacted_through_sequence: persisted.compacted_through_sequence,
-        original_tokens,
-        compacted_tokens,
-        created_at: persisted.created_at.clone(),
-    }))
 }

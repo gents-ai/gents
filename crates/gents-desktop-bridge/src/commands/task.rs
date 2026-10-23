@@ -60,7 +60,7 @@ async fn load_agent_request_by_request_id(
         }}"#
     );
     let response =
-        graphql_with_transaction_retry(&core.node(), &query, "query manual task run request")
+        graphql_with_transaction_retry(core.node(), &query, "query manual task run request")
             .await?;
     let local_row = response
         .data

@@ -48,7 +48,10 @@ mod task_title;
 pub(crate) mod test_support;
 mod transition;
 
-pub use manual::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
+pub use manual::{
+    write_manual_agent_request, write_manual_agent_request_with_conversation_title,
+    ManualRequestTarget,
+};
 pub use materialize::{
     activate_workspace_bound_request,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
@@ -849,9 +852,9 @@ mod tests {
         });
         let mut fields = std::collections::BTreeMap::new();
         snapshot_workspace_lineage_source_fields(&source, &mut fields, None);
-        assert!(fields.get("workspace_id").is_none());
-        assert!(fields.get("workspace_authority").is_none());
-        assert!(fields.get("workspace_seal_hash").is_none());
+        assert!(!fields.contains_key("workspace_id"));
+        assert!(!fields.contains_key("workspace_authority"));
+        assert!(!fields.contains_key("workspace_seal_hash"));
         assert_eq!(
             fields.get("caused_by_correlation").map(String::as_str),
             Some("run-1")

@@ -10,10 +10,10 @@ use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
 use super::TurnItemsView;
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +91,7 @@ pub struct ThreadStartParams {
     pub sandbox: Option<SandboxMode>,
     /// Cannot be combined with `sandbox`.
     pub permissions: Option<String>,
-    pub config: Option<HashMap<String, JsonValue>>,
+    pub config: Option<RapidHashMap<String, JsonValue>>,
     pub service_name: Option<String>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
@@ -244,7 +244,7 @@ pub struct ThreadResumeParams {
     pub sandbox: Option<SandboxMode>,
     /// Cannot be combined with `sandbox`.
     pub permissions: Option<String>,
-    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub config: Option<RapidHashMap<String, serde_json::Value>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
@@ -310,7 +310,7 @@ pub struct ThreadForkParams {
     pub sandbox: Option<SandboxMode>,
     /// Cannot be combined with `sandbox`.
     pub permissions: Option<String>,
-    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub config: Option<RapidHashMap<String, serde_json::Value>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

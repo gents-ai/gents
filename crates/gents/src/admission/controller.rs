@@ -10,8 +10,9 @@ use super::config::BackendAdmissionConfig;
 use super::permit::AdmissionPermit;
 use super::persistence::{
     persist_call_started, persist_existing_call_running, persist_existing_call_terminal,
-    persist_terminal_call, spawn_persistence,
+    persist_terminal_call,
 };
+use crate::drop_cleanup::DropCleanup;
 
 pub(super) struct CapacityPool {
     ledger: Mutex<CapacityLedger>,
@@ -295,6 +296,7 @@ impl BackendAdmissionController {
             controller: self.clone(),
             call: call.clone(),
             doc_id: None,
+            runtime: DropCleanup::current(),
         };
         let doc_id = match super::persistence::persist_call_queued(node.clone(), &call).await {
             Ok(doc_id) => {
@@ -450,6 +452,7 @@ pub(super) struct QueuedCallGuard {
     controller: Arc<BackendAdmissionController>,
     call: InferenceCallRecord,
     doc_id: Option<String>,
+    runtime: DropCleanup,
 }
 
 impl QueuedCallGuard {
@@ -471,7 +474,7 @@ impl Drop for QueuedCallGuard {
         };
         let node = self.node.clone();
         let call = self.call.clone();
-        spawn_persistence(async move {
+        self.runtime.spawn(async move {
             if let Err(error) = persist_existing_call_terminal(
                 node,
                 &call,

@@ -21,8 +21,8 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let mut join_set = JoinSet::new();
-    let mut running = std::collections::HashSet::new();
-    let mut failure_counts = std::collections::HashMap::<String, u32>::new();
+    let mut running = rapidhash::RapidHashSet::default();
+    let mut failure_counts = rapidhash::RapidHashMap::<String, u32>::default();
 
     for behavior in agents {
         spawn_behavior(
@@ -91,7 +91,7 @@ where
 
 fn spawn_behavior<F, Fut>(
     join_set: &mut JoinSet<(Arc<ResolvedAgent>, std::thread::Result<Result<()>>)>,
-    running: &mut std::collections::HashSet<String>,
+    running: &mut rapidhash::RapidHashSet<String>,
     behavior: Arc<ResolvedAgent>,
     shutdown: watch::Receiver<bool>,
     runner: F,

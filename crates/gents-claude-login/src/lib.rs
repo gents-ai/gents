@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
@@ -221,7 +221,7 @@ async fn handle_callback_request(
     if parsed.path() != "/callback" {
         return CallbackOutcome::Continue(CallbackPage::NotFound);
     }
-    let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+    let params: RapidHashMap<String, String> = parsed.query_pairs().into_owned().collect();
     if params.get("state").map(String::as_str) != Some(expected_state) {
         tracing::warn!("rejected Claude OAuth callback with mismatched state");
         return CallbackOutcome::Continue(CallbackPage::StaleLink);

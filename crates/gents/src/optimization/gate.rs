@@ -310,7 +310,7 @@ mod tests {
             candidate,
             text,
             32 * 1024,
-            &[fixture.baseline.digest.clone()],
+            std::slice::from_ref(&fixture.baseline.digest),
         )
     }
 
@@ -462,7 +462,7 @@ mod tests {
             &oversized,
             &long,
             32,
-            &[fixture.baseline.digest.clone()],
+            std::slice::from_ref(&fixture.baseline.digest),
         )
         .unwrap_err();
         assert_eq!(rejection.reason, "text_too_long");

@@ -176,8 +176,7 @@ async fn codex_usage_limit_survives_rig_responses_stream() {
             .next()
             .await
             .expect("stream item")
-            .err()
-            .expect("usage-limit error"),
+            .expect_err("usage-limit error"),
     };
     match classify_completion_error(&rig::agent::StreamingError::Completion(error)) {
         InferenceError::UsageLimited(limit) => {

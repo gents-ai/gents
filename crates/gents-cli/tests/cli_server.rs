@@ -127,6 +127,10 @@ fn count_inference_calls(rows: &[Value], agent_id: Option<&str>, call_state: &st
         .count() as i64
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous harness bounding a std child process exit in real time"
+)]
 fn wait_for_server_exit(
     serve: &mut ServeProcess,
     timeout: Duration,
@@ -966,18 +970,11 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let foreign_readiness_updated_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let foreign_readiness_snapshot = escape_graphql_string(&foreign_readiness_snapshot);
     for mutation in [
-        format!(
-            r#"mutation {{ create_AgentRequest(input: {{purpose: "normal",  request_id: "foreign-metrics-req", node_did: "did:test:foreign-cli", agent_id: "foreign-agent", session_id: "foreign-metrics-session", lifecycle_state: "processing", created_at: "2026-06-02T11:00:00Z" }}) {{ _docID }} }}"#
-        ),
-        format!(
-            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "foreign-metrics-session:tc-foreign", request_id: "foreign-metrics-req", request_doc_id: "", session_id: "foreign-metrics-session", node_did: "did:test:foreign-cli", tool_name: "bash", tool_call_id: "tc-foreign", status: "running", lifecycle_state: "running", started_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
-        ),
-        format!(
-            r#"mutation {{ create_ToolServiceHealthState(input: {{ service_id: "runtime-mcp-pool-obs", node_did: "did:test:foreign-cli", endpoint: "http://127.0.0.1:9/mcp", status: "unreachable", tool_count: 5, failure_count: 9, k_max: 3, last_probe_at: "2026-06-06T00:00:00Z", last_seen: "2026-06-06T00:00:00Z", updated_at: "2026-06-06T00:00:00Z" }}) {{ _docID }} }}"#
-        ),
-        format!(
-            r#"mutation {{
-                create_CompactionEntry(input: {{
+        r#"mutation { create_AgentRequest(input: {purpose: "normal",  request_id: "foreign-metrics-req", node_did: "did:test:foreign-cli", agent_id: "foreign-agent", session_id: "foreign-metrics-session", lifecycle_state: "processing", created_at: "2026-06-02T11:00:00Z" }) { _docID } }"#.to_string(),
+        r#"mutation { create_AgentToolCall(input: { tool_call_key: "foreign-metrics-session:tc-foreign", request_id: "foreign-metrics-req", request_doc_id: "", session_id: "foreign-metrics-session", node_did: "did:test:foreign-cli", tool_name: "bash", tool_call_id: "tc-foreign", status: "running", lifecycle_state: "running", started_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
+        r#"mutation { create_ToolServiceHealthState(input: { service_id: "runtime-mcp-pool-obs", node_did: "did:test:foreign-cli", endpoint: "http://127.0.0.1:9/mcp", status: "unreachable", tool_count: 5, failure_count: 9, k_max: 3, last_probe_at: "2026-06-06T00:00:00Z", last_seen: "2026-06-06T00:00:00Z", updated_at: "2026-06-06T00:00:00Z" }) { _docID } }"#.to_string(),
+        r#"mutation {
+                create_CompactionEntry(input: {
                     compaction_key: "foreign-metrics-ce",
                     session_id: "foreign-metrics-session",
                     node_did: "did:test:foreign-cli",
@@ -985,9 +982,8 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
                     original_tokens: 4321,
                     compacted_tokens: 21,
                     created_at: "2026-06-02T11:00:00Z"
-                }}) {{ _docID }}
-            }}"#
-        ),
+                }) { _docID }
+            }"#.to_string(),
         format!(
             r#"mutation {{
                 create_NodeReadiness(input: {{
@@ -1381,9 +1377,9 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     );
 
     assert!(
-        body.contains(&format!(
-            r#"gents_runtime_runnable_agents{{node_did="did:test:foreign-cli"}} 1"#
-        )),
+        body.contains(
+            &r#"gents_runtime_runnable_agents{node_did="did:test:foreign-cli"} 1"#.to_string()
+        ),
         "the foreign readiness row must be projected under its own DID:\n{body}"
     );
     assert!(
@@ -1393,9 +1389,10 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "the local readiness row must stay observed after the foreign seed:\n{body}"
     );
     assert!(
-        body.contains(&format!(
-            r#"gents_runtime_process_state{{node_did="did:test:foreign-cli",state="ready"}} 1"#
-        )),
+        body.contains(
+            &r#"gents_runtime_process_state{node_did="did:test:foreign-cli",state="ready"} 1"#
+                .to_string()
+        ),
         "the foreign process-state one-hot must be projected from its own row:\n{body}"
     );
 
@@ -3289,8 +3286,7 @@ async fn mcp_graph_tools_take_the_subject_did_from_the_bearer() -> Result<()> {
     for tool in ["get_graph_run", "get_graph_result"] {
         let refused = call_mcp_tool(&client, tool, json!({"run_id": run_id})).await?;
         anyhow::ensure!(
-            matches!(&refused, Err(_))
-                || refused.as_ref().is_ok_and(|view| view["run_id"] != run_id),
+            refused.is_err() || refused.as_ref().is_ok_and(|view| view["run_id"] != run_id),
             "{tool}: foreign bearer saw the owner run: {refused:?}"
         );
     }

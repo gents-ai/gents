@@ -16,17 +16,23 @@ use std::collections::{BTreeMap, BTreeSet};
 struct RootFields(Option<&'static [&'static str]>);
 impl<'de> serde::Deserializer<'de> for &mut RootFields {
     type Error = serde::de::value::Error;
-    fn deserialize_any<V: Visitor<'de>>(self, _: V) -> std::result::Result<V::Value, Self::Error> {
+    fn deserialize_any<V>(self, _: V) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
         Err(serde::de::Error::custom(
             "configuration must derive struct deserialization",
         ))
     }
-    fn deserialize_struct<V: Visitor<'de>>(
+    fn deserialize_struct<V>(
         self,
         _: &'static str,
         fields: &'static [&'static str],
         _: V,
-    ) -> std::result::Result<V::Value, Self::Error> {
+    ) -> std::result::Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
         self.0 = Some(fields);
         Err(serde::de::Error::custom(
             "configuration field inspection complete",
@@ -35,7 +41,10 @@ impl<'de> serde::Deserializer<'de> for &mut RootFields {
     serde::forward_to_deserialize_any! { bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string bytes byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map enum identifier ignored_any }
 }
 
-pub(crate) fn canonical_struct_fields<T: DeserializeOwned>() -> Result<&'static [&'static str]> {
+pub(crate) fn canonical_struct_fields<T>() -> Result<&'static [&'static str]>
+where
+    T: DeserializeOwned,
+{
     let mut fields = RootFields::default();
     let _ = T::deserialize(&mut fields);
     fields
@@ -44,9 +53,10 @@ pub(crate) fn canonical_struct_fields<T: DeserializeOwned>() -> Result<&'static 
         .context("canonical configuration root has no struct fields")
 }
 
-fn project<T: DeserializeOwned + Serialize>(
-    value: Option<&Value>,
-) -> Result<(&'static [&'static str], Option<Value>)> {
+fn project<T>(value: Option<&Value>) -> Result<(&'static [&'static str], Option<Value>)>
+where
+    T: DeserializeOwned + Serialize,
+{
     let fields = canonical_struct_fields::<T>()?;
     let normalized = value
         .map(|value| -> Result<Value> {
@@ -161,9 +171,10 @@ fn record_desired_state_read_page_query() {
 }
 
 #[cfg(test)]
-pub(crate) async fn count_desired_state_read_page_queries<F: std::future::Future>(
-    future: F,
-) -> (F::Output, usize) {
+pub(crate) async fn count_desired_state_read_page_queries<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
     let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = DESIRED_STATE_READ_PAGE_QUERIES
         .scope(queries.clone(), future)

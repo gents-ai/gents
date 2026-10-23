@@ -281,8 +281,8 @@ impl ClientRouteManager {
                 }
             }
         };
-        let readiness = combined_route_readiness(outbound, inbound);
-        readiness
+
+        combined_route_readiness(outbound, inbound)
     }
 
     async fn reconcile_route(

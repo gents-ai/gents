@@ -23,6 +23,10 @@ extern "C" {
     fn mach_port_deallocate(task: libc::mach_port_t, name: libc::mach_port_t) -> libc::c_int;
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "gives signalled OS threads real time to run their handlers"
+)]
 fn signal_every_other_thread() {
     // SAFETY: plain libc/mach calls on this process's own threads; the port
     // rights and thread array `task_threads` hands out are released below.
@@ -68,6 +72,10 @@ fn echo_once(runner: &PluginRunner, n: u64) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous test bounding a child process exit in real time"
+)]
 fn a_signal_on_every_thread_after_a_plugin_call_does_not_abort() {
     if std::env::var_os(CHILD_ENV).is_some() {
         let runtime = tokio::runtime::Builder::new_current_thread()

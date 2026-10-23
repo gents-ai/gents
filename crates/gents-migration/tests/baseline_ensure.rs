@@ -144,7 +144,7 @@ async fn existing_agent_session_schema_upgrades_in_place_and_preserves_rows() {
         .fields
         .iter()
         .map(|field| (field.name.clone(), field.id.clone()))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
 
     let first = ensure_migrations(node.as_ref())
         .await

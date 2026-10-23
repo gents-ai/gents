@@ -14,7 +14,10 @@ pub struct CanonicalPublishedTurn<Accepted> {
     pub accepted_tools: Vec<Accepted>,
 }
 
-pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
+pub trait CanonicalStreamWriter<L>: StreamWriter
+where
+    L: RequestLifecycleControl,
+{
     type AcceptedToolCall: Send;
 
     fn publish_authored_message(

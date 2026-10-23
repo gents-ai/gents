@@ -124,12 +124,15 @@ impl HttpRemoteP2pAdmin {
         Ok(request)
     }
 
-    fn json_request<T: Serialize + ?Sized>(
+    fn json_request<T>(
         &self,
         method: Method,
         path: &str,
         body: &T,
-    ) -> RemoteP2pAdminResult<RequestBuilder> {
+    ) -> RemoteP2pAdminResult<RequestBuilder>
+    where
+        T: Serialize + ?Sized,
+    {
         let body = serde_json::to_vec(body).map_err(|error| {
             RemoteP2pAdminError::LocalError(format!("encoding remote admin request body: {error}"))
         })?;
@@ -539,7 +542,10 @@ mod tests {
         mock.respond_with(response).mount(server).await;
     }
 
-    fn json_body<T: Serialize>(body: &T) -> Vec<u8> {
+    fn json_body<T>(body: &T) -> Vec<u8>
+    where
+        T: Serialize,
+    {
         serde_json::to_vec(body).expect("body")
     }
 

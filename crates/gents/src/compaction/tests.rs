@@ -2601,7 +2601,7 @@ fn pair_closed_messages(messages: &[Message]) -> bool {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         })
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     messages.iter().all(|message| match message {
         Message::User { content } => content.iter().all(|item| match item {
             UserContent::ToolResult(tool_result) => announced.contains(
@@ -2935,7 +2935,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         "did:test:test",
         "request-compaction-test",
         &request_doc_id,
-        &summary,
+        summary,
         &result.files_read,
         &result.files_modified,
         reduction.messages_compacted().unwrap(),

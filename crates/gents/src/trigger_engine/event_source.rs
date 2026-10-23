@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use std::collections::{BTreeMap, VecDeque};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -108,7 +109,7 @@ struct DeliveryBuild {
 pub struct EventSource {
     durable_checkpoint: Option<durable::PendingCheckpoint>,
     durable_ready: bool,
-    parked_arrivals: HashMap<String, durable::ParkedArrival>,
+    parked_arrivals: RapidHashMap<String, durable::ParkedArrival>,
     last_refusal_scan: Option<Instant>,
     durable_after_trigger: Option<String>,
     runtime_observer: Option<Arc<dyn crate::agent::RuntimeSnapshotObserver>>,
@@ -116,24 +117,24 @@ pub struct EventSource {
     node: Arc<EmbeddedNode>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: Option<events::Subscription>,
-    desired_collections: HashSet<String>,
+    desired_collections: RapidHashSet<String>,
     subscription_seed_failures: BTreeMap<String, String>,
     reconciled_generation: u64,
     #[allow(dead_code)]
     reconcile_debounce: Duration,
     cancel: CancellationToken,
     source_schema_cache: SourceSchemaCache,
-    collection_id_to_name: HashMap<String, String>,
-    seen_docs: HashMap<String, HashSet<String>>,
-    partially_seen_triggers: HashMap<SourceDocumentKey, HashSet<String>>,
-    startup_deferred_documents: HashSet<SourceDocumentKey>,
+    collection_id_to_name: RapidHashMap<String, String>,
+    seen_docs: RapidHashMap<String, RapidHashSet<String>>,
+    partially_seen_triggers: RapidHashMap<SourceDocumentKey, RapidHashSet<String>>,
+    startup_deferred_documents: RapidHashSet<SourceDocumentKey>,
     pub(super) deferrals: super::deferred_delivery::DeferralWatch,
     pending_intents: Mutex<VecDeque<FireIntent>>,
-    group_timers: Arc<Mutex<HashMap<GroupTrackingKey, GroupTimer>>>,
+    group_timers: Arc<Mutex<RapidHashMap<GroupTrackingKey, GroupTimer>>>,
     group_due_cursor: usize,
     group_recovery_cursor: usize,
-    group_page_cursors: HashMap<String, String>,
-    group_trigger_fingerprints: HashMap<String, String>,
+    group_page_cursors: RapidHashMap<String, String>,
+    group_trigger_fingerprints: RapidHashMap<String, String>,
     #[cfg(test)]
     group_recovery_page_queries: AtomicUsize,
     #[cfg(test)]
@@ -154,7 +155,7 @@ pub struct EventSource {
 /// keyword is dropped.
 #[derive(Default)]
 pub(crate) struct SourceSchemaCache {
-    by_collection: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
+    by_collection: tokio::sync::Mutex<RapidHashMap<String, Vec<String>>>,
 }
 
 async fn enrich_native_outcome_provenance(
@@ -365,28 +366,28 @@ impl EventSource {
             node,
             subscription_source: subs,
             subscription: None,
-            desired_collections: HashSet::new(),
+            desired_collections: RapidHashSet::new(),
             subscription_seed_failures: BTreeMap::new(),
             reconciled_generation: 0,
             reconcile_debounce: Duration::from_millis(250),
             cancel,
             source_schema_cache: SourceSchemaCache::default(),
-            collection_id_to_name: HashMap::new(),
+            collection_id_to_name: RapidHashMap::new(),
             durable_checkpoint: None,
             durable_ready: true,
-            parked_arrivals: HashMap::new(),
+            parked_arrivals: RapidHashMap::new(),
             last_refusal_scan: None,
             durable_after_trigger: None,
-            seen_docs: HashMap::new(),
-            partially_seen_triggers: HashMap::new(),
-            startup_deferred_documents: HashSet::new(),
+            seen_docs: RapidHashMap::new(),
+            partially_seen_triggers: RapidHashMap::new(),
+            startup_deferred_documents: RapidHashSet::new(),
             deferrals: Default::default(),
             pending_intents: Mutex::new(VecDeque::new()),
-            group_timers: Arc::new(Mutex::new(HashMap::new())),
+            group_timers: Arc::new(Mutex::new(RapidHashMap::new())),
             group_due_cursor: 0,
             group_recovery_cursor: 0,
-            group_page_cursors: HashMap::new(),
-            group_trigger_fingerprints: HashMap::new(),
+            group_page_cursors: RapidHashMap::new(),
+            group_trigger_fingerprints: RapidHashMap::new(),
             #[cfg(test)]
             group_recovery_page_queries: AtomicUsize::new(0),
             #[cfg(test)]
@@ -441,7 +442,7 @@ impl EventSource {
         // not trust that another code path assembled the snapshot the same
         // way: names that fail the collection-identifier check never enter
         // the desired set, so no seed/rescan/probe query is built from them.
-        let desired: HashSet<String> = snapshot
+        let desired: RapidHashSet<String> = snapshot
             .active_event_triggers()
             .values()
             .map(|t| t.source_collection.clone())
@@ -532,7 +533,7 @@ impl EventSource {
         let active_group_trigger_ids = group_triggers
             .iter()
             .map(|trigger| trigger.trigger_id.as_str())
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         let changed_group_trigger_ids = group_triggers
             .iter()
             .filter_map(|trigger| {
@@ -540,7 +541,7 @@ impl EventSource {
                 (self.group_trigger_fingerprints.get(&trigger.trigger_id) != Some(&fingerprint))
                     .then(|| trigger.trigger_id.clone())
             })
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         self.group_timers
             .lock()
             .expect("group_timers mutex poisoned")
@@ -597,7 +598,7 @@ impl EventSource {
             .filter(|trigger| changed_group_trigger_ids.contains(&trigger.trigger_id))
             .take(GROUP_STARTUP_PAGE_BUDGET)
         {
-            let mut seen = HashSet::new();
+            let mut seen = RapidHashSet::new();
             let (intents, next_cursor, complete) = self
                 .recover_trigger_group_page(snapshot, trigger, None, &mut seen)
                 .await;
@@ -653,7 +654,7 @@ impl EventSource {
             .values()
             .filter(|trigger| trigger.source_collection == collection)
             .map(|trigger| trigger.trigger_id.clone())
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         let mut correlation_probes: BTreeMap<(Option<String>, String), Vec<String>> =
             BTreeMap::new();
         for trigger in snapshot
@@ -682,7 +683,7 @@ impl EventSource {
             _ = self.cancel.cancelled() => anyhow::bail!("event source seeding cancelled"),
             ids = super::event_delivery::source_scan::load_doc_ids(&self.node, collection) => ids?,
         };
-        let mut doc_ids: HashSet<String> = ids.into_iter().collect();
+        let mut doc_ids: RapidHashSet<String> = ids.into_iter().collect();
         // Documents of a graph run already underway on a trigger's own
         // revision are live work, never history, even when they predate this
         // engine noticing the trigger.
@@ -695,9 +696,9 @@ impl EventSource {
                 )
                 .await?
             }
-            None => HashMap::new(),
+            None => RapidHashMap::new(),
         };
-        let mut deferred_by_doc: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut deferred_by_doc: RapidHashMap<String, RapidHashSet<String>> = RapidHashMap::new();
         for ((filter, field), correlated_trigger_ids) in correlation_probes {
             let filter = filter
                 .as_deref()
@@ -1218,7 +1219,7 @@ impl EventSource {
             "docs": docs,
             "complete": complete,
         });
-        let owner_for_callback = Self::delivery(snapshot, &trigger).ok()?.owner().to_owned();
+        let owner_for_callback = Self::delivery(snapshot, trigger).ok()?.owner().to_owned();
         let trigger_id_for_callback = trigger.trigger_id.clone();
         let source_doc_id_for_callback = source_doc_id.clone();
         let node_for_callback = self.node.clone();
@@ -1269,20 +1270,17 @@ impl EventSource {
         snapshot: &ActiveRuntimeSnapshot,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
         correlations: &[String],
-    ) -> HashSet<String> {
+    ) -> RapidHashSet<String> {
         if correlations.is_empty() {
-            return HashSet::new();
+            return RapidHashSet::new();
         }
         let Some(node_did) = snapshot
             .agent(&trigger.task.agent_id)
             .map(|agent| agent.node_did())
         else {
-            return HashSet::new();
+            return RapidHashSet::new();
         };
-        let delivery = Delivery::Trigger {
-            node_did: node_did,
-            trigger,
-        };
+        let delivery = Delivery::Trigger { node_did, trigger };
         let keys = correlations
             .iter()
             .map(|correlation| {
@@ -1291,7 +1289,7 @@ impl EventSource {
                     super::durable_fire_key("event-group", &[&delivery.group_key(correlation)]),
                 )
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<RapidHashMap<_, _>>();
         let correlations = correlations
             .iter()
             .map(|correlation| {
@@ -1328,7 +1326,7 @@ impl EventSource {
                     error = %error,
                     "event-trigger batched marker prune failed; dispatch will retain the final marker check",
                 );
-                return HashSet::new();
+                return RapidHashSet::new();
             }
         };
         response
@@ -1353,9 +1351,9 @@ impl EventSource {
         &self,
         delivery: Delivery<'_>,
         correlations: &[String],
-    ) -> HashSet<String> {
+    ) -> RapidHashSet<String> {
         if correlations.is_empty() {
-            return HashSet::new();
+            return RapidHashSet::new();
         }
         let keys_to_correlations = correlations
             .iter()
@@ -1363,7 +1361,7 @@ impl EventSource {
                 let key = delivery.group_key(correlation);
                 (key, correlation.clone())
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<RapidHashMap<_, _>>();
         let keys = keys_to_correlations
             .keys()
             .map(|key| format!("\"{}\"", crate::graphql::escape_graphql_string(key)))
@@ -1393,7 +1391,7 @@ impl EventSource {
                     error = %error,
                     "event-trigger durable quiescence prune failed; invalid groups may be rechecked",
                 );
-                return HashSet::new();
+                return RapidHashSet::new();
             }
         };
         response
@@ -1418,7 +1416,7 @@ impl EventSource {
         snapshot: &ActiveRuntimeSnapshot,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
         cursor: Option<&str>,
-        seen_correlations: &mut HashSet<String>,
+        seen_correlations: &mut RapidHashSet<String>,
     ) -> (Vec<FireIntent>, Option<String>, bool) {
         #[cfg(test)]
         self.group_recovery_page_queries
@@ -1551,7 +1549,7 @@ impl EventSource {
         {
             self.group_recovery_cursor = self.group_recovery_cursor.wrapping_add(1);
             let cursor = self.group_page_cursors.get(&trigger.trigger_id).cloned();
-            let mut seen = HashSet::new();
+            let mut seen = RapidHashSet::new();
             let (page_intents, next_cursor, complete) = self
                 .recover_trigger_group_page(
                     snapshot.as_ref(),
@@ -1629,18 +1627,14 @@ impl EventSource {
     /// A fire whose result never reached the acknowledgment channel has no
     /// `on_result` writer of its own, so its park would otherwise leave no
     /// durable reason and a seed wait would spend its whole deadline on it.
-    /// The caller may be an unwinding or aborting task, so the spawn is
-    /// best-effort: outside a runtime it does nothing rather than panic.
     fn spawn_unacknowledged_field_write(
+        runtime: &crate::drop_cleanup::DropCleanup,
         node: Arc<EmbeddedNode>,
         node_did: String,
         trigger_id: String,
         source_doc_id: String,
     ) {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        handle.spawn(async move {
+        runtime.spawn(async move {
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             let update = crate::document_config::TriggerRuntimeUpdate {
                 last_attempt_at: Some(now),
@@ -1918,7 +1912,7 @@ impl EventSource {
                 args_vars: None,
                 durable_fire_key: crate::trigger_engine::durable_fire_key(
                     "event-document",
-                    &[&trigger.trigger_id, &source_doc_id],
+                    &[&trigger.trigger_id, source_doc_id],
                 ),
                 pre_materialized_request_id: None,
                 on_result: Box::new(move |result| {
@@ -1992,6 +1986,7 @@ pub(super) struct UnacknowledgedGuard {
     node_did: String,
     trigger_id: String,
     source_doc_id: String,
+    runtime: crate::drop_cleanup::DropCleanup,
     armed: std::cell::Cell<bool>,
 }
 
@@ -2007,6 +2002,7 @@ impl UnacknowledgedGuard {
             node_did,
             trigger_id,
             source_doc_id,
+            runtime: crate::drop_cleanup::DropCleanup::current(),
             armed: std::cell::Cell::new(true),
         }
     }
@@ -2020,6 +2016,7 @@ impl Drop for UnacknowledgedGuard {
     fn drop(&mut self) {
         if self.armed.get() {
             EventSource::spawn_unacknowledged_field_write(
+                &self.runtime,
                 self.node.clone(),
                 self.node_did.clone(),
                 self.trigger_id.clone(),

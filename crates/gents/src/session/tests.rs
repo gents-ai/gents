@@ -69,7 +69,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     assert!(matches!(
         history.first(),
         Some(Message::User { content })
-            if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "older steering")
+            if matches!(first_content(content), UserContent::Text(Text { text }) if text == "older steering")
     ));
     assert_eq!(history.get(1), Some(&tool_result));
     node.shutdown().await;
@@ -435,11 +435,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
         right.is_ok(),
         "exactly one stale writer must win"
     );
-    let loser = if left.is_err() {
-        left.unwrap_err()
-    } else {
-        right.unwrap_err()
-    };
+    let loser = left.err().unwrap_or_else(|| right.unwrap_err());
     assert!(
         format!("{loser:#}").contains("stale compaction generation"),
         "unexpected loser error: {loser:#}"
@@ -1005,6 +1001,10 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     node.shutdown().await;
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared test helper with call sites in modules outside session"
+)]
 pub(crate) async fn import_history_observation(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request_id: &str,

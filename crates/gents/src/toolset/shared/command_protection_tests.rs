@@ -162,7 +162,7 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
         binary_path: "/bin/sh".into(),
         description: String::new(),
         allowed_argv_prefixes: vec![vec!["-c".into()]],
-        env_vars: HashMap::from([("FIXTURE_WORD".into(), "kept".into())]),
+        env_vars: RapidHashMap::from_iter([("FIXTURE_WORD".into(), "kept".into())]),
         working_dir: Some(root.clone()),
         timeout_secs: 30,
         max_output_chars: 4096,

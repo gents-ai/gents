@@ -171,6 +171,10 @@ fn run_job(cwd: &Path, args: &[&str]) -> Result<(Option<i32>, String, String)> {
 
 /// Seeds one plugin job row and returns its doc id. `lifecycle` and `state`
 /// are the row's persisted values (`job_state` reads both).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test seed helper takes the seeded row's fields"
+)]
 pub(crate) async fn seed_job(
     access: &ConfigAccess,
     node_did: &str,
@@ -231,7 +235,7 @@ pub(crate) async fn seed_job(
     let mutation = format!(
         r#"mutation($job_pin: JSON, $job_progress: JSON) {{ create_AgentToolCall(input: {{
             tool_call_key: "{key}", request_id: "request-{call}", request_doc_id: "{request_doc_id}",
-            session_id: "{session}", node_did: "{node_did}", tool_name: "workflow",
+            session_id: "{session}", node_did: "{node_did}", requester_did: "{node_did}", tool_name: "workflow",
             tool_call_id: "{call}", message_sequence: 1, await_mode: "background", status: "{lifecycle}", lifecycle_state: "{lifecycle}",
             started_at: "2026-06-01T10:00:00Z", {completed_at}
             job_pin: $job_pin, job_progress: $job_progress
@@ -304,7 +308,7 @@ pub(crate) async fn seed_admission(
     let created_at = "2026-06-01T10:00:00Z";
     let segment = OutputSegment {
         node_did: node_did.into(),
-        requester_did: None,
+        requester_did: Some(node_did.into()),
         session_id: session.into(),
         request_doc_id: request_doc_id.into(),
         source: OutputSource::ProviderTurn {
@@ -349,10 +353,10 @@ pub(crate) async fn seed_admission(
     let close_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")?;
     let message = TranscriptMessage {
-        message_key: gents::session::sequence_message_key(node_did, session, None, 1),
+        message_key: gents::session::sequence_message_key(node_did, session, Some(node_did), 1),
         session_id: session.into(),
         node_did: node_did.into(),
-        requester_did: None,
+        requester_did: Some(node_did.into()),
         request_doc_id: Some(request_doc_id.into()),
         publication: MessagePublication::RequestExecution {
             execution_generation: generation,
@@ -398,7 +402,7 @@ pub(crate) async fn seed_receipt(
     let key = format!("{session}:background-receipt:{row_doc_id}");
     let segment = OutputSegment {
         node_did: node_did.into(),
-        requester_did: None,
+        requester_did: Some(node_did.into()),
         session_id: session.into(),
         request_doc_id: request_doc_id.into(),
         source: OutputSource::Authored { key: key.clone() },
@@ -435,7 +439,7 @@ pub(crate) async fn seed_receipt(
         message_key: key,
         session_id: session.into(),
         node_did: node_did.into(),
-        requester_did: None,
+        requester_did: Some(node_did.into()),
         request_doc_id: Some(request_doc_id.into()),
         publication: MessagePublication::ToolDelivery {
             tool_call_doc_id: row_doc_id.into(),
@@ -585,17 +589,40 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
         let node = initialized_node(tempdir.path(), &node_home, "cli-job-offline").await?;
         gents::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(Arc::new(node));
-        let request = graphql_mutation_with_variables(
+        let create = gents::build_signed_request(
+            gents::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                gents::RequestIdentity {
+                    request_id: "request-call-running".into(),
+                    node_did: did.clone(),
+                    requester_did: None,
+                    agent_id: "general".into(),
+                    session_id: "job-s1".into(),
+                    content: "run".into(),
+                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: "2026-06-01T10:00:00Z".into(),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+            ),
+            gents::RequestSigner::RegisteredTarget,
+        )
+        .await?;
+        let mutation = create
+            .graphql_mutation()
+            .map_err(|error| anyhow::anyhow!(error))?;
+        let request = graphql_mutation_with_variables(&access, &mutation, &json!({})).await?;
+        let request_doc_id =
+            gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
+        // A claimed request is processing; claim is not part of the signed receipt.
+        graphql_mutation_with_variables(
             &access,
             &format!(
-                r#"mutation {{ create_AgentRequest(input: {{ request_id: "request-call-running", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "job-s1", content: "run", lifecycle_state: "processing", created_at: "2026-06-01T10:00:00Z" }}) {{ _docID }} }}"#,
-                node_did = escape_graphql_string(&did)
+                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&request_doc_id)
             ),
             &json!({}),
         )
         .await?;
-        let request_doc_id =
-            gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
         let row = seed_job(
             &access,
             &did,
@@ -654,20 +681,24 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
     Ok(())
 }
 
+fn message_text(message: &Value) -> String {
+    match &message["content"] {
+        Value::String(content) => content.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn last_user_text(request: &Value) -> String {
-    let text = request["messages"]
+    request["messages"]
         .as_array()
         .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
-        .map(|message| match &message["content"] {
-            Value::String(content) => content.clone(),
-            Value::Array(parts) => parts
-                .iter()
-                .filter_map(|part| part["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => String::new(),
-        });
-    text.unwrap_or_default()
+        .map(message_text)
+        .unwrap_or_default()
 }
 
 fn tool_result_texts(request: &Value) -> Vec<String> {
@@ -676,15 +707,7 @@ fn tool_result_texts(request: &Value) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter(|message| message["role"] == "tool")
-        .map(|message| match &message["content"] {
-            Value::String(content) => content.clone(),
-            Value::Array(parts) => parts
-                .iter()
-                .filter_map(|part| part["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => String::new(),
-        })
+        .map(message_text)
         .collect()
 }
 
@@ -704,7 +727,7 @@ async fn children_of(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
         &format!(
             r#"{{
         AgentRequest(filter: {{ {} }}) {{
-            request_id caused_by_trigger_kind caused_by_parent_request_id
+            _docID request_id input caused_by_trigger_kind caused_by_parent_request_id
         }}
     }}"#,
             gents::session::public_request_filter(&format!(
@@ -848,11 +871,20 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                     _ => ChatAction::Sse(completion_text_sse("waiting on the job")),
                 };
             }
-            if released.load(Ordering::SeqCst)
+            let watched = spawn_handle.lock().unwrap().clone();
+            let completed_watch = !watched.is_empty()
                 && request["messages"]
-                    .to_string()
-                    .contains(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
-            {
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|message| message["role"] == "user")
+                    .map(message_text)
+                    .any(|text| {
+                        text.contains("<tool-completion ")
+                            && text.contains(&format!("tool_call_id=\"{watched}\""))
+                            && text.contains("status=\"completed\"")
+                    });
+            if released.load(Ordering::SeqCst) && completed_watch {
                 return if calls_tool(request, "update_goal") {
                     ChatAction::Sse(completion_text_sse("goal complete"))
                 } else {
@@ -958,6 +990,39 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         .as_str()
         .context("held request id")?
         .to_owned();
+    let opening_doc = resumed["doc_id"]
+        .as_str()
+        .context("Goal opening request document")?;
+    let binding = graphql_query(
+        &g,
+        &format!(
+            "{{ Goal(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{goal_id assignment_root_request_doc_id}} }}",
+            escape_graphql_string(&served.node_did),
+            escape_graphql_string(&s_goal),
+        ),
+    )
+    .await?;
+    assert_eq!(
+        binding["data"]["Goal"][0]["assignment_root_request_doc_id"],
+        opening_doc
+    );
+    let children = children_of(&g, &predecessor).await?;
+    assert_eq!(children.len(), 1, "{children:?}");
+    assert_eq!(children[0]["_docID"], opening_doc);
+    assert_eq!(
+        children[0]["input"]["goal_assignment"],
+        json!({"goal_id": resumed["goal_id"], "root_request_doc_id": null}),
+    );
+    let replay = served.goal(&[
+        "resume-request",
+        "--session",
+        &s_goal,
+        "--from",
+        &predecessor,
+    ])?;
+    assert_eq!(replay["created"], false, "{replay}");
+    assert_eq!(replay["doc_id"], opening_doc);
+    assert_eq!(children_of(&g, &predecessor).await?, children);
     let goal = served.goal(&["show", "--session", &s_goal])?;
     assert_eq!(goal["status"], "active", "{goal}");
     let seq0 = goal["continuation_sequence"]
@@ -1001,6 +1066,10 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
     assert!(delivery["caused_by_trigger_kind"].is_null(), "{delivery}");
+    assert_eq!(
+        delivery["input"]["goal_assignment"],
+        json!({"goal_id": resumed["goal_id"], "root_request_doc_id": opening_doc}),
+    );
     let delivery_id = delivery["request_id"]
         .as_str()
         .context("delivery request id")?;
@@ -1023,11 +1092,26 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         );
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
-    assert_eq!(
-        goal["continuation_sequence"].as_u64(),
-        Some(seq0 + 1),
+    if goal["continuation_sequence"].as_u64() != Some(seq0 + 1) {
+        let requests = graphql_query(&g, &format!(
+            "{{AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{_docID request_id purpose lifecycle_state input caused_by_parent_request_id caused_by_trigger_kind created_at}} Goal(filter: {{session_id: {{_eq: \"{}\"}}}}) {{continuation_sequence last_continued_from_request_id assignment_root_request_doc_id token_usage_baseline tokens_used}}}}",
+            escape_graphql_string(&served.node_did), escape_graphql_string(&s_goal), escape_graphql_string(&s_goal),
+        )).await?;
+        panic!(
+            "unexpected Goal continuation count: expected {}; goal={goal}; requests={requests}",
+            seq0 + 1
+        );
+    }
+    assert!(
+        goal["tokens_used"]
+            .as_i64()
+            .is_some_and(|tokens| tokens > 0),
         "{goal}"
     );
+    let updates = wait_for_completed_tool_calls(&g, &s_goal, "update_goal", 1).await?;
+    assert_eq!(updates.len(), 1, "{updates:?}");
+    assert_eq!(updates[0]["request_doc_id"], delivery["_docID"]);
+    assert!(children_of(&g, delivery_id).await?.is_empty());
     assert_eq!(children_of(&g, &held).await?.len(), 1);
     Ok(())
 }

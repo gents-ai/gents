@@ -16,6 +16,10 @@ struct ProviderWire {
     bodies: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
 
+#[expect(
+    clippy::manual_async_fn,
+    reason = "the trait requires a 'static future, which an async fn borrowing &self cannot provide"
+)]
 impl HttpClientExt for ProviderWire {
     fn send<T, U>(
         &self,

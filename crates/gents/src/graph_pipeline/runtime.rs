@@ -702,7 +702,6 @@ async fn create_document(
     let mutation = format!("mutation {{ create_{collection}(input: {input}) {{ _docID }} }}");
     let response = txn.execute(&mutation).await?;
     gents_protocol::graphql::extract_mutation_doc_id(&response, collection)
-        .map_err(anyhow::Error::from)
 }
 
 async fn update_document(
@@ -1315,14 +1314,16 @@ pub async fn start_graph_run(
         Box::pin(async move {
             start_run_in_txn(
                 txn,
-                caller_did,
-                graph_id,
-                expected_revision_digest,
-                entry_name,
-                input,
-                origin,
-                run_id,
-                now,
+                StartRun {
+                    caller_did,
+                    graph_id,
+                    expected_revision_digest,
+                    entry_name,
+                    input,
+                    origin,
+                    run_id,
+                    now,
+                },
             )
             .await
         })
@@ -1349,14 +1350,16 @@ pub async fn start_graph_run_with_access(
             Box::pin(async move {
                 start_run_in_txn(
                     txn,
-                    caller_did,
-                    graph_id,
-                    expected_revision_digest,
-                    entry_name,
-                    input,
-                    origin,
-                    run_id,
-                    now,
+                    StartRun {
+                        caller_did,
+                        graph_id,
+                        expected_revision_digest,
+                        entry_name,
+                        input,
+                        origin,
+                        run_id,
+                        now,
+                    },
                 )
                 .await
             })
@@ -1364,17 +1367,29 @@ pub async fn start_graph_run_with_access(
         .await
 }
 
-async fn start_run_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    caller_did: &str,
-    graph_id: &str,
-    expected_revision_digest: Option<&str>,
-    entry_name: &str,
-    input: &Value,
+#[derive(Clone, Copy)]
+struct StartRun<'a> {
+    caller_did: &'a str,
+    graph_id: &'a str,
+    expected_revision_digest: Option<&'a str>,
+    entry_name: &'a str,
+    input: &'a Value,
     origin: EntryInputOrigin,
-    run_id: &str,
-    now: &str,
-) -> Result<GraphRunReceipt> {
+    run_id: &'a str,
+    now: &'a str,
+}
+
+async fn start_run_in_txn(txn: &ConfigApplyTxn<'_>, run: StartRun<'_>) -> Result<GraphRunReceipt> {
+    let StartRun {
+        caller_did,
+        graph_id,
+        expected_revision_digest,
+        entry_name,
+        input,
+        origin,
+        run_id,
+        now,
+    } = run;
     let definition = query_graph_definition(txn, caller_did, graph_id)
         .await?
         .context("graph does not exist")?;
@@ -2853,7 +2868,7 @@ mod tests {
             identity.did(),
             identity.did(),
             "test-agent",
-            &format!("session-{request_id}"),
+            format!("session-{request_id}"),
             "Execute the pinned graph stage",
             "scheduled",
             "2026-08-25T00:00:00Z",

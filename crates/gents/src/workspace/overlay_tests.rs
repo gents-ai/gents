@@ -1101,7 +1101,7 @@ async fn artifact_alternate_owner(
         did,
         did,
         "general",
-        &format!("artifact-session-{name}"),
+        format!("artifact-session-{name}"),
         "Review source",
         "interactive",
         &now,

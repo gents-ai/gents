@@ -34,7 +34,10 @@ impl Fixture {
             .join("other/nested/file.txt")
     }
 
-    async fn run<F: Future>(&self, future: F) -> F::Output {
+    async fn run<F>(&self, future: F) -> F::Output
+    where
+        F: Future,
+    {
         let context = workspace::for_request(
             Some(self.home.path()),
             "node",

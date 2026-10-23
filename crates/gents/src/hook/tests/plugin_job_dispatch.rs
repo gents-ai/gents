@@ -234,7 +234,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
     };
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
-            .with_job_tools(HashMap::from([(TOOL.to_owned(), binding)]));
+            .with_job_tools(RapidHashMap::from_iter([(TOOL.to_owned(), binding)]));
     if options.driver {
         hook = hook.with_job_driver(JobDriver::new(JobRuntime {
             node: node.clone(),

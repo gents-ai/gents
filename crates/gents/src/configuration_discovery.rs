@@ -1739,8 +1739,11 @@ fn raw_path_string(path: &Path) -> String {
 }
 
 #[cfg(test)]
+type PreopenHook = Box<dyn FnOnce(&Path)>;
+
+#[cfg(test)]
 thread_local! {
-    static PREOPEN_TEST_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+    static PREOPEN_TEST_HOOK: std::cell::RefCell<Option<PreopenHook>> =
         std::cell::RefCell::new(None);
 }
 

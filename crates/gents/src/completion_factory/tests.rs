@@ -529,7 +529,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
 
     ResolvedAgent {
         agent_id: "general".to_string(),
-        node: node,
+        node,
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
@@ -589,12 +589,10 @@ fn claude_advertised_efforts_override_spoofed_additional_params() {
 #[test]
 fn runtime_budget_construction_preserves_zero_and_rejects_negative_values() {
     let agent = agent_with_retry(CompletionRetryProfileFields::default());
-    for invalid in [-1] {
-        let error = parse_aggregate_token_limit(Some(invalid))
-            .err()
-            .expect("negative aggregate budget must be rejected");
-        assert!(error.to_string().contains("must not be negative"));
-    }
+    let invalid = -1;
+    let error = parse_aggregate_token_limit(Some(invalid))
+        .expect_err("negative aggregate budget must be rejected");
+    assert!(error.to_string().contains("must not be negative"));
 
     assert_eq!(parse_aggregate_token_limit(None).unwrap(), None);
     assert_eq!(parse_aggregate_token_limit(Some(0)).unwrap(), Some(0));

@@ -41,13 +41,15 @@ pub(super) async fn reconcile_peer_tick_with_replay(
 
 enum PreparedPairingState {
     DesiredReadFailed,
-    Ready {
-        desired: Option<PairingDesired>,
-        enrollment_generation: Option<EnrollmentRouteGeneration>,
-        applied: LoadedPairingApplied,
-        reconnected: bool,
-        force_replay: bool,
-    },
+    Ready(Box<ReadyPairing>),
+}
+
+struct ReadyPairing {
+    desired: Option<PairingDesired>,
+    enrollment_generation: Option<EnrollmentRouteGeneration>,
+    applied: LoadedPairingApplied,
+    reconnected: bool,
+    force_replay: bool,
 }
 
 pub(super) struct PairingPeerPreparation {
@@ -129,13 +131,13 @@ pub(super) async fn prepare_pairing_peer(
                 return PairingPeerPreparation {
                     peer_id,
                     active_before,
-                    state: Ok(PreparedPairingState::Ready {
+                    state: Ok(PreparedPairingState::Ready(Box::new(ReadyPairing {
                         desired: None,
                         enrollment_generation,
                         applied,
                         reconnected: false,
                         force_replay: false,
-                    }),
+                    }))),
                 };
             }
             let addresses = desired_state
@@ -169,13 +171,13 @@ pub(super) async fn prepare_pairing_peer(
     PairingPeerPreparation {
         peer_id,
         active_before,
-        state: Ok(PreparedPairingState::Ready {
+        state: Ok(PreparedPairingState::Ready(Box::new(ReadyPairing {
             desired,
             enrollment_generation,
             applied,
             reconnected,
             force_replay: (force_replay_when_active || dropped_since_sweep) && active_before,
-        }),
+        }))),
     }
 }
 
@@ -186,14 +188,7 @@ pub(super) async fn reconcile_prepared_peer(
 ) -> Result<PairingTickOutcome> {
     let active_before = prepared.active_before;
     let peer_id = prepared.peer_id;
-    let PreparedPairingState::Ready {
-        mut desired,
-        enrollment_generation,
-        applied: mut applied_record,
-        reconnected,
-        force_replay,
-    } = prepared.state?
-    else {
+    let PreparedPairingState::Ready(ready) = prepared.state? else {
         return Ok(PairingTickOutcome {
             peer_id,
             ops_applied: Vec::new(),
@@ -203,6 +198,13 @@ pub(super) async fn reconcile_prepared_peer(
             live_route_matches: false,
         });
     };
+    let ReadyPairing {
+        mut desired,
+        enrollment_generation,
+        applied: mut applied_record,
+        reconnected,
+        force_replay,
+    } = *ready;
     let mut desired_state = desired.clone().unwrap_or_default();
     let mut actual = read_actual(admin, &applied_record.state.replicator_addresses).await?;
 

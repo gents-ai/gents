@@ -6,7 +6,7 @@
 //! admission task-local context because the completion client is built once
 //! per agent while the session id varies per request.
 
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::future::Future;
 
 use anyhow::{Context, Result};
@@ -165,7 +165,7 @@ impl<H> SessionTaggingHttpClient<H> {
 
     fn tag_with_trace_context_headers<T>(
         req: Request<T>,
-        trace_context_headers: HashMap<String, String>,
+        trace_context_headers: RapidHashMap<String, String>,
     ) -> Request<Bytes>
     where
         T: Into<Bytes>,
@@ -184,7 +184,10 @@ impl<H> SessionTaggingHttpClient<H> {
         Request::from_parts(parts, body)
     }
 
-    fn inject_headers(headers: &mut HeaderMap, trace_context_headers: HashMap<String, String>) {
+    fn inject_headers(
+        headers: &mut HeaderMap,
+        trace_context_headers: RapidHashMap<String, String>,
+    ) {
         if let Some(session_id) = crate::admission::current_session_id() {
             if let Ok(value) = HeaderValue::from_str(&session_id) {
                 headers.insert(SESSION_ID_HEADER, value);
@@ -195,7 +198,7 @@ impl<H> SessionTaggingHttpClient<H> {
 
     fn insert_trace_context_headers(
         headers: &mut HeaderMap,
-        trace_context_headers: HashMap<String, String>,
+        trace_context_headers: RapidHashMap<String, String>,
     ) {
         for (name, value) in trace_context_headers {
             let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
@@ -418,7 +421,7 @@ mod tests {
         let req = Request::new(Bytes::from_static(b""));
         let tagged = SessionTaggingHttpClient::<ReqwestClient>::tag_with_trace_context_headers(
             req,
-            HashMap::from([
+            RapidHashMap::from_iter([
                 (
                     "traceparent".to_string(),
                     "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 #[cfg(test)]
 use std::collections::VecDeque;
 use std::fmt;
@@ -110,9 +110,20 @@ fn take_messages_sse_fixture() -> Option<String> {
 }
 
 #[cfg(test)]
-pub(crate) fn lock_fixtures_for_test() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    let guard = LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+static FIXTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Async tests hold the guard across awaits, so the lock is a tokio mutex.
+#[cfg(test)]
+pub(crate) async fn lock_fixtures_for_test() -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = FIXTURE_LOCK.lock().await;
+    install_messages_sse_fixtures(Vec::new());
+    guard
+}
+
+/// For synchronous tests; panics if called inside a Tokio runtime.
+#[cfg(test)]
+pub(crate) fn blocking_lock_fixtures_for_test() -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = FIXTURE_LOCK.blocking_lock();
     install_messages_sse_fixtures(Vec::new());
     guard
 }
@@ -127,10 +138,10 @@ pub(crate) fn lock_fixtures_for_test() -> std::sync::MutexGuard<'static, ()> {
 /// [`push_line`]: MessagesSseState::push_line
 /// [`finish`]: MessagesSseState::finish
 pub struct MessagesSseState {
-    surface: HashSet<String>,
+    surface: RapidHashSet<String>,
     pending: Option<PendingBlock>,
     last_reasoning_index: Option<u64>,
-    seen_ids: HashSet<String>,
+    seen_ids: RapidHashSet<String>,
     usage: Option<rig::completion::Usage>,
     data: String,
     finished: bool,
@@ -141,12 +152,12 @@ pub struct MessagesSseState {
 }
 
 impl MessagesSseState {
-    pub fn new(surface: HashSet<String>) -> Self {
+    pub fn new(surface: RapidHashSet<String>) -> Self {
         Self {
             surface,
             pending: None,
             last_reasoning_index: None,
-            seen_ids: HashSet::new(),
+            seen_ids: RapidHashSet::new(),
             usage: None,
             data: String::new(),
             finished: false,
@@ -607,14 +618,14 @@ impl MessagesSseState {
 
 pub fn parse_messages_sse(
     sse: &str,
-    surface: &HashSet<String>,
+    surface: &RapidHashSet<String>,
 ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
     parse_messages_sse_typed(sse, surface).map_err(Into::into)
 }
 
 pub fn parse_messages_sse_typed(
     sse: &str,
-    surface: &HashSet<String>,
+    surface: &RapidHashSet<String>,
 ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
     let mut state = MessagesSseState::new(surface.clone());
     let mut events = Vec::new();
@@ -680,8 +691,8 @@ impl PendingTool {
 
 fn mapped_tool_call(
     tool: PendingTool,
-    surface: &HashSet<String>,
-    seen_ids: &mut HashSet<String>,
+    surface: &RapidHashSet<String>,
+    seen_ids: &mut RapidHashSet<String>,
 ) -> Result<RawStreamingChoice<ClaudeStreamResponse>, MessagesParseError> {
     if tool.id.trim().is_empty() || tool.name.trim().is_empty() {
         return Err(MessagesParseError::MalformedToolUse {
@@ -796,7 +807,7 @@ fn stream_sse_body_observed(
         let mut reservation = match audit_sender.as_ref() {
             Some(sender) => match sender.reserve().await {
                 Ok(reservation) => Some(reservation),
-                Err(()) => {
+                Err(_) => {
                     yield Err(audit_queue_closed());
                     return;
                 }
@@ -846,7 +857,7 @@ async fn push_line_observed(
 ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
     let dispatches = line.strip_suffix('\r').unwrap_or(line).is_empty();
     let mut reservation = match (dispatches, audit_sender) {
-        (true, Some(sender)) => Some(sender.reserve().await.map_err(|()| audit_queue_closed())?),
+        (true, Some(sender)) => Some(sender.reserve().await.map_err(|_| audit_queue_closed())?),
         _ => None,
     };
     let parsed = state.push_line(line);
@@ -854,7 +865,7 @@ async fn push_line_observed(
         if let Some(reservation) = reservation.as_mut() {
             reservation
                 .emit(event)
-                .map_err(|()| audit_event_overflow())?;
+                .map_err(|_| audit_event_overflow())?;
         } else if audit_sender.is_some() {
             return Err(audit_event_overflow());
         }
@@ -862,32 +873,38 @@ async fn push_line_observed(
     parsed
 }
 
-pub async fn stream_messages<S: BearerSource>(
+pub async fn stream_messages<S>(
     model: &str,
     request: &CompletionRequest,
-    surface: HashSet<String>,
+    surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
-> {
+>
+where
+    S: BearerSource,
+{
     stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http, usage).await
 }
 
-pub(crate) async fn stream_messages_at<S: BearerSource>(
+pub(crate) async fn stream_messages_at<S>(
     uri: &str,
     model: &str,
     request: &CompletionRequest,
-    surface: HashSet<String>,
+    surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
     usage: Option<Arc<crate::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
-> {
+>
+where
+    S: BearerSource,
+{
     #[cfg(test)]
     let fixture = take_messages_sse_fixture();
     #[cfg(not(test))]

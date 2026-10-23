@@ -235,8 +235,8 @@ pub enum LiveView {
         streams: Vec<LiveStream>,
     },
     Published {
-        message: TranscriptMessage,
-        native: Message,
+        message: Box<TranscriptMessage>,
+        native: Box<Message>,
     },
 }
 
@@ -979,8 +979,8 @@ fn project_published<'a>(observation: &'a LiveObservation<'a>) -> LiveView {
         message,
     ) {
         Ok(native) => LiveView::Published {
-            message: message.clone(),
-            native,
+            message: Box::new(message.clone()),
+            native: Box::new(native),
         },
         Err(error) => match &error {
             ReconstructionError::UnresolvedClose { .. } => LiveView::Loading,

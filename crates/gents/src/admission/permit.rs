@@ -7,8 +7,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::client::AdmissionError;
 use super::controller::{InferenceCallRecord, PoolPermit};
-use super::persistence::{persist_existing_call_terminal, spawn_persistence, ProviderCallUsage};
+use super::persistence::{persist_existing_call_terminal, ProviderCallUsage};
 use super::stream_guard::StreamGuardLifecycle;
+use crate::drop_cleanup::DropCleanup;
 
 pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,
@@ -20,6 +21,7 @@ pub(crate) struct AdmissionPermit {
     cancel_observer: Option<CancellationToken>,
     terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     provider_activity: Option<Arc<gents_loop::provider_activity::ProviderActivity>>,
+    runtime: DropCleanup,
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +51,7 @@ impl AdmissionPermit {
             cancel_observer,
             terminal_failure_observer,
             provider_activity: None,
+            runtime: DropCleanup::current(),
         }
     }
 
@@ -239,7 +242,7 @@ impl Drop for AdmissionPermit {
         let doc_id = self.doc_id.clone();
         let charged_usage = terminal.usage;
         // Drop must never block a Tokio runtime thread.
-        spawn_persistence(async move {
+        self.runtime.spawn(async move {
             if let Err(error) = persist_existing_call_terminal(
                 node,
                 &call,

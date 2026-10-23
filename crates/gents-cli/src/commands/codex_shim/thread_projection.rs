@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
@@ -124,12 +124,12 @@ pub(super) async fn load_codex_thread(
     Ok(Some(assemble_caused_record(state, link).await?))
 }
 
-pub(super) async fn root_thread_ids(state: &ShimState) -> Result<HashSet<String>> {
+pub(super) async fn root_thread_ids(state: &ShimState) -> Result<RapidHashSet<String>> {
     let mut ids = list_scoped_sessions(state)
         .await?
         .into_iter()
         .map(|session| session.session_id)
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     ids.extend(state.created_thread_ids().await);
     Ok(ids)
 }
@@ -139,7 +139,7 @@ pub(super) async fn loaded_codex_thread_ids(state: &ShimState) -> Result<Vec<Str
     let root_ids = loaded
         .iter()
         .cloned()
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     for link in load_caused_threads_for_root_ids(state, &loaded).await? {
         if root_ids.contains(&link.root_session_id) && !loaded.contains(&link.session_id) {
             loaded.push(link.session_id);
@@ -154,7 +154,7 @@ async fn list_codex_threads_by_archived_with_git_cache(
     git_info_cache: &mut ThreadGitInfoCache,
 ) -> Result<Vec<CodexThreadRecord>> {
     let sessions = list_scoped_sessions(state).await?;
-    let mut seen = HashSet::with_capacity(sessions.len());
+    let mut seen = RapidHashSet::with_capacity(sessions.len());
     let mut records = Vec::with_capacity(sessions.len());
     for session in sessions {
         let session_id = session.session_id;
@@ -221,7 +221,7 @@ pub(super) async fn list_codex_threads_for_sources(
             );
         }
     }
-    let mut seen = HashSet::<String>::new();
+    let mut seen = RapidHashSet::<String>::new();
     let mut records = if include_cli {
         active_roots
     } else {
@@ -399,7 +399,7 @@ struct RootThreadWorkspace {
 
 fn index_root_workspaces<'a>(
     roots: impl IntoIterator<Item = &'a CodexThreadRecord>,
-) -> HashMap<String, RootThreadWorkspace> {
+) -> RapidHashMap<String, RootThreadWorkspace> {
     roots
         .into_iter()
         .map(|root| {
@@ -415,7 +415,7 @@ fn index_root_workspaces<'a>(
 }
 
 fn root_workspace_for_link<'a>(
-    root_workspaces: &'a HashMap<String, RootThreadWorkspace>,
+    root_workspaces: &'a RapidHashMap<String, RootThreadWorkspace>,
     link: &CausedThread,
 ) -> Option<&'a RootThreadWorkspace> {
     root_workspaces.get(&link.root_session_id)
@@ -423,7 +423,7 @@ fn root_workspace_for_link<'a>(
 
 #[derive(Default)]
 struct ThreadGitInfoCache {
-    by_cwd: HashMap<PathBuf, Option<Value>>,
+    by_cwd: RapidHashMap<PathBuf, Option<Value>>,
 }
 
 impl ThreadGitInfoCache {

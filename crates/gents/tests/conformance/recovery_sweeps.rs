@@ -492,7 +492,7 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
                 preview: Some("recovery request".into()),
                 latest_request: Some(gents_protocol::session::SessionRequestObservation {
                     request_doc_id: doc_id.clone(),
-                    request_id: (&request_id).to_string(),
+                    request_id: request_id.to_string(),
                     lifecycle_state:
                         gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
                 }),

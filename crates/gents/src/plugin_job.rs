@@ -12,7 +12,7 @@ pub mod recovery;
 pub mod settings;
 pub mod view;
 
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 
 pub use gents_protocol::job;
 use gents_protocol::job::PluginJobSettings;
@@ -33,7 +33,7 @@ impl JobBinding {
     /// declares `job: true`.
     pub(crate) fn bind_all(
         resolutions: &[(PluginToolRef, Option<crate::plugin::store::InstalledPlugin>)],
-    ) -> HashMap<String, JobBinding> {
+    ) -> RapidHashMap<String, JobBinding> {
         resolutions
             .iter()
             .filter(|(_, installed)| {

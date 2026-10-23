@@ -31,9 +31,7 @@ impl ShutdownDrainFailure {
 }
 
 use super::runtime::StartupBarrier;
-use crate::agent::worker_capacity::{
-    bind_current_claim, current_slot_capacity, scope_request_capacity, WorkerTicket,
-};
+use crate::agent::worker_capacity::{RequestGuard, WorkerCapacity, WorkerTicket};
 use crate::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
 use crate::config::ResolvedAgent;
 use crate::hook::FailurePolicy;
@@ -156,7 +154,10 @@ pub(crate) async fn verify_request_at_claim_boundary(
     }
 }
 
-pub(super) struct AgentDaemon<M: ProviderModel> {
+pub(super) struct AgentDaemon<M>
+where
+    M: ProviderModel,
+{
     node: Arc<defra_node::EmbeddedNode>,
     agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
@@ -174,7 +175,7 @@ pub(super) struct AgentDaemon<M: ProviderModel> {
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     remote_tools: Option<crate::document_config::RemoteTools>,
-    job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
+    job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
     job_driver: Option<Arc<crate::plugin_job::driver::JobDriver>>,
     output_obligations: Arc<Vec<(String, crate::document_config::WriteToolOutputObligation)>>,
     startup_barrier: Arc<StartupBarrier>,
@@ -224,26 +225,50 @@ fn auxiliary_task_join_result(joined: std::result::Result<Result<()>, JoinError>
     }
 }
 
-impl<M: ProviderModel> AgentDaemon<M> {
-    pub(super) fn new(
-        node: Arc<defra_node::EmbeddedNode>,
-        agent_config: Arc<ResolvedAgent>,
-        provider_family: Option<String>,
-        model: Arc<M>,
-        preamble: String,
-        loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
-        prompt_builder: LayeredPromptBuilder,
-        hook_failure_policy: FailurePolicy,
-        rendered_request_capture_factory: Option<
-            crate::rendered_request::RenderedRequestCaptureFactory,
-        >,
-        background_tool_registry: crate::hook::BackgroundToolRegistry,
-        background_execution_registry: crate::hook::BackgroundExecutionRegistry,
-        startup_barrier: Arc<StartupBarrier>,
-        runtime_status: crate::runtime_status::RuntimeStatusHandle,
-        slot_generation: u64,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
-    ) -> Result<Self> {
+pub(super) struct AgentDaemonInit<M>
+where
+    M: ProviderModel,
+{
+    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) agent_config: Arc<ResolvedAgent>,
+    pub(super) provider_family: Option<String>,
+    pub(super) model: Arc<M>,
+    pub(super) preamble: String,
+    pub(super) loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
+    pub(super) prompt_builder: LayeredPromptBuilder,
+    pub(super) hook_failure_policy: FailurePolicy,
+    pub(super) rendered_request_capture_factory:
+        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+    pub(super) background_tool_registry: crate::hook::BackgroundToolRegistry,
+    pub(super) background_execution_registry: crate::hook::BackgroundExecutionRegistry,
+    pub(super) startup_barrier: Arc<StartupBarrier>,
+    pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
+    pub(super) slot_generation: u64,
+    pub(super) request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
+}
+
+impl<M> AgentDaemon<M>
+where
+    M: ProviderModel,
+{
+    pub(super) fn new(init: AgentDaemonInit<M>) -> Result<Self> {
+        let AgentDaemonInit {
+            node,
+            agent_config,
+            provider_family,
+            model,
+            preamble,
+            loop_tools,
+            prompt_builder,
+            hook_failure_policy,
+            rendered_request_capture_factory,
+            background_tool_registry,
+            background_execution_registry,
+            startup_barrier,
+            runtime_status,
+            slot_generation,
+            request_admission,
+        } = init;
         let mut compaction_config = crate::completion_factory::loop_config(
             agent_config.as_ref(),
             preamble.clone(),
@@ -358,7 +383,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
 
     pub(super) fn with_job_tools(
         mut self,
-        job_tools: std::collections::HashMap<String, crate::plugin_job::JobBinding>,
+        job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
     ) -> Self {
         self.job_tools = job_tools;
         self
@@ -383,6 +408,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
     pub(super) async fn run(
         &mut self,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+        capacity: Arc<WorkerCapacity>,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         tracing::info!(
@@ -451,56 +477,46 @@ impl<M: ProviderModel> AgentDaemon<M> {
             let agent_id = self.agent_config.agent_id.clone();
             let backend_id = self.agent_config.backend_id.clone().unwrap_or_default();
 
-            let active_guard = if let Some(capacity) = current_slot_capacity() {
-                let cancellation = tokio_util::sync::CancellationToken::new();
-                let guard = tokio::select! {
-                    biased;
-                    _ = shutdown.changed() => break Ok(()),
-                    guard = capacity.acquire_unbound(&cancellation) => guard,
-                };
-                match guard {
-                    Ok(guard) => Some(guard),
-                    Err(error) => {
-                        tracing::warn!(agent_id, error = %error, "request worker capacity admission stopped");
-                        break Ok(());
-                    }
+            let cancellation = tokio_util::sync::CancellationToken::new();
+            let guard = tokio::select! {
+                biased;
+                _ = shutdown.changed() => break Ok(()),
+                guard = capacity.acquire_unbound(&cancellation) => guard,
+            };
+            let active_guard = match guard {
+                Ok(guard) => Some(RequestGuard::Unbound(guard)),
+                Err(error) => {
+                    tracing::warn!(agent_id, error = %error, "request worker capacity admission stopped");
+                    break Ok(());
                 }
-            } else {
-                None
             };
 
-            let process =
-                self.process_request(request, shutdown.clone())
-                    .instrument(tracing::info_span!(
-                        "agent.request",
-                        request_doc_id = %trace_attrs.request_doc_id,
-                        request_id = %trace_attrs.request_id,
-                        session_id = %trace_attrs.session_id,
-                        node_did = %trace_attrs.node_did,
-                        agent_id = %agent_id,
-                        requested_agent_id = %trace_attrs.requested_agent_id,
-                        backend_id = %backend_id,
-                        execution_origin = %trace_attrs.execution_origin,
-                        persisted_execution_origin = %trace_attrs.execution_origin,
-                        deadline_at = %trace_attrs.deadline_at,
-                        has_deadline = trace_attrs.has_deadline,
-                        request_hop = trace_attrs.request_hop,
-                        parent_request_id = %trace_attrs.parent_request_id,
-                        parent_tool_call_id = %trace_attrs.parent_tool_call_id,
-                        selected_skill_count = trace_attrs.selected_skill_count,
-                        workspace_cwd_set = trace_attrs.workspace_cwd_set,
-                        claim_outcome = tracing::field::Empty,
-                        request_outcome = tracing::field::Empty,
-                        failure_class = tracing::field::Empty,
-                    ));
-            if let Some(guard) = active_guard {
-                if let Err(error) = scope_request_capacity(guard, process).await {
-                    break Err(error);
-                }
-            } else {
-                if let Err(error) = process.await {
-                    break Err(error);
-                }
+            let process = self
+                .process_request_with_capacity(request, active_guard, shutdown.clone())
+                .instrument(tracing::info_span!(
+                    "agent.request",
+                    request_doc_id = %trace_attrs.request_doc_id,
+                    request_id = %trace_attrs.request_id,
+                    session_id = %trace_attrs.session_id,
+                    node_did = %trace_attrs.node_did,
+                    agent_id = %agent_id,
+                    requested_agent_id = %trace_attrs.requested_agent_id,
+                    backend_id = %backend_id,
+                    execution_origin = %trace_attrs.execution_origin,
+                    persisted_execution_origin = %trace_attrs.execution_origin,
+                    deadline_at = %trace_attrs.deadline_at,
+                    has_deadline = trace_attrs.has_deadline,
+                    request_hop = trace_attrs.request_hop,
+                    parent_request_id = %trace_attrs.parent_request_id,
+                    parent_tool_call_id = %trace_attrs.parent_tool_call_id,
+                    selected_skill_count = trace_attrs.selected_skill_count,
+                    workspace_cwd_set = trace_attrs.workspace_cwd_set,
+                    claim_outcome = tracing::field::Empty,
+                    request_outcome = tracing::field::Empty,
+                    failure_class = tracing::field::Empty,
+                ));
+            if let Err(error) = process.await {
+                break Err(error);
             }
         };
 
@@ -558,9 +574,22 @@ impl<M: ProviderModel> AgentDaemon<M> {
         admitted
     }
 
+    #[cfg(test)]
     pub(in crate::agent) async fn process_request(
         &mut self,
         request: AgentRequest,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<()> {
+        self.process_request_with_capacity(request, None, shutdown)
+            .await
+    }
+
+    /// `capacity` is the post-dequeue worker permit; this call owns it until
+    /// it returns, bound to the claim's execution generation once one exists.
+    pub(in crate::agent) async fn process_request_with_capacity(
+        &mut self,
+        request: AgentRequest,
+        mut capacity: Option<RequestGuard>,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         // Publication and terminal selection belong to this one execution.
@@ -625,7 +654,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                     }
                 };
                 let ticket = WorkerTicket::new(lifecycle.request().doc_id.clone(), generation);
-                if let Err(error) = bind_current_claim(ticket) {
+                if let Err(error) = RequestGuard::bind_claim(&mut capacity, ticket) {
                     let error = anyhow::Error::new(error);
                     record_current_request_outcome("worker_ticket_refused");
                     record_current_failure_class(&error);

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::llm::tool::ToolDyn;
 use anyhow::Result;
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 
 mod args;
 mod bash_tools;
@@ -161,7 +161,7 @@ pub struct CliToolConfig {
     pub binary_path: PathBuf,
     pub description: String,
     pub allowed_argv_prefixes: Vec<Vec<String>>,
-    pub env_vars: HashMap<String, String>,
+    pub env_vars: RapidHashMap<String, String>,
     pub working_dir: Option<PathBuf>,
     pub timeout_secs: u64,
     pub max_output_chars: usize,

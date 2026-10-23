@@ -274,12 +274,8 @@ async fn started_session_without_an_execution_document_runs_past_a_low_turn_limi
 async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
     let db = test_db("e2e-session-limit-explicit").await;
     configure_session_chain(&db).await;
-    bind_child_execution_max_turns(
-        &db.node,
-        &db.node_identity.did().to_string(),
-        EXPLICIT_CHILD_MAX_TURNS,
-    )
-    .await;
+    bind_child_execution_max_turns(&db.node, db.node_identity.did(), EXPLICIT_CHILD_MAX_TURNS)
+        .await;
 
     let (child_behavior, runtime) = start_child_session(
         &db,

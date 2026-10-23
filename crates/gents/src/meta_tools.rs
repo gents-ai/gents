@@ -22,6 +22,10 @@ pub use shared::{MetaToolContext, MetaToolError};
 
 pub const META_TOOL_NAMES: [&str; 3] = ["discover_tools", "describe_tool", "call_tool"];
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each meta tool context input comes from a separate runtime owner"
+)]
 pub async fn build_meta_tools(
     node: Arc<EmbeddedNode>,
     mcp_pool: McpPool,

@@ -234,7 +234,8 @@ pub(crate) async fn load_request_documents_on(
         return Ok(Vec::new());
     }
     const BATCH_SIZE: usize = 128;
-    let mut expected = std::collections::HashSet::with_capacity(doc_ids.len());
+    let mut expected =
+        rapidhash::RapidHashSet::with_capacity_and_hasher(doc_ids.len(), Default::default());
     let mut unique_doc_ids = Vec::with_capacity(doc_ids.len());
     for doc_id in doc_ids {
         if expected.insert(doc_id.clone()) {
@@ -242,7 +243,8 @@ pub(crate) async fn load_request_documents_on(
         }
     }
     let mut rows = Vec::with_capacity(unique_doc_ids.len());
-    let mut observed = std::collections::HashSet::with_capacity(unique_doc_ids.len());
+    let mut observed =
+        rapidhash::RapidHashSet::with_capacity_and_hasher(unique_doc_ids.len(), Default::default());
     for batch in unique_doc_ids.chunks(BATCH_SIZE) {
         let ids = gents::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
         let query =
@@ -469,6 +471,9 @@ fn session_request_seed_query(
             "seeds_{index}: {AGENT_REQUEST_NAME}(filter: {{ node_did: {{ _eq: \"{node}\" }}, session_id: {{ _eq: \"{session}\" }}, requester_did: {{ _eq: {requester} }}, purpose: {{ _eq: \"normal\" }}, _or: [{}] }}) {{ {AGENT_REQUEST_FIELDS} }}",
             predicates.into_iter().map(|predicate| format!("{{ {predicate} }}")).collect::<Vec<_>>().join(",")
         ));
+        fields.push(format!(
+            "newest_{index}: {AGENT_REQUEST_NAME}(filter: {{ node_did: {{ _eq: \"{node}\" }}, session_id: {{ _eq: \"{session}\" }}, requester_did: {{ _eq: {requester} }}, purpose: {{ _eq: \"normal\" }} }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}, {{ _docID: DESC }}], limit: 1) {{ {AGENT_REQUEST_FIELDS} }}"
+        ));
     }
     format!(
         "query DesktopSessionRequestSeeds {{ {} }}",
@@ -482,7 +487,11 @@ fn request_seeds_from_data(
     scopes: &[(String, String, Option<String>)],
 ) -> Result<Vec<AgentRequestRow>> {
     for (index, (node_did, session_id, requester_did)) in scopes.iter().enumerate() {
-        let rows = snapshot_loaders::complete_request_rows(data, &format!("seeds_{index}"))?;
+        let mut rows = snapshot_loaders::complete_request_rows(data, &format!("seeds_{index}"))?;
+        rows.extend(snapshot_loaders::complete_request_rows(
+            data,
+            &format!("newest_{index}"),
+        )?);
         anyhow::ensure!(
             rows.iter().all(|row| {
                 row.node_did.as_deref() == Some(node_did)

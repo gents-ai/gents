@@ -631,18 +631,20 @@ pub(crate) struct ApplyRequest<'a> {
     pub(crate) allow_create: bool,
     pub(crate) require_create: bool,
     pub(crate) guard_selected_chain: bool,
-    pub(crate) resolve_unique: Box<dyn Fn(&AgentAnchor) -> Result<String> + Send + Sync + 'a>,
-    pub(crate) on_create:
-        Box<dyn Fn(&str, &mut Map<String, Value>) -> Result<()> + Send + Sync + 'a>,
+    pub(crate) resolve_unique: ResolveUniqueFn<'a>,
+    pub(crate) on_create: OnCreateFn<'a>,
     pub(crate) normalize: NormalizeFn<'a>,
     pub(crate) validate: ValidateFn<'a>,
-    pub(crate) guard: Box<
-        dyn Fn(&AgentAnchor, &Map<String, Value>, &Map<String, Value>) -> Result<()>
-            + Send
-            + Sync
-            + 'a,
-    >,
+    pub(crate) guard: GuardFn<'a>,
 }
+
+pub(crate) type ResolveUniqueFn<'a> =
+    Box<dyn Fn(&AgentAnchor) -> Result<String> + Send + Sync + 'a>;
+pub(crate) type OnCreateFn<'a> =
+    Box<dyn Fn(&str, &mut Map<String, Value>) -> Result<()> + Send + Sync + 'a>;
+pub(crate) type GuardFn<'a> = Box<
+    dyn Fn(&AgentAnchor, &Map<String, Value>, &Map<String, Value>) -> Result<()> + Send + Sync + 'a,
+>;
 
 pub(crate) type ValidateFn<'a> = Box<
     dyn for<'b> Fn(
@@ -685,10 +687,10 @@ impl<'a> ApplyRequest<'a> {
     }
 }
 
-pub(crate) fn decode_merged<T: serde::de::DeserializeOwned>(
-    collection: &str,
-    merged: &Map<String, Value>,
-) -> Result<T> {
+pub(crate) fn decode_merged<T>(collection: &str, merged: &Map<String, Value>) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_path_to_error::deserialize(Value::Object(merged.clone())).map_err(|error| {
         let path = error.path().to_string();
         let inner = error.inner().to_string();
@@ -914,7 +916,7 @@ pub(crate) async fn guard_reselection_keeps_grants_in_txn(
             .filter(|id| !id.is_empty())
             .map(ToOwned::to_owned)
     };
-    let before = stored.and_then(|doc| selected(doc));
+    let before = stored.and_then(&selected);
     let after = selected(candidate);
     if before == after {
         return Ok(());

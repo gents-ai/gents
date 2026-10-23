@@ -48,7 +48,7 @@ impl InferenceTarget {
     }
 
     fn load_path(name: String, path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(&path)
+        let bytes = std::fs::read(path)
             .with_context(|| format!("reading inference target {}", path.display()))?;
         let value = serde_json::from_slice(&bytes)
             .with_context(|| format!("parsing inference target {}", path.display()))?;

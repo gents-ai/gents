@@ -111,6 +111,7 @@ opentelemetry-otlp = { version = "0.31.1", default-features = false, features = 
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
 p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7cb7ef2fcd9b827b7df0e2cd0840b5328046c5fb" }
 query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7cb7ef2fcd9b827b7df0e2cd0840b5328046c5fb" }
+rapidhash = { version = "4.5.1", features = ["unsafe"] }
 schema = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7cb7ef2fcd9b827b7df0e2cd0840b5328046c5fb" }
 storage = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "7cb7ef2fcd9b827b7df0e2cd0840b5328046c5fb" }
 rand = "0.9"

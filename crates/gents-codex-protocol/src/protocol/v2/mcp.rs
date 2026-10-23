@@ -33,7 +33,7 @@ pub enum McpServerStatusDetail {
 #[serde(rename_all = "camelCase")]
 pub struct McpServerStatus {
     pub name: String,
-    pub tools: std::collections::HashMap<String, McpTool>,
+    pub tools: rapidhash::RapidHashMap<String, McpTool>,
     pub resources: Vec<McpResource>,
     pub resource_templates: Vec<McpResourceTemplate>,
     pub auth_status: McpAuthStatus,

@@ -3,7 +3,8 @@
 //! join their spawn by session-id equality. Every request of a spawn's session counts
 //! toward its usage, but only the spawn and message requests are its requests.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -102,9 +103,9 @@ pub async fn derive_children_in_txn(
         "{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _in: {list} }} }}) {{ {FIELDS} }} }}"
     );
     let rows: Vec<Stored> = read(txn, &document, "AgentRequest").await?;
-    let caused: HashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
+    let caused: RapidHashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
     let mut attempts: BTreeMap<(String, u32), Attempt> = BTreeMap::new();
-    let mut sessions: HashMap<String, (String, u32)> = HashMap::new();
+    let mut sessions: RapidHashMap<String, (String, u32)> = RapidHashMap::new();
     for row in rows {
         let key = row.retry_key.clone().unwrap_or_default();
         let Some((slot, attempt)) = decode_job_retry_key(&key) else {
@@ -187,10 +188,13 @@ fn latest(attempt: &Attempt) -> Result<&Stored> {
         .context("attempt has no spawn request")
 }
 
+/// Prompt and completion token counts of each request's inference calls.
+type UsageByRequest = RapidHashMap<String, Vec<(Option<i64>, Option<i64>)>>;
+
 fn pair(
     attempt: Attempt,
-    usage: &HashMap<String, Vec<(Option<i64>, Option<i64>)>>,
-    terminals: &HashMap<String, CausedRequestTerminal>,
+    usage: &UsageByRequest,
+    terminals: &RapidHashMap<String, CausedRequestTerminal>,
     result_bytes: u64,
 ) -> Result<(StepChild, JobChildView)> {
     let latest_id = latest(&attempt)?.request_id.clone();
@@ -305,11 +309,11 @@ fn stamp(value: Option<&str>) -> Option<i64> {
         .map(|value| value.timestamp_millis())
 }
 
-async fn usage_by_request<R: ConfigRead>(
-    reader: &R,
-    request_ids: &[String],
-) -> Result<HashMap<String, Vec<(Option<i64>, Option<i64>)>>> {
-    let mut grouped: HashMap<String, Vec<(Option<i64>, Option<i64>)>> = HashMap::new();
+async fn usage_by_request<R>(reader: &R, request_ids: &[String]) -> Result<UsageByRequest>
+where
+    R: ConfigRead,
+{
+    let mut grouped: UsageByRequest = RapidHashMap::new();
     if request_ids.is_empty() {
         return Ok(grouped);
     }
@@ -338,11 +342,10 @@ async fn usage_by_request<R: ConfigRead>(
     Ok(grouped)
 }
 
-async fn read<T: serde::de::DeserializeOwned>(
-    reader: &impl ConfigRead,
-    document: &str,
-    collection: &str,
-) -> Result<Vec<T>> {
+async fn read<T>(reader: &impl ConfigRead, document: &str, collection: &str) -> Result<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
     #[cfg(test)]
     let _ = CHILD_QUERIES.try_with(|queries| {
         queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -436,11 +439,14 @@ pub(super) async fn live_job_settings(
 }
 
 /// `row_doc_id` and the rows its pin resumes, oldest first.
-pub(super) async fn chain_of<R: ConfigRead>(
+pub(super) async fn chain_of<R>(
     reader: &R,
     row_doc_id: &str,
     pin: Option<&JobPin>,
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>>
+where
+    R: ConfigRead,
+{
     let mut chain = vec![row_doc_id.to_owned()];
     let mut next = pin.and_then(|pin| pin.resume_of.clone());
     while let Some(prior) = next.take().filter(|prior| !chain.contains(prior)) {
@@ -733,6 +739,10 @@ pub(crate) mod tests {
         .unwrap();
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
     pub(crate) async fn request(
         node: &std::sync::Arc<EmbeddedNode>,
         chain: &str,
@@ -1684,7 +1694,7 @@ pub(crate) mod tests {
         job.write_step_state(&root, None).await;
         let (root_input, _) = job.later(&root).await.unwrap();
         assert_eq!(root_input.root_call, None);
-        assert_eq!(root_input.job.chain, [root.clone()]);
+        assert_eq!(root_input.job.chain, std::slice::from_ref(&root));
 
         job.write_step_state(&resumed, Some(&resume_block(&root)))
             .await;
@@ -2147,7 +2157,7 @@ pub(crate) mod tests {
         assert_eq!(input.pin, None);
         assert_eq!(input.origin, None);
         assert_eq!(input.verified_script, None);
-        assert_eq!(input.job.chain, [row.clone()]);
+        assert_eq!(input.job.chain, std::slice::from_ref(&row));
         assert_eq!(input.job.chain_root_doc_id, row);
         job.node.shutdown().await;
 

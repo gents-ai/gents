@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -173,18 +173,18 @@ pub struct MCPServiceHealthSnapshot {
 
 #[derive(Clone)]
 pub struct ServiceHealthMap {
-    inner: Arc<RwLock<HashMap<String, ServiceHealthEntry>>>,
+    inner: Arc<RwLock<RapidHashMap<String, ServiceHealthEntry>>>,
     /// A failed or cancelled write has an ambiguous outcome. Removing the last
     /// confirmed snapshot before awaiting it forces the next publish to name
     /// every field. This belongs to the same owner as the live observations.
-    persisted: Arc<tokio::sync::Mutex<HashMap<(String, String), MCPServiceHealthSnapshot>>>,
+    persisted: Arc<tokio::sync::Mutex<RapidHashMap<(String, String), MCPServiceHealthSnapshot>>>,
 }
 
 impl ServiceHealthMap {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(RwLock::new(HashMap::new())),
-            persisted: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            inner: Arc::new(RwLock::new(RapidHashMap::new())),
+            persisted: Arc::new(tokio::sync::Mutex::new(RapidHashMap::new())),
         }
     }
 
@@ -196,7 +196,7 @@ impl ServiceHealthMap {
             .map(|entry| entry.health.clone())
     }
 
-    pub async fn snapshot(&self) -> HashMap<String, ServiceHealth> {
+    pub async fn snapshot(&self) -> RapidHashMap<String, ServiceHealth> {
         self.inner
             .read()
             .await
@@ -247,7 +247,7 @@ impl ServiceHealthMap {
         self.set(service_id.into(), health).await;
     }
 
-    async fn retain_services(&self, service_ids: &HashSet<String>) {
+    async fn retain_services(&self, service_ids: &RapidHashSet<String>) {
         self.inner
             .write()
             .await
@@ -284,6 +284,10 @@ pub struct McpHealthCheckService {
     pub updated_at: Option<String>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public signature called from other crates"
+)]
 pub fn spawn_health_checker(
     node: Arc<EmbeddedNode>,
     mcp_pool: McpPool,
@@ -388,6 +392,10 @@ async fn run_health_check(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public signature called from other crates"
+)]
 pub async fn run_health_check_cycle(
     services: Vec<McpHealthCheckService>,
     now: DateTime<Utc>,
@@ -398,7 +406,7 @@ pub async fn run_health_check_cycle(
     options: &HealthCheckerOptions,
     persistence: Option<HealthPersistenceContext<'_>>,
 ) -> Result<()> {
-    let mut online_service_ids = HashSet::new();
+    let mut online_service_ids = RapidHashSet::new();
 
     for service in services {
         let service_id = service.service_id.clone();
@@ -425,12 +433,14 @@ pub async fn run_health_check_cycle(
             apply_probe_failure(
                 mcp_pool,
                 health_map,
-                &service_id,
-                previous_model,
-                previous_last_seen,
-                previous_endpoint,
-                previous_tool_count,
-                "registry entry missing mcp_port".to_string(),
+                ProbeFailure {
+                    service_id: &service_id,
+                    previous_model,
+                    previous_last_seen,
+                    endpoint: previous_endpoint,
+                    tool_count: previous_tool_count,
+                    error: "registry entry missing mcp_port".to_string(),
+                },
                 now,
                 options,
             )
@@ -445,12 +455,14 @@ pub async fn run_health_check_cycle(
             apply_probe_failure(
                 mcp_pool,
                 health_map,
-                &service_id,
-                previous_model,
-                previous_last_seen,
-                previous_endpoint,
-                previous_tool_count,
-                "registry entry missing address fields".to_string(),
+                ProbeFailure {
+                    service_id: &service_id,
+                    previous_model,
+                    previous_last_seen,
+                    endpoint: previous_endpoint,
+                    tool_count: previous_tool_count,
+                    error: "registry entry missing address fields".to_string(),
+                },
                 now,
                 options,
             )
@@ -519,12 +531,14 @@ pub async fn run_health_check_cycle(
                 apply_probe_failure(
                     mcp_pool,
                     health_map,
-                    &service_id,
-                    previous_model,
-                    previous_last_seen,
-                    Some(endpoint.clone()),
-                    previous_tool_count,
-                    error.to_string(),
+                    ProbeFailure {
+                        service_id: &service_id,
+                        previous_model,
+                        previous_last_seen,
+                        endpoint: Some(endpoint.clone()),
+                        tool_count: previous_tool_count,
+                        error: error.to_string(),
+                    },
                     now,
                     options,
                 )
@@ -539,12 +553,14 @@ pub async fn run_health_check_cycle(
                 apply_probe_failure(
                     mcp_pool,
                     health_map,
-                    &service_id,
-                    previous_model,
-                    previous_last_seen,
-                    Some(endpoint.clone()),
-                    previous_tool_count,
-                    "probe timed out".to_string(),
+                    ProbeFailure {
+                        service_id: &service_id,
+                        previous_model,
+                        previous_last_seen,
+                        endpoint: Some(endpoint.clone()),
+                        tool_count: previous_tool_count,
+                        error: "probe timed out".to_string(),
+                    },
                     now,
                     options,
                 )
@@ -580,18 +596,30 @@ pub async fn run_health_check_cycle(
     Ok(())
 }
 
-async fn apply_probe_failure(
-    mcp_pool: &McpPool,
-    health_map: &ServiceHealthMap,
-    service_id: &str,
+struct ProbeFailure<'a> {
+    service_id: &'a str,
     previous_model: ServiceModelInternal,
     previous_last_seen: DateTime<Utc>,
     endpoint: Option<String>,
     tool_count: Option<i64>,
     error: String,
+}
+
+async fn apply_probe_failure(
+    mcp_pool: &McpPool,
+    health_map: &ServiceHealthMap,
+    failure: ProbeFailure<'_>,
     now: DateTime<Utc>,
     options: &HealthCheckerOptions,
 ) {
+    let ProbeFailure {
+        service_id,
+        previous_model,
+        previous_last_seen,
+        endpoint,
+        tool_count,
+        error,
+    } = failure;
     let next_model = step_service(previous_model, ProbeEvent::ProbeFail, now, options)
         .expect("probeFail must preserve the service model");
     if next_model.state == HealthStateInternal::Evicted {
@@ -720,7 +748,7 @@ async fn persist_health_snapshot(
     now: DateTime<Utc>,
 ) {
     let mut persisted = health_map.persisted.lock().await;
-    let service_ids: HashSet<_> = snapshot.iter().map(|row| row.service_id.as_str()).collect();
+    let service_ids: RapidHashSet<_> = snapshot.iter().map(|row| row.service_id.as_str()).collect();
     persisted.retain(|(node_did, service_id), _| {
         node_did != persistence.node_did || service_ids.contains(service_id.as_str())
     });
@@ -899,7 +927,7 @@ async fn delete_persisted_health_state(
 
 async fn load_persisted_service_ids(
     persistence: &HealthPersistenceContext<'_>,
-) -> Result<HashSet<String>> {
+) -> Result<RapidHashSet<String>> {
     let node_did = escape_graphql_string(persistence.node_did);
     let query = format!(
         r#"{{

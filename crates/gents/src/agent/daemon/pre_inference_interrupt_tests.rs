@@ -14,7 +14,10 @@ impl InterruptionCapture {
     }
 }
 
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for InterruptionCapture {
+impl<S> tracing_subscriber::Layer<S> for InterruptionCapture
+where
+    S: tracing::Subscriber,
+{
     fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
         struct SourceVisitor<'a>(&'a mut Vec<String>);
         impl tracing::field::Visit for SourceVisitor<'_> {
@@ -178,29 +181,32 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
     );
     let entered = Arc::new(tokio::sync::Notify::new());
     let provider_calls = Arc::new(AtomicUsize::new(0));
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(ProviderCallCountingModel(provider_calls.clone())),
-        prompt.preamble().to_owned(),
-        Arc::new(vec![Box::new(PreInferenceBlockingTool {
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(vec![Box::new(PreInferenceBlockingTool {
             entered: entered.clone(),
         }) as Box<dyn crate::llm::tool::ToolDyn>]),
-        prompt,
-        FailurePolicy::default(),
-        None,
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: None,
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
@@ -286,27 +292,30 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         &[],
     );
     let provider_calls = Arc::new(AtomicUsize::new(0));
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(ProviderCallCountingModel(provider_calls.clone())),
-        prompt.preamble().to_owned(),
-        Arc::new(Vec::<Box<dyn crate::llm::tool::ToolDyn>>::new()),
-        prompt,
-        FailurePolicy::default(),
-        None,
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(Vec::<Box<dyn crate::llm::tool::ToolDyn>>::new()),
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: None,
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
@@ -462,27 +471,30 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
         &[],
     );
     let provider_calls = Arc::new(AtomicUsize::new(0));
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(ProviderCallCountingModel(provider_calls.clone())),
-        prompt.preamble().to_owned(),
-        Arc::new(Vec::<Box<dyn crate::llm::tool::ToolDyn>>::new()),
-        prompt,
-        FailurePolicy::default(),
-        None,
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(Vec::<Box<dyn crate::llm::tool::ToolDyn>>::new()),
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: None,
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();

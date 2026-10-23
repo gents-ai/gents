@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -21,7 +22,7 @@ pub struct ScriptKey {
 }
 
 pub struct ScriptedExecutor {
-    table: HashMap<ScriptKey, TrialEvidence>,
+    table: RapidHashMap<ScriptKey, TrialEvidence>,
     default: Option<TrialEvidence>,
     pub calls: Mutex<Vec<ScriptKey>>,
 }
@@ -29,7 +30,7 @@ pub struct ScriptedExecutor {
 impl ScriptedExecutor {
     pub fn new() -> Self {
         Self {
-            table: HashMap::new(),
+            table: RapidHashMap::new(),
             default: None,
             calls: Mutex::new(Vec::new()),
         }

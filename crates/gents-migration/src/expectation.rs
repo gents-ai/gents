@@ -20,7 +20,7 @@ impl CollectionExpectation {
 
     pub fn verify(&self, version: &CollectionVersion) -> Result<(), String> {
         if let Some(required) = self.required_field_names {
-            let present: std::collections::HashSet<&str> =
+            let present: rapidhash::RapidHashSet<&str> =
                 version.fields.iter().map(|f| f.name.as_str()).collect();
             let mut missing = Vec::new();
             for name in required {

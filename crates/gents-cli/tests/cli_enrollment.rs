@@ -454,7 +454,7 @@ async fn wait_for_complete_agent_response(
             if request.is_terminal() {
                 let output = gents::session::observe_request_output(
                     &gents::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(
-                        &graphql,
+                        graphql,
                     )),
                     &request,
                 )

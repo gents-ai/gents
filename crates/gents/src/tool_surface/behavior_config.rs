@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::RapidHashSet;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
@@ -449,7 +449,6 @@ impl AgentToolSurfaceConfig {
     }
 
     #[allow(dead_code)]
-
     pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
         &self.background_tools
     }
@@ -481,7 +480,7 @@ impl AgentToolSurfaceConfig {
         let available_service_ids = enabled_mcp_service_ids(node, node_did).await?;
         if !self.required_mcp_service_ids.is_empty() {
             let measured_available = measured_available_mcp_service_ids(node, node_did).await?;
-            let measured_available = measured_available.iter().collect::<HashSet<_>>();
+            let measured_available = measured_available.iter().collect::<RapidHashSet<_>>();
             let missing = self
                 .required_mcp_service_ids
                 .iter()
@@ -573,8 +572,8 @@ impl AgentToolSurfaceConfig {
             } else {
                 self.eth_calls
                     .iter()
-                    .cloned()
                     .filter(|call| effective_policy.eth_call_tools.permits(&call.tool_name))
+                    .cloned()
                     .collect()
             },
             plugin_tools: self
@@ -650,7 +649,7 @@ impl AgentToolSurfaceConfig {
         &self,
         node: &std::sync::Arc<EmbeddedNode>,
         own_node_did: &str,
-        active_agent_ids: &HashSet<String>,
+        active_agent_ids: &RapidHashSet<String>,
         plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
         let mut agent_tools = self.agent_tools.clone();
@@ -666,7 +665,7 @@ impl AgentToolSurfaceConfig {
         &self,
         mcp_services_online: bool,
         own_node_did: &str,
-        active_agent_ids: &HashSet<String>,
+        active_agent_ids: &RapidHashSet<String>,
     ) -> ToolSurface {
         let mut agent_tools = self.agent_tools.clone();
         agent_tools.targets.retain(|target| {

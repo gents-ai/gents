@@ -13,7 +13,7 @@ pub(crate) struct DurableClaimReceipt {
 }
 
 pub(crate) enum DurableClaimOutcome {
-    Claimed(DurableClaimReceipt),
+    Claimed(Box<DurableClaimReceipt>),
     NotClaimed(ClaimOutcome),
 }
 
@@ -99,7 +99,7 @@ where
         move |txn| {
             Box::pin(async move {
                 if crate::session::session_stopped_in_txn(
-                    &txn,
+                    txn,
                     &request.node_did,
                     &request.session_id,
                     request.requester_did.as_deref(),
@@ -107,7 +107,7 @@ where
                 .await?
                 {
                     super::queue::drain_all_pending_session_requests_in_txn(
-                        &txn,
+                        txn,
                         &request.session_id,
                         &request.node_did,
                         request.requester_did.as_deref(),
@@ -116,13 +116,13 @@ where
                     .await?;
                     return Ok(None);
                 }
-                if !crate::goal::fence_goal_continuation_claim_in_txn(&txn, request, claimed_at)
+                if !crate::goal::fence_goal_continuation_claim_in_txn(txn, request, claimed_at)
                     .await?
                 {
                     return Ok(None);
                 }
                 if request.purpose == gents_protocol::request_admission::RequestPurpose::Normal
-                    && !super::query::claim_queue_allows(&txn, request).await?
+                    && !super::query::claim_queue_allows(txn, request).await?
                 {
                     return Ok(None);
                 }
@@ -134,7 +134,7 @@ where
                     )
                     .await?;
                     let assignment = assignments.scope(&request.doc_id)?;
-                    let response = txn.execute_local_response(&snapshot_query).await?;
+                    let response = txn.execute_local_response(snapshot_query).await?;
                     let through_sequence = response
                         .data
                         .as_ref()
@@ -204,9 +204,7 @@ where
                 } else {
                     BackgroundCompletionClaimSnapshot::default()
                 };
-                let snapshot_fields = capture_background_snapshot
-                    .then(|| snapshot.mutation_fields())
-                    .unwrap_or_default();
+                let snapshot_fields = if capture_background_snapshot { snapshot.mutation_fields() } else { Default::default() };
                 let mutation = build_mutation(&snapshot_fields);
                 let claimed = txn.execute_local_response(&mutation).await?;
                 let mut folded_selection = Vec::new();
@@ -217,12 +215,12 @@ where
                         .and_then(|data| data.get("update_AgentRequest"))
                         .is_some_and(response_has_documents)
                 {
-                    crate::goal::apply_claimed_task_goal_in_txn(&txn, request, claimed_at).await?;
-                    crate::mailbox::claim_reply_in_txn(&txn, request, claimed_at).await?;
-                    super::materialize::apply_request_session_projection(&txn, request, claimed_at)
+                    crate::goal::apply_claimed_task_goal_in_txn(txn, request, claimed_at).await?;
+                    crate::mailbox::claim_reply_in_txn(txn, request, claimed_at).await?;
+                    super::materialize::apply_request_session_projection(txn, request, claimed_at)
                         .await?;
                     folded_selection = super::queue::select_fold_in_claim_txn(
-                        &txn,
+                        txn,
                         request,
                         fold_admitted,
                         claimed_at,
@@ -323,7 +321,7 @@ impl RequestLifecycle {
             };
         let (now, generation) = claim_inputs();
         match self.persist_pending_claim_at(now, generation).await? {
-            Some(receipt) => Ok(DurableClaimOutcome::Claimed(receipt)),
+            Some(receipt) => Ok(DurableClaimOutcome::Claimed(Box::new(receipt))),
             None => Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued)),
         }
     }
@@ -696,7 +694,7 @@ impl RequestLifecycle {
             })
             .await?
         {
-            DurableClaimOutcome::Claimed(receipt) => receipt,
+            DurableClaimOutcome::Claimed(receipt) => *receipt,
             DurableClaimOutcome::NotClaimed(outcome) => return Ok(outcome),
         };
         self.request = receipt.request;

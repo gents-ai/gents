@@ -6,6 +6,16 @@ use gents_protocol::job::JobProgress;
 use gents_protocol::row::AgentRequestRow;
 use tempfile::TempDir;
 
+/// A test's `#[tokio::test]` runtime is its entry point; code under test takes
+/// that runtime's handle from here.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test's #[tokio::test] runtime is its entry-point runtime"
+)]
+pub fn runtime_handle() -> tokio::runtime::Handle {
+    tokio::runtime::Handle::current()
+}
+
 pub fn node_builder() -> gents::defra_node::NodeBuilder {
     use gents::NodeIdentity as _;
 

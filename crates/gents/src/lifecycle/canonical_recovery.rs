@@ -196,6 +196,10 @@ pub(super) async fn recover_expired_generation(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "called from the lean_vocab_test native adapter with this shape"
+)]
 pub(crate) async fn recover_expired_generation_with_facts(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     observed: &AgentRequestRow,
@@ -232,10 +236,10 @@ pub(crate) async fn recover_expired_generation_with_facts(
             let purpose = row.purpose.context("recovery request purpose missing")?;
             let is_auxiliary = purpose.is_auxiliary();
             let state = row.lifecycle_state.context("missing request lifecycle")?;
-            if state.is_terminal()
-                && row.execution_generation.as_deref() == Some(fresh_generation.as_str())
-                && row.terminal_output.is_some()
-            {
+            if let Some(terminal_output) = row.terminal_output.as_ref().filter(|_| {
+                state.is_terminal()
+                    && row.execution_generation.as_deref() == Some(fresh_generation.as_str())
+            }) {
                 if expected_outcome.is_some_and(|expected| state != expected) {
                     return Err(RecoverySelectionRejected.into());
                 }
@@ -283,7 +287,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 let agent = row.node_did.as_deref().context("missing request agent")?;
                 let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
                 reader.observe_headers(&headers);
-                validate_selection(&mut reader, &headers, &row, row.terminal_output.as_ref().expect("checked"))
+                validate_selection(&mut reader, &headers, &row, terminal_output)
                     .await?;
                 if let Some(choice) = &selection_choice {
                     let expected = selection_from_choice(&headers, choice)?;

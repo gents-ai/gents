@@ -128,8 +128,13 @@ async fn reset(
         Some(path)
     };
     let service = NativeServiceManager::new(config)?;
-    service.stop(true)?;
-    if service.status()?.is_active_or_transitioning() {
+    let still_running = tokio::task::spawn_blocking(move || -> Result<bool> {
+        service.stop(true)?;
+        Ok(service.status()?.is_active_or_transitioning())
+    })
+    .await
+    .context("stopping the managed service")??;
+    if still_running {
         bail!("The managed service is still running; quit Gents and stop it before resetting.");
     }
     let server = crate::server_host::ServerConfig::standard(home.clone());

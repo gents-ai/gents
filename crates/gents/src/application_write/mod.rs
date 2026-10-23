@@ -80,6 +80,16 @@ fn preview_call(args: &WriteParams) -> WriteParams {
 }
 
 #[derive(Clone)]
+struct WritePlan<'a> {
+    operation: &'a str,
+    preview: bool,
+    collection: &'a str,
+    limit: usize,
+    filter: Option<Value>,
+    input: Option<Map<String, Value>>,
+}
+
+#[derive(Clone)]
 pub struct WriteTool {
     access: ConfigAccess,
     collections: BTreeSet<String>,
@@ -203,6 +213,14 @@ impl WriteTool {
             !preview || !args.options.contains_key("digest"),
             "preview returns a digest; omit digest while previewing"
         );
+        let plan = WritePlan {
+            operation,
+            preview,
+            collection,
+            limit,
+            filter,
+            input,
+        };
         match &self.access {
             ConfigAccess::Local(local) => {
                 let node = local.node();
@@ -211,18 +229,7 @@ impl WriteTool {
                         node,
                         self.actor.clone(),
                         "application_write",
-                        |txn| {
-                            Box::pin(self.in_transaction(
-                                txn,
-                                args,
-                                operation,
-                                preview,
-                                collection,
-                                limit,
-                                filter.clone(),
-                                input.clone(),
-                            ))
-                        },
+                        |txn| Box::pin(self.in_transaction(txn, args, plan.clone())),
                     )
                     .await
                 } else {
@@ -230,18 +237,7 @@ impl WriteTool {
                         node,
                         self.actor.clone(),
                         "application_write",
-                        |txn| {
-                            Box::pin(self.in_transaction(
-                                txn,
-                                args,
-                                operation,
-                                preview,
-                                collection,
-                                limit,
-                                filter.clone(),
-                                input.clone(),
-                            ))
-                        },
+                        |txn| Box::pin(self.in_transaction(txn, args, plan.clone())),
                     )
                     .await
                 }
@@ -250,31 +246,13 @@ impl WriteTool {
                 if preview {
                     self.access
                         .transact_readonly("application_write", |txn| {
-                            Box::pin(self.in_transaction(
-                                txn,
-                                args,
-                                operation,
-                                preview,
-                                collection,
-                                limit,
-                                filter.clone(),
-                                input.clone(),
-                            ))
+                            Box::pin(self.in_transaction(txn, args, plan.clone()))
                         })
                         .await
                 } else {
                     self.access
                         .transact_write("application_write", |txn| {
-                            Box::pin(self.in_transaction(
-                                txn,
-                                args,
-                                operation,
-                                preview,
-                                collection,
-                                limit,
-                                filter.clone(),
-                                input.clone(),
-                            ))
+                            Box::pin(self.in_transaction(txn, args, plan.clone()))
                         })
                         .await
                 }
@@ -285,13 +263,16 @@ impl WriteTool {
         &self,
         txn: &ConfigApplyTxn<'_>,
         args: &WriteParams,
-        operation: &str,
-        preview: bool,
-        collection: &str,
-        limit: usize,
-        filter: Option<Value>,
-        input: Option<Map<String, Value>>,
+        plan: WritePlan<'_>,
     ) -> Result<Value> {
+        let WritePlan {
+            operation,
+            preview,
+            collection,
+            limit,
+            filter,
+            input,
+        } = plan;
         let schema = txn.collection_version(collection).await?.ok_or_else(|| {
             recovery(
                 "collection not found",

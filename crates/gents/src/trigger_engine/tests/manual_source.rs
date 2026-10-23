@@ -15,21 +15,21 @@ fn resolved_task_for_test(task_id: &str, agent_id: &str, prompt_template: &str) 
 }
 
 fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
-    let mut tasks = HashMap::new();
+    let mut tasks = RapidHashMap::new();
     tasks.insert(task.task_id.clone(), task);
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
         vec![integration_test_agent("general")],
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
     .with_automation(crate::runtime_snapshot::ResolvedAutomation {
         tasks,
         ..Default::default()
     })
     .with_node(stub_principal());
-    Arc::new(resolved.activate(1, HashMap::new()))
+    Arc::new(resolved.activate(1, RapidHashMap::new()))
 }
 
 #[tokio::test]
@@ -108,7 +108,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
     )
     .await
     .unwrap();
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-event", "general", "event body");
@@ -265,7 +265,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         receipt: fire.clone(),
         target_existing: true,
     };
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-lead", "general", "continue the lead");
@@ -373,7 +373,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     )
     .await
     .unwrap();
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-schedule", "general", "schedule body");
@@ -427,7 +427,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
 async fn production_materializer_rejects_incoherent_source_document_lineage() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node, rx);
     let task = resolved_task_for_test("task-lineage-input", "general", "body");
@@ -474,7 +474,7 @@ async fn production_materializer_rejects_incoherent_source_document_lineage() {
 #[tokio::test]
 async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    let snapshot = snapshot_with_schedules(HashMap::new());
+    let snapshot = snapshot_with_schedules(RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node, rx);
     let task = resolved_task_for_test("task-manual", "general", "manual body");

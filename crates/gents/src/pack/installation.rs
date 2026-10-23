@@ -169,12 +169,10 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
     })
 }
 
-fn decode_record_field<T: serde::de::DeserializeOwned + Default>(
-    row: &Value,
-    field: &str,
-    owner: &str,
-    coordinate: &str,
-) -> Result<T> {
+fn decode_record_field<T>(row: &Value, field: &str, owner: &str, coordinate: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned + Default,
+{
     match row.get(field) {
         None | Some(Value::Null) => Ok(T::default()),
         Some(value) => serde_json::from_value(value.clone()).with_context(|| {

@@ -156,11 +156,14 @@ fn discovery_name(discovery: P2pDiscoveryArg) -> &'static str {
 
 /// Installs the definition before persisting settings so a refused install
 /// leaves the home untouched.
-pub(crate) fn install_service<R: CommandRunner>(
+pub(crate) fn install_service<R>(
     manager: &NativeServiceManager<R>,
     home: &Path,
     network: &ServiceNetworkArgs,
-) -> Result<NetworkSettings> {
+) -> Result<NetworkSettings>
+where
+    R: CommandRunner,
+{
     let settings = NetworkSettings::read(home)?.apply(network);
     settings.validate()?;
     manager.install()?;

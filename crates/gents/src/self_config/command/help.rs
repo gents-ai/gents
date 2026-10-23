@@ -375,39 +375,6 @@ pub(super) fn page(resource: &str) -> Option<Page> {
     })
 }
 
-#[cfg(test)]
-mod pack_page_tests {
-    use super::page;
-
-    /// The pack help page names the model-facing workflow tool surface and
-    /// where runs are listed; regression for the retrospective discovery gap.
-    #[test]
-    fn pack_page_mentions_the_workflow_tool_name() {
-        let page = page("pack").expect("pack help page exists");
-        assert!(
-            page.notes.contains("workflow plugins") && page.notes.contains("integrations.plugins"),
-            "pack page should explain workflow plugins and their selection: {}",
-            page.notes
-        );
-        // The tool is exposed under the plugin's own name (the name part of
-        // its namespace/name); runs are listed only via the operator CLI.
-        assert!(
-            page.notes
-                .contains("named after the plugin (the name part of its namespace/name)")
-                && page.next.contains("gents job list"),
-            "pack page should name the job tool surface and run listing: {} | {}",
-            page.notes,
-            page.next
-        );
-        // Help text is shown to the model: no internal Rust symbols.
-        assert!(
-            !page.notes.contains("::"),
-            "pack page notes should not contain internal symbols: {}",
-            page.notes
-        );
-    }
-}
-
 fn mailbox_values() -> Value {
     json!({
         "kind": crate::mailbox::MailboxKind::ALL.map(crate::mailbox::MailboxKind::as_str),
@@ -634,4 +601,37 @@ fn crud_help(
     }
     write!(out, "Next: {}", page.next)?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod pack_page_tests {
+    use super::page;
+
+    /// The pack help page names the model-facing workflow tool surface and
+    /// where runs are listed; regression for the retrospective discovery gap.
+    #[test]
+    fn pack_page_mentions_the_workflow_tool_name() {
+        let page = page("pack").expect("pack help page exists");
+        assert!(
+            page.notes.contains("workflow plugins") && page.notes.contains("integrations.plugins"),
+            "pack page should explain workflow plugins and their selection: {}",
+            page.notes
+        );
+        // The tool is exposed under the plugin's own name (the name part of
+        // its namespace/name); runs are listed only via the operator CLI.
+        assert!(
+            page.notes
+                .contains("named after the plugin (the name part of its namespace/name)")
+                && page.next.contains("gents job list"),
+            "pack page should name the job tool surface and run listing: {} | {}",
+            page.notes,
+            page.next
+        );
+        // Help text is shown to the model: no internal Rust symbols.
+        assert!(
+            !page.notes.contains("::"),
+            "pack page notes should not contain internal symbols: {}",
+            page.notes
+        );
+    }
 }

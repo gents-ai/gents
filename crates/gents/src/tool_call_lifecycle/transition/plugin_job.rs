@@ -57,14 +57,9 @@ impl ToolCallLifecycle {
             IdempotentTransactionRetry::Standard,
             "tool_call.settle_plugin_job",
             |txn| {
-                Box::pin(self.settle_plugin_job_row_in_txn(
-                    txn,
-                    state,
-                    output,
-                    reason,
-                    progress.clone(),
-                    false,
-                ))
+                Box::pin(
+                    self.settle_plugin_job_row_in_txn(txn, state, output, reason, progress, false),
+                )
             },
         )
         .await?;

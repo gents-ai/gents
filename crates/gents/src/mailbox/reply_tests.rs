@@ -39,7 +39,7 @@ async fn persisted_request(
         "session-1",
         "Approved",
         "interactive",
-        &Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(identity.did()),
     );
     create.caused_by_source_doc_id = source_doc_id.map(str::to_owned);
@@ -71,7 +71,7 @@ async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) ->
         let mutation = format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "claimed" }}) {{ _docID }} }}"#,
             escape_graphql_string(&request.doc_id));
         txn.execute_local_response(&mutation).await?;
-        claim_reply_in_txn(&txn, request, &Utc::now().to_rfc3339()).await?;
+        claim_reply_in_txn(txn, request, &Utc::now().to_rfc3339()).await?;
         anyhow::ensure!(!abort, "injected transaction failure");
         Ok(())
     })).await

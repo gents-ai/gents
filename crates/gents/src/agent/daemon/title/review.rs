@@ -46,7 +46,10 @@ fn visible_context(message: &crate::llm::message::Message) -> Option<String> {
     (!body.is_empty()).then(|| format!("{label}:\n{body}"))
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
+impl<M> AgentDaemon<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     pub(in crate::agent::daemon) fn workspace_reviewer(
         &self,
         parent: &AgentRequest,
@@ -64,7 +67,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     }
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
+impl<M> AuxiliaryTask<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     pub(super) fn workspace_reviewer(
         self,
         parent: &AgentRequest,
@@ -266,7 +272,10 @@ impl Drop for ReviewBudgetGuard {
     }
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
+impl<M> AuxiliaryTask<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     pub(super) async fn execute_review(
         &self,
         request: &AgentRequest,

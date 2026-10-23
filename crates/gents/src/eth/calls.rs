@@ -409,10 +409,8 @@ enum IntegerKind {
 fn integer_kind(solidity_type: &str) -> Option<IntegerKind> {
     let (kind, suffix) = if let Some(suffix) = solidity_type.strip_prefix("uint") {
         (IntegerKind::Unsigned, suffix)
-    } else if let Some(suffix) = solidity_type.strip_prefix("int") {
-        (IntegerKind::Signed, suffix)
     } else {
-        return None;
+        (IntegerKind::Signed, solidity_type.strip_prefix("int")?)
     };
     if suffix.is_empty() {
         return Some(kind);

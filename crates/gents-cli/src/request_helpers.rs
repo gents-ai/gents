@@ -325,7 +325,7 @@ pub(crate) async fn prepare_agent_request(
     .await
 }
 
-async fn prepare_agent_request_with_input(
+pub(crate) async fn prepare_agent_request_with_input(
     graphql: &GraphqlEndpoint,
     node_did: &str,
     content: &str,
@@ -421,6 +421,10 @@ pub(crate) async fn prepare_cli_goal_input(
 /// Exact retries use the same immutable submission key and converge to the
 /// already-committed pair; conflicting retries fail without mutating either
 /// document.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the request and its Goal are written together from these fields"
+)]
 pub(crate) async fn create_goal_backed_agent_request(
     graphql: &GraphqlEndpoint,
     node_did: &str,
@@ -1049,7 +1053,10 @@ tokio::task_local! {
     static CAPTURED_REPORT: std::cell::RefCell<Option<Value>>;
 }
 
-pub(crate) fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<()> {
+pub(crate) fn print_json<T>(value: &T) -> Result<()>
+where
+    T: serde::Serialize + ?Sized,
+{
     if CAPTURED_REPORT.try_with(|_| ()).is_ok() {
         let value = serde_json::to_value(value).context("encoding JSON report")?;
         CAPTURED_REPORT.with(|report| *report.borrow_mut() = Some(value));

@@ -167,16 +167,18 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         } else {
             session_request_create_mutation(
                 &parent,
-                TEST_AGENT_ID,
-                "continue",
-                ExecutionOrigin::Scheduled,
-                RequestInput {
-                    queue: Some(hints(source, QueuePolicy::Append)),
-                    ..Default::default()
+                SessionRequestFields {
+                    agent_id: TEST_AGENT_ID,
+                    content: "continue",
+                    execution_origin: ExecutionOrigin::Scheduled,
+                    input: RequestInput {
+                        queue: Some(hints(source, QueuePolicy::Append)),
+                        ..Default::default()
+                    },
+                    request_id: "runtime-control",
+                    created_at: "2030-01-01T00:00:01Z",
+                    retry_key: None,
                 },
-                "runtime-control",
-                "2030-01-01T00:00:01Z",
-                None,
             )
             .await
             .unwrap()
@@ -227,13 +229,15 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
 
         let next = session_request_create_mutation(
             &request,
-            TEST_AGENT_ID,
-            "second-hop",
-            ExecutionOrigin::Scheduled,
-            wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
-            "second-control",
-            "2030-01-01T00:00:02Z",
-            None,
+            SessionRequestFields {
+                agent_id: TEST_AGENT_ID,
+                content: "second-hop",
+                execution_origin: ExecutionOrigin::Scheduled,
+                input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
+                request_id: "second-control",
+                created_at: "2030-01-01T00:00:02Z",
+                retry_key: None,
+            },
         )
         .await
         .unwrap();
@@ -275,13 +279,15 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
 
         let forged = session_request_create_mutation(
             &request,
-            TEST_AGENT_ID,
-            "signed-original",
-            ExecutionOrigin::Scheduled,
-            wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
-            "forged-control",
-            "2030-01-01T00:00:03Z",
-            None,
+            SessionRequestFields {
+                agent_id: TEST_AGENT_ID,
+                content: "signed-original",
+                execution_origin: ExecutionOrigin::Scheduled,
+                input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
+                request_id: "forged-control",
+                created_at: "2030-01-01T00:00:03Z",
+                retry_key: None,
+            },
         )
         .await
         .unwrap()
@@ -359,13 +365,15 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         foreign_parent.session_id = "other-session".into();
         let bad = session_request_create_mutation(
             &foreign_parent,
-            TEST_AGENT_ID,
-            "bad",
-            ExecutionOrigin::Scheduled,
-            wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
-            "foreign-control",
-            "2030-01-01T00:00:02Z",
-            None,
+            SessionRequestFields {
+                agent_id: TEST_AGENT_ID,
+                content: "bad",
+                execution_origin: ExecutionOrigin::Scheduled,
+                input: wake_queue_input(hints(QueueSource::Steering, QueuePolicy::Append)),
+                request_id: "foreign-control",
+                created_at: "2030-01-01T00:00:02Z",
+                retry_key: None,
+            },
         )
         .await
         .unwrap();

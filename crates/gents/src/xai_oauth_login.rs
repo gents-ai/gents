@@ -200,7 +200,7 @@ pub async fn poll_device_token(
             "expired_token" => {
                 anyhow::bail!("xAI device-code expired before approval");
             }
-            other if other.is_empty() => {
+            "" => {
                 anyhow::bail!("xAI device-code token poll failed with HTTP {status}: {body}");
             }
             other => {
@@ -257,14 +257,14 @@ pub async fn run_device_code_login_with_url_callback<F>(
     on_url: F,
 ) -> Result<XaiLoginTokens>
 where
-    F: FnOnce(&str),
+    F: AsyncFnOnce(&str),
 {
     let challenge = request_device_code(http).await?;
     let open_url = challenge
         .verification_uri_complete
         .as_deref()
         .unwrap_or(challenge.verification_uri.as_str());
-    on_url(open_url);
+    on_url(open_url).await;
     poll_device_token(http, &challenge, cancel).await
 }
 

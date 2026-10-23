@@ -93,7 +93,7 @@ where
     loop {
         let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
-            if predicate(&snapshot) {
+            if predicate(snapshot) {
                 return snapshot.clone();
             }
         }

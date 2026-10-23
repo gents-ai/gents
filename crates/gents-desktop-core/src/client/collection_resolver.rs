@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::sync::RwLock;
 
 use anyhow::{anyhow, Result};
@@ -12,7 +12,7 @@ use gents_protocol::schemas::{
 /// replication; only known ignored collections can be negatively cached.
 #[derive(Default)]
 pub struct CollectionResolver {
-    cache: RwLock<HashMap<String, Option<&'static str>>>,
+    cache: RwLock<RapidHashMap<String, Option<&'static str>>>,
 }
 
 impl CollectionResolver {

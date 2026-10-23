@@ -429,7 +429,7 @@ pub(crate) enum LeanCanonicalOutputView {
     },
     Published {
         message: LeanCanonicalMessage<LeanPayloadSpec>,
-        native: LeanReconstructedMessage,
+        native: Box<LeanReconstructedMessage>,
     },
 }
 

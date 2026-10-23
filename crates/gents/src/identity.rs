@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -57,9 +57,9 @@ struct KnownPublicKey {
     bytes: Vec<u8>,
 }
 
-fn known_public_keys() -> &'static RwLock<HashMap<String, KnownPublicKey>> {
-    static TYPED_KEYS: OnceLock<RwLock<HashMap<String, KnownPublicKey>>> = OnceLock::new();
-    TYPED_KEYS.get_or_init(|| RwLock::new(HashMap::new()))
+fn known_public_keys() -> &'static RwLock<RapidHashMap<String, KnownPublicKey>> {
+    static TYPED_KEYS: OnceLock<RwLock<RapidHashMap<String, KnownPublicKey>>> = OnceLock::new();
+    TYPED_KEYS.get_or_init(|| RwLock::new(RapidHashMap::new()))
 }
 
 #[derive(Debug)]

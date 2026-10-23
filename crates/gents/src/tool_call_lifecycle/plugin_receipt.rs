@@ -39,11 +39,10 @@ pub(super) fn published(
     receipt
 }
 
-pub(crate) fn decide<T: PartialEq + ?Sized>(
-    terminal: bool,
-    existing: Option<&T>,
-    receipt: &T,
-) -> ReceiptDecision {
+pub(crate) fn decide<T>(terminal: bool, existing: Option<&T>, receipt: &T) -> ReceiptDecision
+where
+    T: PartialEq + ?Sized,
+{
     match (terminal, existing) {
         (false, None) => ReceiptDecision::Commit,
         (false, Some(_)) => ReceiptDecision::Conflict,

@@ -177,6 +177,10 @@ impl ClientSyncStateOwner {
         Ok(record)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "fields of one enrollment authorization"
+    )]
     pub(super) async fn upsert_enrollment_peer(
         &self,
         peer_id: &str,

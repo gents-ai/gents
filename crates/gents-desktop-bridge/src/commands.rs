@@ -1,3 +1,7 @@
+#[path = "commands/background.rs"]
+mod background;
+pub use background::background_tool;
+
 #[path = "commands/chat.rs"]
 mod chat;
 #[path = "commands/chat_resolve.rs"]

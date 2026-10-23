@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashMap};
+use rapidhash::RapidHashMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,7 +39,7 @@ const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
 /// collection id mapped back to its name.
 pub(super) struct ControlSubscription {
     changes: events::DocumentChangeSubscription,
-    names_by_id: HashMap<String, &'static str>,
+    names_by_id: RapidHashMap<String, &'static str>,
 }
 
 pub(super) fn subscribe_control_changes(
@@ -52,42 +53,35 @@ pub(super) fn subscribe_control_changes(
     })
 }
 
-pub(super) async fn run_control_watcher(
-    node: Arc<defra_node::EmbeddedNode>,
-    subscription: ControlSubscription,
-    node_did: String,
-    resolve_context: DocumentResolveContext,
-    proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
-    runtime_status: RuntimeStatusHandle,
-    health_events_rx: mpsc::Receiver<()>,
-    shutdown: watch::Receiver<bool>,
+pub(super) struct ControlWatcherInputs {
+    pub(super) node: Arc<defra_node::EmbeddedNode>,
+    pub(super) subscription: ControlSubscription,
+    pub(super) node_did: String,
+    pub(super) resolve_context: DocumentResolveContext,
+    pub(super) proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
+    pub(super) runtime_status: RuntimeStatusHandle,
+    pub(super) health_events_rx: mpsc::Receiver<()>,
+    pub(super) shutdown: watch::Receiver<bool>,
+}
+
+pub(super) async fn run_control_watcher(inputs: ControlWatcherInputs) -> Result<()> {
+    run_control_watcher_with_timing(inputs, CONTROL_WATCHER_TIMING).await
+}
+
+pub(super) async fn run_control_watcher_with_timing(
+    inputs: ControlWatcherInputs,
+    timing: ControlWatcherTiming,
 ) -> Result<()> {
-    run_control_watcher_with_timing(
+    let ControlWatcherInputs {
         node,
         subscription,
         node_did,
         resolve_context,
         proposals_tx,
         runtime_status,
-        health_events_rx,
-        shutdown,
-        CONTROL_WATCHER_TIMING,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn run_control_watcher_with_timing(
-    node: Arc<defra_node::EmbeddedNode>,
-    subscription: ControlSubscription,
-    node_did: String,
-    resolve_context: DocumentResolveContext,
-    proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
-    runtime_status: RuntimeStatusHandle,
-    mut health_events_rx: mpsc::Receiver<()>,
-    mut shutdown: watch::Receiver<bool>,
-    timing: ControlWatcherTiming,
-) -> Result<()> {
+        mut health_events_rx,
+        mut shutdown,
+    } = inputs;
     let mut document_view = document_view::load_document_runtime_view(&node, &node_did).await?;
     let sleep = tokio::time::sleep(timing.idle_sleep);
     tokio::pin!(sleep);

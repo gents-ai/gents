@@ -15,11 +15,14 @@ use crate::types::{
 };
 
 #[tauri::command]
-pub async fn desktop_task_save<R: Runtime>(
+pub async fn desktop_task_save<R>(
     app: AppHandle<R>,
     request: TaskSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -31,11 +34,14 @@ pub async fn desktop_task_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_schedule_save<R: Runtime>(
+pub async fn desktop_schedule_save<R>(
     app: AppHandle<R>,
     request: ScheduleSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -47,11 +53,14 @@ pub async fn desktop_schedule_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_schedule_run<R: Runtime>(
+pub async fn desktop_schedule_run<R>(
     app: AppHandle<R>,
     request: ScheduleRunRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<TaskRunResult, BridgeError> {
+) -> Result<TaskRunResult, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -67,11 +76,14 @@ pub async fn desktop_schedule_run<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_trigger_save<R: Runtime>(
+pub async fn desktop_trigger_save<R>(
     app: AppHandle<R>,
     request: TriggerSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -83,11 +95,14 @@ pub async fn desktop_trigger_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_task_run<R: Runtime>(
+pub async fn desktop_task_run<R>(
     app: AppHandle<R>,
     request: TaskRunRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<TaskRunResult, BridgeError> {
+) -> Result<TaskRunResult, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -103,11 +118,14 @@ pub async fn desktop_task_run<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_event_source_save<R: Runtime>(
+pub async fn desktop_event_source_save<R>(
     app: AppHandle<R>,
     request: EventSourceSaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -118,11 +136,14 @@ pub async fn desktop_event_source_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_event_source_delete<R: Runtime>(
+pub async fn desktop_event_source_delete<R>(
     app: AppHandle<R>,
     request: EventSourceDeleteRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };

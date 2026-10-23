@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::time::{Duration, Instant};
 
 use super::AgentRequest;
@@ -13,7 +13,7 @@ pub(super) struct ProcessedMark {
     pub(super) queue_session: Option<String>,
 }
 
-pub(super) type ProcessedRequests = HashMap<String, ProcessedMark>;
+pub(super) type ProcessedRequests = RapidHashMap<String, ProcessedMark>;
 
 pub(super) fn prune_processed_requests(
     processed_request_ids: &mut ProcessedRequests,

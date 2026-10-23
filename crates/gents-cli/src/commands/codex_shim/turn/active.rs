@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
+use gents::drop_cleanup::DropCleanup;
 use gents_protocol::client_protocol::{project_persisted_attempt, RequestLifecycleState};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -53,6 +54,7 @@ pub(in crate::commands::codex_shim) async fn install_stream_control(
         thread_id,
         turn_id,
         stream_id,
+        runtime: DropCleanup::current(),
         armed: true,
     }
 }
@@ -80,6 +82,7 @@ pub(in crate::commands::codex_shim) struct TurnStreamRegistration {
     thread_id: String,
     turn_id: String,
     stream_id: String,
+    runtime: DropCleanup,
     armed: bool,
 }
 
@@ -115,12 +118,9 @@ impl Drop for TurnStreamRegistration {
             }
             return;
         }
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                clear_stream_control_if_current(&connection, &thread_id, &turn_id, &stream_id)
-                    .await;
-            });
-        }
+        self.runtime.spawn(async move {
+            clear_stream_control_if_current(&connection, &thread_id, &turn_id, &stream_id).await;
+        });
     }
 }
 

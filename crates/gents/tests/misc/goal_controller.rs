@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -211,18 +211,18 @@ fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
         node: None,
         local_did: local_did.to_string(),
         default_agent_id: crate::support::AGENT_NAME.to_string(),
-        agents: HashMap::new(),
-        tool_surfaces: HashMap::new(),
-        backend_admission_configs: HashMap::new(),
-        unavailable_agents: HashMap::new(),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
-        active_event_triggers: HashMap::new(),
-        unavailable_event_triggers: HashSet::new(),
-        active_tasks: HashMap::new(),
-        dispatchers: HashMap::new(),
-        agent_executor_capacities: HashMap::new(),
-        agent_executor_queue_capacities: HashMap::new(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
     })
 }
 
@@ -344,38 +344,47 @@ fn unready_source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSn
     )
 }
 
-async fn seed_completed_request(db: &TestDb, request_id: &str) -> String {
-    let doc_id = create_request_for_agent_with_signed_fields(
-        db.node.as_ref(),
-        db.node_identity.did(),
+async fn seed_signed_terminal_request(db: &TestDb, request_id: &str, state: &str) -> String {
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let did = db.node_identity.did();
+    let mut request = AgentRequestCreate::base(
+        RequestPurpose::Normal,
         request_id,
+        did,
+        did,
+        crate::support::AGENT_NAME,
         SESSION,
-        "completed",
+        "hello",
+        "interactive",
         "2026-07-15T00:00:00Z",
-        None,
-        None,
-        None,
-        None,
-    )
-    .await;
+        AgentRequestAdmissionRecord::local_self(did),
+    );
+    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
+        .await
+        .unwrap();
+    let response = ConfigAccess::local(db.node.clone())
+        .write(
+            "test.goal_signed_parent",
+            &request.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    let doc_id = gents::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    set_request_lifecycle_state(db.node.as_ref(), &doc_id, state).await;
+    doc_id
+}
+
+async fn seed_completed_request(db: &TestDb, request_id: &str) -> String {
+    let doc_id = seed_signed_terminal_request(db, request_id, "completed").await;
     publish_canonical_terminal_activity(db, &doc_id, "durable progress").await;
     doc_id
 }
 
 async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
-    create_request_for_agent_with_signed_fields(
-        db.node.as_ref(),
-        db.node_identity.did(),
-        request_id,
-        SESSION,
-        "failed",
-        "2026-07-15T00:00:00Z",
-        None,
-        None,
-        None,
-        None,
-    )
-    .await
+    seed_signed_terminal_request(db, request_id, "failed").await
 }
 
 struct GoalBackgroundHandoff {
@@ -1053,7 +1062,7 @@ async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
     let keys = children
         .iter()
         .map(|child| child.retry_key.as_deref().expect("retry key"))
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     assert_eq!(keys.len(), 2);
 }
 
@@ -2202,6 +2211,16 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
     let objective = "Respect the budget even when execution fails";
     for terminal in ["failed", "dead"] {
         let db = test_db(&format!("goal-budget-after-{terminal}")).await;
+        set_goal(
+            &db.node,
+            db.node_identity.did(),
+            SESSION,
+            Some(objective),
+            Some(GoalStatus::Active),
+            Some(Some(100)),
+        )
+        .await
+        .unwrap();
         let parent = "parent-over-budget";
         let barrier = tempfile::tempdir().unwrap();
         let entered_path = barrier.path().join("entered");
@@ -2226,13 +2245,18 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             vec![hold_wrapup],
         )
         .await;
-        set_request_lifecycle_state(db.node.as_ref(), &parent_doc, terminal).await;
         let prior_usage = session_token_usage(&db.node, db.node_identity.did(), SESSION)
             .await
             .unwrap();
+        assert!(
+            prior_usage < 100,
+            "the held parent has not exhausted the Goal budget"
+        );
         let expected_usage = prior_usage + 105;
         let usage = format!(
-            r#"mutation {{ add_InferenceCall(input: {{
+            r#"mutation {{
+            update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{terminal}" }}) {{ _docID }}
+            add_InferenceCall(input: {{
                 call_id: "over-budget-failed-call",
                 request_id: "{parent}",
                 request_doc_id: "{}",
@@ -2246,26 +2270,19 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
                 completion_tokens: 5
             }}) {{ _docID }} }}"#,
             escape_graphql_string(&parent_doc),
+            escape_graphql_string(&parent_doc),
             gents::graphql::escape_graphql_string(db.node_identity.did()),
         );
-        let response = db.node.execute(&usage).await;
-        assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
+        ConfigAccess::local(db.node.clone())
+            .write("test.goal_failure_and_budget_usage", &usage)
+            .await
+            .unwrap();
         assert_eq!(
             session_token_usage(&db.node, db.node_identity.did(), SESSION)
                 .await
                 .unwrap(),
             expected_usage,
         );
-        set_goal(
-            &db.node,
-            db.node_identity.did(),
-            SESSION,
-            Some(objective),
-            Some(GoalStatus::Active),
-            Some(Some(10)),
-        )
-        .await
-        .unwrap();
 
         for _ in 0..200 {
             if goal_children(&db).await.len() == 1
@@ -3592,7 +3609,7 @@ async fn operator_resume_retry_after_goal_progress_returns_original_child_withou
         serde_json::to_value(before).unwrap()
     );
     assert_eq!(
-        operator_resume_child_row(&db, &child_before["_docID"].as_str().unwrap()).await,
+        operator_resume_child_row(&db, child_before["_docID"].as_str().unwrap()).await,
         child_before
     );
     assert_eq!(goal_children(&db).await.len(), 1);

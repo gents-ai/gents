@@ -390,9 +390,10 @@ fn record_owner_job_batch() {
 }
 
 #[cfg(test)]
-pub(crate) async fn count_owner_job_batches<F: std::future::Future>(
-    future: F,
-) -> (F::Output, usize) {
+pub(crate) async fn count_owner_job_batches<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
     let batches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = OWNER_JOB_BATCHES.scope(batches.clone(), future).await;
     (output, batches.load(std::sync::atomic::Ordering::Relaxed))
@@ -575,12 +576,12 @@ mod tests {
             proposed(1, "one"),
             decided(1, Decision::Accept),
         ];
-        for entry in entries.iter().cloned() {
+        for entry in entries.iter() {
             let before = job.journal.clone();
             append(&access, &mut job, entry.clone()).await.unwrap();
             assert_eq!(job.journal.len(), before.len() + 1);
             assert_eq!(&job.journal[..before.len()], &before[..]);
-            assert_eq!(job.journal.last(), Some(&entry));
+            assert_eq!(job.journal.last(), Some(entry));
         }
         let loaded = load_job(&access, OWNER, "job-2").await.unwrap().unwrap();
         assert_eq!(loaded.journal, entries.to_vec());

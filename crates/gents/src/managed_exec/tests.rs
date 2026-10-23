@@ -1,5 +1,5 @@
 #[cfg(unix)]
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -395,7 +395,7 @@ async fn managed_exec_environment_replaces_the_inherited_environment() {
         cancellation_token: CancellationToken::new(),
         max_output_bytes: 4096,
         stdin: Vec::new(),
-        environment: Some(HashMap::from([(
+        environment: Some(RapidHashMap::from_iter([(
             "TEST_SCOPED_VAR".to_string(),
             "scoped-only".to_string(),
         )])),
@@ -485,27 +485,45 @@ async fn assert_bounded_capture_drain(retained_stream: &str) {
         );
         return;
     }
+    use std::os::unix::ffi::OsStrExt;
+
     let temp = tempfile::tempdir().expect("tempdir");
-    let pid_file = temp
-        .path()
-        .join(format!("{retained_stream}-descendant.pid"));
-    let script = match retained_stream {
-        "stdout" => format!(
-            "printf stdout-before; printf stderr-before >&2; sleep 30 2>/dev/null & echo $! > '{}'; exit 7",
-            pid_file.display()
-        ),
-        "stderr" => format!(
-            "printf stdout-before; printf stderr-before >&2; sleep 30 >/dev/null & echo $! > '{}'; exit 7",
-            pid_file.display()
-        ),
+    let pid_file = temp.path().join("descendant.pid");
+    let ready_file = temp.path().join("ready.fifo");
+    let ready_name = std::ffi::CString::new(ready_file.as_os_str().as_bytes()).unwrap();
+    // The CString keeps this NUL-terminated pointer valid through mkfifo.
+    assert_eq!(
+        unsafe { libc::mkfifo(ready_name.as_ptr(), 0o600) },
+        0,
+        "create readiness FIFO: {}",
+        std::io::Error::last_os_error()
+    );
+    let redirect = match retained_stream {
+        "stdout" => "2>/dev/null",
+        "stderr" => ">/dev/null",
         other => panic!("unexpected retained stream {other}"),
     };
+    // Redirection runs in the descendant after fork. Wait for its acknowledgement
+    // before parent exit so only the intended inherited writer remains open.
+    let script = format!(
+        "printf stdout-before; printf stderr-before >&2; \
+         {{ exec {redirect}; printf 'ready\\n' > \"$2\"; exec sleep 30; }} & \
+         echo $! > \"$1\"; IFS= read -r ready < \"$2\"; \
+         [ \"$ready\" = ready ] || exit 8; exit 7"
+    );
     let tool_name = format!("retained-{retained_stream}-pipe");
 
     let outcome = tokio::time::timeout(
         Duration::from_secs(5),
         run_managed_exec(ManagedExecRequest {
-            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                script,
+                "gents-drain-fixture".to_string(),
+                pid_file.to_str().expect("PID path").to_string(),
+                ready_file.to_str().expect("FIFO path").to_string(),
+            ],
             cwd: temp.path().to_path_buf(),
             deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
             cancellation_token: CancellationToken::new(),
@@ -516,8 +534,7 @@ async fn assert_bounded_capture_drain(retained_stream: &str) {
             live_output: None,
         }),
     )
-    .await
-    .expect("managed exec must not wait indefinitely for descendant-held pipes");
+    .await;
 
     let descendant_pid = std::fs::read_to_string(&pid_file)
         .expect("descendant pid file")
@@ -528,6 +545,8 @@ async fn assert_bounded_capture_drain(retained_stream: &str) {
         libc::kill(descendant_pid, libc::SIGKILL);
     }
 
+    let outcome =
+        outcome.expect("managed exec must not wait indefinitely for descendant-held pipes");
     match outcome {
         ManagedExecOutcome::Exited {
             code,
