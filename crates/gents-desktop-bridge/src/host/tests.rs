@@ -1,3 +1,4 @@
+mod file_inventory;
 mod runtime;
 
 use std::sync::Arc;

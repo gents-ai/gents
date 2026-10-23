@@ -8,7 +8,7 @@ use crate::agent::p2p_reconcile::{
 };
 use crate::file_inventory::{
     admit_demand, begin_client_progress, load_client_progress, receive_client_reply,
-    FileInventoryReceiver, VerifiedInventoryResponse,
+    verified_client_response, FileInventoryReceiver, VerifiedInventoryResponse,
 };
 use crate::identity::KeyIdentity;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
@@ -35,20 +35,7 @@ async fn receive_page(
     admit_demand(node, demand).await?;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let row = ConfigAccess::transact_local_readonly(
-                node,
-                None,
-                "test.inventory.read_request",
-                |txn| {
-                    Box::pin(crate::file_inventory::requests::load_request_in_txn(
-                        txn, demand,
-                    ))
-                },
-            )
-            .await?;
-            if let Some(response) = row.and_then(|row| row.response) {
-                let verified =
-                    VerifiedInventoryResponse::verify(response, demand, identity).await?;
+            if let Some(verified) = verified_client_response(node, demand, identity).await? {
                 if let FileInventoryResponse::Refused(receipt) = verified.response() {
                     anyhow::bail!("inventory request refused: {:?}", receipt.reason);
                 }
