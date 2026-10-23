@@ -50,8 +50,9 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                     "automation" => Ok(Template::Automation),
                     "plugin-tool" => Ok(Template::PluginTool),
                     "assets" => Ok(Template::Assets),
+                    "workflow" => Ok(Template::Workflow),
                     other => Err(anyhow::anyhow!(
-                        "unknown pack template {other:?}; accepted: minimal, automation, plugin-tool, assets"
+                        "unknown pack template {other:?}; accepted: minimal, automation, plugin-tool, assets, workflow"
                     )),
                 })
                 .transpose()?;
@@ -233,6 +234,34 @@ impl ConfigCommandTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scaffold_accepts_the_workflow_template_and_a_language() {
+        let argv: Vec<String> = ["rome_debate", "--template", "workflow", "--language", "js"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let AuthoringCall::Scaffold { name, input } =
+            parse_authoring_args("scaffold", &argv).unwrap()
+        else {
+            panic!("scaffold parses to a scaffold call");
+        };
+        assert_eq!(name, "rome_debate");
+        assert_eq!(input.template, Some(Template::Workflow));
+        assert_eq!(input.language.as_deref(), Some("js"));
+        let bad: Vec<String> = ["x", "--template", "nope"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let error = match parse_authoring_args("scaffold", &bad) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("an unknown template is refused"),
+        };
+        assert!(
+            error.contains("workflow"),
+            "the refusal lists every template: {error}"
+        );
+    }
 
     #[test]
     fn the_caller_path_never_expands_authority() {
