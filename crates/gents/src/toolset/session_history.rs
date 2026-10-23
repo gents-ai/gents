@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use rapidhash::RapidHashSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 mod context_details;
@@ -1400,7 +1401,7 @@ fn build_session_rows(
         .into_iter()
         .filter_map(|session| clean(Some(&session.session_id)).map(|id| (id, session)))
         .collect::<BTreeMap<_, _>>();
-    let session_id_set = session_ids.iter().cloned().collect::<HashSet<_>>();
+    let session_id_set = session_ids.iter().cloned().collect::<RapidHashSet<_>>();
     let aggregates = aggregate_by_session(requests, messages, compactions, &session_id_set)?;
 
     session_ids
@@ -1468,7 +1469,7 @@ fn aggregate_by_session(
     requests: Vec<SessionRequestAggregateRow>,
     messages: Vec<SessionMessageAggregateRow>,
     compactions: Vec<SessionCompactionAggregateRow>,
-    session_id_set: &HashSet<String>,
+    session_id_set: &RapidHashSet<String>,
 ) -> Result<BTreeMap<String, SessionAggregate>> {
     let mut aggregates = BTreeMap::<String, SessionAggregate>::new();
 

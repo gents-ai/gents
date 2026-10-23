@@ -22,11 +22,12 @@ The schema tool accepts compiled bytes only. If file editing and compilation too
         ["migration", "authoring", "rust"] => {
             r#"Complete src/lib.rs example: the source has name: String; the destination adds label: String. Forward copies name into label; inverse drops label. Both preserve other keys, including document identity. Supply actual source/destination VersionIDs when registering.
 ```rust
-use std::{collections::HashMap, error::Error};
+use std::{error::Error};
+use rapidhash::RapidHashMap;
 use lens_sdk::StreamOption;
 use serde_json::Value;
 
-type Doc = HashMap<String, Value>;
+type Doc = RapidHashMap<String, Value>;
 type Input<'a> = &'a mut dyn Iterator<Item = lens_sdk::Result<Option<Doc>>>;
 type Output = Result<StreamOption<Doc>, Box<dyn Error>>;
 

@@ -518,11 +518,11 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         context_totals_exact,
     );
 
-    let requests_by_doc_id: HashMap<&str, &AgentRequestRow> = requests
+    let requests_by_doc_id: RapidHashMap<&str, &AgentRequestRow> = requests
         .iter()
         .filter_map(|request| request.doc_id.as_deref().map(|doc_id| (doc_id, *request)))
         .collect();
-    let input_owners: HashMap<(String, String), &str> = requests
+    let input_owners: RapidHashMap<(String, String), &str> = requests
         .iter()
         .filter_map(|request| {
             gents::lifecycle::input_message_owner(request)

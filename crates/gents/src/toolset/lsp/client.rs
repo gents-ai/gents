@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,7 +19,7 @@ const MAX_HEADER_BYTES: usize = 8 * 1024;
 
 pub(crate) struct LspClient {
     stdin: Arc<Mutex<ChildStdin>>,
-    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
     next_id: AtomicI64,
     pub server_name: String,
     process: Arc<Mutex<ManagedProcess>>,
@@ -30,13 +30,13 @@ pub(crate) struct LspClient {
     workspace: std::path::PathBuf,
     init_options: Option<Value>,
     settings: Option<Value>,
-    versions: Mutex<HashMap<String, i64>>,
-    document_hashes: Mutex<HashMap<String, String>>,
+    versions: Mutex<RapidHashMap<String, i64>>,
+    document_hashes: Mutex<RapidHashMap<String, String>>,
     initialize_timeout: Duration,
-    diagnostics: Arc<Mutex<HashMap<String, Value>>>,
-    language_ids: Mutex<HashMap<String, String>>,
+    diagnostics: Arc<Mutex<RapidHashMap<String, Value>>>,
+    language_ids: Mutex<RapidHashMap<String, String>>,
     server_status: Arc<Mutex<Option<ServerStatus>>>,
-    progress: Arc<Mutex<HashSet<String>>>,
+    progress: Arc<Mutex<RapidHashSet<String>>>,
     alive: Arc<AtomicBool>,
 }
 
@@ -60,16 +60,17 @@ impl LspClient {
         let stdin = process.stdin.take().ok_or("process stdin missing")?;
         let stdout = process.stdout.take().ok_or("process stdout missing")?;
         let stderr = process.stderr.take();
-        let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending: Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>> =
+            Arc::new(Mutex::new(RapidHashMap::new()));
         let pending_reader = pending.clone();
         let stdin = Arc::new(Mutex::new(stdin));
         let stdin_reader = stdin.clone();
-        let diagnostics: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
+        let diagnostics: Arc<Mutex<RapidHashMap<String, Value>>> =
+            Arc::new(Mutex::new(RapidHashMap::new()));
         let diagnostics_reader = diagnostics.clone();
         let server_status: Arc<Mutex<Option<ServerStatus>>> = Arc::new(Mutex::new(None));
         let server_status_reader = server_status.clone();
-        let progress: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let progress: Arc<Mutex<RapidHashSet<String>>> = Arc::new(Mutex::new(RapidHashSet::new()));
         let progress_reader = progress.clone();
         let alive = Arc::new(AtomicBool::new(true));
         let alive_reader = alive.clone();
@@ -119,8 +120,8 @@ impl LspClient {
             workspace,
             init_options: server.init_options.clone(),
             settings: server.settings.clone(),
-            versions: Mutex::new(HashMap::new()),
-            document_hashes: Mutex::new(HashMap::new()),
+            versions: Mutex::new(RapidHashMap::new()),
+            document_hashes: Mutex::new(RapidHashMap::new()),
             initialize_timeout: server
                 .warmup_timeout_ms
                 .map(Duration::from_millis)
@@ -128,7 +129,7 @@ impl LspClient {
                 .max(INITIALIZE_TIMEOUT)
                 .min(Duration::from_secs(60)),
             diagnostics,
-            language_ids: Mutex::new(HashMap::new()),
+            language_ids: Mutex::new(RapidHashMap::new()),
             server_status,
             progress,
             alive,
@@ -532,7 +533,7 @@ impl LspClient {
 
 struct InflightRequest {
     stdin: Arc<Mutex<ChildStdin>>,
-    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
     id: i64,
     completed: Arc<AtomicBool>,
 }
@@ -615,7 +616,7 @@ fn ready_wait(timings: Option<&Value>) -> Duration {
 }
 
 async fn fail_pending(
-    pending: &Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>,
+    pending: &Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>,
     error: &str,
 ) {
     let mut pending = pending.lock().await;
@@ -625,13 +626,13 @@ async fn fail_pending(
 }
 
 struct ReaderShared {
-    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: Arc<Mutex<RapidHashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
     stdin: Arc<Mutex<ChildStdin>>,
-    diagnostics: Arc<Mutex<HashMap<String, Value>>>,
+    diagnostics: Arc<Mutex<RapidHashMap<String, Value>>>,
     workspace: std::path::PathBuf,
     settings: Option<Value>,
     server_status: Arc<Mutex<Option<ServerStatus>>>,
-    progress: Arc<Mutex<HashSet<String>>>,
+    progress: Arc<Mutex<RapidHashSet<String>>>,
 }
 
 async fn read_loop(stdout: ChildStdout, shared: ReaderShared) -> Result<(), String> {

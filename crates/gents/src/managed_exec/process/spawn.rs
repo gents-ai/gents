@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::ffi::OsStr;
 use std::io;
 use std::os::unix::process::CommandExt;
@@ -19,7 +19,7 @@ pub(super) fn spawn_child(
     program: &str,
     args: &[String],
     cwd: &Path,
-    environment: Option<&HashMap<String, String>>,
+    environment: Option<&RapidHashMap<String, String>>,
     piped_stdin: bool,
 ) -> io::Result<Child> {
     let spawn = |executable: &OsStr, script: Option<&OsStr>| {
@@ -65,7 +65,7 @@ pub(super) fn spawn_child(
 fn spawn_supplied_path(
     program: &str,
     cwd: &Path,
-    environment: Option<&HashMap<String, String>>,
+    environment: Option<&RapidHashMap<String, String>>,
     mut spawn: impl FnMut(&OsStr, Option<&OsStr>) -> io::Result<Child>,
 ) -> Option<io::Result<Child>> {
     if program.is_empty() || program.contains('/') || cwd.as_os_str().is_empty() {
@@ -123,7 +123,7 @@ fn spawn_supplied_path(
 fn spawn_path(
     program: &str,
     cwd: &Path,
-    environment: Option<&HashMap<String, String>>,
+    environment: Option<&RapidHashMap<String, String>>,
 ) -> Option<PathBuf> {
     if program.is_empty() || program.contains('/') {
         return None;

@@ -1,6 +1,7 @@
 //! Job rows for the stock pager as `workflow_updated`.
 
-use std::collections::{BTreeSet, HashMap};
+use rapidhash::RapidHashMap;
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
@@ -253,8 +254,8 @@ pub(super) struct JobRunCursor {
     terminal_delivered: BTreeSet<String>,
     /// Tool-call ids of runs with a delivered frame that were not abandoned.
     pub(super) delivered_runs: BTreeSet<String>,
-    rows: HashMap<String, String>,
-    first_failure: Mutex<HashMap<String, DateTime<Utc>>>,
+    rows: RapidHashMap<String, String>,
+    first_failure: Mutex<RapidHashMap<String, DateTime<Utc>>>,
     discovery_failures: u32,
     jobs: ObservationSet,
 }

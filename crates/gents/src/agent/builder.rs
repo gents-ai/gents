@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -467,9 +467,9 @@ impl AgentBuilder {
     }
 }
 
-fn find_duplicates(values: &[String]) -> HashSet<String> {
-    let mut seen = HashSet::new();
-    let mut duplicates = HashSet::new();
+fn find_duplicates(values: &[String]) -> RapidHashSet<String> {
+    let mut seen = RapidHashSet::new();
+    let mut duplicates = RapidHashSet::new();
     for value in values {
         if !seen.insert(value.clone()) {
             duplicates.insert(value.clone());

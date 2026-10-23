@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::hash::Hash;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -32,7 +32,7 @@ pub enum Decision {
 #[derive(Debug)]
 pub struct CallsiteRateLimiter<K> {
     config: RateLimitConfig,
-    states: HashMap<K, CallsiteState>,
+    states: RapidHashMap<K, CallsiteState>,
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ impl<K: Eq + Hash> CallsiteRateLimiter<K> {
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             config,
-            states: HashMap::new(),
+            states: RapidHashMap::new(),
         }
     }
 

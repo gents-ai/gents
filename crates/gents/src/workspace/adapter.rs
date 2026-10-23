@@ -195,7 +195,7 @@ async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Resu
     let mut environment = std::env::vars_os()
         .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
         .filter(|(key, _)| !GIT_ENV_REMOVED.contains(&key.as_str()))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     environment.extend(
         GIT_ENV_SET
             .iter()

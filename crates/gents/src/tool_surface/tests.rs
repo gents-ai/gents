@@ -938,7 +938,7 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
         Vec::new(),
     )
     .unwrap();
-    let active = std::collections::HashSet::from(["investigator".to_string()]);
+    let active = rapidhash::RapidHashSet::from_iter(["investigator".to_string()]);
     let error = config
         .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
         .await
@@ -1543,7 +1543,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
     )
     .unwrap();
     let explanation =
-        config.explain_with_runtime(false, node_did, &std::collections::HashSet::new());
+        config.explain_with_runtime(false, node_did, &rapidhash::RapidHashSet::default());
     assert_eq!(
         explanation.tool_names,
         vec![
@@ -2244,7 +2244,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
         let explanation = config.explain_with_runtime(
             case.mcp_services_online,
             "did:test:test",
-            &std::collections::HashSet::new(),
+            &rapidhash::RapidHashSet::default(),
         );
 
         for name in case.expected_tool_names {
@@ -2335,7 +2335,7 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
         &["observability".to_string(), "registry".to_string()]
     );
 
-    let active_agent_ids = std::collections::HashSet::from(["worker".to_string()]);
+    let active_agent_ids = rapidhash::RapidHashSet::from_iter(["worker".to_string()]);
     let surface = config.resolve_with_available_agent_targets_for_mcp_presence(
         true,
         own_node_did,
@@ -2419,7 +2419,7 @@ fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
     )
     .unwrap();
     let explanation =
-        config.explain_with_runtime(false, "did:test:test", &std::collections::HashSet::new());
+        config.explain_with_runtime(false, "did:test:test", &rapidhash::RapidHashSet::default());
 
     assert!(explanation
         .tool_names
@@ -2465,7 +2465,7 @@ fn category_complete_ceiling_clamps_builtin_reads() {
     )
     .unwrap();
     let explanation =
-        config.explain_with_runtime(false, "did:test:test", &std::collections::HashSet::new());
+        config.explain_with_runtime(false, "did:test:test", &rapidhash::RapidHashSet::default());
 
     assert!(!explanation
         .tool_names
@@ -2496,7 +2496,7 @@ fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
     )
     .unwrap();
     let explanation =
-        config.explain_with_runtime(true, "did:test:test", &std::collections::HashSet::new());
+        config.explain_with_runtime(true, "did:test:test", &rapidhash::RapidHashSet::default());
 
     assert!(!explanation.tool_names.contains(&"call_tool".to_string()));
     assert!(!explanation
@@ -2704,7 +2704,7 @@ fn explain_expands_eth_tool_ids_from_documents() {
     )
     .unwrap();
     let explanation =
-        config.explain_with_runtime(false, node_did, &std::collections::HashSet::new());
+        config.explain_with_runtime(false, node_did, &rapidhash::RapidHashSet::default());
     assert!(
         explanation
             .tool_names
@@ -2790,7 +2790,8 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
         Vec::new(),
     )
     .unwrap();
-    let explanation = config.explain_with_runtime(true, "did:test:test", &HashSet::new());
+    let explanation =
+        config.explain_with_runtime(true, "did:test:test", &rapidhash::RapidHashSet::default());
     let name = crate::meta_tools::flat_tool_name("selected", "read");
     assert_eq!(
         explanation.tool_names,

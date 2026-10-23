@@ -141,7 +141,7 @@ struct CredentialSlot {
 #[derive(Default)]
 pub struct PendingOAuthCredentials {
     issued: std::sync::atomic::AtomicU64,
-    slots: Mutex<std::collections::HashMap<CredentialKey, CredentialSlot>>,
+    slots: Mutex<rapidhash::RapidHashMap<CredentialKey, CredentialSlot>>,
 }
 
 impl PendingOAuthCredentials {
@@ -160,7 +160,7 @@ impl PendingOAuthCredentials {
 
     fn slots(
         &self,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<CredentialKey, CredentialSlot>> {
+    ) -> std::sync::MutexGuard<'_, rapidhash::RapidHashMap<CredentialKey, CredentialSlot>> {
         self.slots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

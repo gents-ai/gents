@@ -350,16 +350,17 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
     )
     .await
     .unwrap();
-    let contents = fired.data.as_ref().map(|data| &data["AgentRequest"]);
-    let content = contents
-        .and_then(|rows| rows.as_array())
-        .filter(|rows| rows.len() == 1)
-        .and_then(|rows| rows[0]["content"].as_str())
+    let fired_content = fired
+        .data
+        .as_ref()
+        .and_then(|data| data["AgentRequest"].as_array())
+        .filter(|requests| requests.len() == 1)
+        .and_then(|requests| requests[0]["content"].as_str())
         .unwrap_or_else(|| panic!("one fired request: {fired:#?}"));
     assert!(
-        content.starts_with("[event trigger:seed-trigger ")
-            && content.ends_with(&format!("]\n\n{SEED_MARKER}")),
-        "{fired:#?}"
+        fired_content.starts_with("[event trigger:seed-trigger ")
+            && fired_content.ends_with(&format!("]\n\n{SEED_MARKER}")),
+        "the fired request carries the trigger source header and the seed body: {fired_content:?}"
     );
     if existing_session {
         let routed = gents::graphql::graphql_with_transaction_retry(

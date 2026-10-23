@@ -5,8 +5,8 @@ use crate::document_config::ensure_node;
 use crate::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use rapidhash::{HashMapExt, RapidHashMap};
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
 
 pub(crate) async fn load_document_runtime_view(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -29,7 +29,7 @@ pub(crate) async fn load_document_runtime_view(
                 let principal = principals
                     .remove(&owner)
                     .context("scoped principal is missing")?;
-                let mut unknown_kind_backends = HashMap::new();
+                let mut unknown_kind_backends = RapidHashMap::new();
                 let (package_artifacts, graph_digests) =
                     crate::graph_pipeline::load_runtime_graph_artifacts_in_txn(txn, &owner).await?;
                 let mut view = DocumentRuntimeView {
@@ -90,9 +90,9 @@ pub(crate) async fn load_document_runtime_view(
                         Collection::RepositoryPlacement,
                     )
                     .await?,
-                    backend_observations: HashMap::new(),
+                    backend_observations: RapidHashMap::new(),
                     unknown_kind_backends,
-                    oauth_credentials: HashMap::new(),
+                    oauth_credentials: RapidHashMap::new(),
                 };
                 // Retain ordinary authored documents; reserved package and
                 // graph resources execute only through their verified revision owner.
@@ -181,16 +181,16 @@ async fn load_records<T: DeserializeOwned>(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     collection: Collection,
-) -> Result<HashMap<String, DocumentRecord<T>>> {
-    load_records_skipping(txn, owner, collection, &mut HashMap::new()).await
+) -> Result<RapidHashMap<String, DocumentRecord<T>>> {
+    load_records_skipping(txn, owner, collection, &mut RapidHashMap::new()).await
 }
 
 async fn load_records_skipping<T: DeserializeOwned>(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     collection: Collection,
-    unknown_kinds: &mut HashMap<String, String>,
-) -> Result<HashMap<String, DocumentRecord<T>>> {
+    unknown_kinds: &mut RapidHashMap<String, String>,
+) -> Result<RapidHashMap<String, DocumentRecord<T>>> {
     let name = collection.graphql_type();
     let (fields, _) = config_projection(collection, None)?;
     let response = txn
@@ -205,7 +205,7 @@ async fn load_records_skipping<T: DeserializeOwned>(
         .and_then(|data| data.get(name))
         .and_then(serde_json::Value::as_array)
         .with_context(|| format!("{name} query did not return rows"))?;
-    let mut result = HashMap::new();
+    let mut result = RapidHashMap::new();
     for row in rows {
         let mut row = row.clone();
         let doc_id = row

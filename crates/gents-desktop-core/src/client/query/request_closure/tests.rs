@@ -3,8 +3,8 @@ use super::*;
 use gents::config_client::ConfigAccess;
 use gents_protocol::graphql::graphql_input_literal;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -20,7 +20,7 @@ async fn generated_request_closures_use_exact_database_dependencies() {
     for case in cases {
         let session = case["name"].as_str().unwrap();
         let modeled = case["rows"].as_array().unwrap();
-        let mut docs: HashMap<u64, String> = HashMap::new();
+        let mut docs: RapidHashMap<u64, String> = RapidHashMap::new();
         for (index, row) in modeled.iter().enumerate() {
             let request = format!("request-{}", row["request"].as_u64().unwrap());
             let requester = row["requester"].as_u64().unwrap();
@@ -107,7 +107,7 @@ async fn generated_request_closures_use_exact_database_dependencies() {
             .unwrap()
             .iter()
             .map(|id| docs[&id.as_u64().unwrap()].as_str())
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         let seeds = all
             .iter()
             .filter(|row| {

@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use rapidhash::{RapidHashMap, RapidHashSet};
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -320,12 +321,12 @@ struct StreamingState {
 
 #[derive(Default)]
 struct StreamingStateInner {
-    chunk_counts: HashMap<String, usize>,
-    request_counts: HashMap<String, usize>,
+    chunk_counts: RapidHashMap<String, usize>,
+    request_counts: RapidHashMap<String, usize>,
     completion_bodies: Vec<serde_json::Value>,
-    releases: HashSet<String>,
-    dynamic_followups: HashSet<String>,
-    dynamic_responses: HashMap<String, VecDeque<StreamResponse>>,
+    releases: RapidHashSet<String>,
+    dynamic_followups: RapidHashSet<String>,
+    dynamic_responses: RapidHashMap<String, VecDeque<StreamResponse>>,
 }
 
 impl StreamingState {
@@ -595,7 +596,10 @@ fn matching_plans<'a>(plans: &'a [StreamPlan], body: &str) -> Result<Vec<&'a Str
         .collect())
 }
 
-fn matching_dynamic_markers(markers: &HashSet<String>, body: &str) -> Result<Vec<String>, String> {
+fn matching_dynamic_markers(
+    markers: &RapidHashSet<String>,
+    body: &str,
+) -> Result<Vec<String>, String> {
     let current_input = current_authored_user_input(body)?;
     let matched = markers
         .iter()

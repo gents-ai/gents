@@ -1,6 +1,6 @@
 use super::*;
 
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 
 use tokio::sync::Mutex;
@@ -27,7 +27,7 @@ pub(super) fn background_completion_gate(
     queue_key: &str,
 ) -> Arc<BackgroundCompletionGate> {
     static GATES: OnceLock<
-        StdMutex<HashMap<BackgroundCompletionGateKey, Weak<BackgroundCompletionGate>>>,
+        StdMutex<RapidHashMap<BackgroundCompletionGateKey, Weak<BackgroundCompletionGate>>>,
     > = OnceLock::new();
 
     let key = BackgroundCompletionGateKey {
@@ -37,7 +37,7 @@ pub(super) fn background_completion_gate(
         queue_key: queue_key.to_string(),
     };
     let mut gates = GATES
-        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .get_or_init(|| StdMutex::new(RapidHashMap::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {

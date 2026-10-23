@@ -58,7 +58,7 @@ fn parse_services(
         .and_then(|data| data.get("ToolServiceRegistry"))
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("MCP registry query returned no rows array"))?;
-    let mut names = std::collections::HashSet::new();
+    let mut names = rapidhash::RapidHashSet::default();
     let mut services = Vec::with_capacity(rows.len());
     for row in rows {
         let service: crate::document_config::ToolServiceRegistry =

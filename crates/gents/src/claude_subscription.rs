@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::RapidHashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -141,7 +141,7 @@ impl<S: BearerSource> fmt::Debug for ClaudeSubscriptionModel<S> {
     }
 }
 
-fn surface_of(request: &CompletionRequest) -> HashSet<String> {
+fn surface_of(request: &CompletionRequest) -> RapidHashSet<String> {
     request.tools.iter().map(|tool| tool.name.clone()).collect()
 }
 

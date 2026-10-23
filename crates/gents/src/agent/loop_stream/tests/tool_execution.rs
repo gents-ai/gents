@@ -148,7 +148,7 @@ impl PolicyDeniedOwner {
                         binary_path: "/bin/echo".into(),
                         description: String::new(),
                         allowed_argv_prefixes: vec![vec!["status".into()]],
-                        env_vars: std::collections::HashMap::new(),
+                        env_vars: rapidhash::RapidHashMap::default(),
                         working_dir: Some(root.to_path_buf()),
                         timeout_secs: 5,
                         max_output_chars: 4096,

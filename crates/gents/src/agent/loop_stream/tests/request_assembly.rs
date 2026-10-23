@@ -1063,7 +1063,7 @@ fn generated_repair_cases_drive_tool_argument_repair() {
 
 fn generated_authored_key(
     key: &crate::lean_vocab_test::LeanFoldAuthoredKey,
-    docs: &std::collections::HashMap<u64, String>,
+    docs: &rapidhash::RapidHashMap<u64, String>,
 ) -> String {
     use crate::lean_vocab_test::LeanFoldAuthoredKey as Key;
     match key {

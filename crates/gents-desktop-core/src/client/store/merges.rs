@@ -36,14 +36,14 @@ macro_rules! retain_node_scope {
         let node_did = $node_did;
         let keep_target = $keep_target;
         let node_session_ids = if keep_target {
-            HashSet::new()
+            RapidHashSet::new()
         } else {
             let mut session_ids = rows
                 .sessions
                 .iter()
                 .filter(|row| row.node_did == node_did)
                 .map(|row| row.session_id.clone())
-                .collect::<HashSet<_>>();
+                .collect::<RapidHashSet<_>>();
             session_ids.extend(
                 rows.requests
                     .iter()
@@ -295,20 +295,20 @@ impl ClientStore {
                     .filter(|row| row.node_did == node_did)
                     .map(|row| row.backend_id.clone()),
             )
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         let shared_backend_ids = rows
             .inference_backends
             .iter()
             .filter(|row| row.node_did != node_did)
             .map(|row| row.backend_id.clone())
             .filter(|backend_id| target_backend_ids.contains(backend_id))
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         let incoming_backend_ids = remote
             .inference_backends
             .iter()
             .filter(|row| row.node_did == node_did)
             .map(|row| row.backend_id.clone())
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         replace_node_rows_with_sources(
             &mut rows.inference_backends,
             &mut rows.inference_backend_source_node_dids,
@@ -377,7 +377,7 @@ impl ClientStore {
             .iter()
             .filter(|row| row.node_did == node_did)
             .map(|row| row.trigger_id.clone())
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         retain_rows_and_sources(
             &mut rows.schedule_observations,
             &mut rows.schedule_observation_source_node_dids,
@@ -939,7 +939,7 @@ mod overlay_tests {
             .tool_calls
             .iter()
             .map(|row| row.tool_call_key.as_str())
-            .collect::<HashSet<_>>();
+            .collect::<RapidHashSet<_>>();
         assert_eq!(
             keys,
             [
@@ -962,7 +962,7 @@ mod overlay_tests {
                 .tool_calls
                 .iter()
                 .map(|row| row.tool_call_key.as_str())
-                .collect::<HashSet<_>>()
+                .collect::<RapidHashSet<_>>()
         };
         assert_eq!(
             scoped_keys("did:alpha"),
@@ -1208,7 +1208,7 @@ mod overlay_tests {
                     row.probe_status.as_deref().expect("probe status"),
                 )
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<RapidHashMap<_, _>>();
         assert_eq!(observations.get("did:test:local"), Some(&"healthy"));
         assert_eq!(observations.get("did:test:other"), Some(&"other-healthy"));
         assert_eq!(overlayed.tasks.len(), 1);

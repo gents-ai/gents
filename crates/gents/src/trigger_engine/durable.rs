@@ -372,7 +372,7 @@ pub async fn request_arrival_order(
     if slots.is_empty() {
         return Ok(Vec::new());
     }
-    let mut seen_slots = std::collections::HashSet::new();
+    let mut seen_slots = rapidhash::RapidHashSet::default();
     let slot_ids = slots
         .iter()
         .filter_map(|(_, slot)| seen_slots.insert(slot.as_str()).then_some(slot.as_str()))
@@ -420,7 +420,7 @@ pub async fn request_arrival_order(
         .iter()
         .enumerate()
         .map(|(index, id)| (id.as_str(), index))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     let mut slots = slots
         .into_iter()
         .filter(|(_, slot)| positions.contains_key(slot.as_str()))

@@ -2601,7 +2601,7 @@ fn pair_closed_messages(messages: &[Message]) -> bool {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         })
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     messages.iter().all(|message| match message {
         Message::User { content } => content.iter().all(|item| match item {
             UserContent::ToolResult(tool_result) => announced.contains(

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 use std::fs::Metadata;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ impl FileChanges {
                 && !changes.changes.is_empty(),
             "invalid retained file change binding"
         );
-        let mut paths = HashSet::new();
+        let mut paths = RapidHashSet::new();
         for change in &changes.changes {
             anyhow::ensure!(
                 !change.root.is_empty() && paths.insert((&change.root, &change.path)),

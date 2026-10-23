@@ -914,7 +914,7 @@ pub(super) fn format_tool_summary_line(tool: &ToolCallProgress, colors: bool) ->
 }
 
 fn text_fingerprint(value: &str) -> (usize, u64) {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = rapidhash::fast::RapidHasher::default();
     value.hash(&mut hasher);
     (value.len(), hasher.finish())
 }

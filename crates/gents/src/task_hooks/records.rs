@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::RapidHashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -62,7 +62,7 @@ impl HostRecord for TaskHookRecord {
 #[derive(Clone)]
 pub(crate) struct TaskHookRecordStore {
     storage: HostRecordStore<TaskHookRecord>,
-    live: Arc<Mutex<HashSet<String>>>,
+    live: Arc<Mutex<RapidHashSet<String>>>,
     recoveries: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     shutdown: CancellationToken,
 }

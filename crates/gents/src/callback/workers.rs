@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
@@ -17,14 +17,14 @@ pub(super) const PLUGIN_CALLBACK_CONCURRENCY: usize = 32;
 /// Process-local execution accounting is separate from the durable claim:
 /// recovery must not interrupt an invocation whose attempt is still executing.
 pub(crate) struct CallbackWorkers {
-    active: Arc<Mutex<HashMap<String, String>>>,
+    active: Arc<Mutex<RapidHashMap<String, String>>>,
     permits: Arc<Semaphore>,
     tasks: TaskTracker,
     cancel: CancellationToken,
 }
 
 struct ActiveInvocation {
-    active: Arc<Mutex<HashMap<String, String>>>,
+    active: Arc<Mutex<RapidHashMap<String, String>>>,
     id: String,
 }
 
@@ -87,7 +87,7 @@ impl CallbackWorkers {
     }
 
     pub(super) fn prioritize(&self, invocations: &mut [CallbackInvocationDoc]) {
-        let mut counts = HashMap::<String, usize>::new();
+        let mut counts = RapidHashMap::<String, usize>::new();
         for callback in self
             .active
             .lock()

@@ -1,5 +1,5 @@
 use super::automation::resolve_automation;
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -88,7 +88,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     };
 
     let measured_vetoed = context.backend_health.vetoed_backend_ids().await;
-    let mut backend_admission_configs = HashMap::new();
+    let mut backend_admission_configs = RapidHashMap::new();
     for record in view.backends.values() {
         let backend = &record.value;
         if let Some(observation) = view.backend_observations.get(&backend.backend_id) {
@@ -100,7 +100,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
-    let mut unavailable_agents = HashMap::new();
+    let mut unavailable_agents = RapidHashMap::new();
     let mut agent_factories: Vec<
         Box<
             dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
@@ -284,7 +284,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let candidate_agent_ids = agents
         .iter()
         .map(|agent_config| agent_config.agent_id.clone())
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     let mut behavior_surfaces = Vec::with_capacity(agents.len());
     for agent_config in agents {
         match agent_config
@@ -313,9 +313,9 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let active_agent_ids = behavior_surfaces
         .iter()
         .map(|(agent_config, _)| agent_config.agent_id.clone())
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     let mut agents = Vec::with_capacity(behavior_surfaces.len());
-    let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
+    let mut tool_surfaces = RapidHashMap::with_capacity(behavior_surfaces.len());
     for (agent_config, mut tool_surface) in behavior_surfaces {
         for target in tool_surface.agent_targets() {
             if target.target_node_did == own_node_did
@@ -351,7 +351,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
 fn ensure_inference_available(
     view: &DocumentRuntimeView,
     inference: &crate::config::ResolvedInference,
-    admission_configs: &HashMap<String, crate::admission::BackendAdmissionConfig>,
+    admission_configs: &RapidHashMap<String, crate::admission::BackendAdmissionConfig>,
 ) -> std::result::Result<(), AgentResolutionError> {
     let scope = view.node.value.node_did.as_str();
     let backend = &inference.backend;

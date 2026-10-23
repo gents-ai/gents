@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -220,7 +220,7 @@ impl DefraWatcher {
             node,
             node_did: node_did.to_string(),
             subscription,
-            processed_request_ids: HashMap::new(),
+            processed_request_ids: RapidHashMap::new(),
         })
     }
 }

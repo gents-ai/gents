@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::fs;
 
 use anyhow::{Context, Result};
@@ -393,7 +393,7 @@ struct TraceToolSelection {
 async fn trace_export(args: TraceExportArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let mut timelines = HashMap::new();
+    let mut timelines = RapidHashMap::new();
     let requested = if let Some(request_id) = args.request_id.as_deref() {
         let rows = load_run_timeline_rows(&access, request_id).await?;
         if let Some(session_id) = args.session_id.as_deref() {

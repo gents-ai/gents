@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -39,7 +39,7 @@ use slot::{retire_slot, spawn_slot};
 
 pub(super) struct GenerationSupervisor<F> {
     current_snapshot: Arc<ActiveRuntimeSnapshot>,
-    active_slots: HashMap<String, AgentSlot>,
+    active_slots: RapidHashMap<String, AgentSlot>,
     admission_registry: AdmissionRegistry,
     retry_policy: RetryPolicy,
     runner: F,
@@ -60,16 +60,16 @@ fn slot_join_result(
 }
 
 struct StagedSlots {
-    slots: HashMap<String, AgentSlot>,
-    registered: HashSet<(String, u64)>,
+    slots: RapidHashMap<String, AgentSlot>,
+    registered: RapidHashSet<(String, u64)>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
 }
 
 impl StagedSlots {
     fn new(failure_policy: Option<Arc<dyn SlotFailurePolicy>>) -> Self {
         Self {
-            slots: HashMap::new(),
-            registered: HashSet::new(),
+            slots: RapidHashMap::new(),
+            registered: RapidHashSet::new(),
             failure_policy,
         }
     }
@@ -86,7 +86,7 @@ impl StagedSlots {
         self.slots.get(agent_id)
     }
 
-    fn into_slots(self) -> HashMap<String, AgentSlot> {
+    fn into_slots(self) -> RapidHashMap<String, AgentSlot> {
         self.slots
     }
 
@@ -395,9 +395,9 @@ where
         }
 
         let runnable_agent_ids = resolved_snapshot.agents.keys().cloned().collect::<Vec<_>>();
-        let mut dispatchers = HashMap::new();
-        let mut executor_capacities = HashMap::new();
-        let mut executor_queue_capacities = HashMap::new();
+        let mut dispatchers = RapidHashMap::new();
+        let mut executor_capacities = RapidHashMap::new();
+        let mut executor_queue_capacities = RapidHashMap::new();
         for agent_id in &runnable_agent_ids {
             let slot = staged
                 .get(agent_id)
@@ -447,7 +447,7 @@ where
             return Err(ActiveSnapshotReceiverClosed.into());
         }
 
-        let mut next_slots = HashMap::new();
+        let mut next_slots = RapidHashMap::new();
         let mut retired_slots = Vec::new();
         let mut retired_agents: Vec<(String, u64, bool)> = Vec::new();
         let mut staged_slots = staged.into_slots();

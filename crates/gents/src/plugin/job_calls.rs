@@ -2,7 +2,8 @@
 //! job row's stored result. Requests and answers are `gents_protocol::job`'s
 //! [`JobCall`] and [`RoundResult`], keyed by request id under `job_results`.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use rapidhash::RapidHashMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -235,7 +236,7 @@ async fn child_output_slots(
             "{{ AgentRequest(filter: {{ request_id: {{ _in: {list} }} }}) {{ _docID request_id }} }}"
         ))
         .await?;
-    let doc_ids: HashMap<&str, &str> = requests
+    let doc_ids: RapidHashMap<&str, &str> = requests
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .map(Vec::as_slice)

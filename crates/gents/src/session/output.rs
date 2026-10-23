@@ -13,7 +13,8 @@ use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, PayloadRef,
     SourceClose,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use super::canonical_rows::{
@@ -159,7 +160,7 @@ enum ReadAccess<'a, 'txn> {
 struct ReadCache {
     headers: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
     requests: BTreeMap<String, Arc<RequestOutputRows>>,
-    sources: HashMap<(String, OutputSource), Vec<super::canonical_rows::OutputSegmentRow>>,
+    sources: RapidHashMap<(String, OutputSource), Vec<super::canonical_rows::OutputSegmentRow>>,
     source_reads: bool,
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
@@ -177,22 +178,23 @@ struct ReadCache {
 #[derive(Clone)]
 struct RequestOutputRows {
     rows: Vec<super::canonical_rows::OutputSegmentRow>,
-    by_doc_id: HashMap<String, Vec<usize>>,
-    by_source: HashMap<OutputSource, Vec<usize>>,
+    by_doc_id: RapidHashMap<String, Vec<usize>>,
+    by_source: RapidHashMap<OutputSource, Vec<usize>>,
 }
 
 /// Unrelated malformed headers remain undecoded. Coordinate matches retain
 /// their original order and every physical occurrence, even identical IDs.
 struct SessionHeaderRows {
     rows: Vec<serde_json::Value>,
-    by_key: HashMap<String, Vec<usize>>,
-    by_sequence: HashMap<u64, Vec<usize>>,
+    by_key: RapidHashMap<String, Vec<usize>>,
+    by_sequence: RapidHashMap<u64, Vec<usize>>,
 }
 
 impl From<Vec<serde_json::Value>> for SessionHeaderRows {
     fn from(rows: Vec<serde_json::Value>) -> Self {
-        let mut by_key: HashMap<String, Vec<usize>> = HashMap::with_capacity(rows.len());
-        let mut by_sequence: HashMap<u64, Vec<usize>> = HashMap::with_capacity(rows.len());
+        let mut by_key: RapidHashMap<String, Vec<usize>> = RapidHashMap::with_capacity(rows.len());
+        let mut by_sequence: RapidHashMap<u64, Vec<usize>> =
+            RapidHashMap::with_capacity(rows.len());
         for (index, row) in rows.iter().enumerate() {
             if let Some(key) = row.get("message_key").and_then(serde_json::Value::as_str) {
                 by_key.entry(key.to_owned()).or_default().push(index);
@@ -236,8 +238,9 @@ impl SessionHeaderRows {
 
 impl From<Vec<super::canonical_rows::OutputSegmentRow>> for RequestOutputRows {
     fn from(rows: Vec<super::canonical_rows::OutputSegmentRow>) -> Self {
-        let mut by_doc_id: HashMap<String, Vec<usize>> = HashMap::with_capacity(rows.len());
-        let mut by_source: HashMap<OutputSource, Vec<usize>> = HashMap::new();
+        let mut by_doc_id: RapidHashMap<String, Vec<usize>> =
+            RapidHashMap::with_capacity(rows.len());
+        let mut by_source: RapidHashMap<OutputSource, Vec<usize>> = RapidHashMap::new();
         for (index, row) in rows.iter().enumerate() {
             by_doc_id.entry(row.doc_id.clone()).or_default().push(index);
             by_source
@@ -1153,7 +1156,7 @@ async fn load_referenced_segments(
         }
     }
     let mut sources = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     for closure in &closures {
         if seen.insert((&closure.segment.request_doc_id, &closure.segment.source)) {
             sources.push((

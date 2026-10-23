@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 
 pub use crate::request_lifecycle::{InvalidRequestLifecycleState, RequestLifecycleState};
 
@@ -106,14 +106,14 @@ pub fn project_persisted_attempt(
 }
 
 pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     for attempt in attempts {
         if !seen.insert(attempt.request.request_id.as_str()) {
             return None;
         }
     }
 
-    let parents: HashSet<_> = attempts
+    let parents: RapidHashSet<_> = attempts
         .iter()
         .filter_map(|attempt| attempt.request.retry_parent_request.as_deref())
         .collect();

@@ -292,7 +292,7 @@ pub fn pending(home: &Path) -> Result<Vec<Request>> {
 pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
     let now = now_ms();
     let mut requests = Vec::new();
-    let mut ids = std::collections::HashSet::new();
+    let mut ids = rapidhash::RapidHashSet::default();
     for queue in Queue::ALL {
         let entries = match std::fs::read_dir(queue.directory(home)) {
             Ok(entries) => entries,

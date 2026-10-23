@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::os::unix::fs::{symlink, PermissionsExt};
 #[cfg(target_os = "macos")]
 use std::path::Path;
@@ -16,7 +16,7 @@ async fn capture(cwd: PathBuf, path: &str, program: &str, script: &str) -> Manag
         cancellation_token: CancellationToken::new(),
         max_output_bytes: 1024,
         stdin: Vec::new(),
-        environment: Some(HashMap::from([("PATH".into(), path.into())])),
+        environment: Some(RapidHashMap::from_iter([("PATH".into(), path.into())])),
         tool_name: None,
         live_output: None,
     })
@@ -106,7 +106,7 @@ async fn supplied_path_preserves_native_spawn_errors() {
         reference.current_dir(&cwd).env_clear().env("PATH", path);
         reference.as_std_mut().arg0(program);
         let expected = reference.spawn().expect_err("invalid native spawn").kind();
-        let environment = HashMap::from([("PATH".into(), path.into())]);
+        let environment = RapidHashMap::from_iter([("PATH".into(), path.into())]);
         let actual = super::spawn_child(program, &[], &cwd, Some(&environment), false)
             .expect_err("invalid managed spawn")
             .kind();
@@ -170,7 +170,7 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
         "{}",
         String::from_utf8_lossy(&compiler.stderr)
     );
-    let mut environment = std::env::vars().collect::<HashMap<_, _>>();
+    let mut environment = std::env::vars().collect::<RapidHashMap<_, _>>();
     environment.insert(FIXTURE.into(), root.path().to_str().unwrap().into());
     environment.insert(
         "DYLD_INSERT_LIBRARIES".into(),
@@ -242,7 +242,7 @@ fn exercise_concurrent_spawns(root: &Path, permission_search: bool) {
                 let mut child = spawn_managed_process(SpawnManagedProcessRequest {
                     argv: vec!["sh".into(), "-c".into(), ":".into()],
                     cwd: PathBuf::from("/"),
-                    environment: Some(HashMap::from([("PATH".into(), search_path)])),
+                    environment: Some(RapidHashMap::from_iter([("PATH".into(), search_path)])),
                     tool_name: None,
                     kind: ManagedExecKind::PersistentService,
                 })

@@ -331,7 +331,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             .await
             .unwrap();
         let outsider_row = persist_request(&node, &outsider).await;
-        let mut stored = std::collections::HashSet::new();
+        let mut stored = rapidhash::RapidHashSet::default();
         let mut previous: Option<(RequestLifecycle, Option<String>)> = None;
         let mut writes_by_request: std::collections::BTreeMap<u64, Vec<&Value>> =
             Default::default();

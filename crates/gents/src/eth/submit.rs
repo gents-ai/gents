@@ -1,7 +1,7 @@
 //! Journaled simulate-before-sign submission: signed bytes are persisted before
 //! broadcast so recovery rebroadcasts the same transaction hash, never a new nonce.
 
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -78,7 +78,7 @@ pub(crate) struct SubmitReceipt {
 
 #[derive(Debug, Default)]
 pub(crate) struct NonceGate {
-    inner: Mutex<HashMap<(String, u64), Arc<tokio::sync::Mutex<()>>>>,
+    inner: Mutex<RapidHashMap<(String, u64), Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl NonceGate {

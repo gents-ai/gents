@@ -1,5 +1,5 @@
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -43,7 +43,7 @@ pub(crate) struct WorkerCapacity {
     active: Arc<Semaphore>,
     #[cfg(test)]
     active_limit: usize,
-    registered: Mutex<HashMap<WorkerTicket, RegisteredTicket>>,
+    registered: Mutex<RapidHashMap<WorkerTicket, RegisteredTicket>>,
 }
 
 tokio::task_local! {
@@ -105,7 +105,7 @@ impl WorkerCapacity {
             active: Arc::new(Semaphore::new(active_limit)),
             #[cfg(test)]
             active_limit,
-            registered: Mutex::new(HashMap::new()),
+            registered: Mutex::new(RapidHashMap::new()),
         })
     }
 
@@ -114,7 +114,7 @@ impl WorkerCapacity {
         self.active_limit
     }
 
-    fn registry(&self) -> MutexGuard<'_, HashMap<WorkerTicket, RegisteredTicket>> {
+    fn registry(&self) -> MutexGuard<'_, RapidHashMap<WorkerTicket, RegisteredTicket>> {
         self.registered
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -255,7 +255,7 @@ mod tests {
         let mut exercised = 0;
         for case in lean_canonical_worker_capacity_cases() {
             let capacity = WorkerCapacity::new(case.pre.active_limit);
-            let mut active = HashMap::<WorkerTicket, ActiveGuard>::new();
+            let mut active = RapidHashMap::<WorkerTicket, ActiveGuard>::new();
             for raw in &case.pre.active {
                 let key = ticket(*raw);
                 let guard = capacity

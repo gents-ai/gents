@@ -79,7 +79,7 @@ pub(crate) async fn reserve_background_slot_in_txn(
     slot: BackgroundSlot,
     request_fields: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    txn.contend_for_background_slot();
+    txn.contend_with_request_siblings();
     if slot != BackgroundSlot::Admitted {
         let live = count_live_backgrounded_rows_in(txn, request_doc_id).await?;
         let admitted = if slot == BackgroundSlot::Occupied {

@@ -96,7 +96,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     };
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("resumed-output-trigger".to_owned(), trigger)]),
+        RapidHashMap::from_iter([("resumed-output-trigger".to_owned(), trigger)]),
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());

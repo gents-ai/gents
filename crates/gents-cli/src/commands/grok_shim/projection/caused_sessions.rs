@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashMap};
+use rapidhash::RapidHashMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -181,10 +182,10 @@ struct HeadActivity {
 
 #[derive(Debug, Default)]
 struct Activity {
-    heads: HashMap<String, HeadActivity>,
-    cause_sequences: HashMap<String, i64>,
+    heads: RapidHashMap<String, HeadActivity>,
+    cause_sequences: RapidHashMap<String, i64>,
     /// Cause tool-call doc id to the `tool_call_id` of the plugin job it pins.
-    job_runs: HashMap<String, String>,
+    job_runs: RapidHashMap<String, String>,
 }
 
 #[derive(Deserialize)]

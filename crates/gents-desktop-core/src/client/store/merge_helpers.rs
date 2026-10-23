@@ -21,7 +21,7 @@ pub(super) fn upsert_rows_by_key<T>(
         .iter()
         .enumerate()
         .map(|(index, row)| (key_fn(row), index))
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
 
     for row in incoming {
         let key = key_fn(&row);
@@ -62,7 +62,7 @@ pub(super) fn upsert_goal_rows(target: &mut Vec<GoalRow>, incoming: Vec<GoalRow>
         .iter()
         .enumerate()
         .map(|(index, row)| (goal_merge_key(row), index))
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
 
     for row in incoming {
         let key = goal_merge_key(&row);
@@ -99,7 +99,7 @@ pub(super) fn upsert_rows_with_sources_by_key<T>(
             let source = target_sources.get(index).and_then(|value| value.as_deref());
             (key_fn(row, source), index)
         })
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
 
     for (row, source) in incoming.into_iter().zip(incoming_sources.into_iter()) {
         let key = key_fn(&row, source.as_deref());
@@ -140,7 +140,7 @@ pub(super) fn retire_request_placeholders(
     existing: &mut Vec<AgentRequestRow>,
     incoming: &[AgentRequestRow],
 ) {
-    let mut replacements = HashSet::with_capacity(incoming.len().saturating_mul(4));
+    let mut replacements = RapidHashSet::with_capacity(incoming.len().saturating_mul(4));
     for replacement in incoming
         .iter()
         .filter(|row| row.doc_id.is_some() || row.node_did.is_some())

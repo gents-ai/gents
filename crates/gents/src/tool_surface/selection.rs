@@ -37,7 +37,7 @@ impl AgentToolConfig {
         targets: impl IntoIterator<Item = &'a crate::document_config::AgentTargetDocument>,
     ) -> Result<Self> {
         let mut resolved = Self::from_document(tools)?;
-        let mut by_id = std::collections::HashMap::new();
+        let mut by_id = rapidhash::RapidHashMap::default();
         for target in targets {
             anyhow::ensure!(
                 by_id
@@ -50,7 +50,7 @@ impl AgentToolConfig {
                 target.target_id
             );
         }
-        let mut names = std::collections::HashSet::new();
+        let mut names = rapidhash::RapidHashSet::default();
         for id in tools
             .agents
             .as_ref()

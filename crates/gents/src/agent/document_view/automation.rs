@@ -3,20 +3,20 @@ use crate::runtime_snapshot::{
     ConcurrencyMode, EventTriggerFireMode, ResolvedAutomation, ResolvedEventTrigger,
     ResolvedSchedule, ResolvedTask, UnavailableAgent,
 };
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 pub(super) fn resolve_automation(
     view: &DocumentRuntimeView,
-    unavailable_agents: &HashMap<String, UnavailableAgent>,
+    unavailable_agents: &RapidHashMap<String, UnavailableAgent>,
 ) -> ResolvedAutomation {
     let tasks = resolve_tasks(view, unavailable_agents);
-    let mut schedules = HashMap::new();
-    let mut unavailable_schedules = HashSet::new();
-    let mut event_triggers = HashMap::new();
-    let mut unavailable_event_triggers = HashSet::new();
-    let mut unavailable_triggers = HashSet::new();
+    let mut schedules = RapidHashMap::new();
+    let mut unavailable_schedules = RapidHashSet::new();
+    let mut event_triggers = RapidHashMap::new();
+    let mut unavailable_event_triggers = RapidHashSet::new();
+    let mut unavailable_triggers = RapidHashSet::new();
 
-    let mut trigger_tasks: HashMap<String, ResolvedTask> = HashMap::new();
+    let mut trigger_tasks: RapidHashMap<String, ResolvedTask> = RapidHashMap::new();
     for trigger_record in view.triggers.values() {
         let trigger = &trigger_record.value;
         let trigger_id = trigger.trigger_id.clone();
@@ -135,9 +135,9 @@ fn resolved_task_from(task: &crate::document_config::Task) -> ResolvedTask {
 
 fn resolve_tasks(
     view: &DocumentRuntimeView,
-    unavailable_agents: &HashMap<String, UnavailableAgent>,
-) -> HashMap<String, ResolvedTask> {
-    let mut active_tasks = HashMap::new();
+    unavailable_agents: &RapidHashMap<String, UnavailableAgent>,
+) -> RapidHashMap<String, ResolvedTask> {
+    let mut active_tasks = RapidHashMap::new();
 
     for (task_id, task_record) in &view.tasks {
         let task = &task_record.value;
@@ -175,8 +175,8 @@ fn resolve_schedule_trigger(
     trigger_id: &str,
     concurrency: ConcurrencyMode,
     task: ResolvedTask,
-    active_schedules: &mut HashMap<String, ResolvedSchedule>,
-    unavailable_schedules: &mut HashSet<String>,
+    active_schedules: &mut RapidHashMap<String, ResolvedSchedule>,
+    unavailable_schedules: &mut RapidHashSet<String>,
 ) {
     let Some(schedule_record) = view.schedules.get(schedule_id) else {
         tracing::warn!(
@@ -234,8 +234,8 @@ fn resolve_event_trigger(
     trigger_id: &str,
     concurrency: ConcurrencyMode,
     task: ResolvedTask,
-    active_event_triggers: &mut HashMap<String, ResolvedEventTrigger>,
-    unavailable_event_triggers: &mut HashSet<String>,
+    active_event_triggers: &mut RapidHashMap<String, ResolvedEventTrigger>,
+    unavailable_event_triggers: &mut RapidHashSet<String>,
 ) {
     let Some(source_record) = view.event_sources.get(event_source_id) else {
         tracing::warn!(

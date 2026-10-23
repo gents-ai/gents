@@ -1,5 +1,5 @@
 use gents_protocol::row::AgentRequestRow;
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 use super::{ClientStore, ClientStoreRows};
 
@@ -162,16 +162,16 @@ impl ClientStore {
         let tool_calls_by_session_id =
             build_vec_index(&rows.tool_calls, |row| row.session_id.as_deref());
 
-        let mut runtimes_by_node_did = HashMap::new();
+        let mut runtimes_by_node_did = RapidHashMap::new();
         for (index, row) in rows.runtimes.iter().enumerate() {
             runtimes_by_node_did.insert(row.node_did.clone(), index);
         }
-        let mut node_readiness_by_node_did = HashMap::new();
+        let mut node_readiness_by_node_did = RapidHashMap::new();
         for (index, row) in rows.node_readiness.iter().enumerate() {
             node_readiness_by_node_did.insert(row.node_did.clone(), index);
         }
 
-        let mut request_index_by_id = HashMap::new();
+        let mut request_index_by_id = RapidHashMap::new();
         for (index, row) in rows.requests.iter().enumerate() {
             request_index_by_id.insert(row.request_id.clone(), index);
         }
@@ -270,8 +270,8 @@ fn sort_rows_with_sources<T>(
 pub(super) fn build_vec_index<T>(
     rows: &[T],
     key_fn: impl Fn(&T) -> Option<&str>,
-) -> HashMap<String, Vec<usize>> {
-    let mut index = HashMap::new();
+) -> RapidHashMap<String, Vec<usize>> {
+    let mut index = RapidHashMap::new();
     for (row_index, row) in rows.iter().enumerate() {
         if let Some(key) = clean_string(key_fn(row)) {
             index.entry(key).or_insert_with(Vec::new).push(row_index);

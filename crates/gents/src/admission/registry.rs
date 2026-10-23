@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::{Arc, Mutex};
 
 use defra_node::EmbeddedNode;
@@ -26,7 +26,7 @@ pub(crate) struct AdmissionRegistry {
 struct AdmissionRegistryInner {
     node: Arc<EmbeddedNode>,
     runtime_instance_id: String,
-    backends: Mutex<HashMap<String, BackendAdmission>>,
+    backends: Mutex<RapidHashMap<String, BackendAdmission>>,
 }
 
 struct BackendAdmission {
@@ -40,12 +40,12 @@ impl AdmissionRegistry {
             inner: Arc::new(AdmissionRegistryInner {
                 node,
                 runtime_instance_id: uuid::Uuid::new_v4().to_string(),
-                backends: Mutex::new(HashMap::new()),
+                backends: Mutex::new(RapidHashMap::new()),
             }),
         }
     }
 
-    fn backends(&self) -> std::sync::MutexGuard<'_, HashMap<String, BackendAdmission>> {
+    fn backends(&self) -> std::sync::MutexGuard<'_, RapidHashMap<String, BackendAdmission>> {
         self.inner
             .backends
             .lock()
@@ -55,7 +55,7 @@ impl AdmissionRegistry {
     pub(crate) fn reconcile(
         &self,
         generation: u64,
-        configs: &HashMap<String, BackendAdmissionConfig>,
+        configs: &RapidHashMap<String, BackendAdmissionConfig>,
     ) {
         let mut backends = self.backends();
         for (backend_id, config) in configs {

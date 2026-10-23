@@ -536,7 +536,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
         .agents()
         .iter()
         .map(|behavior| behavior.agent_id.as_str())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     assert_eq!(agent.node_did(), did);
     assert_eq!(agent.agents().len(), 1);
     assert!(runnable_names.contains("code"));

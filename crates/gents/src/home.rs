@@ -799,8 +799,8 @@ mod tests {
             }
         }
 
-        let mut values = std::collections::HashMap::<String, String>::new();
-        let mut aliases = std::collections::HashMap::<String, String>::new();
+        let mut values = rapidhash::RapidHashMap::<String, String>::default();
+        let mut aliases = rapidhash::RapidHashMap::<String, String>::default();
         for path in &sources {
             let text = fs::read_to_string(path).unwrap();
             for capture in const_def.captures_iter(&text) {

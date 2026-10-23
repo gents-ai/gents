@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::io;
 use std::sync::Arc;
 use std::thread;
@@ -202,7 +202,7 @@ async fn handle_callback_request(
         return CallbackOutcome::Continue(CallbackPage::NotFound);
     }
 
-    let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+    let params: RapidHashMap<String, String> = parsed.query_pairs().into_owned().collect();
     if params.get("state").map(String::as_str) != Some(expected_state) {
         tracing::warn!("rejected ChatGPT OAuth callback with mismatched state");
         return CallbackOutcome::Continue(CallbackPage::StaleLink);

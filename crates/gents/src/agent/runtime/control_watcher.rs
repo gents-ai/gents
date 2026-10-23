@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashMap};
+use rapidhash::RapidHashMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,7 +39,7 @@ const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
 /// collection id mapped back to its name.
 pub(super) struct ControlSubscription {
     changes: events::DocumentChangeSubscription,
-    names_by_id: HashMap<String, &'static str>,
+    names_by_id: RapidHashMap<String, &'static str>,
 }
 
 pub(super) fn subscribe_control_changes(

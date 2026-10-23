@@ -159,7 +159,7 @@ pub async fn list_inference_profile_records(
         .and_then(serde_json::Value::as_array)
         .context("missing canonical configuration rows")?
         .clone();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = rapidhash::RapidHashSet::default();
     rows.into_iter()
         .map(|mut row| {
             let doc_id = row

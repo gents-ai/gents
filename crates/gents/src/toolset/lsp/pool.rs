@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -149,7 +149,7 @@ async fn retire_slot(slot: Arc<Mutex<PoolEntry>>) {
 }
 
 async fn lru_idle_ready(
-    map: &HashMap<PoolKey, Arc<Mutex<PoolEntry>>>,
+    map: &RapidHashMap<PoolKey, Arc<Mutex<PoolEntry>>>,
     pred: impl Fn(&PoolKey) -> bool,
 ) -> Option<PoolKey> {
     let mut victim: Option<(PoolKey, Instant)> = None;
@@ -186,16 +186,16 @@ async fn complete_retirement_if_idle(slot: Arc<Mutex<PoolEntry>>) {
 
 #[derive(Clone)]
 pub struct LspPool {
-    inner: Arc<Mutex<HashMap<PoolKey, Arc<Mutex<PoolEntry>>>>>,
-    failed: Arc<Mutex<HashMap<PoolKey, (String, Instant)>>>,
+    inner: Arc<Mutex<RapidHashMap<PoolKey, Arc<Mutex<PoolEntry>>>>>,
+    failed: Arc<Mutex<RapidHashMap<PoolKey, (String, Instant)>>>,
     sweep_started: Arc<AtomicBool>,
 }
 
 impl Default for LspPool {
     fn default() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
-            failed: Arc::new(Mutex::new(HashMap::new())),
+            inner: Arc::new(Mutex::new(RapidHashMap::new())),
+            failed: Arc::new(Mutex::new(RapidHashMap::new())),
             sweep_started: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -478,7 +478,7 @@ impl LspPool {
 
     async fn take_eviction_victims(
         &self,
-        map: &mut HashMap<PoolKey, Arc<Mutex<PoolEntry>>>,
+        map: &mut RapidHashMap<PoolKey, Arc<Mutex<PoolEntry>>>,
         incoming: &PoolKey,
     ) -> Option<Vec<Arc<Mutex<PoolEntry>>>> {
         let session_count = map
@@ -596,7 +596,7 @@ impl LspPool {
         agent_id: &str,
         workspace: &std::path::Path,
         digest: &str,
-    ) -> Result<HashMap<String, PoolServerState>, String> {
+    ) -> Result<RapidHashMap<String, PoolServerState>, String> {
         let operator_guard_home = crate::plugin::approval::workspace::command_guard_home()
             .map_err(|error| format!("{error:#}"))?;
         let guard_error = operator_guard_home.as_ref().and_then(|home| {
@@ -608,7 +608,7 @@ impl LspPool {
             .map(|error| format!("{error:#}"))
         });
         let map = self.inner.lock().await;
-        let mut states = HashMap::new();
+        let mut states = RapidHashMap::new();
         for (key, slot) in map.iter() {
             if key.session_id == session_id
                 && key.agent_id == agent_id

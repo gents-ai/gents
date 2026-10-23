@@ -3,7 +3,8 @@
 //! join their spawn by session-id equality. Every request of a spawn's session counts
 //! toward its usage, but only the spawn and message requests are its requests.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -102,9 +103,9 @@ pub async fn derive_children_in_txn(
         "{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _in: {list} }} }}) {{ {FIELDS} }} }}"
     );
     let rows: Vec<Stored> = read(txn, &document, "AgentRequest").await?;
-    let caused: HashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
+    let caused: RapidHashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
     let mut attempts: BTreeMap<(String, u32), Attempt> = BTreeMap::new();
-    let mut sessions: HashMap<String, (String, u32)> = HashMap::new();
+    let mut sessions: RapidHashMap<String, (String, u32)> = RapidHashMap::new();
     for row in rows {
         let key = row.retry_key.clone().unwrap_or_default();
         let Some((slot, attempt)) = decode_job_retry_key(&key) else {
@@ -189,8 +190,8 @@ fn latest(attempt: &Attempt) -> Result<&Stored> {
 
 fn pair(
     attempt: Attempt,
-    usage: &HashMap<String, Vec<(Option<i64>, Option<i64>)>>,
-    terminals: &HashMap<String, CausedRequestTerminal>,
+    usage: &RapidHashMap<String, Vec<(Option<i64>, Option<i64>)>>,
+    terminals: &RapidHashMap<String, CausedRequestTerminal>,
     result_bytes: u64,
 ) -> Result<(StepChild, JobChildView)> {
     let latest_id = latest(&attempt)?.request_id.clone();
@@ -308,8 +309,8 @@ fn stamp(value: Option<&str>) -> Option<i64> {
 async fn usage_by_request<R: ConfigRead>(
     reader: &R,
     request_ids: &[String],
-) -> Result<HashMap<String, Vec<(Option<i64>, Option<i64>)>>> {
-    let mut grouped: HashMap<String, Vec<(Option<i64>, Option<i64>)>> = HashMap::new();
+) -> Result<RapidHashMap<String, Vec<(Option<i64>, Option<i64>)>>> {
+    let mut grouped: RapidHashMap<String, Vec<(Option<i64>, Option<i64>)>> = RapidHashMap::new();
     if request_ids.is_empty() {
         return Ok(grouped);
     }

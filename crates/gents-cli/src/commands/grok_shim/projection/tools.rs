@@ -1,4 +1,5 @@
-use std::{char::REPLACEMENT_CHARACTER, collections::HashMap, sync::Arc};
+use rapidhash::RapidHashMap;
+use std::{char::REPLACEMENT_CHARACTER, sync::Arc};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -319,7 +320,7 @@ pub(super) async fn project_tools(
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(Value::as_array)
         .context("missing tool call rows")?;
-    let mut identities = std::collections::HashSet::new();
+    let mut identities = rapidhash::RapidHashSet::default();
     for value in values {
         anyhow::ensure!(
             value["request_doc_id"].as_str() == Some(physical)
@@ -337,7 +338,7 @@ pub(super) async fn project_tools(
     }
     let rows = decode_tool_call_rows(&tool_response)?;
     let access = ConfigAccess::local(node.clone());
-    let mut presentations = std::collections::HashMap::new();
+    let mut presentations = rapidhash::RapidHashMap::default();
     for row in &rows {
         let presentation = load_tool_call_presentation(
             &access,
@@ -365,7 +366,7 @@ pub(crate) async fn session_tool_results(
     node_did: &str,
     session_id: &str,
     tool_name: &str,
-    skip: &std::collections::HashSet<String>,
+    skip: &rapidhash::RapidHashSet<String>,
 ) -> Result<Vec<SessionToolResult>> {
     let scope = gents::session::session_scope_filter(node_did, session_id, Some(node_did));
     let query = format!(
@@ -417,7 +418,7 @@ fn sort_tool_call_rows(rows: &mut [ToolCallRow]) {
 
 pub(super) fn project_tool_rows(
     rows: &[ToolCallRow],
-    presentations: &HashMap<String, CanonicalToolCallPresentation>,
+    presentations: &RapidHashMap<String, CanonicalToolCallPresentation>,
 ) -> ToolProjection {
     let mut updates: Vec<ToolUpdate> = Vec::new();
     let mut chronology: Vec<Option<i64>> = Vec::new();
@@ -609,7 +610,7 @@ fn observed_status(row: &ToolCallRow) -> ToolCallStatus {
 fn tool_title(
     row: &ToolCallRow,
     kind: &ToolCallKind,
-    presentations: &HashMap<String, CanonicalToolCallPresentation>,
+    presentations: &RapidHashMap<String, CanonicalToolCallPresentation>,
 ) -> String {
     let tool_name = row
         .tool_name
@@ -885,24 +886,24 @@ mod tests {
         )
     }
 
-    fn no_presentations() -> HashMap<String, CanonicalToolCallPresentation> {
-        HashMap::new()
+    fn no_presentations() -> RapidHashMap<String, CanonicalToolCallPresentation> {
+        RapidHashMap::default()
     }
 
     fn args_result(
         doc_id: &str,
         arguments: &str,
         result: Option<&str>,
-    ) -> HashMap<String, CanonicalToolCallPresentation> {
-        HashMap::from([presentation(doc_id, arguments, result)])
+    ) -> RapidHashMap<String, CanonicalToolCallPresentation> {
+        RapidHashMap::from_iter([presentation(doc_id, arguments, result)])
     }
 
     fn live_presentation(
         doc_id: &str,
         arguments: &str,
         live_output: Option<&str>,
-    ) -> HashMap<String, CanonicalToolCallPresentation> {
-        HashMap::from([CanonicalToolCallPresentation {
+    ) -> RapidHashMap<String, CanonicalToolCallPresentation> {
+        RapidHashMap::from_iter([CanonicalToolCallPresentation {
             arguments: arguments.to_string(),
             result: None,
             live_output: live_output.map(ToOwned::to_owned),
@@ -925,7 +926,7 @@ mod tests {
         row.await_mode = Some("background".into());
         row.started_at = Some("2026-01-01T00:00:00Z".into());
         let text = format!("PREFIX{}SUFFIX", "0123456789".repeat(10_000));
-        let presentations = HashMap::from([presentation(
+        let presentations = RapidHashMap::from_iter([presentation(
             "doc-bash",
             r#"{"command":"produce output"}"#,
             Some(&json!({"stdout":text,"stdout_truncation":{"truncated":true}}).to_string()),
@@ -1298,7 +1299,7 @@ mod tests {
         second.tool_call_key = "session-1:call-bash-second".to_string();
         second.tool_call_id = Some("call-bash-second".to_string());
 
-        let presentations = HashMap::from([
+        let presentations = RapidHashMap::from_iter([
             presentation(
                 "doc-bash-second",
                 r#"{"command":"true"}"#,
@@ -1497,7 +1498,7 @@ mod tests {
 
     #[test]
     fn durable_result_always_beats_the_live_window() {
-        let presentations = HashMap::from([CanonicalToolCallPresentation {
+        let presentations = RapidHashMap::from_iter([CanonicalToolCallPresentation {
             arguments: r#"{"command":"echo gents-subprocess-probe"}"#.to_string(),
             result: Some("gents-subprocess-probe".to_string()),
             live_output: Some("stale streaming preview".to_string()),
@@ -1516,7 +1517,7 @@ mod tests {
             "the durable result wins"
         );
 
-        let presentations = HashMap::from([CanonicalToolCallPresentation {
+        let presentations = RapidHashMap::from_iter([CanonicalToolCallPresentation {
             arguments: r#"{"command":"echo gents-subprocess-probe"}"#.to_string(),
             result: Some("delivered while running".to_string()),
             live_output: Some("stale streaming preview".to_string()),
@@ -1676,7 +1677,7 @@ mod tests {
         call_a.doc_id = "doc-a".to_string();
         let mut call_b = sequenced_tool_row("call-b", "bash", Some(4));
         call_b.doc_id = "doc-b".to_string();
-        let presentations = HashMap::from([
+        let presentations = RapidHashMap::from_iter([
             presentation("doc-b", r#"{"command":"true"}"#, Some("output for b")),
             presentation("doc-a", r#"{"command":"true"}"#, Some("output for a")),
         ]);

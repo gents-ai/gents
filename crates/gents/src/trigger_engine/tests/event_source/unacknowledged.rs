@@ -25,7 +25,7 @@ fn ping_trigger(emit_outcome: bool) -> ResolvedEventTrigger {
 fn ping_snapshot(generation: u64, emit_outcome: bool) -> Arc<ActiveRuntimeSnapshot> {
     snapshot_with_event_triggers(
         generation,
-        HashMap::from([("ping-trigger".to_string(), ping_trigger(emit_outcome))]),
+        RapidHashMap::from_iter([("ping-trigger".to_string(), ping_trigger(emit_outcome))]),
     )
 }
 

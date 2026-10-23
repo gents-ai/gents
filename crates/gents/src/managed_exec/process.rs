@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::process::Stdio;
@@ -46,7 +46,7 @@ pub(crate) struct ManagedExecRequest {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) max_output_bytes: usize,
     pub(crate) stdin: Vec<u8>,
-    pub(crate) environment: Option<HashMap<String, String>>,
+    pub(crate) environment: Option<RapidHashMap<String, String>>,
     pub(crate) tool_name: Option<String>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
 }
@@ -340,7 +340,7 @@ enum OutcomeKind {
 pub(crate) struct SpawnManagedProcessRequest {
     pub(crate) argv: Vec<String>,
     pub(crate) cwd: PathBuf,
-    pub(crate) environment: Option<HashMap<String, String>>,
+    pub(crate) environment: Option<RapidHashMap<String, String>>,
     pub(crate) tool_name: Option<String>,
     pub(crate) kind: ManagedExecKind,
 }

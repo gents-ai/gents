@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 
 use bytes::Bytes;
 use futures::{FutureExt, StreamExt};
@@ -461,7 +461,7 @@ data: {"type":"content_block_stop","index":0}
 event: message_stop
 data: {"type":"message_stop"}
 "#;
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let events = parse_messages_sse(sse, &surface).expect("map");
     assert!(matches!(
         &events[0],
@@ -499,7 +499,7 @@ fn tool_call_arguments(events: &[RawStreamingChoice<ClaudeStreamResponse>]) -> V
 #[test]
 fn sse_tool_use_deltas_yield_exact_arguments() {
     let sse = sse_tool_use_block("toolu_1", "echo", "{}", &["{\"text\":", " \"hi\"}"]);
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let events = parse_messages_sse(&sse, &surface).expect("parse");
     assert_eq!(tool_call_arguments(&events), json!({"text": "hi"}));
 
@@ -511,7 +511,7 @@ fn sse_tool_use_deltas_yield_exact_arguments() {
 #[test]
 fn sse_tool_use_without_deltas_uses_start_input() {
     let sse = sse_tool_use_block("toolu_1", "echo", "{\"text\":\"hi\"}", &[]);
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let events = parse_messages_sse(&sse, &surface).expect("parse");
     assert_eq!(tool_call_arguments(&events), json!({"text": "hi"}));
 }
@@ -519,7 +519,7 @@ fn sse_tool_use_without_deltas_uses_start_input() {
 #[test]
 fn sse_tool_use_with_no_input_at_all_is_empty_object() {
     let sse = sse_tool_use_block("toolu_1", "echo", "{}", &[]);
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let events = parse_messages_sse(&sse, &surface).expect("parse");
     assert_eq!(tool_call_arguments(&events), json!({}));
 }
@@ -527,7 +527,7 @@ fn sse_tool_use_with_no_input_at_all_is_empty_object() {
 #[test]
 fn sse_tool_use_with_unparseable_input_fails_closed() {
     let sse = sse_fixture_tool_use("toolu_1", "echo", "{\"text\":");
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let err = parse_messages_sse(&sse, &surface).expect_err("truncated json");
     assert!(
         err.to_string().contains("fail-closed: malformed tool_use"),
@@ -539,7 +539,7 @@ fn sse_tool_use_with_unparseable_input_fails_closed() {
 fn sse_duplicate_tool_use_id_fails_closed() {
     let mut sse = sse_tool_use_block("toolu_1", "echo", "{}", &["{}"]);
     sse.push_str(&sse_tool_use_block("toolu_1", "echo", "{}", &["{}"]));
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let err = parse_messages_sse(&sse, &surface).expect_err("duplicate id");
     assert!(
         err.to_string()
@@ -554,7 +554,7 @@ fn sse_overlapping_tool_use_block_fails_closed() {
     let (start, _stop) = first.split_once("event: content_block_stop").expect("stop");
     let mut sse = start.to_string();
     sse.push_str(&sse_tool_use_block("toolu_2", "echo", "{}", &[]));
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let err = parse_messages_sse(&sse, &surface).expect_err("overlap");
     assert!(
         err.to_string()
@@ -565,7 +565,7 @@ fn sse_overlapping_tool_use_block_fails_closed() {
 
 #[test]
 fn sse_message_stop_flushes_pending_tool_before_final() {
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let mut state = MessagesSseState::new(surface);
     let mut events = Vec::new();
     let block = sse_tool_use_block("toolu_1", "echo", "{}", &["{\"text\":\"hi\"}"]);
@@ -595,7 +595,7 @@ fn sse_message_stop_flushes_pending_tool_before_final() {
 
 #[test]
 fn push_line_yields_text_before_the_body_ends() {
-    let mut state = MessagesSseState::new(HashSet::new());
+    let mut state = MessagesSseState::new(RapidHashSet::new());
     assert!(state
         .push_line("event: content_block_delta")
         .unwrap()
@@ -621,7 +621,7 @@ fn push_line_yields_text_before_the_body_ends() {
 #[test]
 fn sse_error_event_becomes_provider_error() {
     let sse = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n";
-    let err = parse_messages_sse(sse, &HashSet::new()).expect_err("error event");
+    let err = parse_messages_sse(sse, &RapidHashSet::new()).expect_err("error event");
     let msg = err.to_string();
     assert!(
         msg.contains("overloaded_error") && msg.contains("Overloaded"),
@@ -647,7 +647,7 @@ async fn chunk_boundaries_do_not_change_the_event_sequence() {
         sse_fixture_text("hello world"),
         sse_fixture_tool_use("toolu_1", "echo", "{\"text\":\"hi\"}")
     );
-    let surface = HashSet::from(["echo".to_string()]);
+    let surface = RapidHashSet::from_iter(["echo".to_string()]);
     let whole: Vec<String> = parse_messages_sse(&sse, &surface)
         .unwrap()
         .iter()
@@ -683,7 +683,7 @@ async fn split_multibyte_sse_signature_retains_exact_utf8() {
     let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter(chunks));
     let events = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        stream_sse_body(body, MessagesSseState::new(HashSet::new())).collect::<Vec<_>>(),
+        stream_sse_body(body, MessagesSseState::new(RapidHashSet::new())).collect::<Vec<_>>(),
     )
     .await
     .expect("bounded SSE decode");
@@ -705,7 +705,7 @@ async fn malformed_utf8_fails_after_prior_valid_sse_events() {
         Box::pin(futures::stream::once(async { Ok(Bytes::from(bytes)) }));
     let events = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        stream_sse_body(body, MessagesSseState::new(HashSet::new())).collect::<Vec<_>>(),
+        stream_sse_body(body, MessagesSseState::new(RapidHashSet::new())).collect::<Vec<_>>(),
     )
     .await
     .expect("bounded SSE decode");
@@ -725,7 +725,10 @@ async fn malformed_utf8_fails_after_prior_valid_sse_events() {
 async fn first_text_event_is_observable_before_the_body_is_exhausted() {
     let (tx, rx) = futures::channel::mpsc::unbounded::<Result<Bytes, http_client::Error>>();
     let body: http_client::sse::BoxedStream = Box::pin(rx);
-    let mut events = Box::pin(stream_sse_body(body, MessagesSseState::new(HashSet::new())));
+    let mut events = Box::pin(stream_sse_body(
+        body,
+        MessagesSseState::new(RapidHashSet::new()),
+    ));
     tx.unbounded_send(Ok(Bytes::from(sse_fixture_text("first"))))
         .unwrap();
     let first = events.next().await.expect("event").expect("ok");
@@ -799,7 +802,7 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
             }));
         let mut stream = Box::pin(stream_sse_body_observed(
             body,
-            MessagesSseState::new(HashSet::new()),
+            MessagesSseState::new(RapidHashSet::new()),
             Some(sender),
         ));
         assert!(stream.next().now_or_never().is_none());
@@ -821,7 +824,7 @@ async fn cancellation_drains_received_signature_without_polling_provider_again()
 fn thinking_start_emits_ordered_audit_observations() {
     use gents_loop::provider_audit::ClaudeAuditEvent;
 
-    let mut state = MessagesSseState::new(HashSet::new());
+    let mut state = MessagesSseState::new(RapidHashSet::new());
     state
         .push_line(
             "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"start\",\"signature\":\"initial\"}}",
@@ -882,7 +885,7 @@ fn generated_claude_wire_start_cases_drive_native_parser() {
             };
             sse.push_str(&format!("data: {payload}\n\n"));
         }
-        let parsed = parse_messages_sse_typed(&sse, &HashSet::new());
+        let parsed = parse_messages_sse_typed(&sse, &RapidHashSet::new());
         match case.expected.kind.as_str() {
             "wireError" => assert!(
                 matches!(
@@ -1000,7 +1003,7 @@ async fn transport_429_usage_cap_reports_reset_time() {
         &url,
         "claude-sonnet-5",
         &echo_request(),
-        HashSet::new(),
+        RapidHashSet::new(),
         &bearer,
         &ReqwestClient::new(),
         None,
@@ -1033,7 +1036,7 @@ async fn transport_401_invalidates_the_bearer_once() {
         &url,
         "claude-sonnet-5",
         &echo_request(),
-        HashSet::new(),
+        RapidHashSet::new(),
         &bearer,
         &ReqwestClient::new(),
         None,
@@ -1071,7 +1074,7 @@ fn captured_request<S: crate::oauth_credential::BearerSource>(
                 &url,
                 "claude-sonnet-5",
                 request,
-                HashSet::new(),
+                RapidHashSet::new(),
                 bearer,
                 &ReqwestClient::new(),
                 None,
@@ -1120,7 +1123,7 @@ async fn unsupported_replay_body_is_a_permanent_request_error() {
         "http://127.0.0.1:1",
         "claude-sonnet-5",
         &request,
-        HashSet::new(),
+        RapidHashSet::new(),
         &bearer,
         &ReqwestClient::new(),
         None,
@@ -1202,7 +1205,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
                 &url,
                 "claude-sonnet-5",
                 &echo_request(),
-                HashSet::new(),
+                RapidHashSet::new(),
                 &bearer,
                 &ReqwestClient::new(),
                 Some(crate::usage_observation::UsageReporter::new(

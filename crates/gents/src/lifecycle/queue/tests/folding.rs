@@ -1,8 +1,8 @@
 use super::*;
 use crate::lean_vocab_test::{LeanFoldQueueCase, LeanFoldQueueEntry, LeanFoldQueueInput};
 use crate::lifecycle::RequestTerminalOutcome;
+use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::json;
-use std::collections::HashMap;
 
 const FOREIGN_REQUESTER: &str = "did:test:fold-foreign-requester";
 const OTHER_CWD: &str = "/tmp/gents-fold-other-context";
@@ -188,7 +188,7 @@ impl ActiveTurn {
 
 pub(super) async fn claim_head(
     db: &TestDb,
-    bound: &HashMap<u64, String>,
+    bound: &RapidHashMap<u64, String>,
     head: u64,
     admitted: &[u64],
 ) -> ActiveTurn {
@@ -201,7 +201,7 @@ pub(super) async fn claim_head(
 
 async fn claim_request(
     db: &TestDb,
-    bound: &HashMap<u64, String>,
+    bound: &RapidHashMap<u64, String>,
     request: crate::watcher::AgentRequest,
     admitted: &[u64],
 ) -> ActiveTurn {
@@ -251,7 +251,7 @@ async fn drive(case: &LeanFoldQueueCase) {
     assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     let db = test_db(&case.name).await;
     let session_id = case.session_id.to_string();
-    let mut bound: HashMap<u64, String> = HashMap::new();
+    let mut bound: RapidHashMap<u64, String> = RapidHashMap::new();
     let mut arrivals: Vec<u64> = Vec::new();
     let mut active: Option<ActiveTurn> = None;
     let mut claims = Vec::new();
@@ -309,7 +309,8 @@ async fn drive(case: &LeanFoldQueueCase) {
     }
 
     let rows = fold_rows(&db.node, &session_id).await;
-    let by_id: HashMap<u64, &FoldRow> = rows.iter().map(|row| (modeled_id(row), row)).collect();
+    let by_id: RapidHashMap<u64, &FoldRow> =
+        rows.iter().map(|row| (modeled_id(row), row)).collect();
     assert_eq!(
         by_id.len(),
         bound.len(),
@@ -408,7 +409,7 @@ async fn generated_handover_fold_claims_bind_to_native_claims() {
     for case in cases {
         let db = test_db(&case.name).await;
         let session_id = format!("handover-{}", case.name);
-        let mut bound = HashMap::new();
+        let mut bound = RapidHashMap::new();
         for (arrival, entry) in case.pending.iter().enumerate() {
             bound.insert(
                 entry.request_id,
@@ -544,7 +545,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             db.identity.clone(),
             authority,
         );
-        let mut bound = HashMap::new();
+        let mut bound = RapidHashMap::new();
         let mut arrival_ids = vec![case.head, case.selected];
         let mut saved_message = None;
         let clock_origin = chrono::Utc::now();
@@ -566,7 +567,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         }
         let head_doc = bound[&case.head].clone();
         let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
-        let mut generations: HashMap<u64, ActiveTurn> = HashMap::new();
+        let mut generations: RapidHashMap<u64, ActiveTurn> = RapidHashMap::new();
         let mut first = claim_head(&db, &bound, case.head, &[case.selected]).await;
         first.begin(&writer).await;
         generations.insert(8, first);
@@ -842,7 +843,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
 async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
     let db = test_db("fold-selected-after-head").await;
     let session_id = "fold-selected-after-head";
-    let mut bound = HashMap::new();
+    let mut bound = RapidHashMap::new();
     for (arrival, (id, context, queued_after)) in
         [(2, 0, None), (3, 0, Some(2))].into_iter().enumerate()
     {
@@ -925,7 +926,7 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
         let db = test_db(name).await;
         let session_id = name;
         let head_doc = enqueue_signed(&db, session_id, head, 0).await;
-        let mut bound = HashMap::from([(head.request_id, head_doc)]);
+        let mut bound = RapidHashMap::from_iter([(head.request_id, head_doc)]);
         let mut active = claim_head(&db, &bound, head.request_id, &[]).await;
         let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
         active.begin(&writer).await;

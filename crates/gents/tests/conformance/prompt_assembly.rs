@@ -5,7 +5,7 @@ use gents::llm::message::{
 };
 use gents_loop::provider_input::ProviderInputProfile;
 
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 
 use gents::claude_messages::{
     build_messages_body_native, parse_messages_sse, parse_messages_sse_typed, CLAUDE_CODE_IDENTITY,
@@ -307,7 +307,7 @@ fn generated_claude_map_cases_drive_the_messages_parser() {
         "Lean emitted no PromptAssembly Claude map cases"
     );
     for case in cases {
-        let surface: HashSet<String> = case.surface.iter().cloned().collect();
+        let surface: RapidHashSet<String> = case.surface.iter().cloned().collect();
         let sse = claude_map_blocks_as_sse(&case.blocks);
         let parsed = parse_messages_sse(&sse, &surface);
         match case.outcome.as_str() {
@@ -411,7 +411,7 @@ fn generated_claude_stream_cases_drive_the_messages_parser() {
         "Lean emitted no PromptAssembly Claude stream cases"
     );
     for case in cases {
-        let surface: HashSet<String> = case.surface.iter().cloned().collect();
+        let surface: RapidHashSet<String> = case.surface.iter().cloned().collect();
         let sse = claude_stream_events_as_sse(&case.events);
         let parsed = parse_messages_sse(&sse, &surface);
         match case.outcome.as_str() {
@@ -553,7 +553,7 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
         "Lean emitted no Claude thinking stream cases"
     );
     for case in cases {
-        let surface = case.surface.iter().cloned().collect::<HashSet<_>>();
+        let surface = case.surface.iter().cloned().collect::<RapidHashSet<_>>();
         let parsed =
             parse_messages_sse_typed(&claude_thinking_events_as_sse(&case.events), &surface);
         if case.outcome != "ok" {
@@ -675,7 +675,7 @@ fn generated_claude_decoded_abort_prefixes_emit_native_audit_events() {
         })
     {
         assert_eq!(case.steps.len(), case.events.len(), "{}", case.name);
-        let surface = case.surface.iter().cloned().collect::<HashSet<_>>();
+        let surface = case.surface.iter().cloned().collect::<RapidHashSet<_>>();
         let mut state = gents::claude_messages::MessagesSseState::new(surface);
         let mut signature = None::<String>;
         let mut redacted = None::<String>;
@@ -760,7 +760,7 @@ fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
     for case in cases {
         let parsed = parse_messages_sse(
             &claude_thinking_events_as_sse(&case.events),
-            &HashSet::new(),
+            &RapidHashSet::new(),
         )
         .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         let mut accumulator = AssistantTurnAccumulator::default();

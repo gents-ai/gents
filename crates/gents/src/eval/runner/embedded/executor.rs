@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -51,7 +52,7 @@ const LIVE_EVERY: Duration = Duration::from_secs(5);
 pub struct EmbeddedExecutor {
     pub runtime_options: DocumentRuntimeOptions,
     pub runs_dir: PathBuf,
-    provisioned: Mutex<HashMap<String, Provisioned>>,
+    provisioned: Mutex<RapidHashMap<String, Provisioned>>,
 }
 
 struct Provisioned {
@@ -64,7 +65,7 @@ impl EmbeddedExecutor {
         Self {
             runtime_options,
             runs_dir,
-            provisioned: Mutex::new(HashMap::new()),
+            provisioned: Mutex::new(RapidHashMap::new()),
         }
     }
 
@@ -105,7 +106,7 @@ impl EmbeddedExecutor {
 
     /// Callers take this guard in a `let` statement and drop it at the
     /// semicolon: holding it across an await would make the future `!Send`.
-    fn provisioned(&self) -> std::sync::MutexGuard<'_, HashMap<String, Provisioned>> {
+    fn provisioned(&self) -> std::sync::MutexGuard<'_, RapidHashMap<String, Provisioned>> {
         self.provisioned
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -127,7 +127,7 @@ pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<AgentS
         let query = format!(r#"{{AgentSession(filter:{{node_did:{{_eq:"{owner}"}},requester_did:{{_eq:"{owner}"}},agent_id:{{_eq:"{agent}"}}}},order:{{created_at:DESC}}){{{AGENT_SESSION_FIELDS}}}}}"#);
         Box::pin(async move {
             let response = txn.execute(&query).await?;
-            let mut identities = std::collections::HashSet::new();
+            let mut identities = rapidhash::RapidHashSet::default();
             rows(&response,"AgentSession")?.iter().map(|row| {
                 let session = decode_session_row(row)?.session;
                 anyhow::ensure!(session.node_did==state.node_did.as_ref() && session.requester_did.as_deref()==Some(state.local_requester_did()) && session.agent_id==state.agent_id.as_ref(),"thread list crossed owner/requester/agent scope");

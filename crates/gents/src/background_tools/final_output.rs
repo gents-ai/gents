@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -34,9 +35,9 @@ pub async fn load_caused_request_terminal(
 pub(crate) async fn load_caused_request_terminals(
     access: &ConfigAccess,
     caused_request_doc_ids: &[String],
-) -> Result<HashMap<String, CausedRequestTerminal>> {
+) -> Result<RapidHashMap<String, CausedRequestTerminal>> {
     if caused_request_doc_ids.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(RapidHashMap::new());
     }
     access
         .transact_readonly("background.caused_request_terminals", |txn| {
@@ -59,7 +60,7 @@ fn query_rows<T: serde::de::DeserializeOwned>(
 pub(crate) async fn caused_request_terminals_in_txn(
     txn: &ConfigApplyTxn<'_>,
     caused_request_doc_ids: &[String],
-) -> Result<HashMap<String, CausedRequestTerminal>> {
+) -> Result<RapidHashMap<String, CausedRequestTerminal>> {
     let list = graphql_string_list_literal(caused_request_doc_ids.iter().map(String::as_str));
     let response = txn
         .execute(&format!(
@@ -72,7 +73,7 @@ pub(crate) async fn caused_request_terminals_in_txn(
         ))
         .await?;
     let rows: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
-    let mut terminals = HashMap::new();
+    let mut terminals = RapidHashMap::new();
     let mut pending = Vec::new();
     for row in &rows {
         let doc_id = row
@@ -119,7 +120,7 @@ pub(crate) async fn caused_request_terminals_in_txn(
             r#"{{ AgentMessage(filter: {{ _docID: {{ _in: {header_list} }} }}) {{ _docID }} }}"#
         ))
         .await?;
-    let mut headers: HashMap<String, usize> = HashMap::new();
+    let mut headers: RapidHashMap<String, usize> = RapidHashMap::new();
     for fact in query_rows::<serde_json::Value>(&available, "AgentMessage")? {
         let id = fact
             .get("_docID")

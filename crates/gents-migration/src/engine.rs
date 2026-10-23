@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -193,7 +193,7 @@ async fn register_file_image_owner(node: &EmbeddedNode, owner: &str) -> Result<(
 }
 
 fn versioned_step_collections<'a>(registry: &Registry<'a>) -> Vec<&'a str> {
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     registry
         .steps
         .iter()
@@ -618,7 +618,7 @@ fn version_descends_from(
     ancestor_version: &str,
 ) -> bool {
     let mut current = descendant_version;
-    let mut visited = HashSet::new();
+    let mut visited = RapidHashSet::new();
     while visited.insert(current) {
         let Some(version) = versions
             .iter()
@@ -773,8 +773,8 @@ async fn apply_patch_in_place(
 
 fn versions_by_name(
     all_versions: &[CollectionVersion],
-) -> HashMap<String, Vec<&CollectionVersion>> {
-    let mut by_name: HashMap<String, Vec<&CollectionVersion>> = HashMap::new();
+) -> RapidHashMap<String, Vec<&CollectionVersion>> {
+    let mut by_name: RapidHashMap<String, Vec<&CollectionVersion>> = RapidHashMap::new();
     for v in all_versions {
         if v.is_placeholder || v.name.is_empty() {
             continue;
@@ -849,8 +849,8 @@ async fn verify_managed_lineages(
     Ok(())
 }
 
-fn known_pin_set(registry: &Registry<'_>) -> HashSet<String> {
-    let mut pins = HashSet::new();
+fn known_pin_set(registry: &Registry<'_>) -> RapidHashSet<String> {
+    let mut pins = RapidHashSet::new();
     for b in registry.baseline {
         if let Some(v) = b.expected_version {
             pins.insert(v.to_string());
@@ -874,8 +874,8 @@ fn known_pin_set(registry: &Registry<'_>) -> HashSet<String> {
     pins
 }
 
-fn target_active_pins(registry: &Registry<'_>) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+fn target_active_pins(registry: &Registry<'_>) -> RapidHashMap<String, String> {
+    let mut map = RapidHashMap::new();
     for b in registry.baseline {
         if let Some(v) = b.expected_version {
             map.insert(b.name.to_string(), v.to_string());
@@ -896,9 +896,9 @@ fn target_active_pins(registry: &Registry<'_>) -> HashMap<String, String> {
 
 fn verify_one_collection(
     entry: &BaselineCollection<'_>,
-    by_name: &HashMap<String, Vec<&CollectionVersion>>,
-    known_pins: &HashSet<String>,
-    target_active: &HashMap<String, String>,
+    by_name: &RapidHashMap<String, Vec<&CollectionVersion>>,
+    known_pins: &RapidHashSet<String>,
+    target_active: &RapidHashMap<String, String>,
 ) -> Result<()> {
     let versions = by_name
         .get(entry.name)
@@ -956,7 +956,7 @@ fn verify_one_collection(
 fn check_known_lineage(
     entry: &BaselineCollection<'_>,
     versions: &[&CollectionVersion],
-    known_pins: &HashSet<String>,
+    known_pins: &RapidHashSet<String>,
 ) -> Result<()> {
     let non_ph: Vec<&CollectionVersion> = versions
         .iter()

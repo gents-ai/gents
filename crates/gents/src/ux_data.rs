@@ -71,7 +71,7 @@ async fn installed_surface(
         .find(|document| document.surface_id == surface)
         .ok_or_else(|| anyhow!("surface {surface:?} is not installed on node {node_did}"))?;
     anyhow::ensure!(document.enabled, "surface {surface:?} is disabled");
-    let mut names = std::collections::HashSet::new();
+    let mut names = rapidhash::RapidHashSet::default();
     for entry in document.entries.as_deref().unwrap_or(&[]) {
         entry
             .validate()

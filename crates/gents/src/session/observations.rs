@@ -555,6 +555,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
         preview: observation.preview.clone(),
         latest_request: Some(current),
     };
+    txn.contend_with_request_siblings();
     patch_session_in_txn(
         txn,
         &session.doc_id,

@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashMap};
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -12,13 +13,13 @@ pub(crate) async fn live_run_correlations<'a>(
     node: &EmbeddedNode,
     owner: &str,
     consumer_ids: impl IntoIterator<Item = &'a str>,
-) -> Result<HashMap<String, String>> {
+) -> Result<RapidHashMap<String, String>> {
     let digests = consumer_ids
         .into_iter()
         .filter_map(graph_artifact_revision_digest)
         .collect::<BTreeSet<_>>();
     if digests.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(RapidHashMap::new());
     }
     let query = format!(
         r#"{{ GraphRun(filter: {{ owner_did: {{ _eq: "{}" }}, status: {{ _eq: "running" }},
@@ -41,7 +42,7 @@ pub(crate) async fn live_run_correlations<'a>(
 }
 
 pub(crate) fn is_live_for(
-    live: &HashMap<String, String>,
+    live: &RapidHashMap<String, String>,
     consumer_id: &str,
     correlation: &str,
 ) -> bool {

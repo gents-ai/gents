@@ -250,8 +250,8 @@ pub(super) fn request_rows_by_doc<'a>(
     node_did: &str,
     session_id: &str,
     rows: &'a [AgentRequestRow],
-) -> Result<std::collections::HashMap<&'a str, &'a AgentRequestRow>> {
-    let mut by_doc = std::collections::HashMap::new();
+) -> Result<rapidhash::RapidHashMap<&'a str, &'a AgentRequestRow>> {
+    let mut by_doc = rapidhash::RapidHashMap::default();
     for row in rows.iter().filter(|row| {
         row.node_did.as_deref() == Some(node_did) && row.session_id.as_deref() == Some(session_id)
     }) {
@@ -267,10 +267,10 @@ pub(super) fn request_rows_by_doc<'a>(
 }
 
 pub(super) type AssignmentOpenings<'a> =
-    std::collections::HashMap<&'a str, std::collections::HashSet<&'a str>>;
+    rapidhash::RapidHashMap<&'a str, rapidhash::RapidHashSet<&'a str>>;
 
 pub(super) fn assignment_openings(goals: &[GoalDocument]) -> AssignmentOpenings<'_> {
-    let mut openings = AssignmentOpenings::new();
+    let mut openings = AssignmentOpenings::default();
     for goal in goals {
         if let Some(root) = goal.assignment_root_request_doc_id.as_deref() {
             openings.entry(root).or_default().insert(&goal.goal_id);
@@ -283,7 +283,7 @@ pub(super) fn authenticated_assignment_entry<'a>(
     node_did: &str,
     session_id: &str,
     row: &'a AgentRequestRow,
-    by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
+    by_doc: &rapidhash::RapidHashMap<&'a str, &'a AgentRequestRow>,
     expected_goal: Option<&str>,
     openings: &AssignmentOpenings<'_>,
 ) -> Result<&'a AgentRequestRow> {
@@ -301,7 +301,7 @@ pub(super) fn authenticated_entry<'a>(
     node_did: &str,
     session_id: &str,
     row: &'a AgentRequestRow,
-    by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
+    by_doc: &rapidhash::RapidHashMap<&'a str, &'a AgentRequestRow>,
     expected_goal: Option<&str>,
 ) -> Result<&'a AgentRequestRow> {
     authenticated_physical_entry(node_did, session_id, row, by_doc, expected_goal, None)
@@ -311,11 +311,11 @@ fn authenticated_physical_entry<'a>(
     node_did: &str,
     session_id: &str,
     mut row: &'a AgentRequestRow,
-    by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
+    by_doc: &rapidhash::RapidHashMap<&'a str, &'a AgentRequestRow>,
     expected_goal: Option<&str>,
     assignment_openings: Option<&AssignmentOpenings<'_>>,
 ) -> Result<&'a AgentRequestRow> {
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = rapidhash::RapidHashSet::default();
     let mut path_goal: Option<&str> = None;
     loop {
         let doc = row

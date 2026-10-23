@@ -1144,7 +1144,7 @@ impl TitleFixture {
         let backend = self.agent_config.backend_id.as_ref().unwrap();
         registry.reconcile(
             1,
-            &std::collections::HashMap::from([(
+            &rapidhash::RapidHashMap::from_iter([(
                 backend.clone(),
                 crate::admission::BackendAdmissionConfig {
                     backend_id: backend.clone(),
@@ -1593,7 +1593,7 @@ async fn assert_title_audit(
         message_count, 0,
         "title audit published a transcript header"
     );
-    let mut sources = std::collections::HashSet::new();
+    let mut sources = rapidhash::RapidHashSet::default();
     for row in &rows {
         let OutputSource::ProviderTurn {
             scope,
@@ -1720,7 +1720,7 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
                 }
                 _ => None,
             })
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<rapidhash::RapidHashSet<_>>();
         let all_received = sources.len() >= minimum
             && sources.iter().all(|(sequence, attempt)| {
                 let source = OutputSource::ProviderTurn {
@@ -2033,7 +2033,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             active_event_triggers: Default::default(),
             unavailable_event_triggers: Default::default(),
             active_tasks: Default::default(),
-            dispatchers: std::collections::HashMap::from([("general".into(), dispatch)]),
+            dispatchers: rapidhash::RapidHashMap::from_iter([("general".into(), dispatch)]),
             agent_executor_capacities: Default::default(),
             agent_executor_queue_capacities: Default::default(),
         });
@@ -2220,7 +2220,7 @@ async fn start_owned_title_daemon(
         active_event_triggers: Default::default(),
         unavailable_event_triggers: Default::default(),
         active_tasks: Default::default(),
-        dispatchers: std::collections::HashMap::from([("general".into(), dispatch.clone())]),
+        dispatchers: rapidhash::RapidHashMap::from_iter([("general".into(), dispatch.clone())]),
         agent_executor_capacities: Default::default(),
         agent_executor_queue_capacities: Default::default(),
     };
@@ -2582,7 +2582,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
     let registry = crate::admission::AdmissionRegistry::new(fixture.node.clone());
     registry.reconcile(
         1,
-        &std::collections::HashMap::from([(
+        &rapidhash::RapidHashMap::from_iter([(
             backend.clone(),
             crate::admission::BackendAdmissionConfig {
                 backend_id: backend.clone(),

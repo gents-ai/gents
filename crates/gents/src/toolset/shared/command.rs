@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -372,7 +372,7 @@ fn which_on_host_path(name: &str) -> Option<PathBuf> {
 pub(crate) struct PreparedManagedCommand {
     pub(crate) program: PathBuf,
     pub(crate) args: Vec<String>,
-    pub(crate) environment: HashMap<String, String>,
+    pub(crate) environment: RapidHashMap<String, String>,
     pub(crate) sandbox: &'static str,
     pub(crate) operator_guard_home: Option<PathBuf>,
 }
@@ -701,11 +701,11 @@ fn validate_command_policy_inner(
     Ok(())
 }
 
-pub(crate) fn build_shell_env() -> HashMap<String, String> {
+pub(crate) fn build_shell_env() -> RapidHashMap<String, String> {
     build_shell_env_from_vars(std::env::vars())
 }
 
-pub(crate) fn build_shell_env_from_vars<I>(vars: I) -> HashMap<String, String>
+pub(crate) fn build_shell_env_from_vars<I>(vars: I) -> RapidHashMap<String, String>
 where
     I: IntoIterator<Item = (String, String)>,
 {
@@ -717,7 +717,7 @@ where
                 .any(|allowed| allowed.eq_ignore_ascii_case(key))
         })
         .filter(|(key, _)| !is_secret_env_name(key))
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
 
     env.entry("PATH".to_string())
         .or_insert_with(|| FALLBACK_PATH.to_string());
@@ -933,7 +933,7 @@ fn artifact_policy_denial(message: impl Into<String>) -> ToolError {
 struct CommandLaunch {
     program: String,
     args: Vec<String>,
-    environment: HashMap<String, String>,
+    environment: RapidHashMap<String, String>,
     sandbox: &'static str,
     writable_root: Option<PathBuf>,
     protection: Option<crate::plugin::allowed::CommandProtection>,
