@@ -17,7 +17,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         goal_wake_ancestry_cases: Vec<serde_json::Value>,
     }
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_wake_ancestry_cases.len(), 16);
+    assert_eq!(contracts.goal_wake_ancestry_cases.len(), 19);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),

@@ -654,20 +654,24 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
     Ok(())
 }
 
+fn message_text(message: &Value) -> String {
+    match &message["content"] {
+        Value::String(content) => content.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn last_user_text(request: &Value) -> String {
-    let text = request["messages"]
+    request["messages"]
         .as_array()
         .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "user"))
-        .map(|message| match &message["content"] {
-            Value::String(content) => content.clone(),
-            Value::Array(parts) => parts
-                .iter()
-                .filter_map(|part| part["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => String::new(),
-        });
-    text.unwrap_or_default()
+        .map(message_text)
+        .unwrap_or_default()
 }
 
 fn tool_result_texts(request: &Value) -> Vec<String> {
@@ -676,15 +680,7 @@ fn tool_result_texts(request: &Value) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter(|message| message["role"] == "tool")
-        .map(|message| match &message["content"] {
-            Value::String(content) => content.clone(),
-            Value::Array(parts) => parts
-                .iter()
-                .filter_map(|part| part["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => String::new(),
-        })
+        .map(message_text)
         .collect()
 }
 
@@ -704,7 +700,7 @@ async fn children_of(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
         &format!(
             r#"{{
         AgentRequest(filter: {{ {} }}) {{
-            request_id caused_by_trigger_kind caused_by_parent_request_id
+            _docID request_id input caused_by_trigger_kind caused_by_parent_request_id
         }}
     }}"#,
             gents::session::public_request_filter(&format!(
@@ -848,11 +844,20 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                     _ => ChatAction::Sse(completion_text_sse("waiting on the job")),
                 };
             }
-            if released.load(Ordering::SeqCst)
+            let watched = spawn_handle.lock().unwrap().clone();
+            let completed_watch = !watched.is_empty()
                 && request["messages"]
-                    .to_string()
-                    .contains(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
-            {
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|message| message["role"] == "user")
+                    .map(message_text)
+                    .any(|text| {
+                        text.contains("<tool-completion ")
+                            && text.contains(&format!("tool_call_id=\"{watched}\""))
+                            && text.contains("status=\"completed\"")
+                    });
+            if released.load(Ordering::SeqCst) && completed_watch {
                 return if calls_tool(request, "update_goal") {
                     ChatAction::Sse(completion_text_sse("goal complete"))
                 } else {
@@ -958,6 +963,39 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         .as_str()
         .context("held request id")?
         .to_owned();
+    let opening_doc = resumed["doc_id"]
+        .as_str()
+        .context("Goal opening request document")?;
+    let binding = graphql_query(
+        &g,
+        &format!(
+            "{{ Goal(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{goal_id assignment_root_request_doc_id}} }}",
+            escape_graphql_string(&served.node_did),
+            escape_graphql_string(&s_goal),
+        ),
+    )
+    .await?;
+    assert_eq!(
+        binding["data"]["Goal"][0]["assignment_root_request_doc_id"],
+        opening_doc
+    );
+    let children = children_of(&g, &predecessor).await?;
+    assert_eq!(children.len(), 1, "{children:?}");
+    assert_eq!(children[0]["_docID"], opening_doc);
+    assert_eq!(
+        children[0]["input"]["goal_assignment"],
+        json!({"goal_id": resumed["goal_id"], "root_request_doc_id": null}),
+    );
+    let replay = served.goal(&[
+        "resume-request",
+        "--session",
+        &s_goal,
+        "--from",
+        &predecessor,
+    ])?;
+    assert_eq!(replay["created"], false, "{replay}");
+    assert_eq!(replay["doc_id"], opening_doc);
+    assert_eq!(children_of(&g, &predecessor).await?, children);
     let goal = served.goal(&["show", "--session", &s_goal])?;
     assert_eq!(goal["status"], "active", "{goal}");
     let seq0 = goal["continuation_sequence"]
@@ -1001,6 +1039,10 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
     assert!(delivery["caused_by_trigger_kind"].is_null(), "{delivery}");
+    assert_eq!(
+        delivery["input"]["goal_assignment"],
+        json!({"goal_id": resumed["goal_id"], "root_request_doc_id": opening_doc}),
+    );
     let delivery_id = delivery["request_id"]
         .as_str()
         .context("delivery request id")?;
@@ -1023,11 +1065,26 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         );
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
-    assert_eq!(
-        goal["continuation_sequence"].as_u64(),
-        Some(seq0 + 1),
+    if goal["continuation_sequence"].as_u64() != Some(seq0 + 1) {
+        let requests = graphql_query(&g, &format!(
+            "{{AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{_docID request_id purpose lifecycle_state input caused_by_parent_request_id caused_by_trigger_kind created_at}} Goal(filter: {{session_id: {{_eq: \"{}\"}}}}) {{continuation_sequence last_continued_from_request_id assignment_root_request_doc_id token_usage_baseline tokens_used}}}}",
+            escape_graphql_string(&served.node_did), escape_graphql_string(&s_goal), escape_graphql_string(&s_goal),
+        )).await?;
+        panic!(
+            "unexpected Goal continuation count: expected {}; goal={goal}; requests={requests}",
+            seq0 + 1
+        );
+    }
+    assert!(
+        goal["tokens_used"]
+            .as_i64()
+            .is_some_and(|tokens| tokens > 0),
         "{goal}"
     );
+    let updates = wait_for_completed_tool_calls(&g, &s_goal, "update_goal", 1).await?;
+    assert_eq!(updates.len(), 1, "{updates:?}");
+    assert_eq!(updates[0]["request_doc_id"], delivery["_docID"]);
+    assert!(children_of(&g, delivery_id).await?.is_empty());
     assert_eq!(children_of(&g, &held).await?.len(), 1);
     Ok(())
 }
