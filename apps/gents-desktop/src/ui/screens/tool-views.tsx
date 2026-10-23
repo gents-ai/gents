@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import type {
@@ -10,7 +11,7 @@ import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
 import { revealInFolder } from "../../lib/nativeShell";
 import { revealInFolderLabel } from "../../lib/shellPlatform";
-import { useFollowTail, useScroller } from "../lib/scroll";
+import { useFollowNewest } from "../lib/scroll";
 import { useHomeDid, useSelectedNode } from "../hooks/useClient";
 import { isWorkingNode } from "../lib/nodes";
 import { CopyButton } from "./Markdown";
@@ -333,11 +334,13 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
   );
 }
 
+/* a running command's output stays at its newest line until the reader
+   scrolls up in it */
 function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
-  const [scroller, owner] = useScroller();
-  useFollowTail(scroller, subject);
+  const box = useRef<HTMLDivElement>(null);
+  useFollowNewest(box, { rows: tail.length, paused: false, enabled: true });
   return (
-    <div ref={owner} className="grid grid-cols-[minmax(0,1fr)] gap-1">
+    <div ref={box} className="grid grid-cols-[minmax(0,1fr)] gap-1">
       <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
         live output
       </span>

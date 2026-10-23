@@ -4,7 +4,9 @@ import { expect, gotoHarness, test } from "./desktopTest";
 type Cost = {
   rects: number;
   writes: number;
+  /* rows drawn, and rows the transcript holds */
   rows: number;
+  loaded: number;
   grew: boolean;
   scrolls: number;
 };
@@ -67,7 +69,11 @@ async function cost(
         rects,
         writes,
         scrolls,
-        rows: scroller.querySelectorAll("[data-timeline-key]").length,
+        rows: scroller.querySelectorAll("[data-row-key]").length,
+        loaded: Number(
+          scroller.querySelector("[data-transcript-list]")?.getAttribute("data-rows") ??
+            0,
+        ),
         grew: scroller.scrollHeight > height,
       };
     } finally {
@@ -77,6 +83,15 @@ async function cost(
       delete (scroller as Partial<HTMLElement>).scrollTop;
     }
   }, act);
+}
+
+/* a scroll's cost, as the middle of five scroll events: other work that
+   lands while one is measured, a page read ahead or a write at rest, is
+   not the scroll's own */
+async function scrollCost(viewport: Locator): Promise<Cost> {
+  const costs: Cost[] = [];
+  for (let n = 0; n < 5; n += 1) costs.push(await cost(viewport, "scroll"));
+  return costs.sort((a, b) => a.rects - b.rects)[2]!;
 }
 
 async function loadEveryPage(page: Page) {
@@ -101,10 +116,25 @@ async function loadEveryPage(page: Page) {
   );
 }
 
+/* rows near the foot are measured as they mount on the way back, so a
+   chunk's cost is taken once the view rests at the foot and the content
+   holds its height for a few frames */
 async function backToBottom(page: Page) {
   await page.getByRole("button", { name: "Back to bottom" }).click();
   await expect(scroller(page)).toHaveAttribute("data-following", "true");
-  await page.waitForTimeout(300);
+  await expect
+    .poll(() =>
+      scroller(page).evaluate(async (scroller) => {
+        const height = scroller.scrollHeight;
+        for (let frame = 0; frame < 6; frame += 1)
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        const foot = scroller.scrollHeight - scroller.clientHeight;
+        return (
+          scroller.scrollHeight === height && Math.abs(scroller.scrollTop - foot) < 1
+        );
+      }),
+    )
+    .toBe(true);
 }
 
 test.describe("what a transcript scroll costs", () => {
@@ -134,33 +164,37 @@ test.describe("what a transcript scroll costs", () => {
     await expect(viewport).toHaveAttribute("data-following", "false");
     await page.waitForTimeout(800);
     const short = {
-      scroll: await cost(viewport, "scroll"),
+      scroll: await scrollCost(viewport),
       chunk: await cost(viewport, "chunk"),
     };
 
     await loadEveryPage(page);
     const long = {
-      scroll: await cost(viewport, "scroll"),
+      scroll: await scrollCost(viewport),
       chunk: await cost(viewport, "chunk"),
     };
     testInfo.annotations.push({
       type: "cost",
       description: JSON.stringify({ short, long }),
     });
-    expect(long.scroll.rows).toBeGreaterThan(short.scroll.rows * 4);
+    /* the transcript holds far more rows and still draws about a view's
+       worth: how many depends on where the reader stopped, not on how many
+       are held. The rows read ahead before the first measure vary by a page */
+    expect(long.scroll.loaded).toBeGreaterThanOrEqual(short.scroll.loaded * 3);
+    expect(long.scroll.rows).toBeLessThanOrEqual(40);
 
-    /* a reader's scroll finds the row under them by point, or when the
-       point finds nothing by halving over the rows (about ten measures at
-       600); a streamed chunk measures the held row and the view */
+    /* a reader's scroll finds the row under them by halving over the drawn
+       rows; a streamed chunk measures the held row and the view. Far up a
+       long session the reply grows in a row that is not drawn */
+    expect(short.chunk.grew).toBe(true);
     for (const at of [short, long]) {
-      expect(at.chunk.grew).toBe(true);
       expect(at.scroll.rects).toBeLessThanOrEqual(16);
       expect(at.chunk.rects).toBeLessThanOrEqual(16);
-
       expect(at.scroll.writes).toBe(0);
     }
-    /* and none of it grows with the session beyond the halving's few */
-    expect(long.scroll.rects).toBeLessThanOrEqual(short.scroll.rects + 10);
+    /* and none of it grows with the rows held: more rows drawn add a
+       halving step, and a row drawn by the scroll is measured once */
+    expect(long.scroll.rects).toBeLessThanOrEqual(short.scroll.rects + 6);
     expect(long.chunk.rects).toBeLessThanOrEqual(short.chunk.rects + 4);
   });
 
@@ -169,17 +203,19 @@ test.describe("what a transcript scroll costs", () => {
   }, testInfo) => {
     const viewport = scroller(page);
     await loadEveryPage(page);
-    await expect(viewport.locator('[data-window-row="box"]')).not.toHaveCount(0);
     const jump = await cost(viewport, "jump");
     testInfo.annotations.push({ type: "cost", description: JSON.stringify(jump) });
-    expect(jump.rects).toBeLessThanOrEqual(24);
+    /* each row drawn on the way is measured as it mounts, and the reader's
+       place is found by halving: the reads follow the rows drawn, never
+       the rows the session holds */
+    expect(jump.loaded).toBeGreaterThan(400);
+    expect(jump.rows).toBeLessThanOrEqual(40);
+    expect(jump.rects).toBeLessThanOrEqual(jump.rows * 3);
     await expect
       .poll(() =>
         viewport.evaluate((scroller) => {
           const view = scroller.getBoundingClientRect();
-          return Array.from(
-            scroller.querySelectorAll('[data-window-row="drawn"]'),
-          ).some((row) => {
+          return Array.from(scroller.querySelectorAll("[data-row-key]")).some((row) => {
             const box = row.getBoundingClientRect();
             return box.bottom > view.top && box.top < view.bottom;
           });

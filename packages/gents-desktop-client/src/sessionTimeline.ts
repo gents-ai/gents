@@ -4,7 +4,9 @@ function timelineItemIdentity(item: RenderedTimelineItem) {
   return `${item.kind}:${item.itemKey}`;
 }
 
-function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
+/** A pending turn whose input already has its saved row is not drawn: one
+ *  message is one row, wherever the two were read from. */
+export function removeMaterializedPendingTurns(items: RenderedTimelineItem[]) {
   const materialized = new Set(
     items.flatMap((item) =>
       item.kind === "userMessage" || item.kind === "automatedInput"
@@ -233,6 +235,9 @@ export function mergeSessionTipSnapshot(
   };
 }
 
+/** An older page joined in front of a snapshot: the stitching a client
+ *  that pages the session snapshot itself uses. The desktop reads history
+ *  by message number instead (`fetchSessionRows`). */
 export function mergeOlderSessionTimelinePage(
   current: DesktopSessionSnapshot | null,
   older: DesktopSessionSnapshot,

@@ -34,25 +34,45 @@ test.describe("a long transcript", () => {
   test("keeps the reader's row in place while an older page lands", async ({
     page,
   }) => {
-    const { key, before, rowsBefore } = await page
+    const rowsBefore = await page.getByTestId("transcript-panel").evaluate((panel) => {
+      const scroller = panel.closest(
+        '[data-slot="scroll-area-viewport"]',
+      ) as HTMLElement;
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+      scroller.scrollTop = 0;
+      return Number(
+        panel.querySelector("[data-transcript-list]")!.getAttribute("data-rows"),
+      );
+    });
+    /* the list draws the rows at the new place on its next frames */
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    );
+    const { key, before } = await page
       .getByTestId("transcript-panel")
       .evaluate((panel) => {
         const scroller = panel.closest(
           '[data-slot="scroll-area-viewport"]',
         ) as HTMLElement;
-        const rowsBefore = scroller.querySelectorAll("[data-timeline-key]").length;
-        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
-        scroller.scrollTop = 0;
-        const first = scroller.querySelector<HTMLElement>("[data-timeline-key]")!;
+        const view = scroller.getBoundingClientRect();
+        const first = [
+          ...scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+        ].find((row) => row.getBoundingClientRect().bottom > view.top)!;
         return {
           key: first.dataset.timelineKey!,
           before: first.getBoundingClientRect().top,
-          rowsBefore,
         };
       });
     const row = page.locator(`[data-timeline-key="${key}"]`);
     await expect
-      .poll(() => page.locator("[data-timeline-key]").count())
+      .poll(() =>
+        page
+          .locator("[data-transcript-list]")
+          .evaluate((list) => Number(list.getAttribute("data-rows"))),
+      )
       .toBeGreaterThan(rowsBefore);
     await expect
       .poll(async () => Math.abs((await row.boundingBox())!.y - before))

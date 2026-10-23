@@ -2,6 +2,7 @@ import {
   Fragment,
   createContext,
   memo,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -19,8 +20,9 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { AssistantMessage, UserMessage } from "@gents/ui/conversation";
-import { useOlderPages } from "@/lib/scroll";
-import { TranscriptWindowProvider, WindowedRow } from "@/lib/transcriptWindow";
+import { useTranscriptList, type ReaderPlace } from "@/lib/transcriptList";
+import { useHeldRows } from "@/lib/useHeldRows";
+import { sequenceOf } from "@/lib/transcriptRows";
 import {
   Collapsible,
   CollapsibleContent,
@@ -56,6 +58,8 @@ import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
 import { useCopied } from "@/lib/clipboard";
 import { toastFailure } from "@/lib/failure";
+import { sessionViews } from "@/app/sessionViews";
+import { createHeightLearner, guessHeight, type RowShape } from "@/lib/rowHeights";
 import { useApp, useView } from "@/app/AppContext";
 import {
   ActivityGroup,
@@ -63,8 +67,6 @@ import {
   Reasoning,
   useGroupState,
 } from "./ActivityGroup";
-
-const ALWAYS_DRAWN = 8;
 
 function FailedEarlier({ message }: { message: string }) {
   return (
@@ -301,7 +303,10 @@ function Reply({
         actions={!live && item.content && !final ? copyActions(item.content) : false}
       >
         {readableReasoning(item.reasoning) ? (
-          <Reasoning text={readableReasoning(item.reasoning)!} />
+          <Reasoning
+            text={readableReasoning(item.reasoning)!}
+            stateKey={item.itemKey}
+          />
         ) : reasoningWithheld(item.reasoning) ? (
           <p className="pb-2 text-xs text-muted-foreground">
             Reasoning was not shared by the provider.
@@ -349,42 +354,36 @@ const ItemRow = memo(function ItemRow({
   rowKey,
   item,
   final,
-  drawn,
 }: {
   /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
   item: RenderedTimelineItem;
   final: boolean;
-  drawn: boolean;
 }) {
   return (
-    <WindowedRow
-      rowKey={rowKey}
-      drawn={drawn}
+    <div
       data-timeline-key={rowKey}
       data-turn={
         item.kind === "userMessage" || item.kind === "pendingUserTurn" ? "" : undefined
       }
-      className="group/response"
+      className="group/response min-w-0 pb-5"
     >
       <TranscriptItem item={item} final={final} />
-    </WindowedRow>
+    </div>
   );
 });
 
 const GroupRow = memo(function GroupRow({
   entry,
   workers,
-  drawn,
 }: {
   entry: Extract<TranscriptEntry, { kind: "group" }>;
   workers: Workers;
-  drawn: boolean;
 }) {
   return (
-    <WindowedRow rowKey={entry.key} drawn={drawn}>
+    <div className="min-w-0 pb-5">
       <ActivityGroup entry={entry} workers={workers} />
-    </WindowedRow>
+    </div>
   );
 });
 
@@ -406,40 +405,70 @@ function useSentCopy(items: RenderedTimelineItem[]): LocalTurn | null {
 }
 const LINGER_MS = 3_000;
 
+/* the scroll owner's face toward the composer: whether the foot is in view,
+   the way back to it, and a nudge when the composer's room changes */
+export type TranscriptOwner = {
+  atBottom: boolean;
+  toBottom: () => void;
+  settle: () => void;
+};
+
+const EMPTY_ITEMS: RenderedTimelineItem[] = [];
+
+/* what a row's height is guessed from before it is drawn */
+function shapeOf(entry: TranscriptEntry): RowShape {
+  if (entry.kind === "group")
+    return { kind: "group", open: !entry.settled, steps: entry.members.length };
+  const item = entry.item;
+  switch (item.kind) {
+    case "userMessage":
+    case "pendingUserTurn":
+    case "automatedInput":
+      return { kind: "user", text: item.content ?? "" };
+    case "assistantMessage":
+    case "liveAssistant":
+      return { kind: "reply", text: item.content ?? "" };
+    default:
+      return { kind: "other" };
+  }
+}
+
 export const TranscriptPanel = memo(function TranscriptPanel({
   inFlight,
   stopping = false,
   scroller,
-  content,
   session,
   workers,
   parentWork,
   workerActions,
+  sentTurn = null,
+  anchorSentTurn = false,
+  onOwner,
 }: {
   inFlight: boolean;
   stopping?: boolean;
   scroller: HTMLElement | null;
-  content: HTMLElement | null;
   session: DesktopSessionSnapshot | null;
   workers: Workers;
   parentWork: ParentWork;
   workerActions: WorkerActions;
+  sentTurn?: string | null;
+  anchorSentTurn?: boolean;
+  /* the session screen's composer reads the foot and the way back to it */
+  onOwner?: (owner: TranscriptOwner) => void;
 }) {
   const { actions } = useApp();
-  const loadingOlder = useOlderPages(
-    scroller,
-    content,
-    session?.sessionId ?? null,
-    session?.timelinePage?.hasOlder ?? false,
-    () => actions.loadOlderSessionTimeline(),
-    session?.timelineItems[0]?.itemKey ?? null,
-  );
   const [retrying, setRetrying] = useState(false);
+  const sessionKey = session?.sessionId ?? null;
+  const rows = useHeldRows(
+    sessionKey,
+    session?.timelineItems ?? EMPTY_ITEMS,
+    session?.timelinePage?.hasOlder ?? false,
+    actions.loadSessionRows,
+  );
 
   const latest = session?.latestRequestOutcome;
-  const status = inFlight
-    ? activityStatus(session?.timelineItems ?? [], stopping)
-    : null;
+  const status = inFlight && rows.joined ? activityStatus(rows.items, stopping) : null;
   const wasInterrupted = session?.turnState === "interrupted";
   const responseError =
     latest?.failureReason?.trim() ||
@@ -450,15 +479,14 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     Boolean(latest?.failureReason) && session?.turnState === "processing";
   const visible = useMemo(
     () =>
-      (continuing
-        ? session?.timelineItems.filter((item) => item.kind !== "liveAssistant")
-        : session?.timelineItems) ?? [],
-    [continuing, session?.timelineItems],
+      continuing
+        ? rows.items.filter((item) => item.kind !== "liveAssistant")
+        : rows.items,
+    [continuing, rows.items],
   );
   const showError =
     Boolean(responseError) && !wasInterrupted && (continuing || !inFlight);
 
-  const sessionKey = session?.sessionId ?? null;
   const heldRef = useRef<HeldLive | null>(null);
   const [heldExpiry, setHeldExpiry] = useState(0);
   const held = useMemo(
@@ -488,8 +516,11 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       false,
   );
   const turns = useMemo(
-    () => withSentTurns(held.items, localTurn, sessionKey, localQueued),
-    [held.items, localTurn, sessionKey, localQueued],
+    () =>
+      rows.joined
+        ? withSentTurns(held.items, localTurn, sessionKey, localQueued)
+        : held.items,
+    [rows.joined, held.items, localTurn, sessionKey, localQueued],
   );
   const keysRef = useRef<DrawKeys>(noDrawKeys(sessionKey));
   const keys = useMemo(
@@ -497,8 +528,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     [turns, held.replacedBy, sessionKey],
   );
   keysRef.current = keys;
-  const rendered = turns;
-  const entries = useMemo(() => groupTranscript(rendered), [rendered]);
+  const entries = useMemo(() => groupTranscript(turns), [turns]);
+  /* each drawn item's message number, by its item key: a group's key is
+     the key of the item it opens with */
+  const sequences = useMemo(
+    () => new Map(turns.map((item) => [item.itemKey, sequenceOf(item)])),
+    [turns],
+  );
   const finalKeys = useMemo(() => {
     const keys = new Set<string>();
     let last: string | null = null;
@@ -517,45 +553,137 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     return keys;
   }, [entries, inFlight]);
   const groupState = useGroupState(sessionKey);
-  /* one block per turn, keyed by the message, so a send starts a new
-     block and the rows before it are not drawn anew; the last block is
-     given room for its reply */
-  const blocks = useMemo(() => {
-    const out: { key: string; start: number; end: number }[] = [];
-    let start = 0;
-    let key = "lead";
-    entries.forEach((e, i) => {
-      if (
-        e.kind === "item" &&
-        (e.item.kind === "userMessage" || e.item.kind === "pendingUserTurn")
-      ) {
-        if (i > start || out.length === 0) out.push({ key, start, end: i });
-        start = i;
-        key = drawKey(keys, e.item);
-      }
+
+  const entryKey = useCallback(
+    (entry: TranscriptEntry) =>
+      entry.kind === "item" ? drawKey(keys, entry.item) : entry.key,
+    [keys],
+  );
+  const indexOf = useMemo(
+    () => new Map(entries.map((entry, index) => [entryKey(entry), index])),
+    [entries, entryKey],
+  );
+  const turnKeys = useMemo(
+    () =>
+      entries.flatMap((entry) =>
+        entry.kind === "item" &&
+        (entry.item.kind === "userMessage" || entry.item.kind === "pendingUserTurn")
+          ? [entryKey(entry)]
+          : [],
+      ),
+    [entries, entryKey],
+  );
+  /* a turn doing work: a tool step drawn after it */
+  const turnWorks = useCallback(
+    (key: string) => {
+      const at = indexOf.get(key);
+      return (
+        at !== undefined &&
+        entries.slice(at + 1).some((entry) => entry.kind === "group")
+      );
+    },
+    [entries, indexOf],
+  );
+
+  /* opening a session returns to where the reader left it: at once when
+     that row is drawn, else once the page around its message is read */
+  const opening = useMemo(() => {
+    const place = sessionViews.placeOf(sessionKey);
+    if (!place) return null;
+    if (indexOf.has(place.key)) return place;
+    return place.sequence !== null ? ("awaiting" as const) : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionKey, entries.length > 0]);
+
+  /* the guesses, corrected by what this session's first rows measure */
+  const heights = useMemo(() => createHeightLearner(), [sessionKey]);
+  const estimateOf = useCallback(
+    (entry: TranscriptEntry, width: number) => {
+      const shape = shapeOf(entry);
+      return Math.round(guessHeight(shape, width) * heights.scale(shape.kind));
+    },
+    [heights],
+  );
+  const onMeasured = useCallback(
+    (entry: TranscriptEntry, height: number, width: number) => {
+      const shape = shapeOf(entry);
+      heights.learn(shape.kind, guessHeight(shape, width), height);
+    },
+    [heights],
+  );
+
+  const list = useTranscriptList({
+    scroller,
+    subject: sessionKey,
+    entries,
+    keyOf: entryKey,
+    estimateOf,
+    onMeasured,
+    sentTurn: rows.joined ? sentTurn : null,
+    anchorSentTurn,
+    turnWorks,
+    turns: turnKeys,
+    opening,
+    nearTop: () => rows.loadOlder(),
+    nearFoot: () => rows.loadNewer(),
+  });
+
+  const returning = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionKey || returning.current === sessionKey || entries.length === 0) return;
+    returning.current = sessionKey;
+    const place = sessionViews.placeOf(sessionKey);
+    if (!place || indexOf.has(place.key) || place.sequence === null) return;
+    rows.jump(place.sequence, () => {
+      pendingPlace.current = place;
     });
-    out.push({ key, start, end: entries.length });
-    return out;
-  }, [entries, keys]);
-  const head = blocks.slice(0, -1);
-  const last = blocks[blocks.length - 1]!;
-  const renderEntry = (entry: (typeof entries)[number], index: number) =>
-    entry.kind === "item" ? (
-      <ItemRow
-        key={drawKey(keys, entry.item)}
-        rowKey={drawKey(keys, entry.item)}
-        item={entry.item}
-        final={finalKeys.has(entry.key)}
-        drawn={entries.length - index <= ALWAYS_DRAWN}
-      />
-    ) : (
-      <GroupRow
-        key={entry.key}
-        entry={entry}
-        workers={workers}
-        drawn={entries.length - index <= ALWAYS_DRAWN}
-      />
-    );
+  });
+  const pendingPlace = useRef<ReaderPlace | null>(null);
+  useEffect(() => {
+    const place = pendingPlace.current;
+    if (place && indexOf.has(place.key)) {
+      pendingPlace.current = null;
+      list.goTo(place);
+    }
+  });
+
+  /* the reader's place, kept as they read; at the foot there is none */
+  const { place } = list;
+  useEffect(() => {
+    if (!scroller || !sessionKey) return;
+    let timer = 0;
+    const remember = () => {
+      if (timer) return;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        const at = place();
+        const entry = at ? entries[indexOf.get(at.key) ?? -1] : undefined;
+        sessionViews.setPlace(
+          sessionKey,
+          at ? { ...at, sequence: entrySequence(entry, sequences) } : null,
+        );
+      }, 300);
+    };
+    scroller.addEventListener("scroll", remember, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", remember);
+      window.clearTimeout(timer);
+    };
+  }, [scroller, sessionKey, place, entries, indexOf, sequences]);
+
+  /* sending, or going back to the foot, returns to the newest page */
+  const { atBottom, toBottom, settle } = list;
+  const { joined, reset } = rows;
+  const toNewest = useCallback(() => {
+    if (!joined) reset();
+    toBottom();
+  }, [joined, reset, toBottom]);
+  useEffect(() => {
+    if (!joined && sentTurn) reset();
+  }, [joined, sentTurn, reset]);
+  useEffect(() => {
+    onOwner?.({ atBottom: atBottom && joined, toBottom: toNewest, settle });
+  }, [onOwner, atBottom, joined, toNewest, settle]);
 
   const retry = async () => {
     const requestId = session?.latestRequestId;
@@ -572,44 +700,46 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 
   return (
     <div
-      className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5 [--step-scroll-inset:56]"
+      className="mt-6 grid grid-cols-[minmax(0,1fr)] [--step-scroll-inset:56]"
       data-testid="transcript-panel"
     >
-      {session?.timelinePage?.hasOlder && (
+      {rows.olderBefore !== null && (
         <div
           role="status"
           aria-live="polite"
-          className="min-h-5 text-center text-xs text-muted-foreground"
+          className="mb-5 min-h-5 text-center text-xs text-muted-foreground"
           data-testid="transcript-older-status"
         >
-          {loadingOlder ? "Loading older messages…" : null}
+          {rows.loading === "older" ? "Loading older messages…" : null}
         </div>
       )}
       <WorkerActionsContext.Provider value={workerActions}>
         <ParentContext.Provider value={parentWork}>
           <GroupStateContext.Provider value={groupState}>
-            <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
-              {head.map((block) => (
-                <div
-                  key={block.key}
-                  data-turn-block
-                  className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-5"
-                >
-                  {entries
-                    .slice(block.start, block.end)
-                    .map((entry, i) => renderEntry(entry, block.start + i))}
-                </div>
-              ))}
-              {/* at least as tall as the room the scroll owner gives a sent
-                  turn: a minimum, so the reply's growth changes nothing */}
-              <div
-                key={last.key}
-                data-turn-block
-                className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-5 min-h-[var(--turn-room,0px)]"
-              >
-                {entries
-                  .slice(last.start)
-                  .map((entry, i) => renderEntry(entry, last.start + i))}
+            <div {...list.listProps} data-transcript-list data-rows={entries.length}>
+              {list.items.map(({ index, start }) => {
+                const entry = entries[index]!;
+                return (
+                  <div
+                    key={entryKey(entry)}
+                    {...list.attributes(index, start)}
+                    className="grid min-w-0 grid-cols-[minmax(0,1fr)]"
+                  >
+                    {entry.kind === "item" ? (
+                      <ItemRow
+                        rowKey={drawKey(keys, entry.item)}
+                        item={entry.item}
+                        final={finalKeys.has(entry.key)}
+                      />
+                    ) : (
+                      <GroupRow entry={entry} workers={workers} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {rows.joined ? (
+              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-5">
                 {continuing && showError && <FailedEarlier message={responseError} />}
                 {continuing &&
                   session?.timelineItems
@@ -651,10 +781,30 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                   </div>
                 </div>
               </div>
-            </TranscriptWindowProvider>
+            ) : (
+              <div
+                className="min-h-5 text-center text-xs text-muted-foreground"
+                data-testid="transcript-newer-status"
+              >
+                {rows.loading === "newer" ? "Loading newer messages…" : null}
+              </div>
+            )}
+            {/* the room a held turn's reply fills, below everything drawn */}
+            <div aria-hidden="true" style={{ height: list.room }} />
           </GroupStateContext.Provider>
         </ParentContext.Provider>
       </WorkerActionsContext.Provider>
     </div>
   );
 });
+
+/* the message number an entry stands at */
+function entrySequence(
+  entry: TranscriptEntry | undefined,
+  sequences: Map<string, number | null>,
+): number | null {
+  if (!entry) return null;
+  return entry.kind === "item"
+    ? sequenceOf(entry.item)
+    : (sequences.get(entry.key) ?? null);
+}

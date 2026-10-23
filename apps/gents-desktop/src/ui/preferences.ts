@@ -26,7 +26,7 @@ const initial = (): Preferences => ({
   theme: systemTheme(),
   nav: "hover",
   zoom: 1,
-  sentTurn: "follow",
+  sentTurn: "anchor",
 });
 
 export function restorePreferences(
