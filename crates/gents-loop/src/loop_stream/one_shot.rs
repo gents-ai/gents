@@ -599,20 +599,21 @@ mod tests {
             assert!(error
                 .downcast_ref::<AuxiliaryPersistenceFailure>()
                 .is_some());
-            let events = captured
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
-            assert!(matches!(
-                events[1],
-                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
-            ));
-            assert!(matches!(
-                events[2],
-                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { .. })
-            ));
-            assert!(matches!(events[3], AuxiliaryOutputEvent::ClosePartial));
-            drop(events);
+            {
+                let events = captured
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
+                assert!(matches!(
+                    events[1],
+                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
+                ));
+                assert!(matches!(
+                    events[2],
+                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { .. })
+                ));
+                assert!(matches!(events[3], AuxiliaryOutputEvent::ClosePartial));
+            }
             assert!(!flush_received_auxiliary_partial().await.unwrap());
         })
         .await;
@@ -690,27 +691,28 @@ mod tests {
                 .await
                 .expect_err("identity error must remain visible");
             assert!(error.to_string().contains("auxiliary audit changed source"));
-            let events = captured
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
-            assert!(matches!(
-                events[1],
-                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
-            ));
-            assert!(matches!(
-                &events[2],
-                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::ThinkingText { fragment, .. })
-                    if fragment == "reasoning"
-            ));
-            assert!(matches!(
-                &events[3],
-                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { fragment, .. })
-                    if fragment == "received"
-            ));
-            assert!(matches!(events[4], AuxiliaryOutputEvent::ClosePartial));
-            assert_eq!(events.len(), 5);
-            drop(events);
+            {
+                let events = captured
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                assert!(matches!(events[0], AuxiliaryOutputEvent::AttemptStarted));
+                assert!(matches!(
+                    events[1],
+                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
+                ));
+                assert!(matches!(
+                    &events[2],
+                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::ThinkingText { fragment, .. })
+                        if fragment == "reasoning"
+                ));
+                assert!(matches!(
+                    &events[3],
+                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { fragment, .. })
+                        if fragment == "received"
+                ));
+                assert!(matches!(events[4], AuxiliaryOutputEvent::ClosePartial));
+                assert_eq!(events.len(), 5);
+            }
             assert!(!flush_received_auxiliary_partial().await.unwrap());
         })
         .await;

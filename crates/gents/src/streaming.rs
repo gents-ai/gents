@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,9 +39,9 @@ pub use gents_loop::stream_writer::StreamWriter;
 pub struct DefraStreamWriter {
     node: Arc<EmbeddedNode>,
     batch_interval: Duration,
-    buffers: Mutex<HashMap<String, StreamBuffer>>,
-    published: Mutex<HashMap<String, String>>,
-    provider_tails: Mutex<HashMap<String, ProviderTail>>,
+    buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
+    published: Mutex<RapidHashMap<String, String>>,
+    provider_tails: Mutex<RapidHashMap<String, ProviderTail>>,
 }
 
 #[derive(Default)]
@@ -51,6 +51,15 @@ struct ProviderTail {
     streams: Vec<native_encoding::EncodedStream>,
     next_ordinal: u32,
     capture_scope: Option<gents_protocol::rendered_request::CaptureScope>,
+    pending_flush: Option<PreparedProviderFlush>,
+}
+
+/// A native commit can outlive its awaiting caller. Retain the exact record
+/// and stream checkpoint until acknowledgement; regenerating its timestamp
+/// would violate the canonical append owner's immutable replay contract.
+struct PreparedProviderFlush {
+    segment: gents_protocol::output::OutputSegment,
+    streams: Vec<native_encoding::EncodedStream>,
 }
 
 struct StreamBuffer {
@@ -201,16 +210,16 @@ impl DefraStreamWriter {
         let tail = tails
             .get_mut(&request.doc_id)
             .context("provider attempt is not active")?;
+        let acknowledged = self.acknowledge_provider_flush(tail, generation).await?;
         let turn = tail.turn;
         let attempt = tail.attempt;
         let capture_scope = tail
             .capture_scope
-            .clone()
             .context("provider attempt omitted capture scope")?;
         let ordinal = tail.next_ordinal;
         let delta = provider_flush_delta(&tail.streams, &encoded)?;
         if !delta.grew {
-            return Ok(false);
+            return Ok(acknowledged);
         }
         let segment = OutputSegment {
             node_did: request.node_did.clone(),
@@ -231,15 +240,31 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        canonical::append_provider_segment(&self.node, generation, &segment).await?;
-        let tail = tails
-            .get_mut(&request.doc_id)
-            .context("provider attempt ended during flush")?;
+        tail.pending_flush = Some(PreparedProviderFlush {
+            segment,
+            streams: encoded.streams,
+        });
+        self.acknowledge_provider_flush(tail, generation).await
+    }
+
+    async fn acknowledge_provider_flush(
+        &self,
+        tail: &mut ProviderTail,
+        generation: &str,
+    ) -> Result<bool> {
+        let Some(pending) = tail.pending_flush.as_ref() else {
+            return Ok(false);
+        };
         anyhow::ensure!(
-            tail.turn == turn && tail.attempt == attempt && tail.next_ordinal == ordinal,
-            "provider attempt changed during flush"
+            pending.segment.ordinal == Some(tail.next_ordinal),
+            "pending provider flush disagrees with its acknowledged cursor"
         );
-        tail.streams = encoded.streams;
+        canonical::append_provider_segment(&self.node, generation, &pending.segment).await?;
+        let pending = tail
+            .pending_flush
+            .take()
+            .context("provider flush lost its prepared record")?;
+        tail.streams = pending.streams;
         tail.next_ordinal += 1;
         Ok(true)
     }
@@ -271,11 +296,14 @@ impl DefraStreamWriter {
     ) -> Result<()> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
         let mut tails = self.provider_tails.lock().await;
-        let scope = tails
-            .get(&request.doc_id)
+        let tail = tails
+            .get_mut(&request.doc_id)
             .filter(|tail| tail.turn == turn && tail.attempt == attempt)
-            .and_then(|tail| tail.capture_scope)
             .context("provider close has no exact active attempt")?;
+        self.acknowledge_provider_flush(tail, generation).await?;
+        let scope = tail
+            .capture_scope
+            .context("provider close omitted capture scope")?;
         let segment = OutputSegment {
             node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
@@ -321,14 +349,15 @@ impl DefraStreamWriter {
         let encoded = std::sync::Arc::new(native_encoding::encode_native_message(message)?);
         let expected = std::sync::Arc::new(message.clone());
         let mut tails = self.provider_tails.lock().await;
-        let created_at = chrono::Utc::now().to_rfc3339();
         let tail = tails
             .get_mut(&request.doc_id)
             .filter(|tail| tail.turn == turn && tail.attempt == attempt)
             .context("provider acceptance has no exact active attempt")?;
+        self.acknowledge_provider_flush(tail, lifecycle.execution_generation()?)
+            .await?;
+        let created_at = chrono::Utc::now().to_rfc3339();
         let capture_scope = tail
             .capture_scope
-            .clone()
             .context("provider acceptance omitted capture scope")?;
         let source = OutputSource::ProviderTurn {
             scope: capture_scope,
@@ -435,9 +464,9 @@ impl DefraStreamWriter {
         Self {
             node,
             batch_interval,
-            buffers: Mutex::new(HashMap::new()),
-            published: Mutex::new(HashMap::new()),
-            provider_tails: Mutex::new(HashMap::new()),
+            buffers: Mutex::new(RapidHashMap::new()),
+            published: Mutex::new(RapidHashMap::new()),
+            provider_tails: Mutex::new(RapidHashMap::new()),
         }
     }
 

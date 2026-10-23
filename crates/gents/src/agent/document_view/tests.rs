@@ -566,7 +566,7 @@ async fn create_task_bound(
     enabled: bool,
 ) {
     seed_automation(
-        &node,
+        node,
         vec![(
             crate::Collection::Task,
             serde_json::json!({
@@ -591,7 +591,7 @@ async fn create_schedule_with_concurrency(
     concurrency: &str,
 ) {
     seed_automation(
-        &node,
+        node,
         vec![
             (
                 crate::Collection::Schedule,

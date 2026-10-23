@@ -202,7 +202,7 @@ impl DefraRenderedRequestSink {
         {
             let stored: Value = serde_json::from_str(stored)
                 .context("decoding stored InferenceCall context_accounting_json")?;
-            let incoming: Value = serde_json::from_str(&accounting_json)
+            let incoming: Value = serde_json::from_str(accounting_json)
                 .context("decoding incoming InferenceCall context_accounting_json")?;
             if canonical_json(&stored) == canonical_json(&incoming) {
                 return Ok(());
@@ -226,7 +226,7 @@ impl DefraRenderedRequestSink {
                     }}
                 ) {{ _docID }}
             }}"#,
-            accounting_json = escape_graphql_string(&accounting_json),
+            accounting_json = escape_graphql_string(accounting_json),
         );
         let response = txn.execute(&mutation).await?;
         if !response

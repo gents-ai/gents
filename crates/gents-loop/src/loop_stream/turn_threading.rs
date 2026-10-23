@@ -125,7 +125,7 @@ pub(super) fn close_streaming_turn(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
 
@@ -136,7 +136,6 @@ mod tests {
         })
         .to_string()
     }
-    #[cfg(feature = "native")]
     #[test]
     fn every_profile_projects_a_bounded_image_result() {
         use crate::backend_provider::BackendProviderKind as Provider;

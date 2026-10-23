@@ -410,3 +410,69 @@ fn workspace_permission_saves_are_strict_and_finish_submitted_mutations() {
     invalid["taskId"] = "another-task".into();
     assert!(decode(invalid).is_err());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_provenance_read_reaches_the_existing_lineage_owner() {
+    let (core, _directory, parent_doc_id) = crate::tests::support::seed_provenance_fixture().await;
+    let host = Arc::new(ClientHost::new(core.clone()));
+    let wire_command = json!({
+        "name": "desktop_session_provenance", "args": { "request": {
+            "nodeDid": crate::tests::support::OPERATOR,
+            "sessionId": "sess_parent",
+            "requesterDid": crate::tests::support::OPERATOR
+        }}
+    });
+    let command: protocol::ClientCommand = serde_json::from_value(wire_command.clone()).unwrap();
+    assert!(command.is_cancellable());
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let task = tokio::spawn(host.serve(server, CancellationToken::new()));
+    let mut client = LengthDelimitedCodec::builder()
+        .max_frame_length(protocol::MAX_FRAME_BYTES)
+        .new_framed(client);
+    client
+        .send(Bytes::from(
+            serde_json::to_vec(&json!({
+                "kind": "hello", "version": protocol::PROTOCOL_VERSION
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let hello: Value = serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+    assert!(hello["commands"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("desktop_session_provenance")));
+    client
+        .send(Bytes::from(
+            serde_json::to_vec(&json!({
+                "kind": "call", "id": 41, "command": wire_command
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let observed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let response: Value =
+                serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
+            if response["kind"] == "response" && response["id"] == 41 {
+                assert!(response["error"].is_null(), "{response}");
+                break response["result"].clone();
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(observed["sessionId"], "sess_parent");
+    let started = observed["started"].as_array().unwrap();
+    assert_eq!(started.len(), 2);
+    assert!(started
+        .iter()
+        .all(|link| link["causeRequestDocId"] == parent_doc_id));
+    assert!(started.iter().any(|link| link["sessionId"] == "sess_child"));
+    assert!(started.iter().any(|link| link["sessionId"] == "sess_peer"));
+    drop(client);
+    task.await.unwrap().unwrap();
+    core.shutdown().await.unwrap();
+}

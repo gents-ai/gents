@@ -1,6 +1,6 @@
 #[cfg(test)]
 use gents_desktop_core::inference::backend_config_view;
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 
 use chrono::Utc;
 use gents::{BashMode, FileToolMode};
@@ -42,7 +42,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .await
         .map(|requests| requests.into_iter().map(Into::into).collect())
         .ok();
-    let peer_statuses_by_id: HashMap<String, ClientPeerStatus> = sync_state
+    let peer_statuses_by_id: RapidHashMap<String, ClientPeerStatus> = sync_state
         .peers
         .iter()
         .cloned()

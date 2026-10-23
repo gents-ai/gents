@@ -26,7 +26,10 @@ async fn flush_received_title_partial(context: &str) -> Result<()> {
 }
 
 #[derive(Clone)]
-pub(super) struct AuxiliaryTask<M: crate::llm::rig_compat::ProviderModel> {
+pub(super) struct AuxiliaryTask<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     node: Arc<EmbeddedNode>,
     agent_config: Arc<crate::config::ResolvedAgent>,
     provider_family: Option<String>,
@@ -45,7 +48,10 @@ enum AuxiliaryResult {
     Interrupted,
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
+impl<M> AgentDaemon<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     pub(super) fn auxiliary_task(&self) -> AuxiliaryTask<M> {
         AuxiliaryTask {
             node: Arc::clone(&self.node),
@@ -132,7 +138,18 @@ fn title_attempt_is_retryable(error: &anyhow::Error) -> bool {
         || error.is::<crate::agent::loop_stream::OneShotNoVisibleOutput>()
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
+struct TitleGeneration<'a> {
+    request_id: &'a str,
+    fallback_source: &'a str,
+    prompt: &'a str,
+    config: crate::agent::loop_stream::LoopConfig,
+    parent_requester_did: Option<String>,
+}
+
+impl<M> AuxiliaryTask<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     async fn run(self, request: AgentRequest, shutdown: watch::Receiver<bool>) -> Result<()> {
         self.run_owned(request, shutdown, None).await.map(|_| ())
     }
@@ -420,11 +437,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
                     return Ok(AuxiliaryResult::Skipped);
                 };
                 self.generate_with_fallback(
-                    &request.request_id,
-                    &source,
-                    &prompt,
-                    config,
-                    parent.requester_did,
+                    TitleGeneration {
+                        request_id: &request.request_id,
+                        fallback_source: &source,
+                        prompt: &prompt,
+                        config,
+                        parent_requester_did: parent.requester_did,
+                    },
                     shutdown,
                     &mut interrupt_rx,
                 )
@@ -436,14 +455,17 @@ impl<M: crate::llm::rig_compat::ProviderModel> AuxiliaryTask<M> {
 
     async fn generate_with_fallback(
         &self,
-        request_id: &str,
-        fallback_source: &str,
-        prompt: &str,
-        config: crate::agent::loop_stream::LoopConfig,
-        parent_requester_did: Option<String>,
+        generation: TitleGeneration<'_>,
         mut shutdown: watch::Receiver<bool>,
         interrupt_rx: &mut watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<AuxiliaryResult> {
+        let TitleGeneration {
+            request_id,
+            fallback_source,
+            prompt,
+            config,
+            parent_requester_did,
+        } = generation;
         let mut last_error = None;
         for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
             if *shutdown.borrow() {

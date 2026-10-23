@@ -3,6 +3,7 @@ import type {
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
 import { useListWindow } from "@source-inc/gents-desktop-ui";
+import type { ReactNode } from "react";
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
@@ -16,8 +17,10 @@ export const MessageList = memo(function MessageList({
   scrollElement,
   compactTools = false,
   onEditUserMessage,
+  renderAfterItem,
 }: {
   timelineItems: RenderedTimelineItem[];
+  renderAfterItem?: (item: RenderedTimelineItem) => ReactNode;
   timelineIdentity?: string | null;
   requestCancelCause?: DerivedCancelCauseView | null;
   scrollElement?: HTMLElement | null;
@@ -78,6 +81,7 @@ export const MessageList = memo(function MessageList({
                 compactTools={compactTools}
                 animateAssistantReveal={item.itemKey === revealAssistantItemKey}
               />
+              {renderAfterItem?.(item)}
             </li>
           );
         })}
@@ -92,6 +96,4 @@ export const MessageList = memo(function MessageList({
   );
 });
 
-function estimateItemSize() {
-  return 120;
-}
+const estimateItemSize = () => 120;

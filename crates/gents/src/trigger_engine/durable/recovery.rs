@@ -1,6 +1,6 @@
 use super::{
     assignment_replaced, observe_goal_outcome_binding, outcome_published, stage_outcome,
-    FIRE_FIELDS,
+    OutcomeStage, FIRE_FIELDS,
 };
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -72,11 +72,13 @@ pub(crate) async fn recover_outcomes_in_txn(
             stage_outcome(
                 txn,
                 &fire,
-                binding.as_ref(),
-                assignment_replaced(&fire, binding.as_ref()),
-                status.is_terminal(),
-                status.as_str(),
-                reason,
+                OutcomeStage {
+                    goal: binding.as_ref(),
+                    assignment_replaced: assignment_replaced(&fire, binding.as_ref()),
+                    request_terminal: status.is_terminal(),
+                    terminal_state: status.as_str(),
+                    reason,
+                },
                 &now,
             )
             .await?,
@@ -166,8 +168,10 @@ mod tests {
                             }})).await?;
                     }
                     if !case["pre"]["outcomes"].as_array().unwrap().is_empty() {
-                        stage_outcome(txn, fire, None, false, terminal,
-                            state, state, "2026-01-01T00:00:01Z").await?;
+                        stage_outcome(txn, fire, OutcomeStage {
+                            goal: None, assignment_replaced: false, request_terminal: terminal,
+                            terminal_state: state, reason: state,
+                        }, "2026-01-01T00:00:01Z").await?;
                     }
                     Ok(())
                 })

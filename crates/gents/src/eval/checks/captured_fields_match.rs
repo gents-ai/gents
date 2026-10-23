@@ -28,7 +28,10 @@ fn one() -> usize {
     1
 }
 
-fn some<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+fn some<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
     Value::deserialize(deserializer).map(Some)
 }
 

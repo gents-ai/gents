@@ -160,9 +160,10 @@ fn record_trigger_cursor_batch_query() {
 }
 
 #[cfg(test)]
-pub(crate) async fn count_trigger_cursor_batch_queries<F: std::future::Future>(
-    future: F,
-) -> (F::Output, usize) {
+pub(crate) async fn count_trigger_cursor_batch_queries<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
     let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = TRIGGER_CURSOR_BATCH_QUERIES
         .scope(queries.clone(), future)

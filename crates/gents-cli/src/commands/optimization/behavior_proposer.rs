@@ -11,7 +11,10 @@ pub(crate) struct AgentProposer<T> {
     preamble: Mutex<Option<String>>,
 }
 
-impl<T: Turn + Send> AgentProposer<T> {
+impl<T> AgentProposer<T>
+where
+    T: Turn + Send,
+{
     pub(crate) fn with_preamble(turn: T, preamble: String) -> Self {
         Self {
             turn: Mutex::new(turn),
@@ -21,7 +24,10 @@ impl<T: Turn + Send> AgentProposer<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: Turn + Send> Proposer for AgentProposer<T> {
+impl<T> Proposer for AgentProposer<T>
+where
+    T: Turn + Send,
+{
     async fn propose(&self, input: ProposalInput) -> Result<Proposal> {
         let mut turn = self.turn.lock().await;
         if let Some(preamble) = self.preamble.lock().await.take() {

@@ -5,20 +5,30 @@ use crate::lifecycle::materialize::{
 };
 use crate::lifecycle::{TriggerLineage, WorkspaceLineage};
 
+pub(super) struct SessionRequestFields<'a> {
+    pub(super) agent_id: &'a str,
+    pub(super) content: &'a str,
+    pub(super) execution_origin: ExecutionOrigin,
+    pub(super) input: RequestInput,
+    pub(super) request_id: &'a str,
+    pub(super) created_at: &'a str,
+    pub(super) retry_key: Option<&'a str>,
+}
+
 #[cfg(test)]
 pub(super) async fn session_request_create_mutation(
     parent: &AgentRequest,
-    agent_id: &str,
-    content: &str,
-    execution_origin: ExecutionOrigin,
-    input: RequestInput,
-    request_id: &str,
-    created_at: &str,
-    retry_key: Option<&str>,
+    fields: SessionRequestFields<'_>,
 ) -> Result<String> {
-    session_request_create_mutation_at_hop(
-        parent,
-        parent.request_hop,
+    session_request_create_mutation_at_hop(parent, parent.request_hop, fields).await
+}
+
+pub(super) async fn session_request_create_mutation_at_hop(
+    parent: &AgentRequest,
+    hop: u32,
+    fields: SessionRequestFields<'_>,
+) -> Result<String> {
+    let SessionRequestFields {
         agent_id,
         content,
         execution_origin,
@@ -26,22 +36,7 @@ pub(super) async fn session_request_create_mutation(
         request_id,
         created_at,
         retry_key,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn session_request_create_mutation_at_hop(
-    parent: &AgentRequest,
-    hop: u32,
-    agent_id: &str,
-    content: &str,
-    execution_origin: ExecutionOrigin,
-    input: RequestInput,
-    request_id: &str,
-    created_at: &str,
-    retry_key: Option<&str>,
-) -> Result<String> {
+    } = fields;
     anyhow::ensure!(
         !parent.request_id.trim().is_empty() && !parent.doc_id.trim().is_empty(),
         "cannot enqueue runtime control continuation from an unbound parent request"

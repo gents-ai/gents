@@ -7,7 +7,10 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
         Some("deliver {{ event.item }} for {{ args.owner }} from {{ node.node_did }}".to_string());
     task.goal_token_budget = Some(4_096);
     let schedule = resolved_schedule("sched-goal", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-goal".to_string(), schedule)]));
+    let snapshot = snapshot_with_schedules(RapidHashMap::from_iter([(
+        "sched-goal".to_string(),
+        schedule,
+    )]));
     let expected_did = snapshot.local_did.clone();
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
@@ -34,9 +37,8 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
     assert!(matches!(result, FireResult::Fired { .. }), "{result:?}");
     assert_eq!(
         materializer.calls()[0].2,
-        format!(
-            "[scheduled trigger:sched-goal · task:t1 · at:2030-01-01T00:00:00Z]\n\nwork on release for runtime"
-        )
+        "[scheduled trigger:sched-goal · task:t1 · at:2030-01-01T00:00:00Z]\n\nwork on release for runtime"
+            .to_string()
     );
     assert_eq!(
         materializer.goal_objectives(),
@@ -56,8 +58,10 @@ async fn latest_only_goal_fire_retry_does_not_supersede_its_own_request() {
         task.clone(),
         ConcurrencyMode::LatestOnly,
     );
-    let snapshot =
-        snapshot_with_schedules(HashMap::from([("sched-goal-retry".to_string(), schedule)]));
+    let snapshot = snapshot_with_schedules(RapidHashMap::from_iter([(
+        "sched-goal-retry".to_string(),
+        schedule,
+    )]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     materializer.track_materialized_nonterminal();
@@ -114,11 +118,11 @@ async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
         goal_token_budget: None,
         ..goal_task.clone()
     };
-    let first_snapshot = snapshot_with_schedules(HashMap::from([(
+    let first_snapshot = snapshot_with_schedules(RapidHashMap::from_iter([(
         "sched-goal-reconfigured".to_string(),
         resolved_schedule("sched-goal-reconfigured", goal_task.clone()),
     )]));
-    let retry_snapshot = snapshot_with_schedules(HashMap::from([(
+    let retry_snapshot = snapshot_with_schedules(RapidHashMap::from_iter([(
         "sched-goal-reconfigured".to_string(),
         resolved_schedule("sched-goal-reconfigured", ordinary_task.clone()),
     )]));
@@ -189,16 +193,16 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             "general".to_string(),
             vec![agent],
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
         )
         .with_automation(crate::runtime_snapshot::ResolvedAutomation {
-            event_triggers: HashMap::from([("group-trigger".to_string(), trigger)]),
+            event_triggers: RapidHashMap::from_iter([("group-trigger".to_string(), trigger)]),
             ..Default::default()
         })
         .with_node(stub_principal())
-        .activate(1, HashMap::new()),
+        .activate(1, RapidHashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
@@ -262,16 +266,16 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             "general".to_string(),
             vec![agent],
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
         )
         .with_automation(crate::runtime_snapshot::ResolvedAutomation {
-            event_triggers: HashMap::from([("event-1".to_string(), trigger)]),
+            event_triggers: RapidHashMap::from_iter([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
         .with_node(stub_principal())
-        .activate(1, HashMap::new()),
+        .activate(1, RapidHashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
@@ -320,16 +324,16 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             "general".to_string(),
             vec![agent],
-            HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
+            RapidHashMap::new(),
         )
         .with_automation(crate::runtime_snapshot::ResolvedAutomation {
-            event_triggers: HashMap::from([("event-1".to_string(), trigger)]),
+            event_triggers: RapidHashMap::from_iter([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
         .with_node(stub_principal())
-        .activate(1, HashMap::new()),
+        .activate(1, RapidHashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
@@ -394,7 +398,8 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
 async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materialize_finishes() {
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
+    let snapshot =
+        snapshot_with_schedules(RapidHashMap::from_iter([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
@@ -490,7 +495,8 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
 async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
     let task = resolved_task("{{ event.missing_field }}");
     let schedule = resolved_schedule("sched-1", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-1".to_string(), schedule)]));
+    let snapshot =
+        snapshot_with_schedules(RapidHashMap::from_iter([("sched-1".to_string(), schedule)]));
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     let engine = TriggerEngine::new(rx, materializer.clone());
@@ -549,7 +555,10 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
 async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-did", task.clone());
-    let snapshot = snapshot_with_schedules(HashMap::from([("sched-did".to_string(), schedule)]));
+    let snapshot = snapshot_with_schedules(RapidHashMap::from_iter([(
+        "sched-did".to_string(),
+        schedule,
+    )]));
     let expected_did = snapshot
         .agent("general")
         .expect("test snapshot resolves the general agent")
@@ -609,7 +618,7 @@ async fn scheduled_target_uses_stable_receipt_and_actual_session_template_scope(
     let mut schedule = resolved_schedule("wake", task.clone());
     schedule.session_id_template = Some("captain-session".into());
     schedule.concurrency = ConcurrencyMode::QueuedSerial;
-    let snapshot = snapshot_with_schedules(HashMap::from([("wake".into(), schedule)]));
+    let snapshot = snapshot_with_schedules(RapidHashMap::from_iter([("wake".into(), schedule)]));
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: snapshot.agent("general").unwrap().node_did().to_string(),
         trigger_id: "wake".into(),

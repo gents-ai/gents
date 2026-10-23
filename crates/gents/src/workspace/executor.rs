@@ -64,7 +64,7 @@ pub enum HostExecuteError {
     Failed {
         reason: String,
         identity_mismatch: bool,
-        outcome: Option<CreateWorkspaceOutcome>,
+        outcome: Option<Box<CreateWorkspaceOutcome>>,
     },
 }
 
@@ -94,7 +94,7 @@ impl HostExecuteError {
         Self::Failed {
             reason: reason.into(),
             identity_mismatch,
-            outcome,
+            outcome: outcome.map(Box::new),
         }
     }
 
@@ -110,7 +110,7 @@ impl HostExecuteError {
 
     pub fn outcome(&self) -> Option<&CreateWorkspaceOutcome> {
         match self {
-            Self::Failed { outcome, .. } => outcome.as_ref(),
+            Self::Failed { outcome, .. } => outcome.as_deref(),
             Self::Denied { .. } => None,
         }
     }
@@ -413,6 +413,10 @@ fn create_workspace_action(
     Ok(outcome)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "provisioning results recorded into one document set"
+)]
 fn persist_docs(
     action: &CreateWorkspaceAction,
     identity: &LogicalWorkspaceIdentity,

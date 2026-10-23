@@ -466,10 +466,13 @@ fn parse_runtime_states(response: &QueryResponse) -> Result<BTreeMap<String, (St
     )
 }
 
-fn config_documents<T: serde::de::DeserializeOwned>(
+fn config_documents<T>(
     response: &QueryResponse,
     collection: crate::collection::Collection,
-) -> Result<BTreeMap<(String, String), T>> {
+) -> Result<BTreeMap<(String, String), T>>
+where
+    T: serde::de::DeserializeOwned,
+{
     let name = collection.graphql_type();
     let (fields, _) = crate::config_client::config_projection(collection, None)?;
     let source = response

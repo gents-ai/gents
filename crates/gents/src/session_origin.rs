@@ -63,11 +63,10 @@ pub struct SessionLineage {
 
 const SCOPE_FIELDS: &str = "_docID node_did session_id requester_did";
 
-async fn collection<R: ConfigRead + ?Sized>(
-    access: &R,
-    query: &str,
-    name: &str,
-) -> Result<Vec<Value>> {
+async fn collection<R>(access: &R, query: &str, name: &str) -> Result<Vec<Value>>
+where
+    R: ConfigRead + ?Sized,
+{
     Ok(access
         .execute_read(query)
         .await?
@@ -107,10 +106,13 @@ impl From<&AgentSession> for SessionScope {
     }
 }
 
-pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
+pub async fn request_scopes<'a, R>(
     access: &R,
     doc_ids: impl IntoIterator<Item = &'a str>,
-) -> Result<Vec<(String, SessionScope)>> {
+) -> Result<Vec<(String, SessionScope)>>
+where
+    R: ConfigRead + ?Sized,
+{
     let doc_ids = doc_ids
         .into_iter()
         .collect::<BTreeSet<_>>()

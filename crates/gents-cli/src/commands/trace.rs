@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::fs;
 
 use anyhow::{Context, Result};
@@ -393,7 +393,7 @@ struct TraceToolSelection {
 async fn trace_export(args: TraceExportArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let mut timelines = HashMap::new();
+    let mut timelines = RapidHashMap::new();
     let requested = if let Some(request_id) = args.request_id.as_deref() {
         let rows = load_run_timeline_rows(&access, request_id).await?;
         if let Some(session_id) = args.session_id.as_deref() {
@@ -587,11 +587,10 @@ fn build_record(
     })
 }
 
-async fn load_rows<T: DeserializeOwned>(
-    access: &ConfigAccess,
-    collection: &str,
-    query: &str,
-) -> Result<Vec<T>> {
+async fn load_rows<T>(access: &ConfigAccess, collection: &str, query: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
     graphql_rows_or_empty_if_collection_missing(access, collection, query)
         .await?
         .into_iter()
@@ -606,7 +605,10 @@ fn push_nonempty(parts: &mut Vec<String>, value: Option<&str>) {
     }
 }
 
-fn write_jsonl<T: Serialize>(path: Option<&std::path::Path>, records: &[T]) -> Result<()> {
+fn write_jsonl<T>(path: Option<&std::path::Path>, records: &[T]) -> Result<()>
+where
+    T: Serialize,
+{
     let mut output = String::new();
     for record in records {
         output.push_str(&serde_json::to_string(record)?);

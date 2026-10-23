@@ -17,7 +17,7 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
     let expected_slot = position.slot_request_doc_id.clone();
     anyhow::ensure!(!expected_slot.is_empty(), InvalidQueuePosition);
     let mut current = row.clone();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = rapidhash::RapidHashSet::default();
     loop {
         let current_id = current.doc_id.as_deref().ok_or(InvalidQueuePosition)?;
         anyhow::ensure!(visited.insert(current_id.to_owned()), InvalidQueuePosition);

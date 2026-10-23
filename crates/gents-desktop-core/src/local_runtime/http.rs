@@ -22,7 +22,10 @@ pub(super) async fn peer_status(
     http_get_json(client, &url).await.map(Some)
 }
 
-pub(super) fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+pub(super) fn read_json<T>(path: &Path) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
 }
@@ -35,10 +38,10 @@ pub(super) fn p2p_api_base(graphql: &str) -> Result<String> {
         .with_context(|| format!("expected GraphQL endpoint ending in /graphql, got {graphql}"))
 }
 
-pub(super) async fn http_get_json<T: for<'de> Deserialize<'de>>(
-    client: &reqwest::Client,
-    url: &str,
-) -> Result<T> {
+pub(super) async fn http_get_json<T>(client: &reqwest::Client, url: &str) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
     let response = client.get(url).send().await.map_err(|error| {
         if error.is_connect() {
             anyhow::Error::from(error).context(format!(

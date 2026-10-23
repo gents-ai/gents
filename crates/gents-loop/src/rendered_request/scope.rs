@@ -693,29 +693,31 @@ mod tests {
             .await
             .expect("bounded auxiliary cancellation drain")
             .unwrap());
-            let events = observed
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            assert_eq!(events.len(), 4);
-            assert!(events.iter().all(|event| {
-                (event.capture_scope, event.turn, event.attempt) == (capture_scope, 0, 0)
-            }));
-            assert!(matches!(
-                events[0].event,
-                AuxiliaryOutputEvent::AttemptStarted
-            ));
-            assert!(matches!(
-                events[1].event,
-                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
-            ));
-            assert!(matches!(
-                events[2].event,
-                AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { .. })
-            ));
-            assert!(matches!(
-                events[3].event,
-                AuxiliaryOutputEvent::ClosePartial
-            ));
+            {
+                let events = observed
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                assert_eq!(events.len(), 4);
+                assert!(events.iter().all(|event| {
+                    (event.capture_scope, event.turn, event.attempt) == (capture_scope, 0, 0)
+                }));
+                assert!(matches!(
+                    events[0].event,
+                    AuxiliaryOutputEvent::AttemptStarted
+                ));
+                assert!(matches!(
+                    events[1].event,
+                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::BlockStart { .. })
+                ));
+                assert!(matches!(
+                    events[2].event,
+                    AuxiliaryOutputEvent::Audit(ClaudeAuditEvent::Signature { .. })
+                ));
+                assert!(matches!(
+                    events[3].event,
+                    AuxiliaryOutputEvent::ClosePartial
+                ));
+            }
             assert!(!flush_received_auxiliary_partial().await.unwrap());
         })
         .await;

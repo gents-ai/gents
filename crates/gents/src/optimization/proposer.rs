@@ -76,7 +76,7 @@ impl Proposer for ScriptedProposer {
                 rationale: "unchanged".to_owned(),
             });
         }
-        let index = (round as usize).checked_sub(1).unwrap_or(0);
+        let index = (round as usize).saturating_sub(1);
         let (text, rationale) = self.script.get(index).ok_or_else(|| {
             anyhow::anyhow!("the scripted proposer has no answer for round {round}")
         })?;

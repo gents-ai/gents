@@ -51,10 +51,12 @@ fn ensure_exact_integers(raw: &serde_json::value::RawValue) -> Result<()> {
                 ensure_exact_integers(value)?;
             }
         }
-        Some(b'-' | b'0'..=b'9') if !text.contains(['.', 'e', 'E']) => {
-            if text.parse::<i64>().is_err() && text.parse::<u64>().is_err() {
-                bail!("--json integer is outside the exact i64/u64 range; encode it as a string");
-            }
+        Some(b'-' | b'0'..=b'9')
+            if !text.contains(['.', 'e', 'E'])
+                && text.parse::<i64>().is_err()
+                && text.parse::<u64>().is_err() =>
+        {
+            bail!("--json integer is outside the exact i64/u64 range; encode it as a string");
         }
         _ => {}
     }

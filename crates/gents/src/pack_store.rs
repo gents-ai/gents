@@ -695,7 +695,11 @@ struct TeeReader<R, W> {
     copy: W,
 }
 
-impl<R: Read, W: Write> Read for TeeReader<R, W> {
+impl<R, W> Read for TeeReader<R, W>
+where
+    R: Read,
+    W: Write,
+{
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.copy.write_all(&buf[..n])?;

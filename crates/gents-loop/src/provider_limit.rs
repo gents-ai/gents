@@ -269,7 +269,7 @@ fn openrouter_payment_required(
 fn has_status(lower: &str, code: Option<&str>) -> bool {
     STATUS_PREFIXES.iter().any(|prefix| {
         lower.match_indices(prefix).any(|(at, _)| {
-            let rest = lower[at + prefix.len()..].as_bytes();
+            let rest = &lower.as_bytes()[at + prefix.len()..];
             rest.len() >= 3
                 && rest[..3].iter().all(u8::is_ascii_digit)
                 && !rest.get(3).is_some_and(u8::is_ascii_digit)

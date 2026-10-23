@@ -238,7 +238,7 @@ pub(crate) async fn resolve_send_target(
         return Ok(None);
     };
     Ok(
-        session_target_allowed(&session, caller_node_did, tools).then(|| SessionMessageTarget {
+        session_target_allowed(&session, caller_node_did, tools).then_some(SessionMessageTarget {
             node_did: session.node_did,
             agent_id: session.agent_id,
             session_id: session.session_id,
@@ -717,7 +717,7 @@ pub(crate) async fn load_receipt(
 }
 
 pub(crate) enum CausedObservation {
-    Bound(gents_protocol::row::AgentRequestRow),
+    Bound(Box<gents_protocol::row::AgentRequestRow>),
     NotVisible,
     Unbound(&'static str),
 }
@@ -781,7 +781,7 @@ pub(crate) async fn observe_caused_request(
             "the receipt names a request that does not carry this call's lineage",
         ));
     }
-    Ok(CausedObservation::Bound(caused))
+    Ok(CausedObservation::Bound(Box::new(caused)))
 }
 
 pub fn agent_interrupt_allowed(
@@ -967,7 +967,7 @@ pub(crate) async fn kill(
     {
         let calling_request_id = calling_request_id(node, lifecycle).await?;
         crate::background_completion::append_background_tool_completion(
-            &node,
+            node,
             lifecycle.session_id(),
             &calling_request_id,
             lifecycle

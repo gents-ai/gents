@@ -449,7 +449,7 @@ pub async fn init_standard_local_runtime(
     let discovery = discover_standard_runtime(&options.node_home).await?;
 
     let peer = initialize_local_standard_peer(
-        &options.desktop_paths.peer_directory_path(),
+        options.desktop_paths.peer_directory_path(),
         &options.label,
         &discovery.p2p_listen_address,
         &discovery.node_did,

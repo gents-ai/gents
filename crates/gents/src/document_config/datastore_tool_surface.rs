@@ -63,7 +63,7 @@ pub async fn list_datastore_tool_surfaces(
         .and_then(|data| data.get("DatastoreToolSurface"))
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("surface query returned no row array"))?;
-    let mut ids = std::collections::HashSet::new();
+    let mut ids = rapidhash::RapidHashSet::default();
     rows.iter()
         .map(|row| {
             let surface: DatastoreToolSurfaceDocument = serde_json::from_value(row.clone())?;

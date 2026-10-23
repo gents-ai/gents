@@ -49,6 +49,12 @@ def cases : List Case :=
       rows := [entry, {wake with openingGoals := [1]}, continued], current := 30}
   , {name := "goal_path_cannot_borrow_another_goals_wake_opening",
       rows := [entry, {wake with openingGoals := [2]}, continued], current := 30}
+  , {name := "first_continuation_opens_assignment_without_reclassifying_parent",
+      rows := [entry, {request := child, openingGoals := [1]}]}
+  , {name := "later_continuation_keeps_continuation_opening",
+      rows := [entry, {request := child, openingGoals := [1]}, continued], current := 30}
+  , {name := "continuation_opening_still_requires_verified_edge",
+      rows := [entry, {request := {child with receiptValid := false}, openingGoals := [1]}]}
   ]
 
 def rowValue (r : AssignmentRow) : Json := Json.mkObj
@@ -67,7 +73,10 @@ def casesJson : String := (toJson (cases.map caseJson)).compress
 example : (cases.map fun c => assignmentEntry 1 1 c.rows c.expectedGoal c.current).take 8 =
     [some 10, some 20, some 20, some 20, some 10, some 10, none, none] := by native_decide
 
-example : (cases.drop 14).map (fun c => assignmentEntry 1 1 c.rows c.expectedGoal c.current) =
+example : ((cases.drop 14).take 2).map (fun c => assignmentEntry 1 1 c.rows c.expectedGoal c.current) =
     [some 20, none] := by native_decide
+
+example : (cases.drop 16).map (fun c => assignmentEntry 1 1 c.rows c.expectedGoal c.current) =
+    [some 20, some 20, none] := by native_decide
 
 end Conformance.GoalWakeAncestryContracts

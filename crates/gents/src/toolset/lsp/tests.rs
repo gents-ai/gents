@@ -151,10 +151,12 @@ fn tool_surface_includes_lsp_when_policy_allows() {
         "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
     )
     .unwrap();
-    let mut selection = ResolvedToolSelection::default();
-    selection.enable_lsp = true;
-    selection.file_tools = FileToolMode::ReadOnly;
-    selection.file_tool_root = Some(root.path().to_path_buf());
+    let selection = ResolvedToolSelection {
+        enable_lsp: true,
+        file_tools: FileToolMode::ReadOnly,
+        file_tool_root: Some(root.path().to_path_buf()),
+        ..Default::default()
+    };
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
         AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
@@ -165,10 +167,12 @@ fn tool_surface_includes_lsp_when_policy_allows() {
 #[test]
 fn tool_surface_omits_lsp_when_disabled() {
     let root = tempfile::tempdir().unwrap();
-    let mut selection = ResolvedToolSelection::default();
-    selection.enable_lsp = false;
-    selection.file_tools = FileToolMode::ReadOnly;
-    selection.file_tool_root = Some(root.path().to_path_buf());
+    let selection = ResolvedToolSelection {
+        enable_lsp: false,
+        file_tools: FileToolMode::ReadOnly,
+        file_tool_root: Some(root.path().to_path_buf()),
+        ..Default::default()
+    };
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
         AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
@@ -895,10 +899,12 @@ fn readonly_surface_uses_file_tool_root_not_cwd() {
         "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
     )
     .unwrap();
-    let mut selection = ResolvedToolSelection::default();
-    selection.enable_lsp = true;
-    selection.file_tools = FileToolMode::ReadOnly;
-    selection.file_tool_root = Some(root.path().to_path_buf());
+    let selection = ResolvedToolSelection {
+        enable_lsp: true,
+        file_tools: FileToolMode::ReadOnly,
+        file_tool_root: Some(root.path().to_path_buf()),
+        ..Default::default()
+    };
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
         AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
@@ -2324,7 +2330,7 @@ exec sleep 30
         std::time::Duration::from_secs(10),
         super::actions::run_linter_diagnostics(
             &config,
-            &[server.clone()],
+            std::slice::from_ref(&server),
             &source,
             std::time::Duration::from_millis(200),
         ),
@@ -2671,7 +2677,8 @@ fn missing_host_executable_is_not_detected() {
         workspace_ready_timings: None,
         warmup_timeout_ms: None,
     };
-    let message = catalog::unavailable_servers_message(root.path(), &[missing.clone()], None);
+    let message =
+        catalog::unavailable_servers_message(root.path(), std::slice::from_ref(&missing), None);
     assert!(message.contains("ghost-ls"), "{message}");
     assert!(message.contains("executable"), "{message}");
     let detected = catalog::detect_admitted_servers(root.path(), &[missing]);

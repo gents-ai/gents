@@ -1,8 +1,10 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+
+const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub(super) struct HttpRequestData {
@@ -43,12 +45,17 @@ impl HttpResponse {
     }
 }
 
-pub(super) fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+async fn read_some(stream: &mut TcpStream, buffer: &mut [u8]) -> Result<usize> {
+    Ok(tokio::time::timeout(READ_TIMEOUT, stream.read(buffer))
+        .await
+        .context("timed out reading the request")??)
+}
+
+pub(super) async fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestData> {
     let mut buffer = Vec::new();
     let mut temp = [0_u8; 1024];
     let header_end = loop {
-        let read = stream.read(&mut temp)?;
+        let read = read_some(stream, &mut temp).await?;
         if read == 0 {
             anyhow::bail!("connection closed before headers");
         }
@@ -80,7 +87,7 @@ pub(super) fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestDat
         .ok_or_else(|| anyhow!("missing request path"))?
         .to_string();
     while buffer.len() < header_end + content_length {
-        let read = stream.read(&mut temp)?;
+        let read = read_some(stream, &mut temp).await?;
         if read == 0 {
             break;
         }
@@ -93,7 +100,7 @@ pub(super) fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequestDat
     Ok(HttpRequestData { method, path, body })
 }
 
-pub(super) fn write_http_response(
+pub(super) async fn write_http_response(
     stream: &mut TcpStream,
     status: &str,
     content_type: &str,
@@ -103,8 +110,8 @@ pub(super) fn write_http_response(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Max-Age: 600\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    stream.write_all(response.as_bytes())?;
-    stream.flush()?;
+    stream.write_all(response.as_bytes()).await?;
+    stream.flush().await?;
     Ok(())
 }
 

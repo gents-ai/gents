@@ -185,13 +185,10 @@ impl GoalSource {
                     }},
                     order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
                 ) {{
-                    _docID goal_id session_id node_did objective status token_budget tokens_used
-                    active_time_seconds active_started_at consecutive_blocked_audits
-                    last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence
-                    wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence
-                    auto_resume_at_reset created_at updated_at
+                    {goal_fields}
                 }}
-            }}"#
+            }}"#,
+            goal_fields = crate::goal::GOAL_FIELDS,
         );
         let response =
             graphql_with_transaction_retry(&self.node, &query, "query Goal rows").await?;
@@ -689,7 +686,7 @@ impl GoalSource {
                     {signed_fields}
                 }}
             }}"#,
-            signed_fields = format!(
+            signed_fields = format_args!(
                 "{} failure_reason terminalized_at",
                 crate::request_admission::SIGNED_REQUEST_FIELDS
             ),

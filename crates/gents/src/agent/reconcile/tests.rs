@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashMap};
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -58,7 +59,7 @@ async fn snapshot_for_agents_with_node(
     agents: Vec<Arc<ResolvedAgent>>,
     runtime_node: Arc<RuntimeNode>,
 ) -> ResolvedRuntimeSnapshot {
-    let mut tool_surfaces = HashMap::new();
+    let mut tool_surfaces = RapidHashMap::new();
     for agent_config in &agents {
         let tool_surface = agent_config
             .tools
@@ -71,7 +72,7 @@ async fn snapshot_for_agents_with_node(
         default_agent_id.to_string(),
         agents,
         tool_surfaces,
-        HashMap::new(),
+        RapidHashMap::new(),
     )
     .with_node(runtime_node)
 }
@@ -80,9 +81,9 @@ async fn snapshot_for_agents_with_admission(
     node: &Arc<defra_node::EmbeddedNode>,
     default_agent_id: &str,
     agents: Vec<Arc<ResolvedAgent>>,
-    backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
+    backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
 ) -> ResolvedRuntimeSnapshot {
-    let mut tool_surfaces = HashMap::new();
+    let mut tool_surfaces = RapidHashMap::new();
     for agent_config in &agents {
         let tool_surface = agent_config
             .tools
@@ -96,7 +97,7 @@ async fn snapshot_for_agents_with_admission(
         agents,
         tool_surfaces,
         backend_admission_configs,
-        HashMap::new(),
+        RapidHashMap::new(),
     )
     .with_node(stub_runtime_node())
 }
@@ -166,7 +167,7 @@ async fn operator_write_changes_snapshot_fingerprint() {
     let current_resolved =
         snapshot_for_agents(&node, "general", vec![Arc::new(initial_agent)]).await;
     let proposed = snapshot_for_agents(&node, "general", vec![Arc::new(updated_agent)]).await;
-    let current = current_resolved.activate(1, HashMap::new());
+    let current = current_resolved.activate(1, RapidHashMap::new());
     let diff = diff_counts(&current, &proposed);
 
     assert_ne!(
@@ -222,7 +223,7 @@ async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints()
         "reconcile must not treat a provenance-only edit as a no-op"
     );
 
-    let active_unset = unset_snapshot.activate(1, HashMap::new());
+    let active_unset = unset_snapshot.activate(1, RapidHashMap::new());
     let setting = diff_counts(&active_unset, &explicit_snapshot);
     assert_eq!(setting.updated, 1);
     assert_eq!(setting.added, 0);
@@ -233,7 +234,7 @@ async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints()
             .await;
     let unset_snapshot =
         snapshot_for_agents_with_node(&node, "general", vec![unset], runtime_node).await;
-    let active_explicit = explicit_snapshot.activate(1, HashMap::new());
+    let active_explicit = explicit_snapshot.activate(1, RapidHashMap::new());
     assert_ne!(
         active_explicit.configuration_fingerprint(),
         unset_snapshot.configuration_fingerprint(),
@@ -294,14 +295,14 @@ async fn reconcile_install_applies_added_agent() {
     let current_resolved = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         Vec::new(),
-        HashMap::new(),
-        HashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
     .with_node(stub_runtime_node());
     let proposed = snapshot_for_agents(&node, "general", vec![Arc::new(agent_config)]).await;
-    let current = current_resolved.activate(1, HashMap::new());
+    let current = current_resolved.activate(1, RapidHashMap::new());
     let diff = diff_counts(&current, &proposed);
-    let applied = proposed.clone().activate(2, HashMap::new());
+    let applied = proposed.clone().activate(2, RapidHashMap::new());
     let rediff = diff_counts(&applied, &proposed);
 
     assert_eq!(diff.added, 1, "install registers one added agent");
@@ -323,13 +324,13 @@ async fn reconcile_teardown_applies_removed_agent() {
     let proposed = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         Vec::new(),
-        HashMap::new(),
-        HashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
     .with_node(stub_runtime_node());
-    let current = current_resolved.activate(1, HashMap::new());
+    let current = current_resolved.activate(1, RapidHashMap::new());
     let diff = diff_counts(&current, &proposed);
-    let applied = proposed.clone().activate(2, HashMap::new());
+    let applied = proposed.clone().activate(2, RapidHashMap::new());
     let rediff = diff_counts(&applied, &proposed);
 
     assert_eq!(diff.removed, 1, "teardown registers one removed agent");
@@ -363,6 +364,7 @@ async fn slot_panic_restarts_agent() {
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let starts = starts.clone();
@@ -444,7 +446,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     let runner = {
         let entered = entered.clone();
         let dropped = dropped.clone();
-        move |_, _, _, _, _| {
+        move |_, _, _, _, _, _| {
             let entered = entered.clone();
             let dropped = dropped.clone();
             async move {
@@ -488,7 +490,7 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
         &node,
         "general",
         vec![Arc::new(agent_config)],
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "backend-wide".to_string(),
             backend_admission_config("backend-wide", 3, 100),
         )]),
@@ -503,6 +505,7 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let started_tx = started_tx.clone();
@@ -521,8 +524,6 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
                         return Ok(());
                     };
                     dequeued_tx.send(request.request_id.clone()).await.unwrap();
-                    let capacity = crate::agent::worker_capacity::current_slot_capacity()
-                        .expect("test runner has slot generation capacity");
                     let cancellation = tokio_util::sync::CancellationToken::new();
                     let unbound = tokio::select! {
                         _ = shutdown.changed() => return Ok(()),
@@ -630,7 +631,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
         &node,
         "general",
         vec![agent_config.clone()],
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "backend-general".to_string(),
             backend_admission_config("backend-general", 1, 100),
         )]),
@@ -640,7 +641,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
         &node,
         "general",
         vec![agent_config],
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "backend-general".to_string(),
             backend_admission_config("backend-general", 3, 100),
         )]),
@@ -650,6 +651,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let runner = move |_agent: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                        _generation: u64,
                        mut shutdown: watch::Receiver<bool>| async move {
         loop {
@@ -755,7 +757,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let admission = |connection: String| {
         let mut config = backend_admission_config("backend-general", 1, 100);
         config.config_fingerprint = connection;
-        HashMap::from([("backend-general".to_string(), config)])
+        RapidHashMap::from_iter([("backend-general".to_string(), config)])
     };
     let initial_snapshot = snapshot_for_agents_with_admission(
         &node,
@@ -778,6 +780,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let runner = move |agent_config: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                        generation: u64,
                        mut shutdown: watch::Receiver<bool>| {
         let built_tx = built_tx.clone();
@@ -915,6 +918,7 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
         move |agent_config: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let (done_tx, held_tx, release) = (done_tx.clone(), held_tx.clone(), release.clone());
@@ -1091,7 +1095,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let node_did = "did:test:reconcile-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did);
 
-    let starts = Arc::new(StdMutex::new(HashMap::<String, usize>::new()));
+    let starts = Arc::new(StdMutex::new(RapidHashMap::<String, usize>::new()));
     let mut initial_agent =
         PendingAgent::new("general").build_with_identity_for_test(test_identity("general"));
     initial_agent.system_prompt = "initial prompt".to_string();
@@ -1109,6 +1113,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         move |agent_config: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let starts = starts.clone();
@@ -1266,14 +1271,15 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let invalid_snapshot = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         valid_updated_snapshot.agents.values().cloned().collect(),
-        HashMap::new(),
-        HashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
     .with_node(stub_runtime_node());
 
     let runner = move |_agent: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                        _generation: u64,
                        mut shutdown: watch::Receiver<bool>| async move {
         loop {
@@ -1480,6 +1486,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             started_generations.lock().unwrap().push(generation);
@@ -1566,6 +1573,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let runner = move |_agent: Arc<ResolvedAgent>,
                        _tool_surface: Arc<ToolSurface>,
                        _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                        generation: u64,
                        mut shutdown: watch::Receiver<bool>| {
         let started_tx = started_tx.clone();
@@ -1671,6 +1679,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let generation_one_exit = generation_one_exit.clone();
@@ -1819,6 +1828,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
         move |_agent: Arc<ResolvedAgent>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let exited = exited.clone();
@@ -1990,6 +2000,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         move |_agent: Arc<ResolvedAgent>,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let observed_tool_names = observed_tool_names.clone();
@@ -2115,6 +2126,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let runner = |_agent: Arc<ResolvedAgent>,
                   _tool_surface: Arc<ToolSurface>,
                   _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                  _capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
                   _generation: u64,
                   mut shutdown: watch::Receiver<bool>| async move {
         let _ = shutdown.changed().await;
@@ -2266,8 +2278,8 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         ResolvedRuntimeSnapshot::from_parts(
             "general".to_string(),
             vec![Arc::clone(&agent_config)],
-            HashMap::from([("general".to_string(), surface)]),
-            HashMap::new(),
+            RapidHashMap::from_iter([("general".to_string(), surface)]),
+            RapidHashMap::new(),
         )
         .with_node(Arc::clone(&runtime_node))
     };
@@ -2279,7 +2291,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         installed_snapshot.configuration_fingerprint(),
         "installing the named plugin must change the configuration fingerprint"
     );
-    let active_absent = absent_snapshot.activate(1, HashMap::new());
+    let active_absent = absent_snapshot.activate(1, RapidHashMap::new());
     let diff = diff_counts(&active_absent, &installed_snapshot);
     assert_eq!(diff.updated, 1);
     assert_eq!(diff.added, 0);
@@ -2294,7 +2306,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
             base_delay_ms: 1,
             max_delay_ms: 1,
         },
-        |_, _, _, _, _| async { Ok(()) },
+        |_, _, _, _, _, _| async { Ok(()) },
         shutdown_rx,
     );
     assert!(

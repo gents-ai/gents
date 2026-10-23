@@ -54,16 +54,28 @@ async fn create_schedule_cadence_doc(
     .unwrap();
 }
 
+struct ScheduleFixture<'a> {
+    trigger_id: &'a str,
+    schedule_id: &'a str,
+    task_id: &'a str,
+    cadence: serde_json::Value,
+    next_run_at: Option<&'a str>,
+    concurrency: &'a str,
+}
+
 async fn create_schedule_with_next_run_at(
     node: &Arc<defra_node::EmbeddedNode>,
     owner_did: &str,
-    trigger_id: &str,
-    schedule_id: &str,
-    task_id: &str,
-    cadence: serde_json::Value,
-    next_run_at: Option<&str>,
-    concurrency: &str,
+    fixture: ScheduleFixture<'_>,
 ) -> String {
+    let ScheduleFixture {
+        trigger_id,
+        schedule_id,
+        task_id,
+        cadence,
+        next_run_at,
+        concurrency,
+    } = fixture;
     create_schedule_cadence_doc(node, owner_did, schedule_id, cadence).await;
     let mut input = serde_json::json!({
         "node_did": owner_did,
@@ -172,23 +184,27 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
     create_schedule_with_next_run_at(
         &node,
         &owner_a,
-        "shared-trigger-id",
-        "cursor-schedule-a",
-        "task-a",
-        interval_cadence_json(),
-        Some(cursor_a),
-        "serial",
+        ScheduleFixture {
+            trigger_id: "shared-trigger-id",
+            schedule_id: "cursor-schedule-a",
+            task_id: "task-a",
+            cadence: interval_cadence_json(),
+            next_run_at: Some(cursor_a),
+            concurrency: "serial",
+        },
     )
     .await;
     create_schedule_with_next_run_at(
         &node,
         owner_b,
-        "shared-trigger-id",
-        "cursor-schedule-b",
-        "task-b",
-        interval_cadence_json(),
-        Some(cursor_b),
-        "serial",
+        ScheduleFixture {
+            trigger_id: "shared-trigger-id",
+            schedule_id: "cursor-schedule-b",
+            task_id: "task-b",
+            cadence: interval_cadence_json(),
+            next_run_at: Some(cursor_b),
+            concurrency: "serial",
+        },
     )
     .await;
 
@@ -241,7 +257,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
                 resolved_schedule(&trigger_id, task.clone()),
             )
         })
-        .collect::<HashMap<_, _>>();
+        .collect::<RapidHashMap<_, _>>();
     let snapshot = snapshot_with_schedules(schedules);
     let first_trigger_id = snapshot
         .active_schedules()
@@ -254,12 +270,14 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     create_schedule_with_next_run_at(
         &node,
         &owner,
-        &first_trigger_id,
-        &first_trigger_id,
-        &task.task_id,
-        interval_cadence_json(),
-        Some(&past),
-        "serial",
+        ScheduleFixture {
+            trigger_id: &first_trigger_id,
+            schedule_id: &first_trigger_id,
+            task_id: &task.task_id,
+            cadence: interval_cadence_json(),
+            next_run_at: Some(&past),
+            concurrency: "serial",
+        },
     )
     .await;
 
@@ -295,12 +313,14 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     let trigger_doc_id = create_schedule_with_next_run_at(
         &node,
         &owner_did,
-        "sched-1",
-        "sched-1",
-        "task-1",
-        interval_cadence_json(),
-        Some(&past),
-        "serial",
+        ScheduleFixture {
+            trigger_id: "sched-1",
+            schedule_id: "sched-1",
+            task_id: "task-1",
+            cadence: interval_cadence_json(),
+            next_run_at: Some(&past),
+            concurrency: "serial",
+        },
     )
     .await;
     let persisted_next_run_at = read_trigger_cursor(node.as_ref(), &owner_did, "sched-1")
@@ -331,7 +351,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-1".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-1".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -381,12 +401,14 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     let trigger_doc_id = create_schedule_with_next_run_at(
         &node,
         &owner_did,
-        "sched-1",
-        "sched-1",
-        "task-1",
-        interval_cadence_json(),
-        Some(&initial_next_run_at),
-        "serial",
+        ScheduleFixture {
+            trigger_id: "sched-1",
+            schedule_id: "sched-1",
+            task_id: "task-1",
+            cadence: interval_cadence_json(),
+            next_run_at: Some(&initial_next_run_at),
+            concurrency: "serial",
+        },
     )
     .await;
 
@@ -417,7 +439,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-1".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-1".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -550,7 +572,7 @@ async fn schedule_source_next_fire_honors_cancellation_token() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let snapshot = snapshot_with_schedules(HashMap::new());
+    let snapshot = snapshot_with_schedules(RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())
@@ -586,12 +608,14 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     let trigger_doc_id = create_schedule_with_next_run_at(
         &node,
         &owner_did,
-        "sched-e2e",
-        "sched-e2e",
-        "task-e2e",
-        interval_cadence_json(),
-        Some(&past),
-        "serial",
+        ScheduleFixture {
+            trigger_id: "sched-e2e",
+            schedule_id: "sched-e2e",
+            task_id: "task-e2e",
+            cadence: interval_cadence_json(),
+            next_run_at: Some(&past),
+            concurrency: "serial",
+        },
     )
     .await;
 
@@ -618,7 +642,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-e2e".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-e2e".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
 
@@ -741,12 +765,14 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     let trigger_doc_id = create_schedule_with_next_run_at(
         &node,
         &owner_did,
-        "sched-null",
-        "sched-null",
-        "task-null",
-        interval_cadence_json(),
-        None,
-        "serial",
+        ScheduleFixture {
+            trigger_id: "sched-null",
+            schedule_id: "sched-null",
+            task_id: "task-null",
+            cadence: interval_cadence_json(),
+            next_run_at: None,
+            concurrency: "serial",
+        },
     )
     .await;
     let precondition = read_trigger_cursor(node.as_ref(), &owner_did, "sched-null")
@@ -779,7 +805,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-null".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-null".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -820,17 +846,19 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     let trigger_doc_id = create_schedule_with_next_run_at(
         &node,
         &owner_did,
-        "sched-cron-null",
-        "sched-cron-null",
-        "task-cron",
-        serde_json::json!({
-            "kind": "cron",
-            "expression": "30 0 * * *",
-            "timezone": "America/Los_Angeles",
-            "missed_run_policy": "latest_only"
-        }),
-        None,
-        "serial",
+        ScheduleFixture {
+            trigger_id: "sched-cron-null",
+            schedule_id: "sched-cron-null",
+            task_id: "task-cron",
+            cadence: serde_json::json!({
+                "kind": "cron",
+                "expression": "30 0 * * *",
+                "timezone": "America/Los_Angeles",
+                "missed_run_policy": "latest_only"
+            }),
+            next_run_at: None,
+            concurrency: "serial",
+        },
     )
     .await;
 
@@ -861,7 +889,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     };
     let snapshot = snapshot_with_agent_and_schedules(
         behavior,
-        HashMap::from([("sched-cron-null".to_string(), schedule)]),
+        RapidHashMap::from_iter([("sched-cron-null".to_string(), schedule)]),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
@@ -918,7 +946,7 @@ async fn schedule_source_next_fire_survives_idle_ticks_until_cancelled() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let snapshot = snapshot_with_schedules(HashMap::new());
+    let snapshot = snapshot_with_schedules(RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let cancel = CancellationToken::new();
     let mut source = ScheduleSource::new(rx, node.clone(), cancel.clone())

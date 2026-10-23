@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 use std::ops::RangeInclusive;
 
 use anyhow::Context;
@@ -143,7 +143,7 @@ pub fn validate(settings: &PluginJobSettings) -> Vec<String> {
                 .to_owned(),
         );
     }
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     for target in &settings.agent_targets {
         if target.trim().is_empty() || !seen.insert(target) {
             errors.push(format!(
@@ -200,12 +200,10 @@ pub fn validate(settings: &PluginJobSettings) -> Vec<String> {
     errors
 }
 
-fn bounded<T: Copy + PartialOrd + std::fmt::Display>(
-    errors: &mut Vec<String>,
-    field: &str,
-    value: T,
-    range: &RangeInclusive<T>,
-) {
+fn bounded<T>(errors: &mut Vec<String>, field: &str, value: T, range: &RangeInclusive<T>)
+where
+    T: Copy + PartialOrd + std::fmt::Display,
+{
     if !range.contains(&value) {
         errors.push(format!(
             "job.{field} is {value}; it must be within {}..={}",

@@ -50,6 +50,10 @@ impl Helper {
         response
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "synchronous test bounding a child process exit in real time"
+    )]
     fn exited(&mut self) -> std::process::ExitStatus {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {

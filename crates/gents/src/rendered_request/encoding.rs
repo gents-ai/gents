@@ -351,7 +351,7 @@ pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
 
 pub(crate) fn chunk_capture_payloads(payloads: [&str; 2]) -> [Vec<ChunkedBlock>; 2] {
     let ranges = payloads.map(long_json_strings);
-    let mut occurrences = std::collections::HashMap::<&str, usize>::new();
+    let mut occurrences = rapidhash::RapidHashMap::<&str, usize>::default();
     for (payload, ranges) in payloads.iter().zip(&ranges) {
         for &(start, end) in ranges {
             *occurrences.entry(&payload[start..end]).or_default() += 1;
@@ -853,7 +853,7 @@ pub(crate) fn decode_versioned_record(capture_version: u32, stored: &str) -> Res
         1 => serde_json::from_str(stored)
             .map(DecodedRecord::Legacy)
             .context("decoding legacy capture JSON"),
-        2 | 3 | 4 => decode_record(stored),
+        2..=4 => decode_record(stored),
         other => anyhow::bail!("unsupported rendered-request capture version {other}"),
     }
 }
@@ -1023,7 +1023,7 @@ mod tests {
             field_commit_cid: "commit".into(),
             byte_len: 2,
         };
-        let flat = encode_manifest(&[entry.clone()]).unwrap();
+        let flat = encode_manifest(std::slice::from_ref(&entry)).unwrap();
         let tree = encode_tree(ManifestTree {
             root: entry,
             height: 0,
@@ -1546,9 +1546,9 @@ mod tests {
         assert_eq!(reassembled, canonical);
     }
 
-    fn manifest_store(
-        blocks: &[ChunkedBlock],
-    ) -> (Vec<ManifestEntry>, BTreeMap<String, (String, Vec<u8>)>) {
+    type ChunkStore = BTreeMap<String, (String, Vec<u8>)>;
+
+    fn manifest_store(blocks: &[ChunkedBlock]) -> (Vec<ManifestEntry>, ChunkStore) {
         let mut entries = Vec::new();
         let mut store = BTreeMap::new();
         for (index, block) in blocks.iter().enumerate() {

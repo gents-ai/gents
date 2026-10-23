@@ -409,7 +409,7 @@ fn pair_closed(messages: &[Message]) -> bool {
     let call_ids = messages
         .iter()
         .flat_map(assistant_tool_call_ids)
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     messages
         .iter()
         .flat_map(user_tool_result_ids)

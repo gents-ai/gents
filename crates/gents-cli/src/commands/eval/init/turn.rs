@@ -85,7 +85,10 @@ pub(crate) struct ScriptedTurn {
 
 #[cfg(test)]
 impl ScriptedTurn {
-    pub(crate) fn new<S: Into<String>>(replies: impl IntoIterator<Item = S>) -> Self {
+    pub(crate) fn new<S>(replies: impl IntoIterator<Item = S>) -> Self
+    where
+        S: Into<String>,
+    {
         Self {
             replies: replies.into_iter().map(Into::into).collect(),
             sent: Vec::new(),

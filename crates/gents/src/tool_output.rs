@@ -10,7 +10,10 @@ pub(crate) struct Ordered(
 );
 
 impl serde::Serialize for Ordered {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         use serde::ser::SerializeMap;
         let present = self
             .0

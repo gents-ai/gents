@@ -444,7 +444,7 @@ async fn load_request_show_snapshot(
     let canonical_request: AgentRequestRow = serde_json::from_value(request_row.clone())
         .with_context(|| format!("decoding AgentRequest {request_id}"))?;
 
-    let output = observe_canonical_request_output(&graphql, &canonical_request).await?;
+    let output = observe_canonical_request_output(graphql, &canonical_request).await?;
     let envelope = request_output_envelope(&canonical_request, output)?;
 
     let tool_response = post_graphql(

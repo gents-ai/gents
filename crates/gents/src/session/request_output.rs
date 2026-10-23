@@ -308,12 +308,12 @@ pub async fn observe_request_output(
         LiveView::Retracted => CanonicalRequestOutput::Retracted,
         LiveView::RetainedPartial { streams } => CanonicalRequestOutput::RetainedPartial(streams),
         LiveView::Published { message, native } => CanonicalRequestOutput::Published {
-            header: message,
+            header: *message,
             presentation: CanonicalPresentation {
                 selected_source: Some(selected_source),
                 ..native_presentation(&native)
             },
-            message: native,
+            message: *native,
         },
     })
 }

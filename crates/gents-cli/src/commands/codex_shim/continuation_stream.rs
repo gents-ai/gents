@@ -207,8 +207,8 @@ async fn project_background_continuation(
     let cwd = state.thread_cwd(&session_id).await;
     let mut projection = TurnProjection::new(state, &session_id, &turn_id, cwd, started_at);
     let options = baseline_turn.map_or_else(
-        || TurnStreamOptions::fresh_background_completion(),
-        |turn| TurnStreamOptions::resumed_background_completion(turn),
+        TurnStreamOptions::fresh_background_completion,
+        TurnStreamOptions::resumed_background_completion,
     );
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let stream_registration = install_stream_control(

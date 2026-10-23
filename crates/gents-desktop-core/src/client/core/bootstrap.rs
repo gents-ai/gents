@@ -214,7 +214,9 @@ impl ClientCore {
                 sync_state,
                 p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
                 observation_scope,
-                request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                request_patch_signatures: tokio::sync::Mutex::new(
+                    rapidhash::RapidHashMap::default(),
+                ),
                 p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
                 shutdown_completion: tokio::sync::Mutex::new(None),
                 #[cfg(test)]

@@ -406,7 +406,6 @@ mod tests {
             collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             replicator_filter: filter("node_did", "did:key:alice"),
-            ..Default::default()
         };
         assert_eq!(
             compute_owned_pairing_diff(&desired, &actual, &applied),
@@ -439,7 +438,6 @@ mod tests {
             collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
             replicator_filter: f,
-            ..Default::default()
         };
         assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
     }

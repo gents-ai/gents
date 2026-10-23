@@ -4,7 +4,7 @@ async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionM
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     (node, materializer)
@@ -16,7 +16,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let node_did = behavior.node_did().to_string();
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let task = ResolvedTask {
@@ -231,7 +231,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
 #[tokio::test]
 async fn durable_goal_task_replay_retains_its_admitted_assignment() {
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let owner = snapshot.local_did.clone();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -379,12 +379,12 @@ async fn goal_task_identity_and_recovery_are_scoped_by_node_did() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let first_behavior = integration_test_agent("general");
     let first_did = first_behavior.node_did().to_string();
-    let first_snapshot = snapshot_with_agent_and_schedules(first_behavior, HashMap::new());
+    let first_snapshot = snapshot_with_agent_and_schedules(first_behavior, RapidHashMap::new());
     let (_first_tx, first_rx) = watch::channel(first_snapshot);
     let first_materializer = ProductionMaterializer::new(node.clone(), first_rx);
     let second_behavior = integration_test_agent("general");
     let second_did = second_behavior.node_did().to_string();
-    let second_snapshot = snapshot_with_agent_and_schedules(second_behavior, HashMap::new());
+    let second_snapshot = snapshot_with_agent_and_schedules(second_behavior, RapidHashMap::new());
     let (_second_tx, second_rx) = watch::channel(second_snapshot);
     let second_materializer = ProductionMaterializer::new(node, second_rx);
     let task = ResolvedTask {
@@ -459,7 +459,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");
     let node_did = behavior.node_did().to_string();
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let task = ResolvedTask {
@@ -632,7 +632,7 @@ async fn materializer_rejects_workspace_from_different_explicit_owner() {
         behavior.node_did(),
     )
     .await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context = writer_context("ws-owner", "did:key:z-wrong-owner");
@@ -858,7 +858,7 @@ async fn materializer_resolves_missing_workspace_owner_from_canonical_workspace(
     let behavior = integration_test_agent("general");
     let owner = behavior.node_did().to_string();
     insert_ready_workspace(&node, "ws-incomplete", &owner, &owner).await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context=serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-incomplete","workspace_authority":"readWrite"}}).to_string();
@@ -902,7 +902,7 @@ async fn materializer_does_not_infer_an_owner_for_a_foreign_workspace() {
         &owner,
     )
     .await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let context = serde_json::json!({"version":1,"source_fields":{"workspace_id":"ws-foreign-ownerless","workspace_authority":"readOnly"}}).to_string();
@@ -948,7 +948,7 @@ async fn materializer_preserves_explicit_workspace_owner_distinct_from_executor(
         behavior.node_did(),
     )
     .await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let context = writer_context("ws-stamp", "did:key:z-workspace-owner");
@@ -993,7 +993,7 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
         behavior.node_did(),
     )
     .await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let context = writer_context("ws-goal-retry", "did:key:z-workspace-owner");
@@ -1059,7 +1059,7 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
         behavior.node_did(),
     )
     .await;
-    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let context = writer_context("ws-rw", "did:key:z-workspace-owner");
@@ -1300,7 +1300,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
@@ -1378,7 +1378,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot =
-        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
     let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
     let identity = gents_protocol::trigger_delivery::FireIdentity {
@@ -1496,7 +1496,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         schedule.concurrency = ConcurrencyMode::QueuedSerial;
         let snapshot = snapshot_with_agent_and_schedules(
             behavior.clone(),
-            HashMap::from([(trigger.clone(), schedule)]),
+            RapidHashMap::from_iter([(trigger.clone(), schedule)]),
         );
         let (tx, rx) = watch::channel(snapshot);
         let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
@@ -1599,7 +1599,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
             }
             tx.send(snapshot_with_agent_and_schedules(
                 behavior.clone(),
-                HashMap::new(),
+                RapidHashMap::new(),
             ))
             .unwrap();
             let replay = engine.dispatch(intent()).await;

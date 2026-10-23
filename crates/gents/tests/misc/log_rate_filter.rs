@@ -49,6 +49,10 @@ impl<'a> MakeWriter<'a> for CapturedOutput {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous test waiting for the wall-clock summary flush"
+)]
 fn filter_caps_a_flood_and_reports_suppression_on_rollover() {
     let output = CapturedOutput::default();
     let filter = RateLimitFilter::with_clock(

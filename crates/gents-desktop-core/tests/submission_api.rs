@@ -43,7 +43,8 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
         response.errors
     );
     let data = response.data.context("projection query data")?;
-    for collection in ["AgentSession"] {
+    {
+        let collection = "AgentSession";
         assert!(
             data.get(collection)
                 .and_then(serde_json::Value::as_array)
@@ -233,7 +234,7 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
 
     let client_paths = DesktopPaths::from_root(root.join("client"));
     initialize_local_standard_peer(
-        &client_paths.peer_directory_path(),
+        client_paths.peer_directory_path(),
         "Test Local Runtime",
         &runtime_addr,
         &node_did,

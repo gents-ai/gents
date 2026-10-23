@@ -78,4 +78,29 @@ theorem full_background_budget_rejected (liveCount : Nat)
     (h : maxBackgroundedPerParent ≤ liveCount) : admitBackground liveCount = none := by
   simp [admitBackground, Nat.not_lt.mpr h]
 
+/-- A bounded contention trace records failed transaction attempts followed by
+one committed receipt. Exhaustion leaves the receipt unpublished; it never
+turns a storage conflict into a tool refusal. -/
+def receiptCommits : List Bool → Nat → Bool
+  | [], _ => false
+  | _, 0 => false
+  | committed :: rest, attempts + 1 =>
+      committed || receiptCommits rest attempts
+
+theorem receipt_commits_after_bounded_conflicts (conflicts : Nat) :
+    receiptCommits (List.replicate conflicts false ++ [true]) (conflicts + 1) = true := by
+  induction conflicts with
+  | zero => rfl
+  | succ n ih => simpa [List.replicate_succ, receiptCommits] using ih
+
+/-- The concurrent admission regression has two overflow calls as well as the
+admitted cohort. Its receipts share the canonical publication transaction. This
+is a finite qualification bound, not a guarantee under unbounded external writes. -/
+def receiptContentionAttempts : Nat := maxBackgroundedPerParent + 2
+
+theorem admission_cohort_receipt_commits :
+    receiptCommits (List.replicate (receiptContentionAttempts - 1) false ++ [true])
+      receiptContentionAttempts = true := by
+  decide
+
 end Background

@@ -133,7 +133,6 @@ describe("list views read back from storage", () => {
       sessionNodes: null,
       mailboxNodes: ["a"],
       mailboxKinds: [],
-      openSessions: [],
     });
     expect(restoreListViews({ sessionNodes: [] }).sessionNodes).toEqual([]);
   });

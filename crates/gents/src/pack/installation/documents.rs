@@ -91,6 +91,11 @@ fn sdl_types(sdl: &str) -> Result<BTreeMap<String, SdlType>> {
     Ok(types)
 }
 
+/// Unique key field sets per declared collection.
+pub type UniqueKeySets = BTreeMap<String, Vec<Vec<String>>>;
+/// Field names per declared collection.
+pub type CollectionFields = BTreeMap<String, Vec<String>>;
+
 /// Checks `plugin`'s `data` and `asset_mounts` against the pack that ships it
 /// and returns each declared collection's unique key field sets and field
 /// names. Every path that installs a pack plugin goes through this check.
@@ -98,10 +103,7 @@ pub fn plugin_data_unique_keys<'a>(
     manifest: &super::super::PackManifest,
     plugin: &super::super::PackPlugin,
     asset: &dyn Fn(&str) -> Result<&'a [u8]>,
-) -> Result<(
-    BTreeMap<String, Vec<Vec<String>>>,
-    BTreeMap<String, Vec<String>>,
-)> {
+) -> Result<(UniqueKeySets, CollectionFields)> {
     let name = &plugin.name;
     for mount in &plugin.asset_mounts {
         let prefix = format!("{}/", mount.class);
@@ -200,6 +202,10 @@ pub struct PreparedDocumentPackInstall {
     pub dependencies: Vec<PreparedDependency>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "install inputs and policies supplied by each install entry point"
+)]
 pub async fn prepare_document_pack_install(
     access: &ConfigAccess,
     owner: &str,
@@ -357,6 +363,10 @@ pub async fn prepare_document_pack_install(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "install inputs and policies supplied by each install entry point"
+)]
 pub async fn install_prepared_document_pack(
     access: &ConfigAccess,
     owner: &str,

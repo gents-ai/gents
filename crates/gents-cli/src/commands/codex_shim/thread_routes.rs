@@ -276,15 +276,15 @@ fn compare_thread_records(
 ) -> std::cmp::Ordering {
     let left_key = thread_sort_timestamp(left, sort_key);
     let right_key = thread_sort_timestamp(right, sort_key);
-    let ordering = match sort_direction {
+
+    match sort_direction {
         codex::SortDirection::Asc => left_key
             .cmp(&right_key)
             .then_with(|| left.session_id.cmp(&right.session_id)),
         codex::SortDirection::Desc => right_key
             .cmp(&left_key)
             .then_with(|| right.session_id.cmp(&left.session_id)),
-    };
-    ordering
+    }
 }
 
 fn thread_sort_timestamp(record: &CodexThreadRecord, sort_key: codex::ThreadSortKey) -> String {
@@ -390,12 +390,12 @@ fn item_snippets(item: &codex::ThreadItem) -> Vec<String> {
     match item {
         codex::ThreadItem::UserMessage { content, .. } => content
             .iter()
-            .filter_map(|input| match input {
-                codex::UserInput::Text { text, .. } => Some(text.clone()),
-                codex::UserInput::Image { url, .. } => Some(url.clone()),
+            .map(|input| match input {
+                codex::UserInput::Text { text, .. } => text.clone(),
+                codex::UserInput::Image { url, .. } => url.clone(),
                 codex::UserInput::LocalImage { path, .. }
-                | codex::UserInput::Skill { path, .. } => Some(path.display().to_string()),
-                codex::UserInput::Mention { name, path } => Some(format!("{name} {path}")),
+                | codex::UserInput::Skill { path, .. } => path.display().to_string(),
+                codex::UserInput::Mention { name, path } => format!("{name} {path}"),
             })
             .collect(),
         codex::ThreadItem::AgentMessage { text, .. } => vec![text.clone()],

@@ -262,6 +262,10 @@ pub enum HydrationAdmissionAction {
     ExplicitRetry,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public conformance-modeled predicate called from gents-desktop-core and conformance tests"
+)]
 pub fn can_admit_hydration_request(
     action: HydrationAdmissionAction,
     request: &ClientHydrationRequestState,

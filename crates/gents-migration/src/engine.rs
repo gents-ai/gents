@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -193,7 +193,7 @@ async fn register_file_image_owner(node: &EmbeddedNode, owner: &str) -> Result<(
 }
 
 fn versioned_step_collections<'a>(registry: &Registry<'a>) -> Vec<&'a str> {
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     registry
         .steps
         .iter()
@@ -311,13 +311,15 @@ async fn apply_steps(
             } => {
                 apply_patch_versioned(
                     node,
-                    id,
-                    collection,
+                    StepContext {
+                        id,
+                        collection,
+                        lens_spec: *lens_spec,
+                        expected_state,
+                    },
                     patch,
-                    *lens_spec,
                     *expected_version,
                     *expected_transform,
-                    expected_state,
                     report,
                 )
                 .await?;
@@ -383,17 +385,28 @@ async fn apply_add_collection(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct StepContext<'a> {
+    id: &'a str,
+    collection: &'a str,
+    lens_spec: Option<crate::registry::LensSpec<'a>>,
+    expected_state: &'a crate::expectation::CollectionExpectation,
+}
+
 async fn apply_patch_versioned(
     node: &EmbeddedNode,
-    id: &str,
-    collection: &str,
+    ctx: StepContext<'_>,
     patch: &str,
-    lens_spec: Option<crate::registry::LensSpec<'_>>,
     expected_version: Option<&str>,
     expected_transform: Option<&str>,
-    expected_state: &crate::expectation::CollectionExpectation,
     report: &mut MigrationReport,
 ) -> Result<()> {
+    let StepContext {
+        id,
+        collection,
+        lens_spec,
+        expected_state,
+    } = ctx;
     let Some(pin) = expected_version else {
         return Err(Error::StepFailed {
             step: id.to_string(),
@@ -410,17 +423,7 @@ async fn apply_patch_versioned(
         })?;
 
     if active.version_id == pin && active.is_active && !active.is_placeholder {
-        verify_active_step(
-            node,
-            id,
-            collection,
-            pin,
-            expected_transform,
-            lens_spec,
-            expected_state,
-            report,
-        )
-        .await?;
+        verify_active_step(node, ctx, pin, expected_transform, report).await?;
         report.steps_already_current += 1;
         return Ok(());
     }
@@ -456,18 +459,8 @@ async fn apply_patch_versioned(
                         detail: "versioned migration destination is missing its source edge"
                             .to_string(),
                     })?;
-                repair_transform_if_needed(
-                    node,
-                    id,
-                    collection,
-                    source,
-                    pin,
-                    lens_spec,
-                    expected_tx,
-                    dest,
-                    report,
-                )
-                .await?;
+                repair_transform_if_needed(node, ctx, source, pin, expected_tx, dest, report)
+                    .await?;
             }
             report.steps_already_current += 1;
             return Ok(());
@@ -560,11 +553,9 @@ async fn apply_patch_versioned(
             if let Some(expected_tx) = expected_transform {
                 repair_transform_if_needed(
                     node,
-                    id,
-                    collection,
+                    ctx,
                     &active.version_id,
                     pin,
-                    lens_spec,
                     expected_tx,
                     v,
                     report,
@@ -581,17 +572,7 @@ async fn apply_patch_versioned(
             report.steps_applied += 1;
         }
         Some(v) => {
-            verify_active_step(
-                node,
-                id,
-                collection,
-                pin,
-                expected_transform,
-                lens_spec,
-                expected_state,
-                report,
-            )
-            .await?;
+            verify_active_step(node, ctx, pin, expected_transform, report).await?;
             if v.version_id == pin {
                 if let Err(e) = node.set_active_collection_version(pin).await {
                     warn!(
@@ -618,7 +599,7 @@ fn version_descends_from(
     ancestor_version: &str,
 ) -> bool {
     let mut current = descendant_version;
-    let mut visited = HashSet::new();
+    let mut visited = RapidHashSet::new();
     while visited.insert(current) {
         let Some(version) = versions
             .iter()
@@ -639,14 +620,17 @@ fn version_descends_from(
 
 async fn verify_active_step(
     node: &EmbeddedNode,
-    id: &str,
-    collection: &str,
+    ctx: StepContext<'_>,
     pin: &str,
     expected_transform: Option<&str>,
-    lens_spec: Option<crate::registry::LensSpec<'_>>,
-    expected_state: &crate::expectation::CollectionExpectation,
     report: &mut MigrationReport,
 ) -> Result<()> {
+    let StepContext {
+        id,
+        collection,
+        expected_state,
+        ..
+    } = ctx;
     let active = node
         .get_collection(collection)
         .map_err(|error| Error::Node(error.into()))?
@@ -671,18 +655,8 @@ async fn verify_active_step(
         let prev = active.version_id.clone();
         if let Some(ref pv) = active.previous_version {
             let source = pv.source_collection_id.clone();
-            repair_transform_if_needed(
-                node,
-                id,
-                collection,
-                &source,
-                pin,
-                lens_spec,
-                expected_tx,
-                &active,
-                report,
-            )
-            .await?;
+            repair_transform_if_needed(node, ctx, &source, pin, expected_tx, &active, report)
+                .await?;
             let _ = prev;
         }
     }
@@ -691,15 +665,19 @@ async fn verify_active_step(
 
 async fn repair_transform_if_needed(
     node: &EmbeddedNode,
-    id: &str,
-    collection: &str,
+    ctx: StepContext<'_>,
     source: &str,
     dest: &str,
-    lens_spec: Option<crate::registry::LensSpec<'_>>,
     expected_tx: &str,
     version: &CollectionVersion,
     report: &mut MigrationReport,
 ) -> Result<()> {
+    let StepContext {
+        id,
+        collection,
+        lens_spec,
+        ..
+    } = ctx;
     let current = version
         .previous_version
         .as_ref()
@@ -773,8 +751,8 @@ async fn apply_patch_in_place(
 
 fn versions_by_name(
     all_versions: &[CollectionVersion],
-) -> HashMap<String, Vec<&CollectionVersion>> {
-    let mut by_name: HashMap<String, Vec<&CollectionVersion>> = HashMap::new();
+) -> RapidHashMap<String, Vec<&CollectionVersion>> {
+    let mut by_name: RapidHashMap<String, Vec<&CollectionVersion>> = RapidHashMap::new();
     for v in all_versions {
         if v.is_placeholder || v.name.is_empty() {
             continue;
@@ -821,36 +799,33 @@ async fn verify_managed_lineages(
 
     for step in registry.steps {
         if let MigrationStep::AddCollection {
-            id: _,
-            sdl: _,
-            expected_version,
+            expected_version: Some(pin),
             expected_state,
+            ..
         } = step
         {
-            if let Some(pin) = expected_version {
-                let Some(v) = all_versions.iter().find(|v| v.version_id == *pin) else {
-                    return Err(Error::VersionPinMismatch {
-                        collection: step.id().to_string(),
-                        expected: pin.to_string(),
-                        actual: "<missing>".into(),
-                    });
-                };
-                expected_state
-                    .verify(v)
-                    .map_err(|detail| Error::StateVerification {
-                        collection: v.name.clone(),
-                        step: step.id().to_string(),
-                        detail,
-                    })?;
-            }
+            let Some(v) = all_versions.iter().find(|v| v.version_id == *pin) else {
+                return Err(Error::VersionPinMismatch {
+                    collection: step.id().to_string(),
+                    expected: pin.to_string(),
+                    actual: "<missing>".into(),
+                });
+            };
+            expected_state
+                .verify(v)
+                .map_err(|detail| Error::StateVerification {
+                    collection: v.name.clone(),
+                    step: step.id().to_string(),
+                    detail,
+                })?;
         }
     }
 
     Ok(())
 }
 
-fn known_pin_set(registry: &Registry<'_>) -> HashSet<String> {
-    let mut pins = HashSet::new();
+fn known_pin_set(registry: &Registry<'_>) -> RapidHashSet<String> {
+    let mut pins = RapidHashSet::new();
     for b in registry.baseline {
         if let Some(v) = b.expected_version {
             pins.insert(v.to_string());
@@ -874,8 +849,8 @@ fn known_pin_set(registry: &Registry<'_>) -> HashSet<String> {
     pins
 }
 
-fn target_active_pins(registry: &Registry<'_>) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+fn target_active_pins(registry: &Registry<'_>) -> RapidHashMap<String, String> {
+    let mut map = RapidHashMap::new();
     for b in registry.baseline {
         if let Some(v) = b.expected_version {
             map.insert(b.name.to_string(), v.to_string());
@@ -896,9 +871,9 @@ fn target_active_pins(registry: &Registry<'_>) -> HashMap<String, String> {
 
 fn verify_one_collection(
     entry: &BaselineCollection<'_>,
-    by_name: &HashMap<String, Vec<&CollectionVersion>>,
-    known_pins: &HashSet<String>,
-    target_active: &HashMap<String, String>,
+    by_name: &RapidHashMap<String, Vec<&CollectionVersion>>,
+    known_pins: &RapidHashSet<String>,
+    target_active: &RapidHashMap<String, String>,
 ) -> Result<()> {
     let versions = by_name
         .get(entry.name)
@@ -956,7 +931,7 @@ fn verify_one_collection(
 fn check_known_lineage(
     entry: &BaselineCollection<'_>,
     versions: &[&CollectionVersion],
-    known_pins: &HashSet<String>,
+    known_pins: &RapidHashSet<String>,
 ) -> Result<()> {
     let non_ph: Vec<&CollectionVersion> = versions
         .iter()

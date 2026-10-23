@@ -125,11 +125,7 @@ impl Session {
                     let arguments = Value::Object(request.arguments).to_string();
                     let outcome = gents_loop::tool_effects::scope(
                         None,
-                        super::approval::scope_composed(self.dispatcher.call(
-                            next,
-                            &request.tool_name,
-                            &arguments,
-                        )),
+                        self.dispatcher.call(next, &request.tool_name, &arguments),
                     )
                     .await;
                     match settle(outcome) {
@@ -443,14 +439,7 @@ mod tests {
         }
         for case in cases["consent"].as_array().unwrap() {
             let interactive = case["interactive"].as_bool().unwrap();
-            let route = if case["composed"].as_bool().unwrap() {
-                crate::plugin::approval::scope_composed(async {
-                    crate::plugin::approval::consent(interactive)
-                })
-                .await
-            } else {
-                crate::plugin::approval::consent(interactive)
-            };
+            let route = crate::plugin::approval::consent(interactive);
             let expected = match case["expected"].as_str().unwrap() {
                 "ask" => crate::plugin::approval::Consent::Ask,
                 _ => crate::plugin::approval::Consent::Deny,

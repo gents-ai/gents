@@ -193,6 +193,10 @@ pub(super) fn assert_shim_trace_method_count_at_least(
     Ok(())
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous harness polling an external tmux pane"
+)]
 pub(super) fn wait_for_tmux_token_occurrences(
     session: &str,
     needle: &str,

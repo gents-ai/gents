@@ -258,14 +258,7 @@ fn javascript_literals(path: &Path, source: &str) -> Vec<(String, bool)> {
         fn visit_template_literal(&mut self, literal: &TemplateLiteral<'a>) {
             let mut template = String::new();
             for (index, quasi) in literal.quasis.iter().enumerate() {
-                template.push_str(
-                    &quasi
-                        .value
-                        .cooked
-                        .as_ref()
-                        .unwrap_or(&quasi.value.raw)
-                        .to_string(),
-                );
+                template.push_str(quasi.value.cooked.as_ref().unwrap_or(&quasi.value.raw));
                 if let Some(expression) = literal.expressions.get(index) {
                     template.push_str("$GENTS_");
                     template.push_str(expression.span().source_text(self.source));

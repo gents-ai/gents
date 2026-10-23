@@ -501,7 +501,7 @@ enum EnrollmentAuthorityOutcome {
 }
 
 enum DesktopApprovalProjection {
-    Routed(ApprovedStatusEnrollment),
+    Routed(Box<ApprovedStatusEnrollment>),
     CurrentWithoutRoute,
     Absent,
 }
@@ -683,7 +683,7 @@ async fn authenticate_enrolled_server(
             .await
             .map_err(map_p2p_error)?
             .context("enrolled server has no authenticated transport identity")?;
-        validate_authenticated_server_did(&approval.admin_did, &resolved.to_string())?;
+        validate_authenticated_server_did(&approval.admin_did, resolved.as_ref())?;
         Ok(address)
     })
     .await;
@@ -754,8 +754,8 @@ async fn load_status_enrollment_approvals(
     let mut requests = Vec::new();
     let raw_requests = rows::<Value>(&response, "NetworkEnrollmentRequest")?;
     for raw in &raw_requests {
-        let relevant = raw_string(&raw, "candidate_did") == Some(principal.did())
-            || raw_string(&raw, "candidate_peer") == Some(local_peer_id);
+        let relevant = raw_string(raw, "candidate_did") == Some(principal.did())
+            || raw_string(raw, "candidate_peer") == Some(local_peer_id);
         if !relevant {
             continue;
         }
@@ -1007,7 +1007,7 @@ async fn load_status_enrollment_approvals(
         {
             Ok(DesktopApprovalProjection::Routed(approval)) => {
                 authorized_server_peers.insert(server_peer);
-                approved.push(approval);
+                approved.push(*approval);
             }
             Ok(DesktopApprovalProjection::CurrentWithoutRoute) => {
                 authorized_server_peers.insert(server_peer);
@@ -1178,6 +1178,10 @@ fn raw_authority_targets(
         .unwrap_or_default()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the projection reads each enrollment row set separately"
+)]
 async fn project_desktop_approval(
     request_row: &EnrollmentRequestRow,
     request_rows: &[EnrollmentRequestRow],
@@ -1290,7 +1294,7 @@ async fn project_desktop_approval(
             )
         });
         if has_current_receipt {
-            return Ok(DesktopApprovalProjection::Routed(
+            return Ok(DesktopApprovalProjection::Routed(Box::new(
                 ApprovedStatusEnrollment {
                     network_id: request.network_id,
                     request_id: request.request_id,
@@ -1303,7 +1307,7 @@ async fn project_desktop_approval(
                     authorization_expires_at: decision.authorization_expires_at,
                     decided_at: decision.decided_at,
                 },
-            ));
+            )));
         }
         current_without_route = true;
     }
@@ -1362,6 +1366,10 @@ async fn listing_assembly_requests(
     contained
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the projection reads each enrollment row set separately"
+)]
 async fn assemble_durable_enrollment_documents(
     offer: &gents_protocol::enrollment::EnrollmentOfferRecord,
     request: &EnrollmentRequestRecord,
@@ -1679,9 +1687,11 @@ fn to_pure_offer(
         admin_did: offer.admin_did.clone(),
         server_peer: offer.server_peer.clone(),
         server_ticket_peer: offer.server_peer.clone(),
-        resolved_server_did: verified
-            .then(|| offer.admin_did.clone())
-            .unwrap_or_default(),
+        resolved_server_did: if verified {
+            offer.admin_did.clone()
+        } else {
+            Default::default()
+        },
         owner_node: offer.owner_agent.clone(),
         profile: offer.profile.clone(),
         schema_compatible: offer.schema_fingerprint == enrollment_schema_fingerprint(),
@@ -1701,12 +1711,16 @@ fn to_pure_request(request: &EnrollmentRequestRecord, verified: bool, fresh: boo
         server_peer: request.server_peer.clone(),
         candidate_did: request.candidate_did.clone(),
         candidate_peer: request.candidate_peer.clone(),
-        observed_candidate_peer: verified
-            .then(|| request.candidate_peer.clone())
-            .unwrap_or_default(),
-        resolved_candidate_did: verified
-            .then(|| request.candidate_did.clone())
-            .unwrap_or_default(),
+        observed_candidate_peer: if verified {
+            request.candidate_peer.clone()
+        } else {
+            Default::default()
+        },
+        resolved_candidate_did: if verified {
+            request.candidate_did.clone()
+        } else {
+            Default::default()
+        },
         candidate_ticket_peer: request.candidate_peer.clone(),
         owner_node: request.owner_agent.clone(),
         profile: request.profile.clone(),
@@ -2789,7 +2803,7 @@ mod tests {
             candidate_ticket: "client-ticket".into(),
             owner_agent: offer.owner_agent.clone(),
             profile: offer.profile.clone(),
-            client_nonce: client_nonce.into(),
+            client_nonce,
             issued_at: issued_at.clone(),
             expires_at: request_expires_at,
             candidate_sig: Vec::new(),

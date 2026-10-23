@@ -2,6 +2,92 @@ use super::*;
 use crate::config_client::ConfigApplyTxn;
 use gents_protocol::request_input::GoalAssignmentInput;
 
+pub(super) fn continuation_reference_matches(
+    goal_id: &str,
+    parent_doc: &str,
+    parent: Option<&GoalAssignmentInput>,
+    child: Option<&GoalAssignmentInput>,
+) -> bool {
+    match parent {
+        Some(reference) => {
+            reference.goal_id == goal_id && child == Some(&reference.continuation(parent_doc))
+        }
+        None => child.is_none_or(|reference| {
+            reference.goal_id == goal_id
+                && reference
+                    .root_request_doc_id
+                    .as_deref()
+                    .is_none_or(|root| root == parent_doc)
+        }),
+    }
+}
+
+fn continuation_reference(
+    goal_id: &str,
+    current: Option<&str>,
+    parent_doc: &str,
+    parent: Option<&GoalAssignmentInput>,
+    receipt_doc: Option<&str>,
+) -> Option<GoalAssignmentInput> {
+    if goal_id.is_empty()
+        || parent_doc.is_empty()
+        || current.is_some_and(str::is_empty)
+        || receipt_doc.is_some_and(str::is_empty)
+        || receipt_doc == Some(parent_doc)
+    {
+        return None;
+    }
+    let root = match current {
+        None => {
+            if receipt_doc.is_some() || parent.is_some() {
+                return None;
+            }
+            None
+        }
+        Some(root) if receipt_doc == Some(root) => {
+            if parent.is_some() {
+                return None;
+            }
+            None
+        }
+        Some(root) => {
+            if !match parent {
+                None => parent_doc == root,
+                Some(reference) => {
+                    reference.goal_id == goal_id
+                        && reference
+                            .root_request_doc_id
+                            .as_deref()
+                            .unwrap_or(parent_doc)
+                            == root
+                }
+            } {
+                return None;
+            }
+            Some(root.to_owned())
+        }
+    };
+    Some(GoalAssignmentInput {
+        goal_id: goal_id.to_owned(),
+        root_request_doc_id: root,
+    })
+}
+
+pub(super) fn continuation_assignment(
+    goal: &GoalDocument,
+    parent: &crate::watcher::AgentRequest,
+    receipt_doc: Option<&str>,
+) -> Result<GoalAssignmentInput> {
+    continuation_reference(
+        &goal.goal_id,
+        goal.assignment_root_request_doc_id.as_deref(),
+        &parent.doc_id,
+        parent.input.goal_assignment.as_ref(),
+        receipt_doc,
+    )
+    .context("Goal continuation conflicts with its physical assignment binding")
+}
+
 /// Reading the canonical row here puts its binding in the storage transaction's
 /// conflict set, including a Goal created earlier in this same transaction.
 pub(crate) async fn bind_goal_first_request_in_txn(

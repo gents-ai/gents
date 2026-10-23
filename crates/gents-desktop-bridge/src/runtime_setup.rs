@@ -6,7 +6,9 @@ use crate::logging;
 static TAURI_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 /// Install the large-stack runtime before `tauri::Builder`; iOS DefraDB
-/// history replay requires the larger stack.
+/// history replay requires the larger stack. This is the desktop process's
+/// entry runtime: everything else reaches it through `tauri::async_runtime`,
+/// except the speech worker's silent runtime (`host::speech::transport`).
 pub fn install_runtime() {
     let runtime = TAURI_RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()

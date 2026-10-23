@@ -81,7 +81,7 @@ async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
         .input
         .as_ref()
         .and_then(|input| input.queue.as_ref())
-        .is_some_and(|queue| queue_is_automated_wakeup(queue)));
+        .is_some_and(queue_is_automated_wakeup));
     let notifications = db
         .node
         .execute(&format!(
@@ -198,13 +198,15 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         .expect("non-Goal wake");
     let duplicate = session_request_create_mutation(
         &parent,
-        TEST_AGENT_ID,
-        "raw duplicate",
-        ExecutionOrigin::Scheduled,
-        wake_queue_input(hints.clone()),
-        "req-coalesce-race-duplicate",
-        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        None,
+        SessionRequestFields {
+            agent_id: TEST_AGENT_ID,
+            content: "raw duplicate",
+            execution_origin: ExecutionOrigin::Scheduled,
+            input: wake_queue_input(hints.clone()),
+            request_id: "req-coalesce-race-duplicate",
+            created_at: &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            retry_key: None,
+        },
     )
     .await
     .unwrap();

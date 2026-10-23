@@ -195,10 +195,13 @@ pub(super) fn usage_response(
     }
 }
 
+type UsageTurns = VecDeque<Vec<RawStreamingChoice<UsageResponse>>>;
+type SeenDispatch = (u64, Option<u64>);
+
 #[derive(Clone)]
 pub(super) struct UsageScriptedModel {
-    turns: Arc<Mutex<VecDeque<Vec<RawStreamingChoice<UsageResponse>>>>>,
-    seen_dispatches: Arc<Mutex<Vec<(u64, Option<u64>)>>>,
+    turns: Arc<Mutex<UsageTurns>>,
+    seen_dispatches: Arc<Mutex<Vec<SeenDispatch>>>,
 }
 
 impl UsageScriptedModel {
@@ -645,7 +648,7 @@ pub(super) async fn owned_test_hook_with_folded_case(
     DefraSessionHook,
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
-    std::collections::HashMap<u64, String>,
+    rapidhash::RapidHashMap<u64, String>,
 ) {
     let key_dir = tempfile::tempdir().unwrap();
     let identity = Arc::new(
@@ -664,7 +667,7 @@ async fn owned_test_hook_with_identity_policy(
     DefraSessionHook,
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
-    std::collections::HashMap<u64, String>,
+    rapidhash::RapidHashMap<u64, String>,
 ) {
     let node_did = identity
         .as_ref()
@@ -731,7 +734,7 @@ async fn owned_test_hook_with_identity_policy(
     )
     .await
     .unwrap();
-    let mut folded_docs = std::collections::HashMap::new();
+    let mut folded_docs = rapidhash::RapidHashMap::default();
     if let Some(case) = folded_case {
         let signer = identity
             .as_ref()

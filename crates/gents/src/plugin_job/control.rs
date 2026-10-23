@@ -1,7 +1,7 @@
 //! The single kill owner for stop, pause, deadline and fail-closed: it
 //! interrupts a job's live children and ends the row now.
 
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 use anyhow::{Context, Result};
 use gents_protocol::job::{
@@ -161,12 +161,12 @@ struct CausedRequest {
 async fn caused_requests(
     txn: &ConfigApplyTxn<'_>,
     job: &StepRow,
-) -> Result<HashMap<String, CausedRequest>> {
+) -> Result<RapidHashMap<String, CausedRequest>> {
     let keys: Vec<&str> = live_own_children(job)
         .map(|child| child.retry_key.as_str())
         .collect();
     if keys.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(RapidHashMap::new());
     }
     let response = txn
         .execute(&format!(
@@ -194,8 +194,8 @@ async fn observe_children_in_txn(
     job: &StepRow,
     node_did: &str,
 ) -> Result<(
-    HashMap<String, CausedRequest>,
-    HashMap<String, KillObservation>,
+    RapidHashMap<String, CausedRequest>,
+    RapidHashMap<String, KillObservation>,
 )> {
     let caused = caused_requests(txn, job).await?;
     let observed = live_own_children(job)
@@ -223,8 +223,8 @@ async fn observe_children(
     job: &StepRow,
     node_did: &str,
 ) -> Result<(
-    HashMap<String, CausedRequest>,
-    HashMap<String, KillObservation>,
+    RapidHashMap<String, CausedRequest>,
+    RapidHashMap<String, KillObservation>,
 )> {
     access
         .transact_readonly("plugin_job.observe_children", |txn| {
@@ -238,7 +238,7 @@ pub(crate) async fn observe_live_children(
     access: &ConfigAccess,
     job: &StepRow,
     node_did: &str,
-) -> Result<HashMap<String, KillObservation>> {
+) -> Result<RapidHashMap<String, KillObservation>> {
     Ok(observe_children(access, job, node_did).await?.1)
 }
 
@@ -469,11 +469,7 @@ pub(crate) async fn resume_target_in_txn(
     txn: &ConfigApplyTxn<'_>,
     plugin: &str,
     row_doc_id: &str,
-) -> Result<(
-    String,
-    bool,
-    Option<(ProcessControlScope, bool, StepRow, StepRow)>,
-)> {
+) -> Result<super::admit::ResumeTarget> {
     let response = txn
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_id node_did requester_did }} }}"#,
@@ -1482,11 +1478,7 @@ mod tests {
         }
     }
 
-    type Target = (
-        String,
-        bool,
-        Option<(ProcessControlScope, bool, StepRow, StepRow)>,
-    );
+    type Target = crate::plugin_job::admit::ResumeTarget;
 
     async fn target(job: &Job, plugin: &str, row: &str) -> Target {
         job.access

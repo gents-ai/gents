@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use rapidhash::RapidHashSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -72,7 +73,10 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         .filter(|agent| agent.enabled)
         .map(|agent| agent.agent_id.clone())
         .collect::<BTreeSet<_>>();
-    let enabled_agent_id_set = enabled_agent_ids.iter().cloned().collect::<HashSet<_>>();
+    let enabled_agent_id_set = enabled_agent_ids
+        .iter()
+        .cloned()
+        .collect::<RapidHashSet<_>>();
     let mut configuration_issues = BTreeMap::new();
     let mut agents = Vec::new();
     for agent in &bundle.config.agents {

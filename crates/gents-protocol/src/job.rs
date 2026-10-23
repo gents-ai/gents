@@ -630,10 +630,10 @@ where
     }
 }
 
-fn required<T: serde::de::DeserializeOwned>(
-    object: &mut StepObject,
-    key: &str,
-) -> Result<T, String> {
+fn required<T>(object: &mut StepObject, key: &str) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
     let value = object.remove(key).unwrap_or(serde_json::Value::Null);
     serde_json::from_value(value).map_err(|e| format!("`{key}`: {e}"))
 }
@@ -669,7 +669,10 @@ fn step_output_variant(kind: &str, o: &mut StepObject) -> Result<JobStepOutput, 
 }
 
 impl<'de> Deserialize<'de> for JobStepOutput {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
         use serde::de::Error;
         const SHAPE: &str =
             "a JSON object with exactly one of `result`, `fail`, `suspend` or `effects`";
@@ -706,24 +709,27 @@ impl<'de> Deserialize<'de> for JobStepOutput {
 }
 
 impl Serialize for JobStepOutput {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         use serde::ser::SerializeMap;
-        fn list<M: SerializeMap, T: Serialize>(
-            m: &mut M,
-            key: &str,
-            v: &[T],
-        ) -> Result<(), M::Error> {
+        fn list<M, T>(m: &mut M, key: &str, v: &[T]) -> Result<(), M::Error>
+        where
+            M: SerializeMap,
+            T: Serialize,
+        {
             if v.is_empty() {
                 Ok(())
             } else {
                 m.serialize_entry(key, v)
             }
         }
-        fn opt<M: SerializeMap, T: Serialize>(
-            m: &mut M,
-            key: &str,
-            v: &Option<T>,
-        ) -> Result<(), M::Error> {
+        fn opt<M, T>(m: &mut M, key: &str, v: &Option<T>) -> Result<(), M::Error>
+        where
+            M: SerializeMap,
+            T: Serialize,
+        {
             match v {
                 Some(v) => m.serialize_entry(key, v),
                 None => Ok(()),

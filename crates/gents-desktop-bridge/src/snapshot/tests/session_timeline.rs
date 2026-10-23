@@ -462,6 +462,92 @@ fn steering_projects_the_authored_input_once() {
 }
 
 #[test]
+fn folded_user_input_stays_visible_when_a_runtime_request_consumes_it() {
+    for (head_source, input_source, control_key) in [
+        ("goal", "user", "goal-continuation:req-1"),
+        ("goal", "steering", "goal-continuation:req-1"),
+        (
+            "background_completion",
+            "user",
+            "background-completion-notification:v1:req-1",
+        ),
+        (
+            "background_completion",
+            "steering",
+            "background-completion-notification:v1:req-1",
+        ),
+    ] {
+        let mut rows = active_store().to_rows();
+        let mut input_request = rows.requests[0].clone();
+        input_request.doc_id = Some("input-doc".into());
+        input_request.request_id = "input-request".into();
+        input_request.content = Some("please include the latest change".into());
+        input_request.input = Some(
+            serde_json::from_value(serde_json::json!({
+                "queue": { "source": input_source, "delivery": "steer", "policy": "append" }
+            }))
+            .unwrap(),
+        );
+        input_request.lifecycle_state = Some(RequestLifecycleState::Superseded);
+        input_request.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+        input_request.superseded_by_request = Some("req-1".into());
+        input_request.superseded_by_request_doc_id = Some("req-1".into());
+        rows.requests[0].input = Some(
+            serde_json::from_value(serde_json::json!({
+                "queue": { "source": head_source, "policy": "coalesce" }
+            }))
+            .unwrap(),
+        );
+        rows.requests.push(input_request);
+        for (key, sequence, role, text) in [
+            (control_key, 1, MessageRole::User, "runtime continuation"),
+            (
+                "authored:req-1:folded:input-doc",
+                2,
+                MessageRole::User,
+                "please include the latest change",
+            ),
+            (
+                "answer",
+                3,
+                MessageRole::Assistant,
+                "I included the latest change",
+            ),
+        ] {
+            push_canonical_text_message(
+                &mut rows,
+                key,
+                "sess-1",
+                Some("req-1"),
+                sequence,
+                role,
+                text,
+            );
+        }
+        let snapshot = build_session_snapshot_from_store(
+            &ClientStore::from_rows(rows),
+            "sess-1",
+            Some("req-1"),
+        )
+        .expect("snapshot");
+        assert!(snapshot.messages[0].runtime_control, "{head_source}");
+        assert!(!snapshot.messages[1].runtime_control, "{head_source}");
+        assert_eq!(snapshot.messages[1].request_id.as_deref(), Some("req-1"));
+        assert!(snapshot.messages[1].origin.is_none(), "{head_source}");
+        assert!(
+            matches!(snapshot.timeline_items.as_slice(), [
+            RenderedTimelineItem::UserMessage {
+                input_request_id: Some(input), content: Some(content), owns_turn: false, ..
+            },
+            RenderedTimelineItem::AssistantMessage { .. },
+        ] if input == "input-request" && content == "please include the latest change"),
+            "{head_source}: {:?}",
+            snapshot.timeline_items
+        );
+    }
+}
+
+#[test]
 fn a_sent_message_keeps_one_logical_request_id_from_pending_to_saved() {
     let request = AgentRequestRow {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
@@ -905,7 +991,9 @@ fn active_store() -> ClientStore {
 
 fn assistant_item(key: &str, sequence: i64) -> RenderedTimelineItem {
     RenderedTimelineItem::AssistantMessage {
+        request_turn: None,
         item_key: key.into(),
+        request_id: None,
         sequence: Some(sequence),
         content: Some(key.into()),
         reasoning: None,
@@ -1131,4 +1219,71 @@ fn context_events_page_with_their_durable_message_anchor() {
             "session-compaction:checkpoint-1"
         ]
     );
+}
+
+#[test]
+fn rendered_request_turns_preserve_physical_owners_and_unknown_lifecycle() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: [
+            ("physical-completed", Some(RequestLifecycleState::Completed)),
+            ("physical-active", Some(RequestLifecycleState::Processing)),
+            ("physical-unknown", None),
+        ]
+        .into_iter()
+        .map(|(id, state)| AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some(id.into()),
+            request_id: "same-logical-id".into(),
+            node_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: state,
+            ..Default::default()
+        })
+        .collect(),
+        ..ClientStoreRows::default()
+    };
+    for (index, physical) in [
+        "physical-completed",
+        "physical-active",
+        "physical-unknown",
+        "missing-owner",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        push_canonical_text_message(
+            &mut rows,
+            &format!("answer-{index}"),
+            "sess-1",
+            Some(physical),
+            index as u32 + 1,
+            MessageRole::Assistant,
+            "Result",
+        );
+    }
+    let snapshot = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
+        .expect("snapshot");
+    let turns = snapshot
+        .timeline_items
+        .iter()
+        .filter_map(|item| match item {
+            RenderedTimelineItem::AssistantMessage { request_turn, .. } => {
+                Some(request_turn.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(turns.len(), 4);
+    for (turn, physical, settled) in [
+        (&turns[0], "physical-completed", Some(true)),
+        (&turns[1], "physical-active", Some(false)),
+        (&turns[2], "physical-unknown", None),
+    ] {
+        let turn = turn.as_ref().expect("exact observed owner");
+        assert_eq!(turn.request_doc_id, physical);
+        assert_eq!(turn.request_id, "same-logical-id");
+        assert_eq!(turn.settled, settled);
+    }
+    assert!(turns[3].is_none());
 }

@@ -9,7 +9,7 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use serde_json::json;
 
 use super::inference::tests::InterruptionCapture;
-use super::AgentDaemon;
+use super::{AgentDaemon, AgentDaemonInit};
 use crate::agent::runtime::StartupBarrier;
 use crate::config::ResolvedAgent;
 use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -324,36 +324,36 @@ impl Harness {
             false,
             &[],
         );
-        AgentDaemon::new(
-            self.node.clone(),
-            self.agent_config.clone(),
-            None,
-            Arc::new(ScriptedModel {
+        AgentDaemon::new(AgentDaemonInit {
+            node: self.node.clone(),
+            agent_config: self.agent_config.clone(),
+            provider_family: None,
+            model: Arc::new(ScriptedModel {
                 calls: self.calls.clone(),
                 fail,
                 hang,
             }),
-            prompt_builder.preamble().to_string(),
-            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+            preamble: prompt_builder.preamble().to_string(),
+            loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
-            FailurePolicy::default(),
-            Some(
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: Some(
                 crate::rendered_request::defra_rendered_request_capture_factory(self.node.clone()),
             ),
-            BackgroundToolRegistry::default(),
-            executions,
-            Arc::new(StartupBarrier::ready_for_test()),
-            crate::runtime_status::RuntimeStatusHandle::new(
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: executions,
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+            runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
                 self.node.clone(),
                 self.owner().to_string(),
             ),
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
                 self.agent_config.node_identity().clone(),
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
-        )
+        })
         .unwrap()
     }
 
@@ -374,12 +374,21 @@ impl Harness {
     }
 
     async fn run(&self, request: AgentRequest, fail: bool) -> serde_json::Value {
+        self.run_with_capacity(request, fail, None).await
+    }
+
+    async fn run_with_capacity(
+        &self,
+        request: AgentRequest,
+        fail: bool,
+        capacity: Option<crate::agent::worker_capacity::RequestGuard>,
+    ) -> serde_json::Value {
         let doc_id = request.doc_id.clone();
         let mut daemon = self.daemon(fail);
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         tokio::time::timeout(
             Duration::from_secs(90),
-            daemon.process_request(request, shutdown_rx),
+            daemon.process_request_with_capacity(request, capacity, shutdown_rx),
         )
         .await
         .expect("request processing finished")
@@ -680,9 +689,7 @@ async fn claim_admission_rejection_releases_the_bound_workspace() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn refused_worker_ticket_releases_the_bound_workspace_before_work() {
-    use crate::agent::worker_capacity::{
-        bind_current_claim, scope_request_capacity, WorkerCapacity, WorkerTicket,
-    };
+    use crate::agent::worker_capacity::{RequestGuard, WorkerCapacity, WorkerTicket};
 
     let harness = Harness::new().await;
     let placement = tempfile::tempdir().expect("workspace placement directory");
@@ -690,12 +697,15 @@ async fn refused_worker_ticket_releases_the_bound_workspace_before_work() {
     harness.install_task(json!([])).await;
     let request = harness.create_request(Lineage::Trigger, true).await;
     materialize_writer_binding(&harness, &request).await;
-    let guard = WorkerCapacity::new(1).try_acquire_unbound().unwrap();
-    let row = scope_request_capacity(guard, async {
-        bind_current_claim(WorkerTicket::new("previous-request", "previous-generation")).unwrap();
-        harness.run(request, false).await
-    })
-    .await;
+    let mut guard = Some(RequestGuard::Unbound(
+        WorkerCapacity::new(1).try_acquire_unbound().unwrap(),
+    ));
+    RequestGuard::bind_claim(
+        &mut guard,
+        WorkerTicket::new("previous-request", "previous-generation"),
+    )
+    .unwrap();
+    let row = harness.run_with_capacity(request, false, guard).await;
     assert_eq!(harness.calls(), 0, "{row}");
     assert_eq!(row["lifecycle_state"], "failed", "{row}");
     assert!(reason(&row).contains("worker guard"), "{row}");

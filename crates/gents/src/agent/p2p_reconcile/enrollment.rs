@@ -318,6 +318,10 @@ pub struct EnrollmentState {
     pub applied_routes: BTreeSet<EnrollmentAppliedRoute>,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "variants are constructed by the conformance harness outside this crate's src"
+)]
 pub enum EnrollmentAction {
     ObserveOffer(EnrollmentOffer),
     ConfirmAdminPin(EnrollmentOffer),
@@ -671,8 +675,7 @@ impl EnrollmentState {
             && offer.resolved_server_did == offer.admin_did
             && request.candidate_signed
             && request.fresh
-            && request.digest
-                == canonical_enrollment_digest(request.canonical_text_fields().into_iter())
+            && request.digest == canonical_enrollment_digest(request.canonical_text_fields())
             && request.observed_candidate_peer == request.candidate_peer
             && request.resolved_candidate_did == request.candidate_did
             && request.candidate_ticket_peer == request.candidate_peer

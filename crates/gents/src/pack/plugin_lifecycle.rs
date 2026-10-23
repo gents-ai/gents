@@ -11,14 +11,17 @@ use crate::plugin::{install, store};
 /// Local publication is durable before node notification: a failed or cancelled notification
 /// cannot roll back a transaction that may already have committed without returning a receipt.
 #[allow(clippy::too_many_arguments)]
-pub async fn install<F: Future<Output = Result<()>>>(
+pub async fn install<F>(
     home: &Path,
     archive: &crate::pack_archive::PackArchive,
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
     notify: impl FnOnce(PackIdentity) -> F,
-) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)> {
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
+where
+    F: Future<Output = Result<()>>,
+{
     let manifest = archive.manifest();
     anyhow::ensure!(
         matches!(manifest.metadata.kind, PackKind::Plugins | PackKind::Assets),

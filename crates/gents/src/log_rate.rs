@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::hash::Hash;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -32,7 +32,7 @@ pub enum Decision {
 #[derive(Debug)]
 pub struct CallsiteRateLimiter<K> {
     config: RateLimitConfig,
-    states: HashMap<K, CallsiteState>,
+    states: RapidHashMap<K, CallsiteState>,
 }
 
 #[derive(Debug)]
@@ -42,11 +42,14 @@ struct CallsiteState {
     suppressed: u64,
 }
 
-impl<K: Eq + Hash> CallsiteRateLimiter<K> {
+impl<K> CallsiteRateLimiter<K>
+where
+    K: Eq + Hash,
+{
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             config,
-            states: HashMap::new(),
+            states: RapidHashMap::new(),
         }
     }
 
@@ -125,7 +128,10 @@ impl RateLimitFilter {
     }
 }
 
-impl<S: tracing::Subscriber> Filter<S> for RateLimitFilter {
+impl<S> Filter<S> for RateLimitFilter
+where
+    S: tracing::Subscriber,
+{
     fn enabled(&self, meta: &tracing::Metadata<'_>, _cx: &Context<'_, S>) -> bool {
         if !meta.is_event() || meta.target() == SUMMARY_TARGET {
             return true;

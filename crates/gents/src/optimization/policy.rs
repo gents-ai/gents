@@ -279,7 +279,7 @@ pub fn permutation_p_ppm(diffs: &[i128], samples: u32, seed: u64) -> u64 {
         }
         (count, samples as u128 + 1)
     };
-    ((count * 1_000_000 + total - 1) / total) as u64
+    (count * 1_000_000).div_ceil(total) as u64
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

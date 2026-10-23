@@ -20,15 +20,18 @@ where
     T: Deserialize<'de>,
 {
     struct Pairs<T>(std::marker::PhantomData<T>);
-    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Pairs<T> {
+    impl<'de, T> serde::de::Visitor<'de> for Pairs<T>
+    where
+        T: Deserialize<'de>,
+    {
         type Value = Vec<(String, T)>;
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             f.write_str("a JSON object")
         }
-        fn visit_map<A: serde::de::MapAccess<'de>>(
-            self,
-            mut map: A,
-        ) -> Result<Self::Value, A::Error> {
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
             let mut pairs = Vec::new();
             while let Some(pair) = map.next_entry()? {
                 pairs.push(pair);
@@ -76,6 +79,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_request_ancestry_cases: Vec<serde_json::Value>,
     pub(crate) goal_queue_assignment_cases: Vec<serde_json::Value>,
     pub(crate) goal_first_request_binding_cases: Vec<serde_json::Value>,
+    pub(crate) goal_continuation_assignment_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
     pub(crate) goal_request_assignment_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_receipt_cases: Vec<serde_json::Value>,
@@ -410,28 +414,28 @@ pub(crate) struct LeanPluginJobKill {
 pub(crate) enum LeanPluginJobAdoptionCase {
     Step0 {
         name: String,
-        tool_call: LeanPluginJobToolCall,
-        context: LeanPluginJobContext,
-        job: LeanPluginJobRow,
-        output: LeanPluginJobOutput,
-        expected: LeanPluginJobStep0Expected,
+        tool_call: Box<LeanPluginJobToolCall>,
+        context: Box<LeanPluginJobContext>,
+        job: Box<LeanPluginJobRow>,
+        output: Box<LeanPluginJobOutput>,
+        expected: Box<LeanPluginJobStep0Expected>,
     },
     HostPin {
         name: String,
-        claimed: LeanPluginJobPin,
-        facts: LeanPluginJobHostFacts,
-        expected: LeanPluginJobHostPinExpected,
+        claimed: Box<LeanPluginJobPin>,
+        facts: Box<LeanPluginJobHostFacts>,
+        expected: Box<LeanPluginJobHostPinExpected>,
     },
     Handle {
         name: String,
         taken: Vec<String>,
         handle: String,
-        expected: LeanPluginJobHandleExpected,
+        expected: Box<LeanPluginJobHandleExpected>,
     },
     Address {
         name: String,
         address: String,
-        expected: LeanPluginJobAddressExpected,
+        expected: Box<LeanPluginJobAddressExpected>,
     },
 }
 
@@ -544,45 +548,45 @@ pub(crate) struct LeanPluginJobDecodedKey {
 pub(crate) enum LeanPluginJobControlCase {
     Kill {
         name: String,
-        job: LeanPluginJobRow,
+        job: Box<LeanPluginJobRow>,
         observations: Vec<LeanPluginJobObservation>,
         control: String,
-        expected: LeanPluginJobKillExpected,
+        expected: Box<LeanPluginJobKillExpected>,
     },
     Resume {
         name: String,
-        caller: LeanPluginJobProcessScope,
-        owner: LeanPluginJobProcessScope,
+        caller: Box<LeanPluginJobProcessScope>,
+        owner: Box<LeanPluginJobProcessScope>,
         same_plugin: bool,
-        root: LeanPluginJobRow,
-        root_call_args: LeanPluginJobCall,
-        prior: LeanPluginJobRow,
-        job: LeanPluginJobRow,
-        call_args: LeanPluginJobCall,
-        guest_pin: LeanPluginJobGuestPin,
-        facts: LeanPluginJobHostFacts,
-        resume: LeanPluginJobResume,
-        expected: LeanPluginJobResumeExpected,
+        root: Box<LeanPluginJobRow>,
+        root_call_args: Box<LeanPluginJobCall>,
+        prior: Box<LeanPluginJobRow>,
+        job: Box<LeanPluginJobRow>,
+        call_args: Box<LeanPluginJobCall>,
+        guest_pin: Box<LeanPluginJobGuestPin>,
+        facts: Box<LeanPluginJobHostFacts>,
+        resume: Box<LeanPluginJobResume>,
+        expected: Box<LeanPluginJobResumeExpected>,
     },
     ResultRead {
         name: String,
-        caller: LeanPluginJobProcessScope,
-        owner: LeanPluginJobProcessScope,
+        caller: Box<LeanPluginJobProcessScope>,
+        owner: Box<LeanPluginJobProcessScope>,
         same_plugin: bool,
         terminal: bool,
-        expected: LeanPluginJobResultReadExpected,
+        expected: Box<LeanPluginJobResultReadExpected>,
     },
     ResultOffer {
         name: String,
         invocation: String,
-        expected: LeanPluginJobResultOfferExpected,
+        expected: Box<LeanPluginJobResultOfferExpected>,
     },
     StepFailure {
         name: String,
-        job: LeanPluginJobRow,
+        job: Box<LeanPluginJobRow>,
         consecutive_failures: u32,
         observations: Vec<LeanPluginJobObservation>,
-        expected: LeanPluginJobStepFailureExpected,
+        expected: Box<LeanPluginJobStepFailureExpected>,
     },
 }
 
@@ -863,45 +867,45 @@ pub(crate) enum LeanPluginJobAuthorityCase {
     Provenance {
         name: String,
         pack_kind: String,
-        record: LeanPluginJobRecord,
-        expected: LeanPluginJobProvenanceExpected,
+        record: Box<LeanPluginJobRecord>,
+        expected: Box<LeanPluginJobProvenanceExpected>,
     },
     Install {
         name: String,
-        prior: LeanPluginJobRecord,
+        prior: Box<LeanPluginJobRecord>,
         pack_kind: String,
         explicit: bool,
         via: String,
-        expected: LeanPluginJobInstallExpected,
+        expected: Box<LeanPluginJobInstallExpected>,
     },
     Origin {
         name: String,
         digest: String,
         mounts: Vec<LeanPluginJobMount>,
         trusted_packs: Vec<String>,
-        expected: LeanPluginJobOriginExpected,
+        expected: Box<LeanPluginJobOriginExpected>,
     },
     PackJobBlock {
         name: String,
         via: String,
         closure: Vec<String>,
-        block: LeanPluginJobPackBlock,
-        expected: LeanPluginJobAdmissibleExpected,
+        block: Box<LeanPluginJobPackBlock>,
+        expected: Box<LeanPluginJobAdmissibleExpected>,
     },
     PolicyValid {
         name: String,
         agent_targets: Vec<LeanPluginJobTarget>,
-        policy: LeanPluginJobPolicy,
-        expected: LeanPluginJobValidExpected,
+        policy: Box<LeanPluginJobPolicy>,
+        expected: Box<LeanPluginJobValidExpected>,
     },
     WireTargetsFrom {
         name: String,
         pack: String,
         pack_targets: Vec<LeanPluginJobTarget>,
-        policy: LeanPluginJobPolicy,
+        policy: Box<LeanPluginJobPolicy>,
         job_targets: Vec<LeanPluginJobTarget>,
         caller_targets: Vec<LeanPluginJobTarget>,
-        expected: LeanPluginJobWireTargetsExpected,
+        expected: Box<LeanPluginJobWireTargetsExpected>,
     },
 }
 
@@ -1002,6 +1006,10 @@ pub(crate) struct LeanPluginJobWireCase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "variants mirror the Lean wire kind names"
+)]
 pub(crate) enum LeanPluginJobWireKind {
     JobStepInput,
     JobStepOutput,
@@ -2425,7 +2433,10 @@ pub(crate) fn lean_plugin_calls_route_cases() -> &'static [LeanPluginCallsRouteC
 }
 
 /// One strictly decoded group of `plugin_resource_cases`.
-fn lean_plugin_resource_group<T: serde::de::DeserializeOwned>(group: &str) -> Vec<T> {
+fn lean_plugin_resource_group<T>(group: &str) -> Vec<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_json::from_value(lean_contract_snapshot().plugin_resource_cases[group].clone())
         .unwrap_or_else(|error| panic!("plugin_resource_cases.{group}: {error}"))
 }

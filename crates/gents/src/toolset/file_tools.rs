@@ -134,7 +134,7 @@ pub(crate) fn open_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
 /// overwritten. External writers are outside the lock — they are caught by
 /// the expected_content_hash check; there is no OS-level file lock (#724).
 static FILE_MUTATION_LOCKS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    std::sync::Mutex<rapidhash::RapidHashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(Default::default);
 
 fn canonical_lock_key(path: &Path) -> PathBuf {

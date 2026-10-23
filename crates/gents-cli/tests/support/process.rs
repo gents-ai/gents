@@ -191,6 +191,10 @@ pub fn spawn_server_with_ready_json_recovering(
     spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, true, None)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous harness polling a std child process and its log files"
+)]
 fn spawn_server_with_ready_json_inner(
     home_dir: &Path,
     port: u16,
@@ -361,6 +365,10 @@ pub(crate) fn configure_foreground_server_env(command: &mut Command, envs: &[(&s
 /// Wait until something accepts TCP on `port`; an unrelated process holding
 /// the port also satisfies this, so a success is not evidence `serve` owns
 /// it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous harness polling a std child process and its port"
+)]
 pub fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

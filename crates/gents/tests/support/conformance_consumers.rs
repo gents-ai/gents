@@ -938,6 +938,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_first_request_bindings_commit_exact_physical_roots",
         },
         ConformanceConsumer::RustTest {
+            id: "goal::first_request_binding::contract_tests::generated_continuation_assignments_preserve_physical_bindings",
+            package: "gents",
+            source_path: "crates/gents/src/goal/first_request_binding/contract_tests.rs",
+            module_path: "goal::first_request_binding::contract_tests",
+            function: "generated_continuation_assignments_preserve_physical_bindings",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::request_assignment::history_tests::generated_assignment_histories_drive_goal_version_selection",
             package: "gents",
             source_path: "crates/gents/src/goal/request_assignment/history_tests.rs",

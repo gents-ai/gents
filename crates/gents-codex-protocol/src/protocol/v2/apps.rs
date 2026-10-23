@@ -1,7 +1,7 @@
 use super::shared::default_enabled;
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -68,7 +68,7 @@ pub struct AppInfo {
     pub distribution_channel: Option<String>,
     pub branding: Option<AppBranding>,
     pub app_metadata: Option<AppMetadata>,
-    pub labels: Option<HashMap<String, String>>,
+    pub labels: Option<RapidHashMap<String, String>>,
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,

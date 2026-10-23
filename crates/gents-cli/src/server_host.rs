@@ -41,25 +41,16 @@ pub struct ProvisionOptions {
     pub store_key_custody: gents::store_key::StoreKeyCustodyChoice,
 }
 
-pub async fn ensure_standard_home(options: ProvisionOptions) -> Result<()> {
-    tokio::task::spawn_blocking(move || {
-        std::thread::Builder::new()
-            .name("gents-managed-provision".to_string())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .thread_stack_size(16 * 1024 * 1024)
-                    .build()
-                    .context("building managed Gents provision runtime")?
-                    .block_on(ensure_standard_home_inner(options))
-            })
-            .context("spawning managed Gents provision thread")?
-            .join()
-            .map_err(|_| anyhow::anyhow!("managed Gents provision thread panicked"))?
-    })
-    .await
-    .context("joining managed Gents provision task")?
+/// Provisioning drives `init`, whose node opening is not `Send`, on a blocking
+/// thread of `runtime`; that runtime's threads must have the large stacks the
+/// provisioning depth needs.
+pub async fn ensure_standard_home(
+    runtime: &tokio::runtime::Handle,
+    options: ProvisionOptions,
+) -> Result<()> {
+    gents::storage_backend::drive_unsendable(runtime, move || ensure_standard_home_inner(options))
+        .await
+        .context("joining managed Gents provision task")?
 }
 
 async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {

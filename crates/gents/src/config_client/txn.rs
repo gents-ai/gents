@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::future::Future;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
@@ -21,6 +21,7 @@ use super::write_telemetry::{
     WriteAttemptEvent, WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
 };
 use super::{graphql_api_base, ConfigAccess, GraphqlEndpoint};
+use crate::drop_cleanup::DropCleanup;
 
 enum TxnBackend<'a> {
     Http {
@@ -38,9 +39,9 @@ enum TxnBackend<'a> {
 
 struct MutationWriteGate {
     permits: Arc<tokio::sync::Semaphore>,
-    owners: StdMutex<HashMap<u64, MutationWriteOwner>>,
+    owners: StdMutex<RapidHashMap<u64, MutationWriteOwner>>,
     next_lease_id: AtomicU64,
-    pending_acquires: StdMutex<HashMap<u64, PendingWriteAcquire>>,
+    pending_acquires: StdMutex<RapidHashMap<u64, PendingWriteAcquire>>,
     next_pending_acquire_id: AtomicU64,
     store_claim: StdMutex<Option<Arc<StoreClaim>>>,
 }
@@ -208,9 +209,9 @@ impl MutationWriteGate {
     fn new() -> Self {
         Self {
             permits: Arc::new(tokio::sync::Semaphore::new(MUTATION_WRITE_GATE_CAPACITY)),
-            owners: StdMutex::new(HashMap::new()),
+            owners: StdMutex::new(RapidHashMap::new()),
             next_lease_id: AtomicU64::new(1),
-            pending_acquires: StdMutex::new(HashMap::new()),
+            pending_acquires: StdMutex::new(RapidHashMap::new()),
             next_pending_acquire_id: AtomicU64::new(1),
             store_claim: StdMutex::new(None),
         }
@@ -757,9 +758,10 @@ where
     tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, cleanup).await
 }
 
-fn mutation_write_gates() -> &'static StdMutex<HashMap<usize, Weak<MutationWriteGate>>> {
-    static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
-    GATES.get_or_init(|| StdMutex::new(HashMap::new()))
+fn mutation_write_gates() -> &'static StdMutex<RapidHashMap<usize, Weak<MutationWriteGate>>> {
+    static GATES: OnceLock<StdMutex<RapidHashMap<usize, Weak<MutationWriteGate>>>> =
+        OnceLock::new();
+    GATES.get_or_init(|| StdMutex::new(RapidHashMap::new()))
 }
 
 fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
@@ -790,14 +792,14 @@ fn existing_mutation_write_gate(node: &EmbeddedNode) -> Option<Arc<MutationWrite
 // the runtime that created it.
 enum RollbackOnDrop {
     Http {
-        runtime: tokio::runtime::Handle,
+        runtime: DropCleanup,
         endpoint: GraphqlEndpoint,
         id: String,
         client: reqwest::Client,
         armed: bool,
     },
     Embedded {
-        runtime: tokio::runtime::Handle,
+        runtime: DropCleanup,
         node: Arc<EmbeddedNode>,
         native_gate: Arc<MutationWriteGate>,
         native_owner: StdMutex<Option<BoxFuture<'static, Result<()>>>>,
@@ -839,7 +841,6 @@ impl Drop for RollbackOnDrop {
                 let endpoint = endpoint.clone();
                 let id = id.clone();
                 let client = client.clone();
-                let runtime = runtime.clone();
                 runtime.spawn(async move {
                     if let Err(error) = graphql::txn_discard(&endpoint, &id, &client).await {
                         tracing::debug!(%error, "discarding cancelled HTTP transaction");
@@ -879,7 +880,6 @@ impl Drop for RollbackOnDrop {
                     return;
                 }
                 let node = Arc::clone(node);
-                let runtime = runtime.clone();
                 let native_gate = Arc::clone(native_gate);
                 let native_operations = Arc::clone(native_operations);
                 let write_guard = write_guard.take();
@@ -925,6 +925,10 @@ impl Drop for RollbackOnDrop {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "ownership handles moved into the transaction owner task"
+)]
 async fn begin_embedded_owned<F, Fut>(
     node: Arc<EmbeddedNode>,
     native_gate: Arc<MutationWriteGate>,
@@ -969,7 +973,7 @@ where
         embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
     })??;
     let rollback = RollbackOnDrop::Embedded {
-        runtime: tokio::runtime::Handle::current(),
+        runtime: DropCleanup::current(),
         node: Arc::clone(&node),
         native_gate,
         native_owner: StdMutex::new(Some(native_owner)),
@@ -993,7 +997,7 @@ async fn begin_http_owned(
         .await
         .map_err(retry::transaction_storage_failure)?;
     let rollback = RollbackOnDrop::Http {
-        runtime: tokio::runtime::Handle::current(),
+        runtime: DropCleanup::current(),
         endpoint: endpoint.clone(),
         id: id.clone(),
         client: client.clone(),
@@ -1085,7 +1089,7 @@ pub struct ConfigApplyTxn<'a> {
     rollback_on_drop: Option<RollbackOnDrop>,
     affected_documents: AtomicU64,
     operation: Option<&'static str>,
-    contends_for_background_slot: AtomicBool,
+    contends_with_request_siblings: AtomicBool,
 }
 
 enum EmbeddedTransactionPurpose {
@@ -1124,11 +1128,27 @@ async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoun
 
 impl<'a> ConfigApplyTxn<'a> {
     #[cfg(test)]
-    pub(crate) async fn with_owned_local_operation_pause<F: Future>(
+    pub(crate) async fn with_embedded_commit_ack_pause<F>(
+        reached: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output
+    where
+        F: Future,
+    {
+        EMBEDDED_FINALIZATION_PAUSE
+            .scope((EmbeddedFinalizationBoundary::AfterCommit, reached), future)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_owned_local_operation_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         LOCAL_OPERATION_PAUSE
             .scope(
                 Arc::new(LocalOperationPause {
@@ -1142,12 +1162,15 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_owned_local_operation_completion<F: Future>(
+    pub(crate) async fn with_owned_local_operation_completion<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         completed: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         LOCAL_OPERATION_PAUSE
             .scope(
                 Arc::new(LocalOperationPause {
@@ -1168,10 +1191,13 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_successful_mutation_failure_at<F: Future>(
+    pub(crate) async fn with_successful_mutation_failure_at<F>(
         fail_after: Option<usize>,
         future: F,
-    ) -> (F::Output, usize) {
+    ) -> (F::Output, usize)
+    where
+        F: Future,
+    {
         assert!(fail_after.is_none_or(|index| index > 0));
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after,
@@ -1247,15 +1273,21 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_post_commit_receipt_loss<F: Future>(future: F) -> (F::Output, bool) {
+    pub(crate) async fn with_post_commit_receipt_loss<F>(future: F) -> (F::Output, bool)
+    where
+        F: Future,
+    {
         Self::with_post_commit_receipt_loss_for_operation(None, future).await
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_post_commit_receipt_loss_for_operation<F: Future>(
+    pub(crate) async fn with_post_commit_receipt_loss_for_operation<F>(
         operation: Option<&'static str>,
         future: F,
-    ) -> (F::Output, bool) {
+    ) -> (F::Output, bool)
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1278,12 +1310,15 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_successful_mutation_pause_at<F: Future>(
+    pub(crate) async fn with_successful_mutation_pause_at<F>(
         after: usize,
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> (F::Output, bool) {
+    ) -> (F::Output, bool)
+    where
+        F: Future,
+    {
         assert!(after > 0);
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
@@ -1320,11 +1355,14 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_write_gate_observation<F: Future>(
+    pub(crate) async fn with_write_gate_observation<F>(
         queued: Arc<tokio::sync::Notify>,
         acquired: Arc<AtomicBool>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1372,10 +1410,10 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_read_storage_failure<F: Future>(
-        marker: &'static str,
-        future: F,
-    ) -> F::Output {
+    pub(crate) async fn with_read_storage_failure<F>(marker: &'static str, future: F) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1395,11 +1433,14 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_read_pause<F: Future>(
+    pub(crate) async fn with_read_pause<F>(
         marker: &'static str,
         reached: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1419,11 +1460,14 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_native_operation_pause<F: Future>(
+    pub(crate) async fn with_native_operation_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1443,11 +1487,14 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     #[cfg(test)]
-    pub(crate) async fn with_rollback_failure_retry_boundary<F: Future>(
+    pub(crate) async fn with_rollback_failure_retry_boundary<F>(
         reached: Arc<tokio::sync::Notify>,
         cleanup_scheduled: Arc<AtomicBool>,
         future: F,
-    ) -> F::Output {
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -1508,7 +1555,7 @@ impl<'a> ConfigApplyTxn<'a> {
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
-            contends_for_background_slot: AtomicBool::new(false),
+            contends_with_request_siblings: AtomicBool::new(false),
             operation: Some(operation.as_str()),
         })
     }
@@ -1579,7 +1626,7 @@ impl<'a> ConfigApplyTxn<'a> {
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
-            contends_for_background_slot: AtomicBool::new(false),
+            contends_with_request_siblings: AtomicBool::new(false),
             operation: None,
         };
         Ok(txn)
@@ -1925,11 +1972,13 @@ impl<'a> ConfigApplyTxn<'a> {
         self.affected_documents.load(Ordering::Relaxed)
     }
 
-    /// Marks this attempt as contending for a request's background admission
-    /// slot. A conflict then retries within the admission budget, since every
-    /// concurrent admission to the request conflicts until one commits.
-    pub(crate) fn contend_for_background_slot(&self) {
-        self.contends_for_background_slot
+    /// Marks this attempt as writing a key that every concurrent sibling of
+    /// its request also writes: the background admission sequence, or the
+    /// session activity each published tool terminal refreshes. A conflict
+    /// then retries within the sibling budget, since such siblings conflict
+    /// until one commits.
+    pub(crate) fn contend_with_request_siblings(&self) {
+        self.contends_with_request_siblings
             .store(true, Ordering::Relaxed);
     }
 }
@@ -2335,10 +2384,10 @@ where
             }
             let conflict_source = retry::classified_transaction_conflict(&error);
             let source = conflict_source.unwrap_or(ConflictSource::None);
-            let slot_contention = conflict_source.is_some()
-                && txn.contends_for_background_slot.load(Ordering::Relaxed);
-            if slot_contention {
-                max_attempts = max_attempts.max(retry::BACKGROUND_SLOT_MAX_ATTEMPTS);
+            let sibling_contention = conflict_source.is_some()
+                && txn.contends_with_request_siblings.load(Ordering::Relaxed);
+            if sibling_contention {
+                max_attempts = max_attempts.max(retry::REQUEST_SIBLING_MAX_ATTEMPTS);
             }
             match failure_disposition(mode, conflict_source, retry_generic, attempt, max_attempts) {
                 FailureDisposition::Observe => {
@@ -2352,8 +2401,8 @@ where
                     return Ok(TransactionOutcome::ConflictObserved);
                 }
                 FailureDisposition::Retry(backoff) => {
-                    let backoff = if slot_contention {
-                        retry::background_slot_backoff(attempt - 1)
+                    let backoff = if sibling_contention {
+                        retry::request_sibling_backoff(attempt - 1)
                     } else {
                         backoff
                     };

@@ -11,10 +11,6 @@ use serde_json::json;
 
 use crate::http::router::RuntimeHttpState;
 
-#[cfg(test)]
-#[path = "../../../gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct IdentityDecideRequest {
     actor: String,
@@ -183,7 +179,7 @@ mod tests {
 
     use super::*;
 
-    use super::lean_vocab_test::{lean_identity_permission_cases, LeanIdentityPermissionCase};
+    use crate::lean_vocab_test::{lean_identity_permission_cases, LeanIdentityPermissionCase};
 
     const IDENTITY_PERMISSION_POLICY_ID: &str = "identity-permission-cases";
     const IDENTITY_PERMISSION_RESOURCE_NAME: &str = "row";

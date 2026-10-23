@@ -594,7 +594,7 @@ async fn recovery_receipt_fixture(
             Box::pin(async move {
                 let now = chrono::Utc::now().to_rfc3339();
                 crate::session::ensure_session_in_txn(
-                    &txn,
+                    txn,
                     &request.session_id,
                     &request.node_did,
                     &request.agent_id,
@@ -605,7 +605,7 @@ async fn recovery_receipt_fixture(
                 )
                 .await?;
                 let session = crate::session::load_agent_session_row_in_txn(
-                    &txn,
+                    txn,
                     &request.node_did,
                     &request.session_id,
                     request.requester_did.as_deref(),
@@ -613,7 +613,7 @@ async fn recovery_receipt_fixture(
                 .await?
                 .expect("recovery session");
                 let facts =
-                    crate::session::load_scoped_request_facts_in_txn(&txn, &session.session, false)
+                    crate::session::load_scoped_request_facts_in_txn(txn, &session.session, false)
                         .await?;
                 let fact = facts
                     .iter()
@@ -621,7 +621,7 @@ async fn recovery_receipt_fixture(
                     .expect("recovery request fact");
                 assert!(
                     crate::session::advance_session_request_observation_in_txn(
-                        &txn,
+                        txn,
                         fact,
                         &request.content,
                         &now,
@@ -1636,10 +1636,9 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         replay_start.is_ok(),
         "exactly one accepted handle must win pending-to-running dispatch: first={first_start:?}, replay={replay_start:?}"
     );
-    let loser_error = if first_start.is_ok() {
-        replay_start.as_ref().unwrap_err()
-    } else {
-        first_start.as_ref().unwrap_err()
+    let loser_error = match (&first_start, &replay_start) {
+        (Ok(_), Err(error)) | (Err(error), _) => error,
+        (Ok(_), Ok(_)) => unreachable!("exactly one handle wins, asserted above"),
     };
     assert!(
         format!("{loser_error:#}").contains("no longer pending"),
@@ -1788,4 +1787,99 @@ async fn modeled_capture_documents_survive_publication_replay_and_forks() {
         before
     );
     node.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancelled_flush_replays_before_inference_close_or_publication() {
+    use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+    use crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
+    use gents_protocol::message::Message;
+    use gents_protocol::output::TerminalOutput;
+
+    for publish in [false, true] {
+        let name = if publish {
+            "cancelled-flush-publication"
+        } else {
+            "cancelled-flush-close"
+        };
+        let (node, path, lifecycle, writer) = fixture(name).await;
+        let request = lifecycle.request();
+        writer
+            .start_provider_attempt(&request.doc_id, 0, 0, "inference.1".parse().unwrap())
+            .await;
+        let prefix = Message::assistant("received 世界");
+        let committed = Arc::new(tokio::sync::Notify::new());
+        let mut flush = Box::pin(ConfigApplyTxn::with_embedded_commit_ack_pause(
+            committed.clone(),
+            writer.flush_native_partial(&lifecycle, &prefix),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                () = committed.notified() => {},
+                result = &mut flush => panic!("flush skipped the commit boundary: {result:?}"),
+            }
+        })
+        .await
+        .expect("inference flush commits before acknowledgement");
+        drop(flush);
+        let access = ConfigAccess::local(node.clone());
+        let query = format!(
+            "{{AgentOutputSegment(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{{AGENT_OUTPUT_SEGMENT_FIELDS}}}}}",
+            crate::graphql::escape_graphql_string(&request.doc_id),
+        );
+        let before = access.execute(&query).await.unwrap();
+        let originals = before["data"]["AgentOutputSegment"].as_array().unwrap();
+        assert_eq!(originals.len(), 1);
+        assert!(originals[0]["close"].is_null());
+
+        let expected = if publish {
+            Message::assistant("received 世界 and final output")
+        } else {
+            prefix
+        };
+        let message_doc_id = if publish {
+            writer
+                .publish_native_turn(&lifecycle, 0, 0, &expected)
+                .await
+                .expect("acceptance replays the pending prefix before appending its final delta")
+                .message_doc_id
+        } else {
+            writer
+                .close_provider_attempt(&lifecycle, 0, 0, canonical::ProviderAttemptClose::Partial)
+                .await
+                .expect("partial closure acknowledges all received output");
+            let TerminalOutput::Message { message_doc_id } =
+                writer.terminal_output(&request.doc_id).await
+            else {
+                panic!("partial inference close must retain its message");
+            };
+            message_doc_id
+        };
+        let (_, reconstructed) = crate::session::load_canonical_message(
+            &access,
+            &message_doc_id,
+            &request.node_did,
+            request.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reconstructed, expected);
+        let after = access.execute(&query).await.unwrap();
+        let rows = after["data"]["AgentOutputSegment"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "original flush and one closing record");
+        assert!(
+            rows.contains(&originals[0]),
+            "exact original flush is retained"
+        );
+        if publish {
+            let replay = writer
+                .publish_native_turn(&lifecycle, 0, 0, &expected)
+                .await
+                .unwrap();
+            assert_eq!(replay.message_doc_id, message_doc_id);
+            assert_eq!(access.execute(&query).await.unwrap(), after);
+        }
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(path);
+    }
 }

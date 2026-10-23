@@ -1,6 +1,6 @@
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +35,7 @@ pub struct ProcessSpawnParams {
         skip_serializing_if = "Option::is_none"
     )]
     pub timeout_ms: Option<Option<i64>>,
-    pub env: Option<HashMap<String, Option<String>>>,
+    pub env: Option<RapidHashMap<String, Option<String>>>,
     pub size: Option<ProcessTerminalSize>,
 }
 

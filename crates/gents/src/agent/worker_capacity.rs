@@ -1,6 +1,4 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::future::Future;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -43,60 +41,39 @@ pub(crate) struct WorkerCapacity {
     active: Arc<Semaphore>,
     #[cfg(test)]
     active_limit: usize,
-    registered: Mutex<HashMap<WorkerTicket, RegisteredTicket>>,
+    registered: Mutex<RapidHashMap<WorkerTicket, RegisteredTicket>>,
 }
 
-tokio::task_local! {
-    static SLOT_CAPACITY: Arc<WorkerCapacity>;
-    static REQUEST_GUARD: RefCell<Option<RequestGuard>>;
-}
-
-enum RequestGuard {
+/// The worker permit one request execution owns from dequeue until it returns.
+pub(crate) enum RequestGuard {
     Unbound(UnboundActiveGuard),
     Active { _guard: ActiveGuard },
 }
 
-pub(crate) async fn scope_slot_capacity<F: Future>(
-    capacity: Arc<WorkerCapacity>,
-    future: F,
-) -> F::Output {
-    SLOT_CAPACITY.scope(capacity, future).await
-}
-
-pub(crate) fn current_slot_capacity() -> Option<Arc<WorkerCapacity>> {
-    SLOT_CAPACITY.try_with(Arc::clone).ok()
-}
-
-/// Owns one post-dequeue permit for the entire `process_request` future.
-pub(crate) async fn scope_request_capacity<F: Future>(
-    guard: UnboundActiveGuard,
-    future: F,
-) -> F::Output {
-    REQUEST_GUARD
-        .scope(RefCell::new(Some(RequestGuard::Unbound(guard))), future)
-        .await
-}
-
-/// Bind after the canonical request claim has supplied an execution generation.
-pub(crate) fn bind_current_claim(ticket: WorkerTicket) -> Result<(), CapacityError> {
-    REQUEST_GUARD
-        .try_with(|slot| {
-            let mut slot = slot.borrow_mut();
-            let Some(RequestGuard::Unbound(guard)) = slot.take() else {
-                return Err(CapacityError::OwnershipLost);
-            };
-            match guard.bind(ticket) {
-                Ok(active) => {
-                    *slot = Some(RequestGuard::Active { _guard: active });
-                    Ok(())
-                }
-                Err((guard, error)) => {
-                    *slot = Some(RequestGuard::Unbound(guard));
-                    Err(error)
-                }
+impl RequestGuard {
+    /// Bind after the canonical request claim has supplied an execution
+    /// generation. A request run without a worker permit has nothing to bind.
+    pub(crate) fn bind_claim(
+        slot: &mut Option<Self>,
+        ticket: WorkerTicket,
+    ) -> Result<(), CapacityError> {
+        let Some(guard) = slot.take() else {
+            return Ok(());
+        };
+        let Self::Unbound(guard) = guard else {
+            return Err(CapacityError::OwnershipLost);
+        };
+        match guard.bind(ticket) {
+            Ok(active) => {
+                *slot = Some(Self::Active { _guard: active });
+                Ok(())
             }
-        })
-        .unwrap_or(Ok(()))
+            Err((guard, error)) => {
+                *slot = Some(Self::Unbound(guard));
+                Err(error)
+            }
+        }
+    }
 }
 
 impl WorkerCapacity {
@@ -105,7 +82,7 @@ impl WorkerCapacity {
             active: Arc::new(Semaphore::new(active_limit)),
             #[cfg(test)]
             active_limit,
-            registered: Mutex::new(HashMap::new()),
+            registered: Mutex::new(RapidHashMap::new()),
         })
     }
 
@@ -114,7 +91,7 @@ impl WorkerCapacity {
         self.active_limit
     }
 
-    fn registry(&self) -> MutexGuard<'_, HashMap<WorkerTicket, RegisteredTicket>> {
+    fn registry(&self) -> MutexGuard<'_, RapidHashMap<WorkerTicket, RegisteredTicket>> {
         self.registered
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -255,7 +232,7 @@ mod tests {
         let mut exercised = 0;
         for case in lean_canonical_worker_capacity_cases() {
             let capacity = WorkerCapacity::new(case.pre.active_limit);
-            let mut active = HashMap::<WorkerTicket, ActiveGuard>::new();
+            let mut active = RapidHashMap::<WorkerTicket, ActiveGuard>::new();
             for raw in &case.pre.active {
                 let key = ticket(*raw);
                 let guard = capacity

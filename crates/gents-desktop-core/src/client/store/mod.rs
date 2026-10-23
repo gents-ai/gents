@@ -8,9 +8,12 @@ mod turns;
 
 pub(crate) use indexing::sort_request_rows;
 
-pub use turns::{folded_requests, queued_behind_turn, request_answer_owner, session_turn_request};
+pub use turns::{
+    folded_requests, queued_behind_turn, request_answer_owner, session_display_request,
+    session_turn_request,
+};
 
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use gents::document_config::{
@@ -105,7 +108,7 @@ pub struct ClientStoreRows {
     #[serde(skip)]
     pub chain_key_binding_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
-    pub operator_config_authoritative_node_dids: HashSet<String>,
+    pub operator_config_authoritative_node_dids: RapidHashSet<String>,
     #[serde(skip)]
     pub inference_backend_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
@@ -167,21 +170,21 @@ pub struct ClientStore {
     pub datastore_tool_surface_source_node_dids: Vec<Option<String>>,
     pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     pub chain_key_binding_source_node_dids: Vec<Option<String>>,
-    pub operator_config_authoritative_node_dids: HashSet<String>,
+    pub operator_config_authoritative_node_dids: RapidHashSet<String>,
     pub inference_backend_source_node_dids: Vec<Option<String>>,
     pub backend_observation_source_node_dids: Vec<Option<String>>,
     pub inference_profile_source_node_dids: Vec<Option<String>>,
     pub tool_service_registry_source_node_dids: Vec<Option<String>>,
-    transcript_messages_by_session_id: HashMap<String, Vec<usize>>,
-    output_segments_by_request_doc_id: HashMap<String, Vec<usize>>,
-    requests_by_session_id: HashMap<String, Vec<usize>>,
-    tool_calls_by_session_id: HashMap<String, Vec<usize>>,
-    runtimes_by_node_did: HashMap<String, usize>,
-    node_readiness_by_node_did: HashMap<String, usize>,
-    request_index_by_id: HashMap<String, usize>,
-    request_index_by_doc_id: HashMap<String, Option<usize>>,
-    unscoped_placeholder_request_ids: HashSet<String>,
-    mailbox_index_by_doc_id: HashMap<String, Option<usize>>,
+    transcript_messages_by_session_id: RapidHashMap<String, Vec<usize>>,
+    output_segments_by_request_doc_id: RapidHashMap<String, Vec<usize>>,
+    requests_by_session_id: RapidHashMap<String, Vec<usize>>,
+    tool_calls_by_session_id: RapidHashMap<String, Vec<usize>>,
+    runtimes_by_node_did: RapidHashMap<String, usize>,
+    node_readiness_by_node_did: RapidHashMap<String, usize>,
+    request_index_by_id: RapidHashMap<String, usize>,
+    request_index_by_doc_id: RapidHashMap<String, Option<usize>>,
+    unscoped_placeholder_request_ids: RapidHashSet<String>,
+    mailbox_index_by_doc_id: RapidHashMap<String, Option<usize>>,
 }
 
 #[derive(Debug)]
@@ -270,7 +273,7 @@ impl ClientStore {
             return StoreScope::All;
         };
         let mut scope = self.merge_scope(incoming);
-        scope.insert_node(&node_did);
+        scope.insert_node(node_did);
         scope
     }
 
@@ -309,12 +312,6 @@ impl ClientStore {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    mod observer_projection;
-    mod store_semantics;
-}
-
 pub fn source_matches_node(
     sources: &[Option<String>],
     row_index: usize,
@@ -325,4 +322,10 @@ pub fn source_matches_node(
         Some(source_node_did) => source_node_did == node_did,
         None => !require_source_scope,
     }
+}
+
+#[cfg(test)]
+mod tests {
+    mod observer_projection;
+    mod store_semantics;
 }

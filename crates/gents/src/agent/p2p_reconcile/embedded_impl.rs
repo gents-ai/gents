@@ -453,7 +453,7 @@ pub(super) mod tests {
 
     use super::*;
     use crate::agent::completion_retry::CompletionRetryProfileFields;
-    use crate::agent::daemon::AgentDaemon;
+    use crate::agent::daemon::{AgentDaemon, AgentDaemonInit};
     use crate::agent::p2p_reconcile::templates::{
         Scope, AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
     };
@@ -921,27 +921,27 @@ pub(super) mod tests {
             node.clone(),
             behavior.node_did().to_string(),
         );
-        AgentDaemon::new(
-            node.clone(),
-            behavior.clone(),
-            None,
-            Arc::new(CountingReplyModel(calls)),
-            prompt_builder.preamble().to_string(),
-            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+        AgentDaemon::new(AgentDaemonInit {
+            node: node.clone(),
+            agent_config: behavior.clone(),
+            provider_family: None,
+            model: Arc::new(CountingReplyModel(calls)),
+            preamble: prompt_builder.preamble().to_string(),
+            loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
-            FailurePolicy::default(),
-            None,
-            BackgroundToolRegistry::default(),
-            BackgroundExecutionRegistry::default(),
-            Arc::new(StartupBarrier::ready_for_test()),
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: None,
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: BackgroundExecutionRegistry::default(),
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 node,
                 behavior.node_identity().clone(),
                 authority,
             ),
-        )
+        })
         .expect("valid canonical daemon fixture")
     }
 

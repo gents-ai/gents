@@ -492,20 +492,23 @@ describe("stop", () => {
 });
 
 describe("foreground command control", () => {
+  const command = {
+    ...tool({ kind: "generic", summary: null, input: null, output: null }, "running"),
+    toolName: "bash_unrestricted",
+    toolCallId: "command-1",
+    requestId: "request-1",
+    awaitMode: "foreground",
+    backgroundAvailable: true,
+  };
+
   it("backgrounds the exact running command without stopping its request", async () => {
     const backgroundTool = vi.fn().mockResolvedValue(true);
     const app = testApp({ api: { backgroundTool }, session: session({}) });
-    const command = {
-      ...tool({ kind: "generic", summary: null, input: null, output: null }, "running"),
-      toolName: "bash_unrestricted",
-      toolCallId: "command-1",
-      requestId: "request-1",
-      awaitMode: "foreground",
-      backgroundAvailable: true,
-    };
     renderIn(app, <BackgroundToolButton tool={command} />);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Run in background" }));
+      const button = screen.getByRole("button", { name: "Run in background" });
+      fireEvent.click(button);
+      fireEvent.click(button);
     });
     expect(backgroundTool).toHaveBeenCalledWith({
       nodeDid: "did:test:node",
@@ -513,6 +516,25 @@ describe("foreground command control", () => {
       requestId: "request-1",
       toolCallId: "command-1",
     });
+    expect(screen.getByRole("button", { name: "Backgrounding…" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Backgrounding…" }));
+    expect(backgroundTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("can retry a failed handoff and settles when the command already finished", async () => {
+    const backgroundTool = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("runtime unavailable"))
+      .mockResolvedValueOnce(false);
+    const app = testApp({ api: { backgroundTool }, session: session({}) });
+    renderIn(app, <BackgroundToolButton tool={command} />);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Run in background" }));
+      });
+      expect(screen.getByRole("button", { name: "Run in background" })).toBeEnabled();
+    }
+    expect(backgroundTool).toHaveBeenCalledTimes(2);
   });
 
   it("does not offer backgrounding for a completed command", () => {

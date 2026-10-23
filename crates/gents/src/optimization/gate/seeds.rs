@@ -33,7 +33,7 @@ fn failed_seeds(
         .as_deref()
         .unwrap_or("1970-01-01T00:00:00Z");
     let identity = uuid::Uuid::nil().to_string();
-    let (node, ctx) = task_node_ctx(&definition.node_did, &baseline.agent_id, &now);
+    let (node, ctx) = task_node_ctx(&definition.node_did, &baseline.agent_id, now);
     let mut failures = Vec::new();
     for case in &definition.cases {
         for (index, stage) in case.stages.iter().enumerate() {

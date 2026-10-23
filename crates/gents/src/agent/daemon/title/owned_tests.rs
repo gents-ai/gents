@@ -23,7 +23,10 @@ use tracing_subscriber::{Layer, Registry};
 
 use super::{AgentDaemon, AuxiliaryTask};
 use crate::agent::completion_retry::CompletionRetryProfileFields;
-use crate::agent::runtime::{run_router_with_watcher, RuntimeAdmissionGate, StartupBarrier};
+use crate::agent::daemon::AgentDaemonInit;
+use crate::agent::runtime::{
+    run_router_with_watcher, RouterInputs, RuntimeAdmissionGate, StartupBarrier,
+};
 use crate::backend_provider::BackendProviderKind;
 use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::config_client::ConfigAccess;
@@ -192,27 +195,28 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
         recovered.snapshot().unwrap().used,
         budget.snapshot().unwrap().used
     );
-    let requests = observed.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].tools.is_empty());
-    assert_eq!(requests[0].chat_history.len(), 2);
-    assert_eq!(
-        requests[0]
-            .chat_history
-            .iter()
-            .filter(|message| matches!(message, rig::message::Message::User { .. }))
-            .count(),
-        1
-    );
-    assert_eq!(
-        requests[0]
-            .chat_history
-            .iter()
-            .filter(|message| matches!(message, rig::message::Message::System { .. }))
-            .count(),
-        1
-    );
-    drop(requests);
+    {
+        let requests = observed.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].tools.is_empty());
+        assert_eq!(requests[0].chat_history.len(), 2);
+        assert_eq!(
+            requests[0]
+                .chat_history
+                .iter()
+                .filter(|message| matches!(message, rig::message::Message::User { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests[0]
+                .chat_history
+                .iter()
+                .filter(|message| matches!(message, rig::message::Message::System { .. }))
+                .count(),
+            1
+        );
+    }
     assert_eq!(fixture.session_message_count().await, 0);
     assert_eq!(
         crate::goal::session_token_usage(
@@ -396,30 +400,31 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
     drain_reviews(&tasks, true).await;
     assert!(reviewer.take_failure().is_none());
     assert_eq!(budget.snapshot().unwrap().used, 8);
-    let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].tools.is_empty());
-    let input = calls[0]
-        .chat_history
-        .iter()
-        .find_map(|message| {
-            let rig::message::Message::User { content } = message else {
-                return None;
-            };
-            content.iter().find_map(|part| {
-                let rig::message::UserContent::Text(text) = part else {
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].tools.is_empty());
+        let input = calls[0]
+            .chat_history
+            .iter()
+            .find_map(|message| {
+                let rig::message::Message::User { content } = message else {
                     return None;
                 };
-                serde_json::from_str::<super::review::ReviewInput>(&text.text).ok()
+                content.iter().find_map(|part| {
+                    let rig::message::UserContent::Text(text) = part else {
+                        return None;
+                    };
+                    serde_json::from_str::<super::review::ReviewInput>(&text.text).ok()
+                })
             })
-        })
-        .unwrap();
-    assert_eq!(input.action["workspace"], serde_json::json!(key.path));
-    assert_eq!(
-        input.action["subject"]["root"],
-        serde_json::json!(tool_root)
-    );
-    drop(calls);
+            .unwrap();
+        assert_eq!(input.action["workspace"], serde_json::json!(key.path));
+        assert_eq!(
+            input.action["subject"]["root"],
+            serde_json::json!(tool_root)
+        );
+    }
     assert_eq!(fixture.session_message_count().await, 0);
     assert!(crate::plugin::approval::pending_requests(home.path())
         .unwrap()
@@ -1028,7 +1033,10 @@ struct TitleProvider {
 #[derive(Default)]
 struct TitleWarningCapture(Arc<Mutex<Vec<&'static str>>>);
 
-impl<S: tracing::Subscriber> Layer<S> for TitleWarningCapture {
+impl<S> Layer<S> for TitleWarningCapture
+where
+    S: tracing::Subscriber,
+{
     fn on_event(&self, event: &tracing::Event<'_>, _: LayerContext<'_, S>) {
         let metadata = event.metadata();
         if metadata.target() == "gents::agent::daemon::title"
@@ -1144,7 +1152,7 @@ impl TitleFixture {
         let backend = self.agent_config.backend_id.as_ref().unwrap();
         registry.reconcile(
             1,
-            &std::collections::HashMap::from([(
+            &rapidhash::RapidHashMap::from_iter([(
                 backend.clone(),
                 crate::admission::BackendAdmissionConfig {
                     backend_id: backend.clone(),
@@ -1316,11 +1324,10 @@ impl TitleFixture {
         }
     }
 
-    fn task<M: crate::llm::rig_compat::ProviderModel>(
-        &self,
-        model: M,
-        capture: bool,
-    ) -> AuxiliaryTask<M> {
+    fn task<M>(&self, model: M, capture: bool) -> AuxiliaryTask<M>
+    where
+        M: crate::llm::rig_compat::ProviderModel,
+    {
         AuxiliaryTask {
             node: self.node.clone(),
             agent_config: self.agent_config.clone(),
@@ -1593,7 +1600,7 @@ async fn assert_title_audit(
         message_count, 0,
         "title audit published a transcript header"
     );
-    let mut sources = std::collections::HashSet::new();
+    let mut sources = rapidhash::RapidHashSet::default();
     for row in &rows {
         let OutputSource::ProviderTurn {
             scope,
@@ -1720,7 +1727,7 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
                 }
                 _ => None,
             })
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<rapidhash::RapidHashSet<_>>();
         let all_received = sources.len() >= minimum
             && sources.iter().all(|(sequence, attempt)| {
                 let source = OutputSource::ProviderTurn {
@@ -2033,7 +2040,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             active_event_triggers: Default::default(),
             unavailable_event_triggers: Default::default(),
             active_tasks: Default::default(),
-            dispatchers: std::collections::HashMap::from([("general".into(), dispatch)]),
+            dispatchers: rapidhash::RapidHashMap::from_iter([("general".into(), dispatch)]),
             agent_executor_capacities: Default::default(),
             agent_executor_queue_capacities: Default::default(),
         });
@@ -2048,31 +2055,31 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             .unwrap();
         let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let mut daemon = AgentDaemon::new(
-            fixture.node.clone(),
-            fixture.agent_config.clone(),
-            None,
-            Arc::new(provider),
+        let mut daemon = AgentDaemon::new(AgentDaemonInit {
+            node: fixture.node.clone(),
+            agent_config: fixture.agent_config.clone(),
+            provider_family: None,
+            model: Arc::new(provider),
             preamble,
-            Arc::new(Vec::new()),
+            loop_tools: Arc::new(Vec::new()),
             prompt_builder,
-            FailurePolicy::default(),
-            Some(
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: Some(
                 crate::rendered_request::defra_rendered_request_capture_factory(
                     fixture.node.clone(),
                 ),
             ),
-            BackgroundToolRegistry::default(),
-            BackgroundExecutionRegistry::default(),
-            Arc::new(StartupBarrier::ready_for_test()),
-            status.clone(),
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: BackgroundExecutionRegistry::default(),
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+            runtime_status: status.clone(),
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 fixture.node.clone(),
                 fixture.identity.clone(),
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
-        )
+        })
         .unwrap();
         let daemon_rx = Arc::new(tokio::sync::Mutex::new(receiver));
         let daemon_shutdown = shutdown_rx.clone();
@@ -2082,16 +2089,16 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         let router_node = fixture.node.clone();
         let router_did = fixture.identity.did().to_owned();
         let router_task = tokio::spawn(async move {
-            run_router_with_watcher(
-                router_node.clone(),
-                router_did.clone(),
-                DefraWatcher::new(router_node, &router_did).expect("request watcher"),
-                snapshot_rx,
-                shutdown_rx,
-                router_gate,
-                status,
-                None,
-            )
+            run_router_with_watcher(RouterInputs {
+                node: router_node.clone(),
+                node_did: router_did.clone(),
+                watcher: DefraWatcher::new(router_node, &router_did).expect("request watcher"),
+                active_snapshot_rx: snapshot_rx,
+                shutdown: shutdown_rx,
+                admission_gate: router_gate,
+                runtime_status: status,
+                runtime_snapshot_observer: None,
+            })
             .await
         });
 
@@ -2136,7 +2143,15 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                 "creator dispatched before daemon"
             );
         }
-        let daemon_task = tokio::spawn(async move { daemon.run(daemon_rx, daemon_shutdown).await });
+        let daemon_task = tokio::spawn(async move {
+            daemon
+                .run(
+                    daemon_rx,
+                    crate::agent::worker_capacity::WorkerCapacity::new(1),
+                    daemon_shutdown,
+                )
+                .await
+        });
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
@@ -2220,7 +2235,7 @@ async fn start_owned_title_daemon(
         active_event_triggers: Default::default(),
         unavailable_event_triggers: Default::default(),
         active_tasks: Default::default(),
-        dispatchers: std::collections::HashMap::from([("general".into(), dispatch.clone())]),
+        dispatchers: rapidhash::RapidHashMap::from_iter([("general".into(), dispatch.clone())]),
         agent_executor_capacities: Default::default(),
         agent_executor_queue_capacities: Default::default(),
     };
@@ -2234,31 +2249,37 @@ async fn start_owned_title_daemon(
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut daemon = AgentDaemon::new(
-        fixture.node.clone(),
-        fixture.agent_config.clone(),
-        None,
-        Arc::new(provider),
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: fixture.node.clone(),
+        agent_config: fixture.agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(provider),
         preamble,
-        Arc::new(Vec::new()),
+        loop_tools: Arc::new(Vec::new()),
         prompt_builder,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(fixture.node.clone())),
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        status,
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(fixture.node.clone()),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: status,
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             fixture.node.clone(),
             fixture.identity.clone(),
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let task = tokio::spawn(async move {
         daemon
-            .run(Arc::new(tokio::sync::Mutex::new(receiver)), shutdown_rx)
+            .run(
+                Arc::new(tokio::sync::Mutex::new(receiver)),
+                crate::agent::worker_capacity::WorkerCapacity::new(1),
+                shutdown_rx,
+            )
             .await
     });
     (dispatch, shutdown_tx, task, status_owner)
@@ -2582,7 +2603,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
     let registry = crate::admission::AdmissionRegistry::new(fixture.node.clone());
     registry.reconcile(
         1,
-        &std::collections::HashMap::from([(
+        &rapidhash::RapidHashMap::from_iter([(
             backend.clone(),
             crate::admission::BackendAdmissionConfig {
                 backend_id: backend.clone(),

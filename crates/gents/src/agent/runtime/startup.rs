@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -517,7 +517,7 @@ async fn run_agent_owned(
         resolved_snapshot,
         admission_registry.clone(),
         agent.retry_policy.clone(),
-        move |agent, tool_surface, request_rx, generation, shutdown| {
+        move |agent, tool_surface, request_rx, capacity, generation, shutdown| {
             let runtime = runtime_for_runner.clone();
             #[cfg(test)]
             let test_slot_runner = test_slot_runner.clone();
@@ -527,7 +527,14 @@ async fn run_agent_owned(
                     return test_slot_runner(generation, shutdown.clone()).await;
                 }
                 runtime
-                    .run_agent(agent, tool_surface, request_rx, generation, shutdown)
+                    .run_agent(
+                        agent,
+                        tool_surface,
+                        request_rx,
+                        capacity,
+                        generation,
+                        shutdown,
+                    )
                     .await
             }
         },
@@ -964,14 +971,16 @@ async fn run_agent_owned(
         background_tasks.spawn(async move {
             BackgroundTaskResult::Control(
                 super::control_watcher::run_control_watcher(
-                    control_node,
-                    control_subscription,
-                    control_node_did,
-                    control_context,
-                    control_tx,
-                    control_runtime_status,
-                    backend_health_events_rx,
-                    control_shutdown,
+                    super::control_watcher::ControlWatcherInputs {
+                        node: control_node,
+                        subscription: control_subscription,
+                        node_did: control_node_did,
+                        resolve_context: control_context,
+                        proposals_tx: control_tx,
+                        runtime_status: control_runtime_status,
+                        health_events_rx: backend_health_events_rx,
+                        shutdown: control_shutdown,
+                    },
                 )
                 .await,
             )
@@ -1265,8 +1274,8 @@ async fn resolve_tool_surfaces(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     agents: &[Arc<crate::config::ResolvedAgent>],
     plugins: &crate::plugin::executor::PluginExecutor,
-) -> Result<HashMap<String, Arc<ToolSurface>>> {
-    let mut tool_surfaces = HashMap::with_capacity(agents.len());
+) -> Result<RapidHashMap<String, Arc<ToolSurface>>> {
+    let mut tool_surfaces = RapidHashMap::with_capacity(agents.len());
     for agent in agents {
         let tool_surface = agent.tools.resolve(node, agent.node_did(), plugins).await?;
         tool_surfaces.insert(agent.agent_id.clone(), Arc::new(tool_surface));
@@ -1303,8 +1312,8 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
 async fn resolve_backend_admission_configs(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     agents: &[Arc<crate::config::ResolvedAgent>],
-) -> Result<HashMap<String, BackendAdmissionConfig>> {
-    let mut configs = HashMap::new();
+) -> Result<RapidHashMap<String, BackendAdmissionConfig>> {
+    let mut configs = RapidHashMap::new();
     for agent in agents {
         let Some(backend_id) = agent
             .backend_id
@@ -1392,7 +1401,7 @@ mod degraded_reason_tests {
 
 #[cfg(test)]
 mod startup_slot_failure_policy_tests {
-    use std::collections::HashSet;
+    use rapidhash::{HashSetExt, RapidHashSet};
     use std::sync::Arc;
 
     use crate::agent::reconcile::SlotFailurePolicy as _;
@@ -1487,18 +1496,18 @@ mod startup_slot_failure_policy_tests {
                 node: None,
                 local_did: String::new(),
                 default_agent_id: "general".to_string(),
-                agents: HashMap::new(),
-                tool_surfaces: HashMap::new(),
-                backend_admission_configs: HashMap::new(),
-                unavailable_agents: HashMap::new(),
-                active_schedules: HashMap::new(),
-                unavailable_schedules: HashSet::new(),
-                active_event_triggers: HashMap::new(),
-                unavailable_event_triggers: HashSet::new(),
-                active_tasks: HashMap::new(),
-                dispatchers: HashMap::from([("general".to_string(), dispatcher)]),
-                agent_executor_capacities: HashMap::new(),
-                agent_executor_queue_capacities: HashMap::new(),
+                agents: RapidHashMap::new(),
+                tool_surfaces: RapidHashMap::new(),
+                backend_admission_configs: RapidHashMap::new(),
+                unavailable_agents: RapidHashMap::new(),
+                active_schedules: RapidHashMap::new(),
+                unavailable_schedules: RapidHashSet::new(),
+                active_event_triggers: RapidHashMap::new(),
+                unavailable_event_triggers: RapidHashSet::new(),
+                active_tasks: RapidHashMap::new(),
+                dispatchers: RapidHashMap::from_iter([("general".to_string(), dispatcher)]),
+                agent_executor_capacities: RapidHashMap::new(),
+                agent_executor_queue_capacities: RapidHashMap::new(),
             })
             .await
             .unwrap();

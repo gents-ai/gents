@@ -154,7 +154,7 @@ async fn build_bootstrap_summary_raw(
     desktop_paths: &DesktopPaths,
     node_home: Option<&Path>,
 ) -> Result<DesktopBootstrapSummary, String> {
-    let peer_records = load_peer_records(&desktop_paths.peer_directory_path())
+    let peer_records = load_peer_records(desktop_paths.peer_directory_path())
         .await
         .map_err(|error| error.to_string())?;
     let (init, init_config_status) = node_home
@@ -282,8 +282,9 @@ fn read_init_ceiling(node_home: &std::path::Path) -> Option<InitCeilingView> {
 
 #[path = "snapshot/runtime_tasks.rs"]
 mod runtime_tasks;
+pub(crate) use runtime_tasks::session_summaries;
 #[cfg(test)]
-use runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_histories};
+use runtime_tasks::{recent_runs_for_task_views, task_run_histories};
 use runtime_tasks::{request_matches_node, source_matches_node};
 
 #[path = "snapshot/runtime.rs"]

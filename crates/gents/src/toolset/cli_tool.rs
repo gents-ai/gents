@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 
 use crate::llm::tool::BoxFuture;
 use crate::llm::tool::ToolDefinition;
@@ -104,8 +104,8 @@ fn validate_argv_policy(config: &CliToolConfig, argv: &[String]) -> Result<()> {
     )
 }
 
-fn cli_tool_environment(config: &CliToolConfig) -> HashMap<String, String> {
-    let mut env: HashMap<String, String> = std::env::vars().collect();
+fn cli_tool_environment(config: &CliToolConfig) -> RapidHashMap<String, String> {
+    let mut env: RapidHashMap<String, String> = std::env::vars().collect();
     env.insert("PAGER".to_string(), "cat".to_string());
     env.insert("GIT_PAGER".to_string(), "cat".to_string());
     env.insert("NO_COLOR".to_string(), "1".to_string());
@@ -275,7 +275,7 @@ async fn render_cli_outcome(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use rapidhash::RapidHashMap;
 
     fn config(timeout_secs: u64) -> CliToolConfig {
         CliToolConfig {
@@ -283,7 +283,7 @@ mod tests {
             binary_path: "/bin/sh".into(),
             description: String::new(),
             allowed_argv_prefixes: vec![],
-            env_vars: HashMap::from([("GENTS_T".to_string(), "1".to_string())]),
+            env_vars: RapidHashMap::from_iter([("GENTS_T".to_string(), "1".to_string())]),
             working_dir: None,
             timeout_secs,
             max_output_chars: super::super::DEFAULT_MAX_COMMAND_CHARS,

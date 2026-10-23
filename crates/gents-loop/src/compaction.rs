@@ -397,7 +397,10 @@ pub trait ReductionEngine: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct ProviderReductionEngine<M: ProviderModel> {
+pub struct ProviderReductionEngine<M>
+where
+    M: ProviderModel,
+{
     model: Arc<M>,
     config: crate::loop_stream::LoopConfig,
     source_input_counter: Option<Arc<crate::provider_input::ProviderInputCounter>>,
@@ -405,7 +408,10 @@ pub struct ProviderReductionEngine<M: ProviderModel> {
     now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 }
 
-impl<M: ProviderModel> ProviderReductionEngine<M> {
+impl<M> ProviderReductionEngine<M>
+where
+    M: ProviderModel,
+{
     pub fn new(model: Arc<M>, mut config: crate::loop_stream::LoopConfig) -> Self {
         config.retry_policy = crate::completion_retry::CompletionRetryPolicy::internal_immediate();
         Self {
@@ -461,7 +467,10 @@ impl<M: ProviderModel> ProviderReductionEngine<M> {
     }
 }
 
-impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
+impl<M> ReductionEngine for ProviderReductionEngine<M>
+where
+    M: ProviderModel,
+{
     fn retention_target(
         &self,
         configured: usize,
@@ -681,7 +690,7 @@ impl<M: ProviderModel> ReductionEngine for ProviderReductionEngine<M> {
     }
 }
 
-async fn largest_fitting_summary_chunk<M: ProviderModel>(
+async fn largest_fitting_summary_chunk<M>(
     model: &M,
     remaining: &[Message],
     prior_summary: Option<&str>,
@@ -689,7 +698,10 @@ async fn largest_fitting_summary_chunk<M: ProviderModel>(
     options: &ReductionOptions,
     absolute_start: usize,
     context_window: usize,
-) -> Result<(usize, usize)> {
+) -> Result<(usize, usize)>
+where
+    M: ProviderModel,
+{
     let boundaries = history::pair_safe_boundaries(remaining);
     let configured_output = configured_output_ceiling(summary_config.max_tokens);
     let input_budget = rolling_summary_input_budget(context_window, configured_output);
@@ -772,13 +784,16 @@ async fn largest_fitting_summary_chunk<M: ProviderModel>(
     .into())
 }
 
-async fn summary_candidate_tokens<M: ProviderModel>(
+async fn summary_candidate_tokens<M>(
     model: &M,
     chunk: &[Message],
     prior_summary: Option<&str>,
     summary_config: &crate::loop_stream::LoopConfig,
     options: &ReductionOptions,
-) -> Result<usize> {
+) -> Result<usize>
+where
+    M: ProviderModel,
+{
     let prepared_chunk = pretruncate_tool_results(chunk.to_vec(), options.tool_result_max_chars);
     let prior_checkpoint = prior_summary.and_then(|summary| {
         let summaries = [summary.to_string()];
@@ -801,12 +816,15 @@ async fn summary_candidate_tokens<M: ProviderModel>(
         .context("projecting rolling compaction summary request")
 }
 
-async fn summarize_checkpoint<M: ProviderModel>(
+async fn summarize_checkpoint<M>(
     model: &M,
     prepared_history: Vec<Message>,
     summary_config: crate::loop_stream::LoopConfig,
     now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
-) -> Result<ContinuationCheckpoint> {
+) -> Result<ContinuationCheckpoint>
+where
+    M: ProviderModel,
+{
     if deadline_elapsed(summary_config.deadline, now.as_ref()) {
         return Err(ReductionError::DeadlineElapsed.into());
     }

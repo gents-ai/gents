@@ -143,10 +143,10 @@ pub(crate) fn render(pack_dir: &Path, agent: Option<&str>) -> Result<Dossier> {
             };
             let files = host
                 .and_then(|host| host.files.as_ref())
-                .map(|files| serde_json::to_value(&files.mode));
+                .map(|files| serde_json::to_value(files.mode));
             let bash = host
                 .and_then(|host| host.bash.as_ref())
-                .map(|bash| serde_json::to_value(&bash.mode));
+                .map(|bash| serde_json::to_value(bash.mode));
             let _ = writeln!(text, "- files: {}", mode(files)?);
             let _ = writeln!(text, "- bash: {}", mode(bash)?);
             if let Some(root) = host.and_then(|host| host.root.as_deref()) {

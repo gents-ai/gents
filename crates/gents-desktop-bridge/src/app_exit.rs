@@ -56,7 +56,10 @@ impl Drop for ExitPreparation {
     }
 }
 
-pub(crate) fn requested<R: Runtime>(app: &AppHandle<R>, api: &ExitRequestApi, code: Option<i32>) {
+pub(crate) fn requested<R>(app: &AppHandle<R>, api: &ExitRequestApi, code: Option<i32>)
+where
+    R: Runtime,
+{
     // Tauri cannot defer a restart request; its next process owns startup.
     if code == Some(tauri::RESTART_EXIT_CODE) {
         return;

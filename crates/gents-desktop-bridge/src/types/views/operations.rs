@@ -127,6 +127,11 @@ pub struct SessionProvenanceView {
     pub opening_request_id: Option<String>,
     pub senders: Vec<TurnSenderView>,
     pub calls: Vec<CausedCallView>,
+    /// Exact-scope metadata read through the existing node observation access;
+    /// related sessions need not be hydrated in the client's transcript cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub related_sessions: Option<Vec<super::SessionSummary>>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

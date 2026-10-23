@@ -201,7 +201,7 @@ pub(crate) async fn select_fold_in_claim_txn(
     if order.len() != doc_ids.len() {
         return Ok(Vec::new());
     }
-    let by_doc: std::collections::HashMap<&str, &AgentRequestRow> = rows
+    let by_doc: rapidhash::RapidHashMap<&str, &AgentRequestRow> = rows
         .iter()
         .filter_map(|row| row.doc_id.as_deref().map(|doc| (doc, row)))
         .collect();
@@ -396,7 +396,7 @@ pub(crate) async fn load_consumed_folded_inputs(
                 let rows: Vec<AgentRequestRow> =
                     serde_json::from_value(response["data"]["AgentRequest"].clone())
                         .context("decode folded requests")?;
-                let mut by_doc = std::collections::HashMap::new();
+                let mut by_doc = rapidhash::RapidHashMap::default();
                 for row in rows {
                     anyhow::ensure!(
                         row.requester_did == head.requester_did,

@@ -9,6 +9,7 @@ description = "Minimal Codex app-server wire types used by the Gents compatibili
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+rapidhash = { workspace = true }
 serde_with = "3.17"
 strum_macros = "0.28.0"
 thiserror.workspace = true

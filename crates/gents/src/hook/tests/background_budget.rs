@@ -50,7 +50,7 @@ async fn assert_background_rows(node: &EmbeddedNode, request: &str, count: usize
 #[tokio::test]
 async fn generated_background_budget_uses_accepted_dispatch() {
     let witness = crate::lean_vocab_test::lean_r6_background_theorem_witnesses()
-        .into_iter()
+        .iter()
         .find(|w| w.witness_kind == "admission_bound")
         .expect("modeled admission bound");
     let dir = tempfile::tempdir().unwrap();

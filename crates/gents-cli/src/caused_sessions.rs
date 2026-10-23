@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::RapidHashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -60,7 +60,7 @@ pub(crate) async fn load_caused_sessions(
     roots: &[SessionScope],
 ) -> Result<Vec<CausedSession>> {
     let access = access(node);
-    let mut visited = roots.iter().cloned().collect::<HashSet<_>>();
+    let mut visited = roots.iter().cloned().collect::<RapidHashSet<_>>();
     let mut frontier = roots
         .iter()
         .map(|scope| (scope.clone(), scope.session_id.clone(), 0_u32))
@@ -98,7 +98,7 @@ pub(crate) async fn load_caused_session(
     };
     let mut scope = SessionScope::from(&session);
     let mut chain = Vec::<SessionLink>::new();
-    let mut seen = HashSet::from([scope.clone()]);
+    let mut seen = RapidHashSet::from_iter([scope.clone()]);
     loop {
         let Some(link) = started_by(&access, &scope).await? else {
             return Ok(None);

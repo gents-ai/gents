@@ -11,10 +11,17 @@ import {
 /* the desktop's routes: the kit's, and a UX plugin's own page. The kit's
    memory history carries any route object and never re-parses, so the
    extra route costs it nothing; only the path functions must know it. */
-export type Route = ShellRoute | { name: "plugin"; pluginId: string };
+export type Route =
+  | ShellRoute
+  | { name: "plugin"; pluginId: string }
+  /* the sessions one session started, a level down the sessions list */
+  | { name: "sessionsUnder"; session: string };
 
 export function pathFor(route: Route): string {
   if (route.name === "plugin") return `/plugins/${encodeURIComponent(route.pluginId)}`;
+  if (route.name === "sessionsUnder") {
+    return `/sessions/under/${encodeURIComponent(route.session)}`;
+  }
   return shellPathFor(route);
 }
 
@@ -22,6 +29,9 @@ export function parseRoute(path: string): Route {
   const parts = path.replace(/^#\/?/, "").replace(/^\//, "").split("/").filter(Boolean);
   if (parts[0] === "plugins" && parts[1]) {
     return { name: "plugin", pluginId: decodeURIComponent(parts[1]) };
+  }
+  if (parts[0] === "sessions" && parts[1] === "under" && parts[2]) {
+    return { name: "sessionsUnder", session: decodeURIComponent(parts[2]) };
   }
   return shellParseRoute(path);
 }

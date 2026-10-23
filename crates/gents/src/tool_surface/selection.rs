@@ -37,7 +37,7 @@ impl AgentToolConfig {
         targets: impl IntoIterator<Item = &'a crate::document_config::AgentTargetDocument>,
     ) -> Result<Self> {
         let mut resolved = Self::from_document(tools)?;
-        let mut by_id = std::collections::HashMap::new();
+        let mut by_id = rapidhash::RapidHashMap::default();
         for target in targets {
             anyhow::ensure!(
                 by_id
@@ -50,7 +50,7 @@ impl AgentToolConfig {
                 target.target_id
             );
         }
-        let mut names = std::collections::HashSet::new();
+        let mut names = rapidhash::RapidHashSet::default();
         for id in tools
             .agents
             .as_ref()
@@ -350,9 +350,7 @@ impl ResolvedToolSelection {
             defra_query_collections: datastore
                 .and_then(|datastore| datastore.defra_query_collections.as_deref())
                 .unwrap_or(&[])
-                .iter()
-                .cloned()
-                .collect(),
+                .to_vec(),
             application_write_collections: datastore
                 .and_then(|v| v.write_collections.clone())
                 .unwrap_or_default(),
@@ -362,12 +360,8 @@ impl ResolvedToolSelection {
             enable_self_config: self_config_group
                 .and_then(|group| group.enable_self_config)
                 .unwrap_or(false),
-            self_config_categories: self_config_group.and_then(|group| {
-                group
-                    .self_config_categories
-                    .as_ref()
-                    .map(|categories| categories.clone())
-            }),
+            self_config_categories: self_config_group
+                .and_then(|group| group.self_config_categories.clone()),
             self_config_no_lockout: self_config_group
                 .and_then(|group| group.self_config_no_lockout)
                 .unwrap_or(false),

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::future::Future;
 use std::net::Ipv4Addr;
 use std::pin::Pin;
@@ -30,14 +30,15 @@ type CallToolFuture = Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send
 type ConnectFuture = Pin<Box<dyn Future<Output = Result<McpConnection>> + Send + 'static>>;
 type ListToolsFn = dyn Fn() -> ListToolsFuture + Send + Sync;
 type CallToolFn = dyn Fn(CallToolRequestParams) -> CallToolFuture + Send + Sync;
-type ConnectFn =
-    dyn Fn(String, String, Option<String>, HashMap<String, String>) -> ConnectFuture + Send + Sync;
-type TraceContextHeadersFn = dyn Fn() -> HashMap<String, String> + Send + Sync;
+type ConnectFn = dyn Fn(String, String, Option<String>, RapidHashMap<String, String>) -> ConnectFuture
+    + Send
+    + Sync;
+type TraceContextHeadersFn = dyn Fn() -> RapidHashMap<String, String> + Send + Sync;
 
 struct McpConnection {
     endpoint: String,
     node_did_header: Option<String>,
-    trace_context_headers: HashMap<String, String>,
+    trace_context_headers: RapidHashMap<String, String>,
     list_tools_fn: Box<ListToolsFn>,
     call_tool_fn: Box<CallToolFn>,
     last_used: std::sync::Mutex<std::time::Instant>,
@@ -77,7 +78,7 @@ where
     McpConnection {
         endpoint,
         node_did_header: None,
-        trace_context_headers: HashMap::new(),
+        trace_context_headers: RapidHashMap::new(),
         last_used: fresh_last_used(),
         resume_policy,
         list_tools_fn: Box::new(move || {
@@ -104,7 +105,7 @@ where
 fn streamable_http_transport_config(
     endpoint: &str,
     node_did_header: Option<&str>,
-    trace_context_headers: &HashMap<String, String>,
+    trace_context_headers: &RapidHashMap<String, String>,
 ) -> Result<StreamableHttpClientTransportConfig> {
     let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint.to_string());
     let mut headers = std::collections::HashMap::new();
@@ -122,8 +123,8 @@ fn streamable_http_transport_config(
 }
 
 fn insert_trace_context_headers(
-    headers: &mut HashMap<HeaderName, HeaderValue>,
-    trace_context_headers: &HashMap<String, String>,
+    headers: &mut std::collections::HashMap<HeaderName, HeaderValue>,
+    trace_context_headers: &RapidHashMap<String, String>,
 ) {
     for (name, value) in trace_context_headers {
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
@@ -140,7 +141,7 @@ async fn connect_mcp_service(
     service_id: &str,
     endpoint: &str,
     node_did_header: Option<&str>,
-    trace_context_headers: HashMap<String, String>,
+    trace_context_headers: RapidHashMap<String, String>,
     resume_stats: Arc<McpResumeStats>,
 ) -> Result<McpConnection> {
     let mut config =
@@ -164,7 +165,7 @@ fn default_connect_fn(stats: ResumeStatsRegistry) -> Arc<ConnectFn> {
         move |service_id: String,
               endpoint: String,
               node_did_header: Option<String>,
-              trace_context_headers: HashMap<String, String>| {
+              trace_context_headers: RapidHashMap<String, String>| {
             let resume_stats = stats.stats_for(&service_id);
             Box::pin(async move {
                 connect_mcp_service(
@@ -182,7 +183,7 @@ fn default_connect_fn(stats: ResumeStatsRegistry) -> Arc<ConnectFn> {
 
 #[derive(Clone, Default)]
 struct ResumeStatsRegistry {
-    inner: Arc<std::sync::Mutex<HashMap<String, Arc<McpResumeStats>>>>,
+    inner: Arc<std::sync::Mutex<RapidHashMap<String, Arc<McpResumeStats>>>>,
 }
 
 impl ResumeStatsRegistry {
@@ -195,12 +196,12 @@ impl ResumeStatsRegistry {
 #[derive(Clone)]
 pub struct McpPool {
     owner_node_did: Option<String>,
-    inner: Arc<RwLock<HashMap<ParkKey, Arc<McpConnection>>>>,
+    inner: Arc<RwLock<RapidHashMap<ParkKey, Arc<McpConnection>>>>,
     connect_fn: Arc<ConnectFn>,
     trace_context_headers_fn: Arc<TraceContextHeadersFn>,
     idle_ttl: Option<std::time::Duration>,
     resume_stats: ResumeStatsRegistry,
-    park: Arc<std::sync::Mutex<HashMap<ParkKey, ParkState>>>,
+    park: Arc<std::sync::Mutex<RapidHashMap<ParkKey, ParkState>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -238,7 +239,7 @@ const MCP_STRIKE_DECAY: std::time::Duration = std::time::Duration::from_secs(30 
 enum DialReservation {
     Unreserved,
     Reserved {
-        park: Arc<std::sync::Mutex<HashMap<ParkKey, ParkState>>>,
+        park: Arc<std::sync::Mutex<RapidHashMap<ParkKey, ParkState>>>,
         key: ParkKey,
     },
 }
@@ -270,12 +271,12 @@ impl McpPool {
         let resume_stats = ResumeStatsRegistry::default();
         Self {
             owner_node_did: None,
-            inner: Arc::new(RwLock::new(HashMap::new())),
+            inner: Arc::new(RwLock::new(RapidHashMap::new())),
             connect_fn: default_connect_fn(resume_stats.clone()),
             trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
             idle_ttl: Some(DEFAULT_MCP_IDLE_TTL),
             resume_stats,
-            park: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            park: Arc::new(std::sync::Mutex::new(RapidHashMap::new())),
         }
     }
 
@@ -303,7 +304,7 @@ impl McpPool {
     #[cfg(test)]
     fn new_with_connector<F, Fut>(connector: F) -> Self
     where
-        F: Fn(String, String, Option<String>, HashMap<String, String>) -> Fut
+        F: Fn(String, String, Option<String>, RapidHashMap<String, String>) -> Fut
             + Send
             + Sync
             + 'static,
@@ -311,7 +312,7 @@ impl McpPool {
     {
         Self {
             owner_node_did: None,
-            inner: Arc::new(RwLock::new(HashMap::new())),
+            inner: Arc::new(RwLock::new(RapidHashMap::new())),
             connect_fn: Arc::new(
                 move |service_id, endpoint, node_did_header, trace_headers| {
                     Box::pin(connector(
@@ -325,14 +326,14 @@ impl McpPool {
             trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
             idle_ttl: None,
             resume_stats: ResumeStatsRegistry::default(),
-            park: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            park: Arc::new(std::sync::Mutex::new(RapidHashMap::new())),
         }
     }
 
     #[cfg(test)]
     fn with_trace_context_headers<F>(mut self, headers: F) -> Self
     where
-        F: Fn() -> HashMap<String, String> + Send + Sync + 'static,
+        F: Fn() -> RapidHashMap<String, String> + Send + Sync + 'static,
     {
         self.trace_context_headers_fn = Arc::new(headers);
         self

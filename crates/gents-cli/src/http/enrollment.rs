@@ -237,7 +237,7 @@ async fn authenticate_operator_query(
 pub(crate) enum EnrollmentStatus {
     Available {
         token: String,
-        offer: EnrollmentOfferRecord,
+        offer: Box<EnrollmentOfferRecord>,
     },
     Unavailable {
         reason: &'static str,
@@ -359,7 +359,7 @@ mod tests {
     async fn operator_command_requires_the_live_admin_identity_and_exact_signature() {
         let temp = tempfile::tempdir().unwrap();
         let identity =
-            gents::KeyIdentity::load_or_create(&temp.path().join("admin.key"), None).unwrap();
+            gents::KeyIdentity::load_or_create(temp.path().join("admin.key"), None).unwrap();
         let now = Utc::now();
         let mut command = EnrollmentOperatorDecisionCommand {
             protocol_version: ENROLLMENT_PROTOCOL_VERSION,
@@ -383,7 +383,7 @@ mod tests {
             .await
             .is_err());
         let other =
-            gents::KeyIdentity::load_or_create(&temp.path().join("other.key"), None).unwrap();
+            gents::KeyIdentity::load_or_create(temp.path().join("other.key"), None).unwrap();
         assert!(authenticate_operator_command(&other, &command, now)
             .await
             .is_err());

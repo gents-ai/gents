@@ -197,7 +197,7 @@ async fn load_message_header_ids(
             }}
         }}"#,
     );
-    Ok(required_rows(access, "AgentMessage", &query)
+    required_rows(access, "AgentMessage", &query)
         .await?
         .into_iter()
         .map(|row| {
@@ -207,7 +207,7 @@ async fn load_message_header_ids(
                 .map(str::to_owned)
                 .context("AgentMessage row omitted _docID")
         })
-        .collect::<Result<Vec<_>>>()?)
+        .collect::<Result<Vec<_>>>()
 }
 
 pub(super) async fn load_timeline_tool_observations_for_session(
@@ -455,7 +455,7 @@ pub(super) fn resolve_tool_payloads(
                 let Message::Assistant { content, .. } = &message.message else {
                     anyhow::bail!("accepted tool header reconstructed as a non-assistant message")
                 };
-                let Some(AssistantContent::ToolCall(native)) = content.iter().nth(index) else {
+                let Some(AssistantContent::ToolCall(native)) = content.get(index) else {
                     anyhow::bail!("accepted physical tool does not match its native block position")
                 };
                 anyhow::ensure!(

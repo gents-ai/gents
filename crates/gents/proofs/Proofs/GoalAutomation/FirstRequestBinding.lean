@@ -13,6 +13,58 @@ def root? (goalId : String) (current : Option String) (requestDoc : String)
       current.any (· != requestDoc) then none
   else some requestDoc
 
+/-- An operator-created Goal has no opening request until its first fresh
+continuation is committed with the physical binding in the same transaction.
+The signed opening uses its self sentinel; replay recognizes that physical
+child without rewriting its input. A receipt cannot repair an unbound Goal,
+and an unrelated predecessor cannot acquire a bound assignment. -/
+def continuationReference? (goalId : String) (current : Option String)
+    (parentDoc : String) (parent : Option Enrollment.GoalAssignmentInput)
+    (receiptDoc : Option String) : Option Enrollment.GoalAssignmentInput :=
+  if goalId.isEmpty || parentDoc.isEmpty || current.any String.isEmpty ||
+      receiptDoc.any String.isEmpty || receiptDoc == some parentDoc then none
+  else match current with
+  | none => if receiptDoc.isSome || parent.isSome then none else some ⟨goalId, none⟩
+  | some root =>
+      if receiptDoc == some root then
+        if parent.isSome then none else some ⟨goalId, none⟩
+      else if (match parent with
+        | none => parentDoc == root
+        | some reference => reference.goalId == goalId &&
+            reference.rootRequestDocId.getD parentDoc == root) then
+        some ⟨goalId, some root⟩
+      else none
+
+theorem continuation_receipt_cannot_bind_an_unbound_goal
+    (goalId parentDoc receipt : String) (parent : Option Enrollment.GoalAssignmentInput) :
+    continuationReference? goalId none parentDoc parent (some receipt) = none := by
+  simp [continuationReference?]
+
+theorem fresh_continuation_opens_with_self_reference (goalId parentDoc : String)
+    (goalValid : goalId.isEmpty = false) (parentValid : parentDoc.isEmpty = false) :
+    continuationReference? goalId none parentDoc none none = some ⟨goalId, none⟩ := by
+  simp [continuationReference?, goalValid, parentValid]
+
+/-- The signed physical edge permits a new self-attributed opening or an
+untagged physical opening's child. A signed assignment can only extend its
+existing root. Retained untagged edges remain ancestry, not assignment evidence. -/
+def continuationEdge (goalId parentDoc : String)
+    (parent child : Option Enrollment.GoalAssignmentInput) : Bool :=
+  match parent with
+  | some reference => reference.goalId == goalId && child == some
+      { reference with rootRequestDocId := some (reference.rootRequestDocId.getD parentDoc) }
+  | none => child.all fun reference => reference.goalId == goalId &&
+      reference.rootRequestDocId.all (· == parentDoc)
+
+theorem opening_edge_is_signed_self (goalId parentDoc : String) :
+    continuationEdge goalId parentDoc none (some ⟨goalId, none⟩) = true := by
+  simp [continuationEdge]
+
+theorem tagged_parent_cannot_drop_assignment (goalId parentDoc : String)
+    (reference : Enrollment.GoalAssignmentInput) :
+    continuationEdge goalId parentDoc (some reference) none = false := by
+  simp [continuationEdge]
+
 /-- Task assignments reuse the canonical session Goal identity. The deterministic
 initial identity is used only when that session has no Goal document. A later
 client replacement must not be renamed to its retired predecessor's identity. -/

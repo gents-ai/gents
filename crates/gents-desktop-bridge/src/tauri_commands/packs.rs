@@ -23,15 +23,23 @@ fn failed(error: anyhow::Error) -> BridgeError {
 
 /// Runs a pack operation on a blocking thread that drives it to completion:
 /// opening the local node holds state that must stay on one thread, which a
-/// command future may not.
+/// command future may not. Commands use the runtime `install_runtime` registers.
 async fn run<T, F, Fut>(operation: F) -> Result<T, BridgeError>
 where
     T: DeserializeOwned,
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = anyhow::Result<Value>>,
 {
-    let handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || handle.block_on(operation()))
+    run_on(tauri::async_runtime::handle().inner(), operation).await
+}
+
+async fn run_on<T, F, Fut>(runtime: &tokio::runtime::Handle, operation: F) -> Result<T, BridgeError>
+where
+    T: DeserializeOwned,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = anyhow::Result<Value>>,
+{
+    gents::storage_backend::drive_unsendable(runtime, operation)
         .await
         .map_err(|error| BridgeError::untyped(format!("the pack operation stopped: {error}")))?
         .map_err(failed)
@@ -255,19 +263,24 @@ pub async fn desktop_pack_wire_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::support::runtime_handle;
 
     #[tokio::test]
     async fn typed_pack_reports_use_the_existing_operations() {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().to_path_buf();
-        let slots: PackPluginSlotsView = run(move || packs::plugin_slots(path)).await.unwrap();
+        let slots: PackPluginSlotsView =
+            run_on(&runtime_handle(), move || packs::plugin_slots(path))
+                .await
+                .unwrap();
         assert!(slots.plugins.is_empty());
         assert!(slots.profiles.is_empty());
         let path = home.path().to_path_buf();
-        let report: PackLogoutView =
-            run(move || packs::logout(path, Some("https://registry.example".into())))
-                .await
-                .unwrap();
+        let report: PackLogoutView = run_on(&runtime_handle(), move || {
+            packs::logout(path, Some("https://registry.example".into()))
+        })
+        .await
+        .unwrap();
         assert_eq!(report.registry, "https://registry.example");
         assert!(!report.signed_out);
     }
@@ -286,9 +299,11 @@ mod tests {
             .mount(&registry)
             .await;
         let url = registry.uri();
-        let view: PackSearchView = run(move || packs::search(Some(url), "demo".into(), 2))
-            .await
-            .unwrap();
+        let view: PackSearchView = run_on(&runtime_handle(), move || {
+            packs::search(Some(url), "demo".into(), 2)
+        })
+        .await
+        .unwrap();
         assert_eq!(serde_json::to_value(view).unwrap(), report);
     }
 

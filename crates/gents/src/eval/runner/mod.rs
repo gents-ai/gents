@@ -2063,7 +2063,7 @@ mod tests {
         assert!(trials.iter().all(|trial| trial
             .completion
             .as_ref()
-            .is_some_and(|completion| completion_is_not_evidence(completion))));
+            .is_some_and(completion_is_not_evidence)));
 
         let recovered = ScriptedExecutor::new().with_default(passed());
         let outcome = resume(
@@ -3199,7 +3199,10 @@ mod tests {
 
     struct BackoffBegan(Arc<tokio::sync::Notify>);
 
-    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BackoffBegan {
+    impl<S> tracing_subscriber::Layer<S> for BackoffBegan
+    where
+        S: tracing::Subscriber,
+    {
         fn on_event(
             &self,
             event: &tracing::Event<'_>,

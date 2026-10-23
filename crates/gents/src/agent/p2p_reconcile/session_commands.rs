@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -129,14 +129,14 @@ pub async fn run_session_command_reconciler(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut collections = HashMap::new();
+    let mut collections = RapidHashMap::new();
     for kind in CommandKind::ALL {
         let collection = node
             .get_collection(kind.collection())?
             .context("session command schema missing")?;
         collections.insert(collection.collection_id, kind);
     }
-    let mut goal_sources = HashMap::new();
+    let mut goal_sources = RapidHashMap::new();
     for source in crate::goal::GOAL_OBSERVATION_SOURCES {
         let collection = node
             .get_collection(source)?
@@ -151,7 +151,7 @@ pub async fn run_session_command_reconciler(
     let mut changes = node.subscribe_collection_changes(watched);
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     let mut subscription_open = true;
-    let mut deferred: HashMap<(CommandKind, String), DateTime<Utc>> = HashMap::new();
+    let mut deferred: RapidHashMap<(CommandKind, String), DateTime<Utc>> = RapidHashMap::new();
     let mut ids = Vec::new();
     let mut failed = Vec::new();
     let mut full_sweep_owed = false;

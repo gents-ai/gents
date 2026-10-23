@@ -159,6 +159,27 @@ fn trace_thread_item(method: &str, item: &codex::ThreadItem) -> Value {
     }
 }
 
+fn trace_json<T>(value: &T) -> Value
+where
+    T: Serialize,
+{
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
+fn append_json(default_path: &Path, value: Value) {
+    let path = std::env::var_os("GENTS_CODEX_SHIM_TRACE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_path.to_path_buf());
+    let _guard = match TRACE_APPEND_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(value.to_string().as_bytes());
+        let _ = file.write_all(b"\n");
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -179,26 +200,5 @@ mod tests {
         assert_eq!(trace["content_parts"], 1);
         assert_eq!(trace["content_len"], 24);
         assert!(!trace.to_string().contains("private chain of thought"));
-    }
-}
-
-fn trace_json<T>(value: &T) -> Value
-where
-    T: Serialize,
-{
-    serde_json::to_value(value).unwrap_or(Value::Null)
-}
-
-fn append_json(default_path: &Path, value: Value) {
-    let path = std::env::var_os("GENTS_CODEX_SHIM_TRACE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default_path.to_path_buf());
-    let _guard = match TRACE_APPEND_LOCK.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = file.write_all(value.to_string().as_bytes());
-        let _ = file.write_all(b"\n");
     }
 }

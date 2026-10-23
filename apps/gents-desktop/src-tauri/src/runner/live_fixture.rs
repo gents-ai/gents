@@ -17,7 +17,6 @@ use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
 use gents_desktop_core::local_runtime::DesktopInitSummary;
-use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tracing_subscriber::prelude::*;
 
@@ -37,7 +36,6 @@ const DEFAULT_DEPLOYMENT_LABEL: &str = "Fleet E2E Agent";
 const DEFAULT_NODE_NAME: &str = "fleet-e2e-agent";
 
 pub(crate) struct LiveBridgeFixture {
-    runtime: Arc<Runtime>,
     tempdir: Mutex<Option<tempfile::TempDir>>,
     desktop_paths: DesktopPaths,
     node_home: PathBuf,
@@ -55,10 +53,6 @@ pub(crate) struct LiveBridgeFixture {
 }
 
 impl LiveBridgeFixture {
-    pub(crate) fn runtime(&self) -> &Arc<Runtime> {
-        &self.runtime
-    }
-
     pub(crate) fn init_summary(&self) -> DesktopInitSummary {
         self.init_summary.clone()
     }
@@ -146,7 +140,7 @@ impl LiveBridgeFixture {
         Ok(())
     }
 
-    pub(crate) fn start(
+    pub(crate) async fn start(
         backend_override: Option<LiveBackendOverride>,
         agent_target_backend_override: Option<LiveTargetBackendOverride>,
     ) -> Result<Arc<Self>> {
@@ -155,7 +149,6 @@ impl LiveBridgeFixture {
         let backend = LiveBackendConfig::resolve(backend_override.as_ref())?;
         let agent_target_backend =
             LiveBackendConfig::resolve_target(agent_target_backend_override.as_ref(), &backend)?;
-        let runtime = live_runtime()?;
         let tempdir = tempfile::tempdir()?;
         let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote"));
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
@@ -167,28 +160,22 @@ impl LiveBridgeFixture {
         let operator_graphql = format!("http://{operator_addr}/api/v0/graphql");
         let mut remote_options = live_core_options();
         remote_options.http_addr = Some(operator_addr);
-        let remote_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
-            remote_paths,
-            remote_options,
-        ))?);
+        let remote_core =
+            Arc::new(ClientCore::start_with_paths_and_options(remote_paths, remote_options).await?);
 
         let agent_key = tempdir.path().join("agent").join("fleet-e2e-agent.key");
-        let (running_node, docs, tool_root) = runtime.block_on(spawn_live_node(
+        let (running_node, docs, tool_root) = spawn_live_node(
             Arc::clone(&remote_core),
             agent_key,
             DEFAULT_NODE_NAME,
             &backend,
             agent_target_backend.as_ref(),
-        ))?;
-        runtime.block_on(wait_for_operator_graphql(
-            &operator_graphql,
-            &running_node.node_did,
-        ))?;
+        )
+        .await?;
+        wait_for_operator_graphql(&operator_graphql, &running_node.node_did).await?;
 
-        let remote_addr = runtime.block_on(wait_for_connectable_iroh_addr(
-            remote_core.as_ref(),
-            DEFAULT_DEPLOYMENT_LABEL,
-        ))?;
+        let remote_addr =
+            wait_for_connectable_iroh_addr(remote_core.as_ref(), DEFAULT_DEPLOYMENT_LABEL).await?;
         let mut peer_record = PeerRecord::local_standard(
             DEFAULT_DEPLOYMENT_LABEL,
             &remote_addr,
@@ -200,43 +187,45 @@ impl LiveBridgeFixture {
         peer_record.pairing_ready = true;
         write_peer_directory_records(&desktop_paths, &[peer_record.clone()])?;
 
-        let desktop_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
-            desktop_paths.clone(),
-            live_core_options(),
-        ))?);
+        let desktop_core = Arc::new(
+            ClientCore::start_with_paths_and_options(desktop_paths.clone(), live_core_options())
+                .await?,
+        );
 
-        runtime.block_on(configure_live_replicators(
+        configure_live_replicators(
             desktop_core.as_ref(),
             remote_core.as_ref(),
             DEFAULT_DEPLOYMENT_LABEL,
-        ))?;
-        runtime.block_on(wait_for_connected_peer(
+        )
+        .await?;
+        wait_for_connected_peer(
             desktop_core.as_ref(),
             remote_core.local_peer_id(),
             "desktop -> amy",
-        ))?;
-        runtime.block_on(wait_for_connected_peer(
+        )
+        .await?;
+        wait_for_connected_peer(
             remote_core.as_ref(),
             desktop_core.local_peer_id(),
             "amy -> desktop",
-        ))?;
-        runtime.block_on(desktop_core.add_local_standard_peer_route_for_test(
-            &peer_record.label,
-            &peer_record.addr,
-            &peer_record.node_did,
-            peer_record.graphql.as_deref().unwrap_or_default(),
-            &node_home.display().to_string(),
-        ))?;
-        runtime.block_on(wait_for_ready_peer_status(
+        )
+        .await?;
+        desktop_core
+            .add_local_standard_peer_route_for_test(
+                &peer_record.label,
+                &peer_record.addr,
+                &peer_record.node_did,
+                peer_record.graphql.as_deref().unwrap_or_default(),
+                &node_home.display().to_string(),
+            )
+            .await?;
+        wait_for_ready_peer_status(
             desktop_core.as_ref(),
             &peer_record.peer_id,
             "desktop -> amy",
-        ))?;
-        runtime.block_on(wait_for_live_documents(
-            desktop_core.as_ref(),
-            &running_node.node_did,
-            &docs,
-        ))?;
+        )
+        .await?;
+        wait_for_live_documents(desktop_core.as_ref(), &running_node.node_did, &docs).await?;
 
         seed_runner_node_home(
             &node_home,
@@ -285,7 +274,7 @@ impl LiveBridgeFixture {
             let desktop_core = Arc::clone(&desktop_core);
             let remote_core = Arc::clone(&remote_core);
             let update_version = Arc::clone(&update_version);
-            runtime.spawn(async move {
+            tokio::spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
                 let mut sync_updates = desktop_core.sync_state_updates();
                 let mut remote_store_updates = remote_core.store_updates();
@@ -315,7 +304,6 @@ impl LiveBridgeFixture {
         };
 
         Ok(Arc::new(Self {
-            runtime,
             tempdir: Mutex::new(Some(tempdir)),
             desktop_paths,
             node_home,
@@ -333,24 +321,22 @@ impl LiveBridgeFixture {
         }))
     }
 
-    pub(crate) fn start_desktop_only() -> Result<Arc<Self>> {
+    pub(crate) async fn start_desktop_only() -> Result<Arc<Self>> {
         init_live_runner_tracing();
 
-        let runtime = live_runtime()?;
         let tempdir = tempfile::tempdir()?;
         let remote_paths = DesktopPaths::from_root(tempdir.path().join("remote-empty"));
         let desktop_paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
         let node_home = tempdir.path().join("agent-home");
         std::fs::create_dir_all(&node_home)?;
 
-        let remote_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
-            remote_paths,
-            live_core_options(),
-        ))?);
-        let desktop_core = Arc::new(runtime.block_on(ClientCore::start_with_paths_and_options(
-            desktop_paths.clone(),
-            live_core_options(),
-        ))?);
+        let remote_core = Arc::new(
+            ClientCore::start_with_paths_and_options(remote_paths, live_core_options()).await?,
+        );
+        let desktop_core = Arc::new(
+            ClientCore::start_with_paths_and_options(desktop_paths.clone(), live_core_options())
+                .await?,
+        );
         let p2p_listen_address = desktop_core
             .listen_addresses()
             .first()
@@ -380,7 +366,7 @@ impl LiveBridgeFixture {
         let update_task = {
             let desktop_core = Arc::clone(&desktop_core);
             let update_version = Arc::clone(&update_version);
-            runtime.spawn(async move {
+            tokio::spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
                 let mut sync_updates = desktop_core.sync_state_updates();
                 loop {
@@ -403,7 +389,6 @@ impl LiveBridgeFixture {
         };
 
         Ok(Arc::new(Self {
-            runtime,
             tempdir: Mutex::new(Some(tempdir)),
             desktop_paths,
             node_home,
@@ -458,15 +443,19 @@ fn non_empty_clone(value: &str) -> Option<String> {
     (!value.trim().is_empty()).then(|| value.to_string())
 }
 
-fn live_runtime() -> Result<Arc<Runtime>> {
+/// Drives a live fixture to completion on the runtime it owns. Callers are
+/// synchronous process or test entry points outside any runtime.
+pub(crate) fn run_on_live_runtime<F>(future: F) -> Result<F::Output>
+where
+    F: std::future::Future,
+{
     const STACK_BYTES: usize = 16 * 1024 * 1024;
-    Ok(Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(4)
-            .thread_stack_size(STACK_BYTES)
-            .build()?,
-    ))
+    Ok(tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(4)
+        .thread_stack_size(STACK_BYTES)
+        .build()?
+        .block_on(future))
 }
 
 async fn wait_for_operator_graphql(endpoint: &str, node_did: &str) -> Result<()> {
@@ -547,7 +536,7 @@ mod tests {
     use serde_json::Value;
     use tokio::sync::oneshot;
 
-    use super::{LiveBackendOverride, LiveBridgeFixture};
+    use super::{run_on_live_runtime, LiveBackendOverride, LiveBridgeFixture};
     use gents_desktop_bridge::commands::{
         delete_skill_config, save_skill_config, send_chat_message,
     };
@@ -559,29 +548,27 @@ mod tests {
     #[test]
     fn live_fixture_replicates_skill_create_delete_to_node() -> Result<()> {
         let _guard = live_fixture_test_lock();
-        let mock = MockChatEndpoint::start(MODEL_NAME, "ok")?;
-        let fixture = LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None)?;
-
-        let result = fixture
-            .runtime()
-            .block_on(skill_create_delete_case(fixture.as_ref()));
-        let shutdown_result = fixture.runtime().block_on(fixture.shutdown());
-        shutdown_result?;
-        result
+        run_on_live_runtime(async {
+            let mock = MockChatEndpoint::start(MODEL_NAME, "ok").await?;
+            let fixture =
+                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None).await?;
+            let result = skill_create_delete_case(fixture.as_ref()).await;
+            fixture.shutdown().await?;
+            result
+        })?
     }
 
     #[test]
     fn live_fixture_desktop_chat_slash_skill_loads_on_node() -> Result<()> {
         let _guard = live_fixture_test_lock();
-        let mock = MockChatEndpoint::start_with_held_prompt(MODEL_NAME, "skill loaded")?;
-        let fixture = LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None)?;
-
-        let result = fixture
-            .runtime()
-            .block_on(slash_skill_chat_case(fixture.as_ref(), &mock));
-        let shutdown_result = fixture.runtime().block_on(fixture.shutdown());
-        shutdown_result?;
-        result
+        run_on_live_runtime(async {
+            let mock = MockChatEndpoint::start_with_held_prompt(MODEL_NAME, "skill loaded").await?;
+            let fixture =
+                LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None).await?;
+            let result = slash_skill_chat_case(fixture.as_ref(), &mock).await;
+            fixture.shutdown().await?;
+            result
+        })?
     }
 
     async fn skill_create_delete_case(fixture: &LiveBridgeFixture) -> Result<()> {
@@ -1157,23 +1144,23 @@ mod tests {
         held_response: Option<Arc<tokio::sync::Semaphore>>,
         captured: Arc<Mutex<Vec<Value>>>,
         shutdown: Option<oneshot::Sender<()>>,
-        join: Option<std::thread::JoinHandle<()>>,
     }
 
     impl MockChatEndpoint {
-        fn start(model_name: &str, final_text: &str) -> Result<Self> {
-            Self::start_inner(model_name, final_text, None)
+        async fn start(model_name: &str, final_text: &str) -> Result<Self> {
+            Self::start_inner(model_name, final_text, None).await
         }
 
-        fn start_with_held_prompt(model_name: &str, final_text: &str) -> Result<Self> {
+        async fn start_with_held_prompt(model_name: &str, final_text: &str) -> Result<Self> {
             Self::start_inner(
                 model_name,
                 final_text,
                 Some(Arc::new(tokio::sync::Semaphore::new(0))),
             )
+            .await
         }
 
-        fn start_inner(
+        async fn start_inner(
             model_name: &str,
             final_text: &str,
             held_response: Option<Arc<tokio::sync::Semaphore>>,
@@ -1185,45 +1172,31 @@ mod tests {
                 held_response: held_response.clone(),
                 captured: Arc::clone(&captured),
             });
-            let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .context("mock chat endpoint failed to bind a port")?;
+            let port = listener.local_addr()?.port();
             let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-            let join = std::thread::spawn(move || {
-                let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                else {
-                    return;
-                };
-                runtime.block_on(async move {
-                    let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
-                        return;
-                    };
-                    let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(0);
-                    let _ = port_tx.send(port);
-                    let app = Router::new()
-                        .route("/v1/models", get(handle_models))
-                        .route("/models", get(handle_models))
-                        .route("/v1/chat/completions", post(handle_chat))
-                        .route("/chat/completions", post(handle_chat))
-                        .fallback(handle_fallback)
-                        .with_state(state);
-                    let _ = axum::serve(listener, app)
-                        .with_graceful_shutdown(async move {
-                            let _ = shutdown_rx.await;
-                        })
-                        .await;
-                });
+            let app = Router::new()
+                .route("/v1/models", get(handle_models))
+                .route("/models", get(handle_models))
+                .route("/v1/chat/completions", post(handle_chat))
+                .route("/chat/completions", post(handle_chat))
+                .fallback(handle_fallback)
+                .with_state(state);
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app)
+                    .with_graceful_shutdown(async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await;
             });
 
-            let port = port_rx
-                .recv()
-                .context("mock chat endpoint failed to bind a port")?;
             Ok(Self {
                 endpoint: format!("http://127.0.0.1:{port}/v1"),
                 held_response,
                 captured,
                 shutdown: Some(shutdown_tx),
-                join: Some(join),
             })
         }
 
@@ -1253,9 +1226,6 @@ mod tests {
         fn drop(&mut self) {
             if let Some(shutdown) = self.shutdown.take() {
                 let _ = shutdown.send(());
-            }
-            if let Some(join) = self.join.take() {
-                let _ = join.join();
             }
         }
     }

@@ -35,9 +35,10 @@ pub enum CachedInputTokensObservation {
 
 /// Rig maps absent Responses cache details to zero; inspect the raw response
 /// so the durable nullable column preserves whether the provider reported it.
-pub fn cached_input_tokens_observation<T: serde::Serialize>(
-    raw_response: &T,
-) -> CachedInputTokensObservation {
+pub fn cached_input_tokens_observation<T>(raw_response: &T) -> CachedInputTokensObservation
+where
+    T: serde::Serialize,
+{
     let Ok(value) = serde_json::to_value(raw_response) else {
         return CachedInputTokensObservation::NotAvailable;
     };

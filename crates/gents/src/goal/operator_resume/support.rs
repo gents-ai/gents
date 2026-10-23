@@ -151,6 +151,8 @@ impl Fixture {
             self.parent.request_hop,
         )
         .unwrap();
+        create.input.goal_assignment =
+            Some(continuation_assignment(&self.goal, &self.parent, None).unwrap());
         if conflicting {
             create.input.queue.as_mut().unwrap().key = Some("goal:foreign".into());
         }
@@ -158,6 +160,27 @@ impl Fixture {
             .await
             .unwrap();
         execute(&self.node, &create.graphql_mutation().unwrap()).await;
+        let child = request_rows(&self.node)
+            .await
+            .into_iter()
+            .find(|row| row.request_id == create.request_id)
+            .unwrap();
+        ConfigAccess::local(self.node.clone())
+            .transact_write("test.goal.seed_child_binding", |txn| {
+                let create = &create;
+                let child = &child;
+                Box::pin(async move {
+                    bind_goal_first_request_in_txn(
+                        txn,
+                        &self.goal,
+                        child.doc_id.as_deref().unwrap(),
+                        create.input.goal_assignment.as_ref(),
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
         execute(&self.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "completed", deadline: "2021-01-01T00:00:01Z" }}) {{ _docID }} }}"#, create.request_id)).await;
     }
     pub async fn other_request(&self, id: &str, date: &str, state: &str) {
@@ -398,7 +421,7 @@ impl Fixture {
                 assert_eq!(queue.key.as_deref(), Some(identity.queue_key.as_str()));
             }
 
-            let expected = prepare_goal_continuation(
+            let mut expected = prepare_goal_continuation(
                 &self.parent,
                 "contract-behavior".into(),
                 &g.goal_id,
@@ -409,6 +432,8 @@ impl Fixture {
                 self.parent.request_hop,
             )
             .unwrap();
+            expected.input.goal_assignment =
+                Some(continuation_assignment(&g, &self.parent, child.doc_id.as_deref()).unwrap());
             let actual: GoalBackedRequestFingerprint =
                 serde_json::from_value(serde_json::to_value(child).unwrap()).unwrap();
             let mut comparison = expected.clone();

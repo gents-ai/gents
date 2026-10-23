@@ -245,7 +245,7 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
             let path = format!("schemas/{}.graphql", super_snake(&collection));
             pack.create_file(
                 &path,
-                &format!("type {collection} {{\n  run_id: String @index\n}}\n"),
+                format!("type {collection} {{\n  run_id: String @index\n}}\n"),
             )?;
             pack.manifest_list("schemas")?.push(json!(path));
             Ok(())
@@ -348,7 +348,7 @@ fn add_agent(pack: &mut PackEdit, id: &str, slot: Option<&str>) -> Result<()> {
     pack.require_new("agents", "agent_id", id)?;
     let slot = slot.map(str::to_owned).unwrap_or_else(|| snake(id));
     let prompt = format!("agents/{}/system_prompt.md", snake(id));
-    pack.create_file(&prompt, &format!("You are the {} agent.\n", title(id)))?;
+    pack.create_file(&prompt, format!("You are the {} agent.\n", title(id)))?;
     pack.list("agents")?.push(json!({
         "agent_id": id,
         "display_name": title(id),

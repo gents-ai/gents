@@ -38,25 +38,29 @@ enum Reply {
     Stored,
 }
 
-pub fn frames<S: AsyncRead + AsyncWrite>(stream: S) -> Framed<S, LengthDelimitedCodec> {
+pub fn frames<S>(stream: S) -> Framed<S, LengthDelimitedCodec>
+where
+    S: AsyncRead + AsyncWrite,
+{
     LengthDelimitedCodec::builder()
         .max_frame_length(MAX_FRAME_BYTES)
         .new_framed(stream)
 }
 
-pub async fn send<S: AsyncRead + AsyncWrite + Unpin>(
-    channel: &mut Framed<S, LengthDelimitedCodec>,
-    message: &Message,
-) -> Result<()> {
+pub async fn send<S>(channel: &mut Framed<S, LengthDelimitedCodec>, message: &Message) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     channel
         .send(Bytes::from(serde_json::to_vec(message)?))
         .await?;
     Ok(())
 }
 
-pub async fn receive<S: AsyncRead + AsyncWrite + Unpin>(
-    channel: &mut Framed<S, LengthDelimitedCodec>,
-) -> Result<bytes::BytesMut> {
+pub async fn receive<S>(channel: &mut Framed<S, LengthDelimitedCodec>) -> Result<bytes::BytesMut>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     tokio::time::timeout(std::time::Duration::from_secs(30), channel.next())
         .await
         .context("editor secret storage did not respond")?
@@ -90,7 +94,10 @@ impl<S> std::fmt::Debug for Provider<S> {
     }
 }
 
-impl<S: AsyncRead + AsyncWrite> Provider<S> {
+impl<S> Provider<S>
+where
+    S: AsyncRead + AsyncWrite,
+{
     pub fn new(home: PathBuf, interactive: bool, channel: S) -> Self {
         Self {
             home,
@@ -100,7 +107,10 @@ impl<S: AsyncRead + AsyncWrite> Provider<S> {
     }
 }
 
-impl<S: AsyncRead + AsyncWrite + Unpin> Provider<S> {
+impl<S> Provider<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     pub async fn ready(&self) -> Result<()> {
         send(&mut *self.channel.lock().await, &Message::Ready).await
     }
@@ -140,7 +150,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Provider<S> {
 }
 
 #[async_trait::async_trait]
-impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ClientStoreKeyProvider for Provider<S> {
+impl<S> ClientStoreKeyProvider for Provider<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     async fn load(
         &self,
         record: &StoreEncryption,
@@ -200,16 +213,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> ClientStoreKeyProvider 
 mod tests {
     use super::*;
 
-    async fn read_message<S: AsyncRead + AsyncWrite + Unpin>(
-        channel: &mut Framed<S, LengthDelimitedCodec>,
-    ) -> Message {
+    async fn read_message<S>(channel: &mut Framed<S, LengthDelimitedCodec>) -> Message
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         serde_json::from_slice(&receive(channel).await.unwrap()).unwrap()
     }
 
-    async fn reply<S: AsyncRead + AsyncWrite + Unpin>(
-        channel: &mut Framed<S, LengthDelimitedCodec>,
-        reply: Reply,
-    ) {
+    async fn reply<S>(channel: &mut Framed<S, LengthDelimitedCodec>, reply: Reply)
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         channel
             .send(Bytes::from(serde_json::to_vec(&reply).unwrap()))
             .await

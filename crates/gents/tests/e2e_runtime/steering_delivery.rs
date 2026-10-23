@@ -287,7 +287,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     } else {
         assert!(bodies[1].to_string().contains("first terminal answer"));
     }
-    let captures = access.execute(&format!(r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "active-steering-request" }} }}) {{ request_doc_id turn_index }} }}"#)).await.unwrap();
+    let captures = access.execute(r#"{ RenderedRequest(filter: { request_id: { _eq: "active-steering-request" } }) { request_doc_id turn_index } }"#).await.unwrap();
     let captures = captures["data"]["RenderedRequest"].as_array().unwrap();
     assert_eq!(captures.len(), 2);
     assert!(captures

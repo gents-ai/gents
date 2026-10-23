@@ -199,6 +199,18 @@ def parse_items(source):
     return items
 
 
+def unbox_type(ty, env):
+    while True:
+        ty = env.get(ty, ty)
+        generic = re.fullmatch(r"([A-Za-z0-9_:]+)<(.+)>", ty)
+        if not generic or generic.group(1).split("::")[-1] != "Box":
+            return ty
+        args = split_top(generic.group(2))
+        if len(args) != 1:
+            return ty
+        ty = args[0]
+
+
 class Checker:
     def __init__(self, items):
         self.items, self.errors = items, []
@@ -209,7 +221,7 @@ class Checker:
 
     def check(self, value, ty, path, env=None):
         env = env or {}
-        ty = env.get(ty, ty)
+        ty = unbox_type(ty, env)
         if ty.startswith("(") and ty.endswith(")"):
             members = split_top(ty[1:-1])
             if not isinstance(value, list) or len(value) != len(members):
@@ -268,7 +280,7 @@ class Checker:
                     "unsupported serde syntax: " + ", ".join(field["unsupported"]))
                 continue
             optional = field["default"] or (
-                env.get(field["type"], field["type"]).startswith("Option<")
+                unbox_type(field["type"], env).startswith("Option<")
                 and not field["required_nullable"])
             if field["name"] not in value:
                 if not optional:

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 use opentelemetry::global;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -65,9 +65,9 @@ pub(crate) fn record_current_failure_class(error: &anyhow::Error) {
     tracing::Span::current().record("failure_class", failure_class);
 }
 
-pub(crate) fn current_trace_context_headers() -> HashMap<String, String> {
+pub(crate) fn current_trace_context_headers() -> RapidHashMap<String, String> {
     let context = tracing::Span::current().context();
-    let mut headers = HashMap::new();
+    let mut headers = RapidHashMap::new();
     global::get_text_map_propagator(|propagator| {
         propagator.inject_context(&context, &mut headers);
     });

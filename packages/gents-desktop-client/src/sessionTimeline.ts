@@ -56,6 +56,9 @@ function timelineItemUnchanged(
     case "assistantMessage":
       return (
         next.kind === "assistantMessage" &&
+        previous.requestId === next.requestId &&
+        JSON.stringify(previous.requestTurn) ===
+          JSON.stringify(next.requestTurn) &&
         previous.sequence === next.sequence &&
         previous.content === next.content &&
         previous.reasoning === next.reasoning &&

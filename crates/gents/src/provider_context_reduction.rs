@@ -411,7 +411,7 @@ pub(crate) async fn persist(
                 created_at: "{created_at}"
             }}) {{ _docID }}
         }}"#,
-                    reduction_key = escape_graphql_string(&reduction_key),
+                    reduction_key = escape_graphql_string(reduction_key),
                     node_did = escape_graphql_string(input.node_did),
                     session_id = escape_graphql_string(input.session_id),
                     request_id = escape_graphql_string(input.request_id),
@@ -1571,6 +1571,10 @@ mod tests {
             })],
         };
         let source = boundary("request-doc-pair");
+        #[expect(
+            clippy::cloned_ref_to_slice_refs,
+            reason = "checkpoint_messages moves the message that retained_suffix would borrow"
+        )]
         let error = persist(
             &node,
             NewProviderContextReduction {

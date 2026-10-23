@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +29,7 @@ const FETCH_RETRY_LIMIT: u32 = 3;
 const SESSION_HYDRATION_REQUEST: &str = "SessionHydrationRequest";
 
 fn resync_retry_ready(retry_not_before: Option<Instant>, now: Instant) -> bool {
-    retry_not_before.map_or(true, |deadline| now >= deadline)
+    retry_not_before.is_none_or(|deadline| now >= deadline)
 }
 
 enum ObserverWake {
@@ -72,8 +72,9 @@ pub fn spawn_observer_with_selection(
 
     let task = tokio::spawn(async move {
         let mut subscription = subscription;
-        let mut dirty: HashMap<&'static str, HashSet<String>> = HashMap::new();
-        let mut redundant_fetches_pending: HashMap<(String, String), u32> = HashMap::new();
+        let mut dirty: RapidHashMap<&'static str, RapidHashSet<String>> = RapidHashMap::new();
+        let mut redundant_fetches_pending: RapidHashMap<(String, String), u32> =
+            RapidHashMap::new();
         let mut resync_pending = false;
         let mut resync_retry_not_before = None;
 
@@ -240,7 +241,7 @@ pub fn spawn_observer_with_selection(
                 .debounce_flushes
                 .fetch_add(1, Ordering::Relaxed);
 
-            let mut flushed: HashMap<&'static str, HashSet<String>> = HashMap::new();
+            let mut flushed: RapidHashMap<&'static str, RapidHashSet<String>> = RapidHashMap::new();
             std::mem::swap(&mut flushed, &mut dirty);
 
             let transcript_collection_count = flushed
@@ -254,7 +255,7 @@ pub fn spawn_observer_with_selection(
                 .sum::<usize>();
             let hydration_control_changed_docs = flushed
                 .get(SESSION_HYDRATION_REQUEST)
-                .map_or(0, HashSet::len);
+                .map_or(0, RapidHashSet::len);
             if transcript_changed_docs > 0 || hydration_control_changed_docs > 0 {
                 let store_version =
                     store.invalidate_projection(flushed.contains_key(AGENT_TOOL_CALL_NAME));
@@ -285,22 +286,21 @@ pub fn spawn_observer_with_selection(
                         let row_count = patch.observed_documents;
                         // A scoped deletion reload cannot recover surviving rows
                         // for other nodes in this batch.
-                        if patch.store.row_count() > 0 {
-                            if store
+                        if patch.store.row_count() > 0
+                            && store
                                 .merge_observer_patch_at_read(&captured_snapshot, patch.store)
                                 .is_none()
-                            {
-                                store.enqueue_resync_request(None);
-                                resync_pending = true;
-                                continue;
-                            }
+                        {
+                            store.enqueue_resync_request(None);
+                            resync_pending = true;
+                            continue;
                         }
                         let reload_scopes = match patch.missing_doc_ids.as_deref() {
                             Some(missing_doc_ids) if !missing_doc_ids.is_empty() => {
                                 let snapshot = store.snapshot();
-                                let missing: HashSet<&str> =
+                                let missing: RapidHashSet<&str> =
                                     missing_doc_ids.iter().map(String::as_str).collect();
-                                let mut scopes = HashSet::new();
+                                let mut scopes = RapidHashSet::new();
                                 let mut require_full = false;
                                 for request in &snapshot.requests {
                                     if request
@@ -383,8 +383,12 @@ pub fn spawn_observer_with_selection(
 
 /// Branchable collections emit a collection-head update with an empty document
 /// ID; only the document update identifies a row to read.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "observer loop state borrowed from separate owners"
+)]
 async fn accumulate_dirty(
-    dirty: &mut HashMap<&'static str, HashSet<String>>,
+    dirty: &mut RapidHashMap<&'static str, RapidHashSet<String>>,
     resolver: &CollectionResolver,
     node: &EmbeddedNode,
     collection_id: &str,

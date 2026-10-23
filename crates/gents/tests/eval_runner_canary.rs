@@ -32,7 +32,11 @@ const QUIET_ITEM_SDL: &str = "type QuietItem {\n  label: String\n}\n";
 async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripted_model() {
     let backend = MockStreamingBackend::start_with_plans(MODEL, answering_plans()).unwrap();
     let (canary, request) = canary_request(backend.endpoint(), "run-canary").await;
-    let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        canary.runs_dir(),
+        support::runtime_handle(),
+    );
 
     let outcome = run(
         &canary.access,
@@ -132,8 +136,11 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
     assert_eq!(view.trials.len(), 2);
     assert_eq!(view.report.cells[0].counts.pass, 2);
     let (again, repeat) = canary_request(backend.endpoint(), "run-canary").await;
-    let repeat_executor =
-        EmbeddedExecutor::new(DocumentRuntimeOptions::default(), again.runs_dir());
+    let repeat_executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        again.runs_dir(),
+        support::runtime_handle(),
+    );
     run(
         &again.access,
         &repeat,
@@ -199,7 +206,11 @@ async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_tri
             (Collection::InferenceProfile, profile),
         ])
         .await;
-    let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        canary.runs_dir(),
+        support::runtime_handle(),
+    );
 
     let outcome = run(
         &canary.access,
@@ -282,7 +293,11 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         source
     });
     request.cells[0].agent_id = "seeded".into();
-    let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        canary.runs_dir(),
+        support::runtime_handle(),
+    );
 
     let outcome = run(
         &canary.access,
@@ -350,16 +365,17 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
     )
     .await
     .unwrap();
-    let contents = fired.data.as_ref().map(|data| &data["AgentRequest"]);
-    let content = contents
-        .and_then(|rows| rows.as_array())
-        .filter(|rows| rows.len() == 1)
-        .and_then(|rows| rows[0]["content"].as_str())
+    let fired_content = fired
+        .data
+        .as_ref()
+        .and_then(|data| data["AgentRequest"].as_array())
+        .filter(|requests| requests.len() == 1)
+        .and_then(|requests| requests[0]["content"].as_str())
         .unwrap_or_else(|| panic!("one fired request: {fired:#?}"));
     assert!(
-        content.starts_with("[event trigger:seed-trigger ")
-            && content.ends_with(&format!("]\n\n{SEED_MARKER}")),
-        "{fired:#?}"
+        fired_content.starts_with("[event trigger:seed-trigger ")
+            && fired_content.ends_with(&format!("]\n\n{SEED_MARKER}")),
+        "the fired request carries the trigger source header and the seed body: {fired_content:?}"
     );
     if existing_session {
         let routed = gents::graphql::graphql_with_transaction_retry(
@@ -403,7 +419,11 @@ async fn a_seed_stage_no_trigger_fires_for_ends_unsubmitted_at_its_deadline() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_runner/trigger_pack"),
     );
     request.cells[0].agent_id = "seeded".into();
-    let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        canary.runs_dir(),
+        support::runtime_handle(),
+    );
 
     let outcome = run(
         &canary.access,
@@ -452,7 +472,11 @@ async fn a_seed_stage_whose_event_sources_do_not_reconcile_fails_at_once() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/eval_runner/trigger_pack"),
     );
     request.cells[0].agent_id = "seeded".into();
-    let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        canary.runs_dir(),
+        support::runtime_handle(),
+    );
 
     let outcome = run(
         &canary.access,
@@ -513,7 +537,11 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
     );
     let backend = MockStreamingBackend::start_with_plans(MODEL, plans).unwrap();
     let (canary, request) = canary_request(backend.endpoint(), "run-provider-down").await;
-    let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        canary.runs_dir(),
+        support::runtime_handle(),
+    );
 
     let outcome = run(
         &canary.access,
@@ -584,7 +612,11 @@ async fn a_failing_first_stage_skips_the_second_and_grades_it_skipped_prerequisi
 #[tokio::test]
 async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_any_home() {
     let (canary, base) = canary_request("http://127.0.0.1:1/v1", "run-refused").await;
-    let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        canary.runs_dir(),
+        support::runtime_handle(),
+    );
     let registry = CheckRegistry::builtin();
 
     let unrestricted = canary.dirs.path().join("unrestricted-pack");
@@ -702,7 +734,11 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
     };
     request.cells.push(candidate);
 
-    let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), canary.runs_dir());
+    let executor = EmbeddedExecutor::new(
+        DocumentRuntimeOptions::default(),
+        canary.runs_dir(),
+        support::runtime_handle(),
+    );
     run(
         &canary.access,
         &request,

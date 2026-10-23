@@ -20,6 +20,7 @@ struct ResumeCase {
 struct Contracts {
     pub goal_operator_resume_cases: Vec<ResumeCase>,
     pub goal_config_reactivation_cases: Vec<ConfigCase>,
+    pub goal_wake_ancestry_cases: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +34,14 @@ struct ConfigCase {
 async fn generated_goal_operator_resume_cases_drive_real_transactions() {
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
     assert_eq!(contracts.goal_operator_resume_cases.len(), 11);
+    let opening = contracts
+        .goal_wake_ancestry_cases
+        .iter()
+        .find(|case| {
+            case["name"] == "first_continuation_opens_assignment_without_reclassifying_parent"
+        })
+        .expect("modeled continuation assignment opening");
+    let opening_is_entry = opening["expected_entry"] == opening["current"];
     let mut seen = std::collections::BTreeSet::new();
     for case in contracts.goal_operator_resume_cases {
         assert!(seen.insert(case.name.clone()), "duplicate generated case");
@@ -138,6 +147,24 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .verify_fresh(&request, "contract-behavior")
                             .await
                             .expect("published continuation must pass actual execution admission");
+                        let allowed = access
+                            .transact_write("test.goal.resume_claim_fence", |txn| {
+                                let request = &request;
+                                Box::pin(async move {
+                                    fence_goal_continuation_claim_in_txn(
+                                        txn,
+                                        request,
+                                        "2026-10-23T00:00:00Z",
+                                    )
+                                    .await
+                                })
+                            })
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            allowed, opening_is_entry,
+                            "the publication must pass the modeled assignment-opening claim fence"
+                        );
                     }
                 }
                 "denied" | "illegal" | "conflict" => {

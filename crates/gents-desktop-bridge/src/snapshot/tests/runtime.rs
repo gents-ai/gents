@@ -1,11 +1,8 @@
 use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-#[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
-
+use super::lean_vocab_test::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases};
 use crate::types::TriggerView;
-use lean_vocab_test::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases};
 
 fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({
@@ -111,7 +108,7 @@ fn live_session_response_requires_physical_and_requester_identity() {
     let mut wrong_requester = indexed_request(None);
     wrong_requester.lifecycle_state = Some(RequestLifecycleState::Completed);
     let adversarial = session_summaries(
-        &[session.clone()],
+        std::slice::from_ref(&session),
         &[wrong_physical, wrong_requester],
         "did:test:owner",
         &[],

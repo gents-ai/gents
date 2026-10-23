@@ -54,10 +54,13 @@ impl ServiceExecutable {
     }
 }
 
-pub(crate) fn resolve_service_executable<R: Runtime>(
+pub(crate) fn resolve_service_executable<R>(
     app: &AppHandle<R>,
     desktop_home: &Path,
-) -> Result<ServiceExecutable, BridgeError> {
+) -> Result<ServiceExecutable, BridgeError>
+where
+    R: Runtime,
+{
     if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return Err(BridgeError::new(
             BridgeErrorCode::Unsupported,

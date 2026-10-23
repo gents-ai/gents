@@ -100,7 +100,7 @@ pub(crate) async fn load_agent_request_by_doc_id(
                 workspace_seal_hash
             }}
         }}"#,
-        escape_graphql_string(&request_doc_id)
+        escape_graphql_string(request_doc_id)
     );
     let response =
         graphql_with_transaction_retry(node, &query, "load_agent_request_by_document").await?;

@@ -5,6 +5,7 @@ import type { JobOutcome } from "./JobOutcome.js";
 import type { JobProgress } from "./JobProgress.js";
 import type { JobState } from "./JobState.js";
 import type { MessageReconstructionView } from "./MessageReconstructionView.js";
+import type { RequestTurnView } from "./RequestTurnView.js";
 import type { ToolPresentationView } from "./ToolPresentationView.js";
 
-export type RenderedToolCallView = { backgroundAvailable?: boolean | null, itemKey: string, toolCallDocId?: string | null, toolName: string, statusKind: string, requestId?: string | null, toolCallId?: string | null, awaitMode?: string | null, startedAt?: string | null, deadlineAt?: string | null, completedAt?: string | null, presentation: ToolPresentationView, reconstruction: MessageReconstructionView, partialOutputTail?: string | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, jobProgress?: JobProgress | null, jobHandle?: string | null, jobState?: JobState | null, jobOutcome?: JobOutcome | null, jobNextCalls?: Array<string>, };
+export type RenderedToolCallView = { requestTurn?: RequestTurnView | null, backgroundAvailable?: boolean | null, itemKey: string, toolCallDocId?: string | null, toolName: string, statusKind: string, requestId?: string | null, toolCallId?: string | null, awaitMode?: string | null, startedAt?: string | null, deadlineAt?: string | null, completedAt?: string | null, presentation: ToolPresentationView, reconstruction: MessageReconstructionView, partialOutputTail?: string | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, jobProgress?: JobProgress | null, jobHandle?: string | null, jobState?: JobState | null, jobOutcome?: JobOutcome | null, jobNextCalls?: Array<string>, };

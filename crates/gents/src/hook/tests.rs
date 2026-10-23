@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -59,10 +59,11 @@ struct HookExecutionFixture {
     turn: usize,
 }
 
-fn hook_execution_fixtures() -> &'static tokio::sync::Mutex<HashMap<String, HookExecutionFixture>> {
-    static FIXTURES: OnceLock<tokio::sync::Mutex<HashMap<String, HookExecutionFixture>>> =
+fn hook_execution_fixtures(
+) -> &'static tokio::sync::Mutex<RapidHashMap<String, HookExecutionFixture>> {
+    static FIXTURES: OnceLock<tokio::sync::Mutex<RapidHashMap<String, HookExecutionFixture>>> =
         OnceLock::new();
-    FIXTURES.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+    FIXTURES.get_or_init(|| tokio::sync::Mutex::new(RapidHashMap::new()))
 }
 
 fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> String {
@@ -1985,7 +1986,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         let args = r#"{"objective":"revised while active"}"#;
         accept_hook_tool_call(
             &hook,
-            &call_id,
+            call_id,
             crate::goal::UPDATE_GOAL_TOOL_NAME,
             args,
             None,
@@ -1994,7 +1995,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
         let ToolCallHookAction::Skip {
             reason: tool_result,
         } = hook
-            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, &call_id, args)
+            .on_tool_call(crate::goal::UPDATE_GOAL_TOOL_NAME, None, call_id, args)
             .await
         else {
             panic!("expected hook-managed skip for {call_id}");
@@ -3448,11 +3449,11 @@ async fn owned_tool_result_materializes_one_transcript_row() {
     let tool_call_keys = tool_call_rows
         .iter()
         .filter_map(|row| row.get("tool_call_key").and_then(|value| value.as_str()))
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     let tool_call_ids = tool_call_rows
         .iter()
         .filter_map(|row| row.get("tool_call_id").and_then(|value| value.as_str()))
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     assert_eq!(tool_call_keys.len(), 1);
     assert_eq!(tool_call_ids.len(), 1);
     assert_eq!(tool_call_ids.iter().next().copied(), Some(model_result_id));
@@ -4497,7 +4498,10 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
         "did:test:plugin-owner",
         FailurePolicy::FailClosed,
     )
-    .with_job_tools(HashMap::from([("workflow_run".to_owned(), binding)]));
+    .with_job_tools(RapidHashMap::from_iter([(
+        "workflow_run".to_owned(),
+        binding,
+    )]));
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();

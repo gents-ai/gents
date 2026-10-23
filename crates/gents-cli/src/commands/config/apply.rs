@@ -57,7 +57,7 @@ pub(crate) async fn apply_bound_desired_manifest(
     let desired_manifest = &bound.manifest;
 
     let live_errs =
-        desired_state::validate::validate_manifest_against_live(desired_manifest, &access).await?;
+        desired_state::validate::validate_manifest_against_live(desired_manifest, access).await?;
     if !live_errs.is_empty() {
         for e in &live_errs {
             tracing::error!(error = %e, "live config validation failed");
@@ -68,7 +68,7 @@ pub(crate) async fn apply_bound_desired_manifest(
     let desired_bundle =
         desired_state::export_bundle_from_manifest(desired_manifest, access.mode())?;
 
-    let live_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
+    let live_bundle = build_desired_state_live_bundle(access, desired_manifest).await?;
     let (live_node, live_manifest) = live_manifest_from_bundle(desired_manifest, &live_bundle)?;
     let planned = desired_state::diff_manifests(
         root,
@@ -97,7 +97,7 @@ pub(crate) async fn apply_bound_desired_manifest(
         .await
         .context("config apply transaction")?;
 
-    let remaining_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
+    let remaining_bundle = build_desired_state_live_bundle(access, desired_manifest).await?;
     let (remaining_node, remaining_manifest) =
         live_manifest_from_bundle(desired_manifest, &remaining_bundle)?;
     let remaining = desired_state::diff_manifests(

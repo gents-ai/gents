@@ -32,6 +32,8 @@ mod editor_goal_removal;
 mod editor_goal_replacement;
 #[path = "support/editor_history.rs"]
 mod editor_history;
+#[path = "support/editor_related_work.rs"]
+mod editor_related_work;
 #[path = "support/editor_retry.rs"]
 mod editor_retry;
 #[path = "support/editor_review.rs"]
@@ -76,6 +78,8 @@ enum Journey {
     EditorReviewPermissions,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorRelatedWork,
     Goal,
 }
 
@@ -92,6 +96,7 @@ impl Journey {
             Self::EditorReview => Some("review"),
             Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorWorkspace => Some("workspace"),
+            Self::EditorRelatedWork => Some("related-work"),
             _ => None,
         }
     }
@@ -367,6 +372,30 @@ async fn editor_replaces_goals_in_the_same_chat_without_losing_work_or_drafts() 
     copy_editor_evidence(temp.path(), "editor-goal-replacement-canonical.json")
 }
 
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorRelatedWork)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
+}
+
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
@@ -396,6 +425,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let history_provider_gate = editor_history_gate.clone();
     let history_provider_hold = root.join("hold-history-provider");
+    let related_provider = Arc::new(editor_related_work::Provider::new());
+    let provider_related = Arc::clone(&related_provider);
     let provider = FakeLlm::start_with_models(
         if journey.editor_scenario().is_some() {
             &["editor-fixture", "editor-fixture-alternate"]
@@ -404,6 +435,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorRelatedWork) {
+                if let Some(action) = provider_related.reply(request) {
+                    return action;
+                }
+            }
             if matches!(journey, Journey::EditorGoalReplacement) {
                 if let Some(action) = provider_goal_replacement.reply(request, &emitted) {
                     return action;
@@ -1349,6 +1385,35 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             #[cfg(feature = "editor-e2e")]
             copy_editor_evidence(root, "editor-history-profile-canonical.json")?;
         }
+    }
+    if matches!(journey, Journey::EditorRelatedWork) {
+        editor_related_work::configure(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        id += 1;
+        let result = tokio::try_join!(
+            run_editor_journey(
+                root,
+                &paths,
+                &host_binary,
+                session,
+                provider.endpoint(),
+                "related-work"
+            ),
+            related_provider.release_when_requested(root),
+        );
+        if let Err(error) = result {
+            let snapshot = client.snapshot(id).await;
+            let provenance = client.call(id + 1, "desktop_session_provenance", json!({"request":{"nodeDid":node_did,"sessionId":session,"requesterDid":client_did}})).await;
+            anyhow::bail!("{error:#}; related-work snapshot: {snapshot}; provenance: {provenance}");
+        }
+        let evidence =
+            editor_related_work::verify(&access, node_did, session, &client_did, root).await?;
+        std::fs::write(
+            root.join("editor-related-work-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
     }
     if matches!(journey, Journey::EditorWorkspace) {
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;

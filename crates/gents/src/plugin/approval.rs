@@ -27,10 +27,12 @@ const LISTENER_GRACE: Duration = if cfg!(test) {
 
 tokio::task_local! {
     static INTERACTIVE: ();
-    static COMPOSED: ();
 }
 
-pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future: F) -> F::Output {
+pub async fn scope_interactive<F>(interactive: bool, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
     if interactive {
         INTERACTIVE.scope((), future).await
     } else {
@@ -38,30 +40,15 @@ pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future
     }
 }
 
-pub fn carry_interactive<F: std::future::Future>(
-    future: F,
-) -> impl std::future::Future<Output = F::Output> {
-    let composed = composed();
-    let future = workspace::carry(scope_interactive(interactive(), future));
-    async move {
-        if composed {
-            COMPOSED.scope((), future).await
-        } else {
-            future.await
-        }
-    }
+pub fn carry_interactive<F>(future: F) -> impl std::future::Future<Output = F::Output>
+where
+    F: std::future::Future,
+{
+    workspace::carry(scope_interactive(interactive(), future))
 }
 
 pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
-}
-
-pub(crate) async fn scope_composed<F: std::future::Future>(future: F) -> F::Output {
-    COMPOSED.scope((), future).await
-}
-
-fn composed() -> bool {
-    COMPOSED.try_with(|_| ()).is_ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,16 +57,12 @@ pub(crate) enum Consent {
     Deny,
 }
 
-pub(crate) fn consent_route(interactive: bool, _composed: bool) -> Consent {
+pub(crate) fn consent(interactive: bool) -> Consent {
     if interactive {
         Consent::Ask
     } else {
         Consent::Deny
     }
-}
-
-pub(crate) fn consent(interactive: bool) -> Consent {
-    consent_route(interactive, composed())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,7 +275,7 @@ pub fn pending(home: &Path) -> Result<Vec<Request>> {
 pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
     let now = now_ms();
     let mut requests = Vec::new();
-    let mut ids = std::collections::HashSet::new();
+    let mut ids = rapidhash::RapidHashSet::default();
     for queue in Queue::ALL {
         let entries = match std::fs::read_dir(queue.directory(home)) {
             Ok(entries) => entries,

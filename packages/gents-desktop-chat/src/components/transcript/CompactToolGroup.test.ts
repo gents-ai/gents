@@ -14,6 +14,11 @@ function tool(itemKey: string, statusKind = "success"): RenderedToolCallView {
     itemKey,
     statusKind,
     toolName: "read_file",
+    requestTurn: {
+      requestDocId: "physical-request",
+      requestId: "request",
+      settled: null,
+    },
     reconstruction: { state: "ready" },
     presentation: {
       kind: "fileRead",
@@ -271,4 +276,79 @@ describe("compact action summaries", () => {
     );
     expect(JSON.stringify(groups)).toBe(original);
   });
+});
+
+it("preserves a physical turn boundary even when logical request IDs repeat", () => {
+  const first = tool("first");
+  const second = tool("second");
+  first.requestTurn = {
+    requestDocId: "physical-first",
+    requestId: "repeated",
+    settled: true,
+  };
+  second.requestTurn = {
+    requestDocId: "physical-second",
+    requestId: "repeated",
+    settled: false,
+  };
+  const groups: RenderedTimelineItem[] = [first, second].map(
+    (entry, index) => ({
+      kind: "toolGroup",
+      itemKey: `group-${index}`,
+      tools: [entry],
+    }),
+  );
+  expect(coalesceToolGroups(groups)).toEqual(groups);
+});
+
+function boundaryGroup(
+  itemKey: string,
+  tools: RenderedToolCallView[],
+): RenderedTimelineItem {
+  return { kind: "toolGroup", itemKey, tools };
+}
+
+it("does not merge adjacent groups when physical ownership is unavailable", () => {
+  const first = tool("unknown-first");
+  const second = tool("unknown-second");
+  delete first.requestTurn;
+  delete second.requestTurn;
+  const groups = [
+    boundaryGroup("first", [first]),
+    boundaryGroup("second", [second]),
+  ];
+  expect(coalesceToolGroups(groups)).toEqual(groups);
+});
+
+it("does not merge groups whose tools have different physical owners", () => {
+  const mixed = (prefix: string) =>
+    ["left", "right"].map((side) => {
+      const entry = tool(`${prefix}-${side}`);
+      entry.requestTurn = {
+        requestDocId: `${prefix}-${side}`,
+        requestId: "repeated",
+        settled: null,
+      };
+      return entry;
+    });
+  const groups = [
+    boundaryGroup("first", mixed("first")),
+    boundaryGroup("second", mixed("second")),
+  ];
+  expect(coalesceToolGroups(groups)).toEqual(groups);
+});
+
+it("retains unchanged group objects across adjacent physical request boundaries", () => {
+  const left = tool("left");
+  const right = tool("right");
+  right.requestTurn = {
+    requestDocId: "another-request",
+    requestId: "another",
+    settled: null,
+  };
+  const first = boundaryGroup("first", [left]);
+  const second = boundaryGroup("second", [right]);
+  const result = coalesceToolGroups([first, second]);
+  expect(result[0]).toBe(first);
+  expect(result[1]).toBe(second);
 });

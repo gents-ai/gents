@@ -233,7 +233,7 @@ fn native_data_envelope_payload_size_benchmark() {
             let native = Some(data.clone());
             let start = std::time::Instant::now();
             let envelope = if copy {
-                serde_json :: json ! ({ "data" : native . unwrap_or (Value :: Null) })
+                serde_json :: json ! ({ "data" : data . clone () })
             } else {
                 into_data_envelope(native)
             };

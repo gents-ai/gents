@@ -4,14 +4,14 @@ use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
+use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
 async fn parent(
     db: &TestDb,
     session: &str,
     model: &Value,
-    documents: &mut HashMap<u64, AgentRequest>,
+    documents: &mut RapidHashMap<u64, AgentRequest>,
 ) -> AgentRequest {
     let id = model["doc"].as_u64().unwrap();
     if let Some(request) = documents.get(&id) {
@@ -73,10 +73,10 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let db = test_db(name).await;
-        let mut documents = HashMap::new();
+        let mut documents = RapidHashMap::new();
         let first = parent(&db, name, &case["first"], &mut documents).await;
         let second = parent(&db, name, &case["second"], &mut documents).await;
-        let mut goals: HashMap<u64, String> = HashMap::new();
+        let mut goals: RapidHashMap<u64, String> = RapidHashMap::new();
         let mut first_goal = None;
         for assignment in case["observed"].as_array().unwrap() {
             let goal_id = assignment["goal"].as_u64().unwrap();

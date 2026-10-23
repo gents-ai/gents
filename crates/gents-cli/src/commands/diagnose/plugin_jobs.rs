@@ -503,7 +503,8 @@ mod tests {
     #[test]
     fn job_target_unavailable_covers_missing_disabled_and_unlisted_targets() {
         let home = healthy_home();
-        let cases: [(&str, fn(&mut Value)); 3] = [
+        type Mutation = fn(&mut Value);
+        let cases: [(&str, Mutation); 3] = [
             ("not an AgentTarget", |config| {
                 plugin_entry(config)["job"]["agent_targets"] = json!(["wf-gone"]);
             }),

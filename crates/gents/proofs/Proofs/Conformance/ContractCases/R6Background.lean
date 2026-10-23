@@ -739,6 +739,12 @@ def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
         , ("error_code_on_violation", "background_tool_budget_exceeded")
         ]
     }
+  , { theoremName := "Background.admission_cohort_receipt_commits"
+    , witnessKind := "receipt_contention"
+    , scenario := "spawn_receipt_commits_after_bounded_transaction_conflicts"
+    , numericBound := Background.receiptContentionAttempts - 1
+    , kindFields := [("tool_name", "spawn_process")]
+    }
   ]
 
 structure WakeRowsCase where

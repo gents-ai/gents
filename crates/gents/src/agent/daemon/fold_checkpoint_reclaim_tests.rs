@@ -237,35 +237,37 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         let preamble = prompt_builder.preamble().to_string();
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
         let request_identity = agent_config.node_identity().clone();
-        let mut daemon = AgentDaemon::new(
-            node.clone(),
-            agent_config.clone(),
-            None,
-            Arc::new(WakeInputModel {
+        let mut daemon = AgentDaemon::new(AgentDaemonInit {
+            node: node.clone(),
+            agent_config: agent_config.clone(),
+            provider_family: None,
+            model: Arc::new(WakeInputModel {
                 provider_inputs: provider_inputs.clone(),
                 title_calls: Arc::new(AtomicUsize::new(0)),
                 title_shape_mismatches: Arc::new(AtomicUsize::new(0)),
                 successor: None,
             }),
             preamble,
-            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+            loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
-            FailurePolicy::default(),
-            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-            BackgroundToolRegistry::default(),
-            BackgroundExecutionRegistry::default(),
-            Arc::new(StartupBarrier::ready_for_test()),
-            crate::runtime_status::RuntimeStatusHandle::new(
+            hook_failure_policy: FailurePolicy::default(),
+            rendered_request_capture_factory: Some(
+                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            ),
+            background_tool_registry: BackgroundToolRegistry::default(),
+            background_execution_registry: BackgroundExecutionRegistry::default(),
+            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+            runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
                 node.clone(),
                 agent_config.node_did().to_string(),
             ),
-            1,
-            crate::request_admission::AgentRequestAdmissionVerifier::new(
+            slot_generation: 1,
+            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
-        )
+        })
         .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         daemon
@@ -377,35 +379,37 @@ async fn scripted_daemon(
         &[],
     );
     let preamble = prompt_builder.preamble().to_string();
-    AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(WakeInputModel {
+    AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(WakeInputModel {
             provider_inputs: provider_inputs.clone(),
             title_calls: Arc::new(AtomicUsize::new(0)),
             title_shape_mismatches: Arc::new(AtomicUsize::new(0)),
             successor: None,
         }),
         preamble,
-        Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+        loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
         prompt_builder,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
             node.clone(),
             agent_config.node_did().to_string(),
         ),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             agent_config.node_identity().clone(),
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap()
 }
 

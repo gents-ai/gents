@@ -404,7 +404,10 @@ async fn fetch_node_readiness_snapshot(
         .and_then(|json| serde_json::from_str(json).ok()))
 }
 
-fn optional_row<T: DeserializeOwned>(response: &QueryResponse, key: &str) -> Result<Option<T>> {
+fn optional_row<T>(response: &QueryResponse, key: &str) -> Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
     if response.has_errors() {
         bail!("{key} query failed: {:?}", response.errors);
     }

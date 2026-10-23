@@ -33,11 +33,11 @@ pub fn compute_module_id(wasm: &[u8], args: &Value, abi_version: i64) -> Result<
     let args_json = canonical_json_string(args)?;
     let mut hasher = Sha256::new();
     hasher.update(CALLBACK_MODULE_ID_DOMAIN);
-    hasher.update(&(wasm.len() as u64).to_be_bytes());
+    hasher.update((wasm.len() as u64).to_be_bytes());
     hasher.update(wasm);
-    hasher.update(&(args_json.len() as u64).to_be_bytes());
+    hasher.update((args_json.len() as u64).to_be_bytes());
     hasher.update(args_json.as_bytes());
-    hasher.update(&(abi_version as u64).to_be_bytes());
+    hasher.update((abi_version as u64).to_be_bytes());
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 

@@ -250,7 +250,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             );
         }
 
-        let cited_keys = |cites: bool| cites.then(|| vec![key.clone()]).unwrap_or_default();
+        let cited_keys = |cites: bool| if cites { vec![key.clone()] } else { Vec::new() };
         let inference_provenance = if case.inference_supported {
             provenance(
                 "inference.1",

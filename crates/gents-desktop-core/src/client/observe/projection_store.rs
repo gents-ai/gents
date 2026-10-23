@@ -160,7 +160,7 @@ struct ObservedState {
 #[derive(Default)]
 struct PendingResync {
     full: bool,
-    node_dids: std::collections::HashSet<String>,
+    node_dids: rapidhash::RapidHashSet<String>,
 }
 
 pub struct ObservedStore {
@@ -938,7 +938,7 @@ mod reload_tests {
                 .expect("modeled expected authoritative owners")
                 .iter()
                 .map(|owner| did(owner.as_u64().expect("authority owner")))
-                .collect::<std::collections::HashSet<_>>();
+                .collect::<rapidhash::RapidHashSet<_>>();
             assert_eq!(
                 merged.operator_config_authoritative_node_dids,
                 expected_authority

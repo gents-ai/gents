@@ -619,6 +619,10 @@ mod tests {
         fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async { Ok(serde_json::to_string(&plugin_receipt()).unwrap()) })
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the tool must become ready past the deadline within one poll"
+        )]
         fn call_with_receipt<'a>(
             &'a self,
             args: String,

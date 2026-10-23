@@ -24,10 +24,13 @@ fn decode_live_backgrounded_rows(value: serde_json::Value) -> anyhow::Result<usi
 
 /// The caller request's backgrounded tool rows that have not ended, read
 /// through `reader` so an adoption counts them inside its transaction.
-pub(crate) async fn count_live_backgrounded_rows_in<R: crate::config_client::ConfigRead>(
+pub(crate) async fn count_live_backgrounded_rows_in<R>(
     reader: &R,
     request_doc_id: &str,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<usize>
+where
+    R: crate::config_client::ConfigRead,
+{
     let escaped_request_doc_id = crate::graphql::escape_graphql_string(request_doc_id);
     let query = format!(
         r#"{{
@@ -79,7 +82,7 @@ pub(crate) async fn reserve_background_slot_in_txn(
     slot: BackgroundSlot,
     request_fields: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    txn.contend_for_background_slot();
+    txn.contend_with_request_siblings();
     if slot != BackgroundSlot::Admitted {
         let live = count_live_backgrounded_rows_in(txn, request_doc_id).await?;
         let admitted = if slot == BackgroundSlot::Occupied {

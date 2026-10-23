@@ -39,7 +39,7 @@ impl Drop for Wait<'_> {
     }
 }
 
-pub(super) async fn run<R: Runtime>(
+pub(super) async fn run<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     window: &str,
@@ -47,7 +47,10 @@ pub(super) async fn run<R: Runtime>(
     method: InferenceAuthMethod,
     provider: &str,
     label: Option<&str>,
-) -> Result<SignIn, BridgeError> {
+) -> Result<SignIn, BridgeError>
+where
+    R: Runtime,
+{
     super::sign_in_platform::require_supported(method, cfg!(target_os = "ios"))?;
     let core = current_core(state).ok_or_else(|| {
         BridgeError::new(
@@ -90,7 +93,7 @@ pub(super) async fn run<R: Runtime>(
         provider,
         label,
         &wait.cancel,
-        |url| {
+        async |url| {
             if wait.cancel.is_cancelled() || app.get_webview_window(window).is_none() {
                 return Err(BridgeError::untyped("Sign-in cancelled."));
             }
@@ -124,7 +127,7 @@ pub(super) async fn run<R: Runtime>(
                 }
                 _ => {}
             }
-            if crate::host_browser::open_url(url).is_err() {
+            if crate::host_browser::open_url(url).await.is_err() {
                 tracing::warn!("Could not open the sign-in page; open its link in Settings");
             }
             Ok(())

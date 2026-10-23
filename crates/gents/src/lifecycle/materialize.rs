@@ -168,8 +168,8 @@ async fn publish_graph_root_request(
         "lifecycle.publish_graph_root",
         move |txn| {
             Box::pin(async move {
-                crate::graph_pipeline::fence_graph_root_request_in_txn(&txn, create).await?;
-                let response = txn.execute(&mutation).await?;
+                crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
+                let response = txn.execute(mutation).await?;
                 crate::graphql::created_doc_id(&response, "AgentRequest")
             })
         },
@@ -558,7 +558,7 @@ pub fn next_request_hop(cause: RequestHopCause, own: u32) -> u32 {
 }
 
 pub fn request_hop_within_bound(max_request_hop: Option<u32>, hop: u32) -> bool {
-    max_request_hop.map_or(true, |bound| hop <= bound)
+    max_request_hop.is_none_or(|bound| hop <= bound)
 }
 
 #[derive(Debug, Clone)]
@@ -599,6 +599,10 @@ pub(crate) fn session_message_sender_header(cause: &SessionMessageCause, at: &st
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "called from session_message with this shape"
+)]
 pub(crate) async fn build_session_message_request(
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
@@ -627,6 +631,10 @@ pub(crate) async fn build_session_message_request(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "called from session_message and plugin_job effects with this shape"
+)]
 pub(crate) async fn build_session_message_request_with_input(
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,

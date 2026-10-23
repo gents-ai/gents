@@ -124,7 +124,10 @@ pub(super) async fn claim_queue_allows(
         .map(|receipt| receipt.trigger_id.clone());
 
     let mut observations = Vec::with_capacity(session_requests.len());
-    let mut observation_by_doc = std::collections::HashMap::with_capacity(session_requests.len());
+    let mut observation_by_doc = rapidhash::RapidHashMap::with_capacity_and_hasher(
+        session_requests.len(),
+        Default::default(),
+    );
     for row in &session_requests {
         let observation = claim_observation(
             row,
@@ -203,7 +206,7 @@ pub(super) async fn claim_queue_allows(
         .iter()
         .enumerate()
         .map(|(index, id)| (id.as_str(), index as u64))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     for row in &mut observations {
         row.arrival = positions.get(row.document.as_str()).copied();
     }
@@ -221,11 +224,11 @@ async fn claim_receipts_for_request_ids(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner_did: &str,
     request_ids: &[&str],
-) -> Result<std::collections::HashMap<String, QueueReceipt>> {
+) -> Result<rapidhash::RapidHashMap<String, QueueReceipt>> {
     let owner = escape_graphql_string(owner_did);
-    let mut receipts = std::collections::HashMap::new();
+    let mut receipts = rapidhash::RapidHashMap::default();
     for request_batch in request_ids.chunks(CLAIM_QUEUE_PAGE_SIZE) {
-        let mut seen_ids = std::collections::HashSet::new();
+        let mut seen_ids = rapidhash::RapidHashSet::default();
         let ids = crate::graphql::graphql_string_list_literal(
             request_batch
                 .iter()
@@ -286,10 +289,13 @@ fn cursor_after_arg(after: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn cursor_page<T: serde::de::DeserializeOwned>(
+fn cursor_page<T>(
     response: &defra_node::QueryResponse,
     collection: &str,
-) -> Result<(Vec<T>, Option<String>)> {
+) -> Result<(Vec<T>, Option<String>)>
+where
+    T: serde::de::DeserializeOwned,
+{
     let cursor = response
         .data
         .as_ref()

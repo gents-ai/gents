@@ -89,12 +89,16 @@ impl History {
     }
 }
 
-pub fn evaluate<W: PartialEq, A: PartialEq>(
+pub fn evaluate<W, A>(
     input: &Input<W, A>,
     history: &History,
     verdict: Review,
     grant: &Grant<W, A>,
-) -> Route {
+) -> Route
+where
+    W: PartialEq,
+    A: PartialEq,
+{
     if policy::route(input) == Route::Review && history.blocked() {
         Route::Ask
     } else {
@@ -102,12 +106,16 @@ pub fn evaluate<W: PartialEq, A: PartialEq>(
     }
 }
 
-pub fn apply<W: PartialEq, A: PartialEq>(
+pub fn apply<W, A>(
     input: &Input<W, A>,
     history: &mut History,
     verdict: Review,
     grant: &Grant<W, A>,
-) -> Route {
+) -> Route
+where
+    W: PartialEq,
+    A: PartialEq,
+{
     let result = evaluate(input, history, verdict, grant);
     if policy::route(input) == Route::Review
         && !history.blocked()

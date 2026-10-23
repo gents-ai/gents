@@ -1,7 +1,7 @@
 //! AppKit's tracker takes over the scroll stream once it starts, so it only
 //! starts where the webview has said the content under the pointer cannot
 //! scroll further in the gesture's direction.
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 
@@ -14,14 +14,14 @@ use objc2_core_foundation::CGFloat;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 /// Sideways scroll room under each view's pointer: (left, right).
-static SCROLL_ROOM: Mutex<Option<HashMap<String, (bool, bool)>>> = Mutex::new(None);
+static SCROLL_ROOM: Mutex<Option<RapidHashMap<String, (bool, bool)>>> = Mutex::new(None);
 
 #[tauri::command]
 pub fn swipe_scroll_edges(window: WebviewWindow, left: bool, right: bool) {
     let mut room = SCROLL_ROOM
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    room.get_or_insert_with(HashMap::new)
+    room.get_or_insert_with(RapidHashMap::default)
         .insert(window.label().to_owned(), (left, right));
 }
 
@@ -86,13 +86,7 @@ fn track(app: &AppHandle, event: &NSEvent) {
                 NSEventPhase::Cancelled => "cancelled",
                 _ => return,
             };
-            let _ = window.emit(
-                "native-swipe",
-                SwipeProgress {
-                    amount: amount as f64,
-                    phase,
-                },
-            );
+            let _ = window.emit("native-swipe", SwipeProgress { amount, phase });
         },
     );
     event.trackSwipeEventWithOptions_dampenAmountThresholdMin_max_usingHandler(
