@@ -50,11 +50,26 @@ pub fn decode_transcript_message_row(row: &serde_json::Value) -> Result<Transcri
     Ok(TranscriptMessageRow { doc_id, message })
 }
 
-pub fn request_output_segments_query(request_doc_id: &str) -> String {
+pub(crate) fn request_output_segments_filter(request_doc_id: &str) -> String {
     format!(
-        r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
+        "request_doc_id: {{ _eq: \"{}\" }}",
         gents_protocol::graphql::escape_graphql_string(request_doc_id)
     )
+}
+
+pub fn request_output_segments_query(request_doc_id: &str) -> String {
+    let filter = request_output_segments_filter(request_doc_id);
+    format!("{{ AgentOutputSegment(filter: {{ {filter} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}")
+}
+
+pub(crate) fn source_output_segments_filter(
+    request_doc_id: &str,
+    source: &gents_protocol::output::OutputSource,
+) -> Result<String> {
+    let request = request_output_segments_filter(request_doc_id);
+    let discriminator =
+        gents_protocol::graphql::graphql_input_literal(&output_source_discriminator(source))?;
+    Ok(format!("{request}, source: {discriminator}"))
 }
 
 /// DefraDB indexes JSON leaves, not whole objects. Readers must check complete
@@ -64,13 +79,9 @@ pub(crate) fn source_output_segments_query(
     request_doc_id: &str,
     source: &gents_protocol::output::OutputSource,
 ) -> Result<String> {
-    let discriminator = output_source_discriminator(source);
-    let filter = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-        "request_doc_id": {"_eq": request_doc_id},
-        "source": discriminator,
-    }))?;
+    let filter = source_output_segments_filter(request_doc_id, source)?;
     Ok(format!(
-        "{{ AgentOutputSegment(filter: {filter}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"
+        "{{ AgentOutputSegment(filter: {{ {filter} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"
     ))
 }
 

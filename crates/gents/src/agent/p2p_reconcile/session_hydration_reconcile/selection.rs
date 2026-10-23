@@ -287,10 +287,7 @@ async fn load_request_segments(
     requester_did: &str,
 ) -> Result<()> {
     for request_id in request_ids {
-        let filter = format!(
-            "request_doc_id: {{ _eq: \"{}\" }}",
-            escape_graphql_string(&request_id)
-        );
+        let filter = crate::session::canonical_rows::request_output_segments_filter(&request_id);
         let values = pages::load_rows(
             txn,
             gents_protocol::session_hydration::SessionHydrationCollection::AgentOutputSegment,

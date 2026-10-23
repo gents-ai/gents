@@ -1,3 +1,5 @@
+mod cursor;
+
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::future::Future;
 #[cfg(test)]

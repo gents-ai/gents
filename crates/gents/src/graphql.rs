@@ -137,6 +137,22 @@ pub(crate) fn cursor_after_arg(after: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+pub(crate) const CURSOR_PAGE_SIZE: usize = 64;
+
+pub(crate) fn cursor_query(
+    collection: &str,
+    fields: &str,
+    filter: &str,
+    after: Option<&str>,
+) -> String {
+    let after = cursor_after_arg(after);
+    format!(
+        r#"{{ _cursor {{ {collection}(first: {CURSOR_PAGE_SIZE}{after},
+        filter: {{ {filter} }}, order: [{{ _docID: ASC }}]) {{ {fields} }}
+        _pageInfo {{ hasNext endCursor }} }} }}"#
+    )
+}
+
 pub(crate) fn cursor_page<T>(
     response: &defra_node::QueryResponse,
     collection: &str,
