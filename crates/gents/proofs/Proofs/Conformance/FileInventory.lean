@@ -308,6 +308,65 @@ def demandCasesJson : String :=
      ("initial_page", wirePageJson firstEnvelope.page),
      ("matches_initial_page", boolString (value.matchesPage firstEnvelope.page true))])
 
+private def refusalReasonJson : RefusalReason → String
+  | .rejected => jsonString "rejected"
+  | .stale => jsonString "stale"
+  | .unavailable => jsonString "unavailable"
+
+private def replyJson : Reply → String
+  | .page value => object [("kind", jsonString "page"), ("page", wirePageJson value)]
+  | .refused reason => object [("kind", jsonString "refused"), ("reason", refusalReasonJson reason)]
+
+structure RefusalInput where
+  name : String
+  actual : PageDemand := initialDemand
+  version : Bool := true
+  nonceMatches : Bool := true
+  signer : String := admission.node
+  verified : Bool := true
+
+private def refusalInputs : List RefusalInput :=
+  [ {name := "valid_refusal"}
+  , {name := "wrong_attempt", actual := {initialDemand with attempt := "attempt-2"}}
+  , {name := "wrong_cursor", actual := continuingDemand}
+  , {name := "wrong_session", actual := {initialDemand with admission := forkRequest}}
+  , {name := "wrong_version", version := false}
+  , {name := "wrong_nonce", nonceMatches := false}
+  , {name := "foreign_signer", signer := "node-2"}
+  , {name := "invalid_signature", verified := false} ]
+
+def refusalCasesJson : String := jsonArray (refusalInputs.map fun value => object
+  [("name", jsonString value.name), ("expected_demand", demandJson initialDemand),
+   ("actual_demand", demandJson value.actual), ("version", boolString value.version),
+   ("nonce_matches", boolString value.nonceMatches), ("signer", jsonString value.signer),
+   ("verified", boolString value.verified),
+   ("expected", boolString (acceptsRefusal initialDemand value.actual value.version
+      value.nonceMatches value.signer value.verified))])
+
+structure ReplyJournalInput where
+  name : String
+  prior : Option Reply := none
+  candidate : Reply := .page firstEnvelope.page
+  write : TerminalWriteResult := .committed
+
+private def replyJournalInputs : List ReplyJournalInput :=
+  [ {name := "first_page"}
+  , {name := "first_stale", candidate := .refused .stale}
+  , {name := "first_rejected", candidate := .refused .rejected}
+  , {name := "first_unavailable", candidate := .refused .unavailable}
+  , {name := "rollback_page", write := .failed}
+  , {name := "rollback_refusal", candidate := .refused .stale, write := .failed}
+  , {name := "retained_page", prior := some (.page firstEnvelope.page), candidate := .refused .stale}
+  , {name := "retained_stale", prior := some (.refused .stale)}
+  , {name := "retained_rejection", prior := some (.refused .rejected)}
+  , {name := "retained_unavailable", prior := some (.refused .unavailable), write := .failed} ]
+
+def replyJournalCasesJson : String := jsonArray (replyJournalInputs.map fun value => object
+  [("name", jsonString value.name), ("demand", demandJson initialDemand),
+   ("prior", optional replyJson value.prior), ("candidate", replyJson value.candidate),
+   ("committed", boolString (value.write == .committed)),
+   ("expected", optional replyJson (recordReply value.prior value.candidate value.write))])
+
 private def receivedJson (value : ReceivedPage) : String := object
   [("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope)]
 

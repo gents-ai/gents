@@ -92,15 +92,18 @@ pub async fn ensure_migrations_with_registry(
     Ok(report)
 }
 
-const CAPTURE_COLLECTIONS: &[&str] = &[
-    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-    gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME,
+const FILE_COLLECTION_POLICIES: &[(&str, bool)] = &[
+    (gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, true),
+    (gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME, true),
+    (gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME, false),
 ];
 
 fn manages_file_images(registry: &Registry<'_>) -> bool {
-    registry
-        .managed_names()
-        .any(|name| CAPTURE_COLLECTIONS.contains(&name))
+    registry.managed_names().any(|name| {
+        FILE_COLLECTION_POLICIES
+            .iter()
+            .any(|(collection, _)| *collection == name)
+    })
 }
 
 async fn register_file_image_policy<'n>(
@@ -114,12 +117,12 @@ async fn register_file_image_policy<'n>(
     {
         return Ok(None);
     }
-    for name in CAPTURE_COLLECTIONS {
+    for (name, branchable) in FILE_COLLECTION_POLICIES {
         if let Some(collection) = node
             .get_collection(name)
             .map_err(|error| Error::Node(error.into()))?
         {
-            validate_file_image_policy(&collection, true)?;
+            validate_file_image_policy(&collection, *branchable)?;
         }
     }
     if let Some(collection) = node
@@ -171,7 +174,7 @@ async fn register_file_image_owner(
     let owner = owner
         .parse()
         .map_err(|error| Error::Node(anyhow::anyhow!("invalid image owner DID: {error}")))?;
-    for name in CAPTURE_COLLECTIONS {
+    for (name, branchable) in FILE_COLLECTION_POLICIES {
         if !registry.managed_names().any(|managed| managed == *name) {
             continue;
         }
@@ -181,7 +184,7 @@ async fn register_file_image_owner(
             .ok_or_else(|| Error::CollectionMissing {
                 collection: (*name).into(),
             })?;
-        validate_file_image_policy(&collection, true)?;
+        validate_file_image_policy(&collection, *branchable)?;
         let acp = node.document_acp();
         let policy = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID;
         let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;

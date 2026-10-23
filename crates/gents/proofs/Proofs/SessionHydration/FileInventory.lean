@@ -475,6 +475,41 @@ theorem revoked_after_signing_cannot_issue (value : WirePage) (nonce signer : St
 theorem revoked_before_signing_cannot_issue (value : WirePage) (nonce signer : String) (after : Bool) :
     mayIssue value nonce signer false after = false := by simp [mayIssue]
 
+inductive RefusalReason where
+  | rejected | stale | unavailable
+  deriving DecidableEq, Repr
+
+/-- A refusal carries only the client's exact demand and a fixed reason. It
+contains no selected membership, metadata or image grant. Native verification
+binds its disjoint versioned purpose and full demand, including the cursor. -/
+def acceptsRefusal (expected actual : PageDemand) (version nonceMatches : Bool)
+    (signer : String) (signatureVerified : Bool) : Bool :=
+  expected.wellFormed && expected == actual && version && nonceMatches &&
+    signer == expected.admission.node && signatureVerified
+
+inductive Reply where
+  | page (value : WirePage)
+  | refused (reason : RefusalReason)
+  deriving DecidableEq, Repr
+
+/-- Prior replies have been decoded, correlated and signature-verified for the
+exact demand, and their native document owner is the source. The local journal
+is not a transfer grant; delivery must still check current authorization. -/
+def recordReply (prior : Option Reply) (candidate : Reply)
+    (write : TerminalWriteResult) : Option Reply :=
+  match prior with
+  | some outcome => some outcome
+  | none => if write == .committed then some candidate else none
+
+theorem recorded_reply_is_immutable (prior candidate : Reply) (write : TerminalWriteResult) :
+    recordReply (some prior) candidate write = some prior := rfl
+
+theorem failed_reply_is_not_retained (candidate : Reply) :
+    recordReply none candidate .failed = none := rfl
+
+theorem stale_reply_is_not_upgraded (candidate : Reply) :
+    recordReply (some (.refused .stale)) candidate .committed = some (.refused .stale) := rfl
+
 /-- All authorization remains with the existing source/identity owners. This
 receiver checks their signed metadata representation, not another access
 policy. Fork entries retain the attested actual scope, including origins. -/

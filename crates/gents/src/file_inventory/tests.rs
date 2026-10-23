@@ -63,6 +63,64 @@ impl Names {
         }
     }
 
+    fn demand(&self, value: &Value) -> gents_protocol::file_inventory::FileInventoryPageDemand {
+        gents_protocol::file_inventory::FileInventoryPageDemand {
+            admission: self.admission(&value["admission"]),
+            attempt_id: text(&value["attempt"]),
+            cursor: (!value["cursor"].is_null()).then(|| FileInventoryCursor {
+                binding: self.binding(&value["cursor"]["binding"]),
+                offset: value["cursor"]["offset"].as_u64().unwrap(),
+            }),
+        }
+    }
+
+    fn page(&self, value: &Value) -> FileInventoryPage {
+        FileInventoryPage {
+            binding: self.binding(&value["binding"]),
+            offset: value["offset"].as_u64().unwrap(),
+            entries: value["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| self.entry(entry))
+                .collect(),
+            next: (!value["next"].is_null()).then(|| FileInventoryCursor {
+                binding: self.binding(&value["next"]["binding"]),
+                offset: value["next"]["offset"].as_u64().unwrap(),
+            }),
+        }
+    }
+
+    async fn reply(
+        &self,
+        value: &Value,
+        demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
+    ) -> gents_protocol::file_inventory::FileInventoryReply {
+        use gents_protocol::file_inventory::FileInventoryReply;
+        if value["kind"] == "refused" {
+            FileInventoryReply::Refused(
+                sign_refusal(
+                    &self.source,
+                    demand,
+                    serde_json::from_value(value["reason"].clone()).unwrap(),
+                )
+                .await
+                .unwrap(),
+            )
+        } else {
+            FileInventoryReply::Page(
+                sign_current_page(
+                    &self.source,
+                    &demand.derive_request_key().unwrap(),
+                    self.page(&value["page"]),
+                    || std::future::ready(Ok(true)),
+                )
+                .await
+                .unwrap(),
+            )
+        }
+    }
+
     async fn receipt(&self, envelope: &Value) -> FileInventoryPageReceipt {
         let page = &envelope["page"];
         let mut receipt = FileInventoryPageReceipt {
@@ -424,4 +482,252 @@ async fn generated_demands_preserve_attempt_and_cursor_identity() {
     }
     drop(names);
     tokio::fs::remove_dir_all(directory.path()).await.unwrap();
+}
+
+#[tokio::test]
+async fn generated_refusals_verify_exact_demand() {
+    use gents_protocol::file_inventory::{FileInventoryRefusalReason, FileInventoryReply};
+    let (directory, names) = tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let names = Names {
+            source: KeyIdentity::load_or_create(directory.path().join("source.key"), None).unwrap(),
+            other: KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap(),
+        };
+        (directory, names)
+    })
+    .await
+    .unwrap();
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_refusal_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let expected = names.demand(&case["expected_demand"]);
+        let actual = names.demand(&case["actual_demand"]);
+        for reason in [
+            FileInventoryRefusalReason::Rejected,
+            FileInventoryRefusalReason::Stale,
+            FileInventoryRefusalReason::Unavailable,
+        ] {
+            let mut receipt = sign_refusal(&names.source, &actual, reason).await.unwrap();
+            if case["version"] == false {
+                receipt.version += 1;
+            }
+            if case["nonce_matches"] == false {
+                receipt.request_key.push_str("-wrong");
+            }
+            receipt.signer_did = names.actor(&case["signer"]);
+            let signer = if case["signer"] == "node-1" {
+                &names.source
+            } else {
+                &names.other
+            };
+            receipt.signature = signer
+                .sign(&receipt.signing_payload().unwrap())
+                .await
+                .unwrap();
+            if case["verified"] == false {
+                receipt.signature[0] ^= 1;
+            }
+            let reply = FileInventoryReply::Refused(receipt);
+            let restored: FileInventoryReply =
+                serde_json::from_slice(&serde_json::to_vec(&reply).unwrap()).unwrap();
+            assert_eq!(
+                verify_reply(&expected, &restored, &names.source)
+                    .await
+                    .is_ok(),
+                case["expected"].as_bool().unwrap(),
+                "{} {reason:?}",
+                case["name"]
+            );
+            if case["expected"] == true {
+                let FileInventoryReply::Refused(mut tampered) = restored else {
+                    unreachable!()
+                };
+                tampered.reason = if reason == FileInventoryRefusalReason::Stale {
+                    FileInventoryRefusalReason::Rejected
+                } else {
+                    FileInventoryRefusalReason::Stale
+                };
+                assert!(verify_reply(
+                    &expected,
+                    &FileInventoryReply::Refused(tampered),
+                    &names.source
+                )
+                .await
+                .is_err());
+            }
+        }
+    }
+    drop(names);
+    tokio::fs::remove_dir_all(directory.path()).await.unwrap();
+}
+
+#[tokio::test]
+async fn generated_reply_journals_preserve_immutable_outcomes() {
+    use crate::config_client::ConfigAccess;
+    use crate::tool_call_lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+    use gents_protocol::file_inventory::FileInventoryReply;
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_reply_journal_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "inventory-reply-journal".into(),
+        real_identity: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let path = fixture.path.clone();
+    let names = tokio::task::spawn_blocking(move || Names {
+        source: KeyIdentity::load_or_create(path.join("test-agent.key"), None).unwrap(),
+        other: KeyIdentity::load_or_create(path.join("other.key"), None).unwrap(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(names.source.did(), fixture.node_did);
+    for case in cases {
+        let mut demand = names.demand(&case["demand"]);
+        demand.attempt_id = text(&case["name"]);
+        let prior = if case["prior"].is_null() {
+            None
+        } else {
+            Some(names.reply(&case["prior"], &demand).await)
+        };
+        if let Some(prior) = &prior {
+            assert_eq!(
+                &record_reply(&fixture.node, &demand, prior, &names.source)
+                    .await
+                    .unwrap(),
+                prior
+            );
+        }
+        let candidate = names.reply(&case["candidate"], &demand).await;
+        let result = ConfigAccess::transact_local_write(
+            &fixture.node,
+            None,
+            "test.inventory.reply_commit",
+            |txn| {
+                let (demand, candidate, verifier) = (&demand, &candidate, &names.source);
+                Box::pin(async move {
+                    let reply = journal::record_in_txn(txn, demand, candidate, verifier).await?;
+                    anyhow::ensure!(
+                        case["committed"] == true,
+                        "fixture rollback after writing reply"
+                    );
+                    Ok(reply)
+                })
+            },
+        )
+        .await;
+        assert_eq!(
+            result.is_ok(),
+            case["committed"] == true,
+            "{}",
+            case["name"]
+        );
+        let retained = load_recorded_reply(&fixture.node, &demand, &names.source)
+            .await
+            .unwrap();
+        if case["expected"].is_null() {
+            assert!(retained.is_none(), "{}", case["name"]);
+        } else {
+            let expected = prior.clone().unwrap_or_else(|| candidate.clone());
+            assert_eq!(retained, Some(expected.clone()), "{}", case["name"]);
+            match (&expected, &case["expected"]) {
+                (FileInventoryReply::Page(receipt), value) => {
+                    assert_eq!(value["kind"], "page");
+                    assert_eq!(receipt.page, names.page(&value["page"]));
+                }
+                (FileInventoryReply::Refused(receipt), value) => {
+                    assert_eq!(value["kind"], "refused");
+                    assert_eq!(
+                        serde_json::to_value(receipt.reason).unwrap(),
+                        value["reason"]
+                    );
+                }
+            }
+            assert_eq!(
+                record_reply(&fixture.node, &demand, &candidate, &names.source)
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        let mut fresh = demand.clone();
+        fresh.attempt_id.push_str("-new");
+        assert!(load_recorded_reply(&fixture.node, &fresh, &names.source)
+            .await
+            .unwrap()
+            .is_none());
+    }
+    for invalid in ["foreign-owner", "corrupt-signature", "wrong-demand"] {
+        let mut demand = names.demand(&cases[0]["demand"]);
+        demand.attempt_id = invalid.into();
+        let reply = names.reply(&cases[1]["candidate"], &demand).await;
+        let mut stored_reply = serde_json::to_value(&reply).unwrap();
+        let mut stored_demand = demand.clone();
+        if invalid == "corrupt-signature" {
+            stored_reply["receipt"]["signature"][0] =
+                serde_json::json!(stored_reply["receipt"]["signature"][0].as_u64().unwrap() ^ 1);
+        }
+        if invalid == "wrong-demand" {
+            stored_demand.attempt_id.push_str("-other");
+        }
+        let input = serde_json::json!({
+            "request_key": demand.derive_request_key().unwrap(),
+            "node_did": names.source.did(), "demand": stored_demand, "reply": stored_reply,
+        });
+        let actor = (invalid == "foreign-owner").then(|| names.other.did().parse().unwrap());
+        let id = ConfigAccess::transact_local_write(&fixture.node, actor, "test.inventory.invalid_reply", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                let response = txn.execute_with_variables(
+                    "mutation($input: FileInventoryReplyMutationInputArg!) { create_FileInventoryReply(input: $input) { _docID } }",
+                    &serde_json::json!({"input": input})).await?;
+                crate::graphql::created_doc_id(&response, "FileInventoryReply")
+            })
+        }).await.unwrap();
+        if invalid == "foreign-owner" {
+            fixture
+                .node
+                .add_dac_actor_relationship(
+                    names.other.did(),
+                    "FileInventoryReply",
+                    &id,
+                    "reader",
+                    names.source.did(),
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            load_recorded_reply(&fixture.node, &demand, &names.source)
+                .await
+                .is_err(),
+            "{invalid}"
+        );
+        assert!(
+            record_reply(&fixture.node, &demand, &reply, &names.source)
+                .await
+                .is_err(),
+            "{invalid}"
+        );
+    }
+    fixture.node.shutdown().await;
+    drop(names);
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

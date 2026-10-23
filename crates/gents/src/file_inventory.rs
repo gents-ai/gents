@@ -178,5 +178,79 @@ where
     Ok(receipt)
 }
 
+/// Verification is independent of transport status. A valid refusal settles
+/// this demand without extending a page prefix or certifying an empty list.
+pub async fn verify_reply(
+    demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
+    reply: &gents_protocol::file_inventory::FileInventoryReply,
+    verifier: &dyn NodeIdentity,
+) -> Result<()> {
+    use gents_protocol::file_inventory::{FileInventoryReply, FILE_INVENTORY_REFUSAL_VERSION};
+    let key = demand.derive_request_key()?;
+    let (signer, payload, signature) = match reply {
+        FileInventoryReply::Page(receipt) => {
+            demand.validate_page_reference(receipt)?;
+            ensure!(
+                receipt.version == FILE_INVENTORY_RECEIPT_VERSION && receipt.page.well_formed(),
+                "file inventory reply has an invalid page or purpose"
+            );
+            (
+                &receipt.signer_did,
+                receipt.signing_payload()?,
+                &receipt.signature,
+            )
+        }
+        FileInventoryReply::Refused(receipt) => {
+            ensure!(
+                receipt.version == FILE_INVENTORY_REFUSAL_VERSION
+                    && receipt.demand == *demand
+                    && receipt.request_key == key,
+                "file inventory refusal does not match its demand or purpose"
+            );
+            (
+                &receipt.signer_did,
+                receipt.signing_payload()?,
+                &receipt.signature,
+            )
+        }
+    };
+    ensure!(
+        signer == &demand.admission.request.node_did,
+        "file inventory reply is not signed by its source"
+    );
+    ensure!(
+        verifier.verify(signer, &payload, signature).await?,
+        "file inventory reply signature is invalid"
+    );
+    Ok(())
+}
+
+pub async fn sign_refusal(
+    identity: &dyn NodeIdentity,
+    demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
+    reason: gents_protocol::file_inventory::FileInventoryRefusalReason,
+) -> Result<gents_protocol::file_inventory::FileInventoryRefusalReceipt> {
+    use gents_protocol::file_inventory::{
+        FileInventoryRefusalReceipt, FILE_INVENTORY_REFUSAL_VERSION,
+    };
+    ensure!(
+        identity.did() == demand.admission.request.node_did,
+        "file inventory refusal requires the exact source"
+    );
+    let mut receipt = FileInventoryRefusalReceipt {
+        version: FILE_INVENTORY_REFUSAL_VERSION,
+        request_key: demand.derive_request_key()?,
+        demand: demand.clone(),
+        reason,
+        signer_did: identity.did().to_owned(),
+        signature: Vec::new(),
+    };
+    receipt.signature = identity.sign(&receipt.signing_payload()?).await?;
+    Ok(receipt)
+}
+
+mod journal;
+pub use journal::{load_recorded_reply, record_reply};
+
 #[cfg(test)]
 mod tests;

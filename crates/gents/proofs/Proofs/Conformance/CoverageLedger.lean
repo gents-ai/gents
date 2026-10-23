@@ -1373,6 +1373,18 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_refusal_cases"
+      "FileInventoryRefusalCases"
+      "file_inventory::tests::generated_refusals_verify_exact_demand"
+      "Drives signed terminal replies and source-local immutable storage. Durable demands, delivery and installed client acceptance remain obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_inventory_reply_journal_cases"
+      "FileInventoryReplyJournalCases"
+      "file_inventory::tests::generated_reply_journals_preserve_immutable_outcomes"
+      "Drives signed terminal replies and source-local immutable storage. Durable demands, delivery and installed client acceptance remain obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_demand_cases"
       "FileInventoryDemandCases"
       "file_inventory::tests::generated_demands_preserve_attempt_and_cursor_identity"

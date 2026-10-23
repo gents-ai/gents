@@ -164,6 +164,9 @@ pub const ENROLLMENT_OPERATOR_NONCE: &str =
 pub const FILE_IMAGE_HYDRATION_REQUEST_NAME: &str = "FileImageHydrationRequest";
 pub const FILE_IMAGE_HYDRATION_REQUEST: &str =
     include_str!("../schemas/agent/file_image_hydration_request.graphql");
+pub const FILE_INVENTORY_REPLY_NAME: &str = "FileInventoryReply";
+pub const FILE_INVENTORY_REPLY: &str =
+    include_str!("../schemas/agent/file_inventory_reply.graphql");
 pub const FILE_IMAGE_HYDRATION_RECEIPT_NAME: &str = "FileImageHydrationReceipt";
 pub const FILE_IMAGE_HYDRATION_RECEIPT: &str =
     include_str!("../schemas/agent/file_image_hydration_receipt.graphql");
@@ -249,6 +252,7 @@ pub const ALL: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE,
     SESSION_HYDRATION_REQUEST,
     FILE_IMAGE_HYDRATION_REQUEST,
+    FILE_INVENTORY_REPLY,
     FILE_IMAGE_HYDRATION_RECEIPT,
     AGENT_SESSION_INPUT_EDIT,
     AGENT_SESSION_GOAL_CONTROL,
@@ -329,6 +333,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
     FILE_IMAGE_HYDRATION_REQUEST_NAME,
+    FILE_INVENTORY_REPLY_NAME,
     FILE_IMAGE_HYDRATION_RECEIPT_NAME,
     AGENT_SESSION_INPUT_EDIT_NAME,
     AGENT_SESSION_GOAL_CONTROL_NAME,
@@ -393,6 +398,7 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
 pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ADMIN_PIN_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
+    FILE_INVENTORY_REPLY_NAME,
     FILE_IMAGE_HYDRATION_RECEIPT_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
 ];

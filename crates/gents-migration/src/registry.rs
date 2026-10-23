@@ -586,6 +586,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreihbcklqo55343lt7spcif4xftwqbsfe6flznvpge3sfcre3sakdgu"
     ),
     baseline_entry!(
+        gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_REPLY,
+        "bafyreicj5rsouhjk2j36qigmwamnlyh6xqzwttvdhvvcxkkdsmzgwnnsei"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME,
         gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT,
         "bafyreickb6g5druozipch55cjpaciwvm5gafgtrprqmdtezp4zqddk5fry"

@@ -279,3 +279,56 @@ impl FileInventoryPageReceipt {
         ))
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileInventoryRefusalReason {
+    Rejected,
+    Stale,
+    Unavailable,
+}
+
+pub const FILE_INVENTORY_REFUSAL_VERSION: u8 = 1;
+
+/// Refusals attest only the client's own demand and a fixed reason. They
+/// contain no selected file membership and do not authorize delivery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileInventoryRefusalReceipt {
+    pub version: u8,
+    pub request_key: String,
+    pub demand: FileInventoryPageDemand,
+    pub reason: FileInventoryRefusalReason,
+    pub signer_did: String,
+    pub signature: Vec<u8>,
+}
+
+impl FileInventoryRefusalReceipt {
+    pub fn signing_payload(&self) -> Result<Vec<u8>> {
+        let version = self.version.to_string();
+        let demand = serde_json::to_string(&self.demand)?;
+        let reason = serde_json::to_string(&self.reason)?;
+        Ok(canonical_domain_payload(
+            "gents-file-inventory-refusal-v1",
+            [
+                version.as_str(),
+                &self.request_key,
+                &demand,
+                &reason,
+                &self.signer_did,
+            ],
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "receipt",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum FileInventoryReply {
+    Page(FileInventoryPageReceipt),
+    Refused(FileInventoryRefusalReceipt),
+}
