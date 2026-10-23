@@ -426,10 +426,6 @@ async fn backend_usage_views(
     let time = |at: chrono::DateTime<chrono::Utc>| at.to_rfc3339();
     let mut views = Vec::with_capacity(backends.len());
     for backend in backends {
-        let stored =
-            gents::usage_observation::usage_for_backend(access, node_did, &backend).await?;
-        let usage =
-            gents::usage_observation::usage_view(stored.as_ref(), backend.provider_kind, now);
         let account = match (backend.provider_kind.oauth_provider(), &backend.auth) {
             (Some(provider), gents::document_config::BackendAuth::NodeOAuth { account_ref }) => {
                 Some((provider, account_ref))
@@ -441,6 +437,9 @@ async fn backend_usage_views(
             None => account.is_some_and(|(provider, account_ref)| {
                 read.provider == provider && read.account_ref == *account_ref
             }),
+        });
+        let usage = read.and_then(|read| read.usage.clone()).unwrap_or_else(|| {
+            gents::usage_observation::usage_view(None, backend.provider_kind, now)
         });
         views.push(BackendUsageView {
             backend_id: backend.backend_id,
@@ -463,7 +462,7 @@ async fn backend_usage_views(
                 })
                 .collect(),
             plan: usage.plan,
-            note: usage.note.map(str::to_owned),
+            note: usage.note,
             read_at: usage.read_at.map(time),
             read_error: usage.read_error,
             read: read.map(|read| match &read.outcome {
@@ -514,7 +513,7 @@ pub(crate) async fn desktop_provider_usage_read(
             tracing::warn!(
                 target: LOG_TARGET,
                 error = %format!("{error:#}"),
-                "usage read on open failed; showing stored usage"
+                "usage read on open failed; limits unavailable"
             );
             None
         }
@@ -1567,10 +1566,11 @@ mod provider_account_tests {
     async fn usage_views_follow_each_backend_with_source_age_and_honest_unknowns() {
         use gents::usage_observation::account_usage::{UsageReport, UsageSource, UsageWindow};
         use gents::usage_observation::{
-            read_account_usage, record_usage, AccountUsageRead, UsageAccount, UsageEndpoints,
+            read_account_usage, read_node_usage, record_usage, UsageAccount, UsageEndpoints,
             UsageRead, UsageTrigger,
         };
 
+        let cache = gents::usage_observation::UsageCache::default();
         let node = serving_node().await;
         let access = gents::ConfigAccess::local(node.clone());
         let node_did = "did:key:zAgent";
@@ -1649,6 +1649,7 @@ mod provider_account_tests {
         }
 
         record_usage(
+            &cache,
             &node,
             &UsageAccount::for_credential(&b),
             report(vec![
@@ -1678,6 +1679,7 @@ mod provider_account_tests {
         .await
         .expect("record B");
         record_usage(
+            &cache,
             &node,
             &UsageAccount::for_credential(&a),
             report(vec![
@@ -1701,6 +1703,7 @@ mod provider_account_tests {
         .expect("record A");
         assert_eq!(
             read_account_usage(
+                &cache,
                 node.clone(),
                 node_did,
                 &openrouter,
@@ -1713,22 +1716,24 @@ mod provider_account_tests {
             UsageRead::Read
         );
 
+        let mut live = read_node_usage(
+            &cache,
+            node.clone(),
+            node_did,
+            UsageTrigger::Cached,
+            None,
+            &UsageEndpoints::default(),
+            now,
+        )
+        .await
+        .unwrap();
+        live.iter_mut()
+            .find(|read| read.backend_id.as_deref() == Some("openrouter"))
+            .unwrap()
+            .outcome = UsageRead::Unavailable("throttled".into());
         let reads = gents_server::accounts::UsageReads {
-            node_did: node_did.to_string(),
-            reads: vec![
-                AccountUsageRead {
-                    provider: gents::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_string(),
-                    account_ref: b.account_ref.clone(),
-                    backend_id: None,
-                    outcome: UsageRead::SkippedRecent,
-                },
-                AccountUsageRead {
-                    provider: "OpenRouter".to_string(),
-                    account_ref: None,
-                    backend_id: Some("openrouter".to_string()),
-                    outcome: UsageRead::Unavailable("throttled".to_string()),
-                },
-            ],
+            node_did: node_did.into(),
+            reads: live,
         };
         let views = backend_usage_views(&access, node_did, Some(&reads), now)
             .await
@@ -1771,7 +1776,7 @@ mod provider_account_tests {
         assert_eq!(original.windows[0].used_pct, 20.0);
         assert_eq!(original.windows[0].source, "endpoint");
         assert_eq!(original.note, None);
-        assert_eq!(original.read, None);
+        assert_eq!(original.read.as_deref(), Some("skipped_recent"));
 
         let key = view("openrouter");
         assert!(key.windows.is_empty(), "{key:?}");
@@ -1782,7 +1787,7 @@ mod provider_account_tests {
         let local = view("local");
         assert!(local.windows.is_empty());
         assert_eq!(local.note.as_deref(), Some("not reported"));
-        assert_eq!(local.read, None);
+        assert_eq!(local.read.as_deref(), Some("not_reported"));
 
         let json = serde_json::to_string(&views).unwrap();
         for secret in ["SECRET", "KEY-SENTINEL", "IDENTITY"] {

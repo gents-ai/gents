@@ -229,6 +229,7 @@ impl GentsBuilder {
         let plugin_node = node.clone();
 
         Ok(Gents {
+            usage_cache: Arc::default(),
             node,
             runtime_node: principal,
             agents,

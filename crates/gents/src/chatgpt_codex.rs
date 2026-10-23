@@ -362,6 +362,7 @@ fn sse_events(sse_body: &str) -> Vec<Value> {
 }
 
 pub async fn build_responses_client(
+    cache: Arc<crate::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     node_did: &str,
     account_ref: Option<&str>,
@@ -391,6 +392,7 @@ pub async fn build_responses_client(
         build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
     let endpoint = normalize_endpoint(endpoint);
     let usage = crate::usage_observation::UsageReporter::new(
+        cache,
         node,
         crate::usage_observation::UsageAccount::for_credential(&credential),
     );

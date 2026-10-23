@@ -287,6 +287,7 @@ async fn build_fails_closed_without_node_did() {
         .await
         .expect("node");
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         std::sync::Arc::new(node),
         String::new(),
         None,
@@ -308,6 +309,7 @@ async fn build_registers_gated_family() {
         .await
         .expect("node");
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         std::sync::Arc::new(node),
         "did:key:zSelfConfigTest".to_string(),
         None,
@@ -353,6 +355,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     tool_config.agent_id = "setup".to_string();
     tool_config.enable_pack_install = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity),
@@ -575,6 +578,7 @@ async fn graph_pack_install_writes_definition_and_revision() {
     tool_config.enable_pack_install = true;
     tool_config.enable_graph_tools = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity),
@@ -722,6 +726,7 @@ async fn pack_tool(
     tool_config.agent_id = "setup".to_string();
     tool_config.enable_pack_install = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity),
@@ -1026,6 +1031,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     };
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity.clone()),
@@ -1118,6 +1124,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     tool_config.enabled = false;
     tool_config.enable_pack_install = false;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node,
         node_did.clone(),
         Some(identity),
@@ -1197,6 +1204,7 @@ async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
     tool_config.enable_pack_install = true;
     tool_config.enable_graph_tools = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did,
         Some(identity),
@@ -1289,6 +1297,7 @@ async fn run_graph_description_makes_entry_optional_for_every_selection() {
     let mut tool_config = config(&[]);
     tool_config.enable_graph_tools = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         build_agent_node().await,
         "did:key:zSelfConfigTest".to_owned(),
         None,
@@ -1322,6 +1331,7 @@ async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without
     tool_config.enable_graph_tools = true;
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity),
@@ -1446,6 +1456,7 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     tool_config.enable_graph_tools = true;
 
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity.clone()),
@@ -1491,8 +1502,14 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
         bash_mode: crate::tool_surface::BashMode::Off,
         root: Some(allowed_root.path().to_owned()),
     };
-    let tools =
-        build_self_config_tools(node, node_did, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        node_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let call = |name: &str, args: Value| {
         tools
             .iter()
@@ -1650,6 +1667,7 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
         root: Some(root_path.clone()),
     };
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did,
         Some(identity),
@@ -1725,8 +1743,14 @@ async fn config_tools_cannot_self_grant_pack_install() {
 
     let mut tool_config = config(&["tools"]);
     tool_config.agent_id = "setup".to_string();
-    let tools =
-        build_self_config_tools(node, node_did, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        node_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -1787,7 +1811,14 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
     operator_grant_pack_install(&node, &owner, "granted:tools").await;
     let mut tool_config = config(&["tools"]);
     tool_config.agent_id = "granted".to_string();
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
 
     let edited = call_config_tool(
         &tools,
@@ -1829,8 +1860,14 @@ async fn built_ins_enable_graph_tools_remains_self_grantable() {
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&["tools"]);
     tool_config.agent_id = "setup".to_string();
-    let tools =
-        build_self_config_tools(node, node_did, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        node_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let applied = call_config_tool(
         &tools,
         vec![
@@ -1858,8 +1895,14 @@ async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
     let mut tool_config = config(&["node", "tools"]);
     tool_config.agent_id = "setup".to_string();
     tool_config.enable_pack_install = true;
-    let tools =
-        build_self_config_tools(node, node_did, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        node_did,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let applied = call_config_tool(
         &tools,
         vec![
@@ -1923,7 +1966,14 @@ async fn reselection_tools(
     let mut tool_config = config(&["node", "agent", "tools"]);
     tool_config.agent_id = "worker".to_owned();
     tool_config.enable_pack_install = hold_pack_install;
-    build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins())
+    build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    )
 }
 
 #[tokio::test]
@@ -2083,8 +2133,14 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut grants = config(&["automation"]);
     grants.preview = true;
-    let tools =
-        build_self_config_tools(node.clone(), owner, Some(identity), &grants, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node.clone(),
+        owner,
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     for verb in ["preview", "edit"] {
         let error = call_config_tool(
             &tools,
@@ -2138,8 +2194,14 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
         .unwrap();
     let mut grants = config(&["automation"]);
     grants.preview = true;
-    let tools =
-        build_self_config_tools(node.clone(), owner, Some(identity), &grants, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node.clone(),
+        owner,
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -2214,6 +2276,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     grants.preview = true;
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
     let denied_tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity.clone()),
@@ -2245,6 +2308,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     .await
     .unwrap();
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -2361,6 +2425,7 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
 
     let mut grants = config(&["tools"]);
     let denied_tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity.clone()),
@@ -2416,7 +2481,14 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
         .read_effective_config(&BTreeSet::new(), false, false)
         .await
         .unwrap();
-    let tools = build_self_config_tools(node, owner, Some(identity), &grants, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     let outside = tempfile::tempdir().unwrap();
     let outside_error = call_config_tool(
         &tools,
@@ -2529,6 +2601,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     .await
     .unwrap();
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -2707,6 +2780,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     let mut grants = config(&["tools"]);
     grants.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -2947,6 +3021,7 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
     settings.agent_id = "working".into();
     settings.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner,
         Some(identity),
@@ -3007,6 +3082,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
         .await
         .unwrap();
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner,
         Some(identity),
@@ -3066,6 +3142,7 @@ async fn config_errors_name_the_next_call() {
     let mut grants = config(&["node", "tools"]);
     grants.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -3176,8 +3253,14 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
         "mcp_service",
     ]);
     grants.preview = true;
-    let tools =
-        build_self_config_tools(node.clone(), owner, Some(identity), &grants, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node.clone(),
+        owner,
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -3247,6 +3330,7 @@ async fn agent_category_gates_the_tool() {
     let node_did = identity.did().to_string();
 
     let without_agent = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         None,
@@ -3259,6 +3343,7 @@ async fn agent_category_gates_the_tool() {
     assert!(error.contains("not granted"), "{error}");
 
     let with_agent = build_self_config_tools(
+        std::sync::Arc::default(),
         node,
         node_did,
         Some(identity),
@@ -3280,6 +3365,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
     tool_config.agent_id = "current".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -3354,7 +3440,14 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     }
     let mut tool_config = config(&["node", "profile", "backend"]);
     tool_config.agent_id = "alpha".into();
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -3439,7 +3532,14 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
     let mut tool_config = config(&["backend", "profile"]);
     tool_config.agent_id = "setup".into();
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let endpoint = format!("http://{address}/v1");
     let profiles_before: Value = serde_json::from_str(
         &call_config_tool(
@@ -3573,6 +3673,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
     tool_config.preview = true;
     tool_config.no_lockout = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -3886,7 +3987,14 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     }
     let mut tool_config = config(&["node", "tools", "profile", "backend"]);
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
 
     let referenced = call_config_tool(
         &tools,
@@ -4010,6 +4118,7 @@ async fn agent_default_commits_through_the_agent_owner() {
     tool_config.agent_id = "seed".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity.clone()),
@@ -4068,6 +4177,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     let profile_id = "seed:inference";
 
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity.clone()),
@@ -4215,6 +4325,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         json!({"lsp": false, "native_graph_tools": false, "network_mode": "inherit"})
     );
     let grant_tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity.clone()),
@@ -4307,6 +4418,7 @@ async fn agent_clone_accepts_sibling_agent_id() {
     let profile_id = "sibling-agent:inference";
 
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity.clone()),
@@ -4350,6 +4462,7 @@ async fn agent_clone_cannot_copy_unheld_grants() {
     let mut tool_config = config(&["node"]);
     tool_config.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity.clone()),
@@ -4426,6 +4539,7 @@ async fn agent_clone_by_holder_copies_granted_source() {
     tool_config.enable_pack_install = true;
     tool_config.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity),
@@ -4675,6 +4789,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         root: Some(operator_root.path().to_path_buf()),
     };
     let agent_tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity.clone()),
@@ -5544,6 +5659,7 @@ async fn pack_inference_slot_cannot_pick_another_account() {
     tool_config.enable_graph_tools = true;
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node,
         core.node_did().to_owned(),
         Some(identity),
@@ -5606,7 +5722,14 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut tool_config = config(&["tools"]);
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, None, &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        None,
+        &tool_config,
+        test_plugins(),
+    );
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -5684,7 +5807,14 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     let mut tool_config = config(&["profile"]);
     tool_config.agent_id = "setup".into();
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let edit = |verb: &str, window: u64| -> Vec<String> {
         vec![
             "profile".into(),
@@ -5759,6 +5889,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     grants.preview = true;
     grants.no_lockout = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -6222,7 +6353,14 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     let mut tool_config = config(&["backend"]);
     tool_config.agent_id = "setup".into();
     tool_config.preview = true;
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let call = |argv: &[&str]| {
         let argv = std::iter::once("backend")
             .chain(argv.iter().copied())
@@ -6737,15 +6875,18 @@ async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> 
     let response = node
         .execute(
             "{ OAuthCredential { _docID credential_id enabled label access_token } \
-               InferenceBackend { _docID backend_id enabled auth } \
-               ProviderAccountUsage { _docID usage_key report read_at } }",
+               InferenceBackend { _docID backend_id enabled auth } }",
         )
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     response.data.expect("data")
 }
 
-async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owner: &str) {
+async fn seed_account_view(
+    cache: &crate::usage_observation::UsageCache,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    owner: &str,
+) {
     use crate::oauth_credential::{oauth_credential_id, upsert_oauth_credential, OAuthCredential};
     let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
     let account = |account_ref: Option<&str>, label: &str, enabled: bool| OAuthCredential {
@@ -6821,6 +6962,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
         .await
         .unwrap();
     crate::usage_observation::record_usage(
+        cache,
         node,
         &crate::usage_observation::UsageAccount::Credential {
             doc_id: None,
@@ -6850,10 +6992,12 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     let identity = node_identity("config-accounts");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
-    seed_account_view(&node, &owner).await;
+    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    seed_account_view(&cache, &node, &owner).await;
     let mut tool_config = config(&["node", "profile", "backend"]);
     tool_config.agent_id = "alpha".into();
     let tools = build_self_config_tools(
+        cache,
         node.clone(),
         owner,
         Some(identity),
@@ -6926,7 +7070,14 @@ async fn config_backend_accounts_needs_the_backend_grant() {
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
     let mut tool_config = config(&["node", "profile"]);
     tool_config.agent_id = "alpha".into();
-    let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        owner,
+        Some(identity),
+        &tool_config,
+        test_plugins(),
+    );
     let config = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -7031,6 +7182,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
     grants.no_lockout = true;
     grants.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -7074,6 +7226,7 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
     grants.agent_id = "current".into();
     grants.preview = true;
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         owner.clone(),
         Some(identity),
@@ -7647,6 +7800,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     cfg.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         did.clone(),
         Some(identity),
@@ -7825,6 +7979,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     cfg.enable_pack_install = true;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         did.clone(),
         Some(identity.clone()),
@@ -7838,7 +7993,14 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
         .to_string()
         .contains("effective file read permission"));
     cfg.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
-    let tools = build_self_config_tools(node, did, Some(identity), &cfg, plugins);
+    let tools = build_self_config_tools(
+        std::sync::Arc::default(),
+        node,
+        did,
+        Some(identity),
+        &cfg,
+        plugins,
+    );
     assert!(config_call(&tools, &["pack", "get", path])
         .await
         .unwrap_err()
@@ -8335,6 +8497,7 @@ async fn pack_tool_with_local_read(
     tool_config.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
     tool_config.process_ceiling.root = Some(root.to_owned());
     let tools = build_self_config_tools(
+        std::sync::Arc::default(),
         node.clone(),
         node_did.clone(),
         Some(identity),

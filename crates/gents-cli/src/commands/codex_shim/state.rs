@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct ShimState {
+    pub(super) usage_cache: Arc<gents::usage_observation::UsageCache>,
     pub(super) codex_home: PathBuf,
     pub(super) trace_path: PathBuf,
     pub(super) cwd: PathBuf,

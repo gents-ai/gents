@@ -161,6 +161,7 @@ impl RuntimeContext {
         );
 
         let client = crate::llm::backend_client::build_backend_client(
+            self.tool_runtime.usage_cache.clone(),
             self.node.clone(),
             agent_config.as_ref(),
             &api_key,
@@ -227,6 +228,7 @@ impl RuntimeContext {
             self.enrollment_authority.clone(),
         );
         let summary_compactor = crate::completion_factory::build_compaction_engine(
+            self.tool_runtime.usage_cache.clone(),
             self.node.clone(),
             &agent_config,
             self.admission_registry.clone(),

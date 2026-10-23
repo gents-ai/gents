@@ -170,7 +170,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         no_lockout: false,
         ..Default::default()
     };
-    let tools = crate::self_config::build_self_config_tools(
+    let tools = crate::self_config::build_self_config_tools(std::sync::Arc::default(),
         node.clone(),
         owner,
         Some(identity),

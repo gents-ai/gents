@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gents::config_client::load_inference_backend_in_txn;
-use gents::usage_observation::{usage_for_backend, StoredUsage};
+use gents::usage_observation::{usage_for_backend, UsageObservation};
 use gents_codex_protocol as codex;
 use serde_json::json;
 
@@ -244,7 +244,7 @@ pub(super) async fn handle_basic_request(
 }
 
 /// Stored usage of the session backend's account; on-demand provider reads belong to the runtime.
-async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
+async fn session_usage(state: &ShimState) -> Option<UsageObservation> {
     let load = async {
         let profile = load_bound_agent(state).await?.inference_profile;
         let node_did = state.node_did.as_ref();
@@ -256,8 +256,13 @@ async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
         let Some(backend) = backend else {
             return Ok(None);
         };
-        let mut stored =
-            usage_for_backend(&ConfigAccess::local(state.node.clone()), node_did, &backend).await?;
+        let mut stored = usage_for_backend(
+            &state.usage_cache,
+            &ConfigAccess::local(state.node.clone()),
+            node_did,
+            &backend,
+        )
+        .await?;
         if backend.provider_kind != gents::BackendProviderKind::ChatGptCodex {
             if let Some(stored) = stored.as_mut() {
                 stored.report.plan = None;
@@ -301,6 +306,7 @@ mod tests {
 
     fn state(node: Arc<EmbeddedNode>, tempdir: &tempfile::TempDir) -> ShimState {
         ShimState {
+            usage_cache: Arc::default(),
             codex_home: tempdir.path().join("codex-home"),
             trace_path: tempdir
                 .path()
@@ -467,7 +473,9 @@ mod tests {
             provider: provider.into(),
             account_ref: None,
         };
+        let cache = Arc::default();
         record_usage(
+            &cache,
             &node,
             &account,
             UsageReport {
@@ -484,14 +492,17 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = state(node.clone(), &tempdir);
+        let state = ShimState {
+            usage_cache: cache,
+            ..state(node.clone(), &tempdir)
+        };
 
         let limits = rate_limits(&state).await;
 
         assert_eq!(limits["primary"]["usedPercent"], json!(12));
         assert_eq!(limits["primary"]["windowDurationMins"], json!(300));
         assert_eq!(limits["planType"], json!("plus"));
-        let stored = load_usage(&ConfigAccess::local(node), &account)
+        let stored = load_usage(&state.usage_cache, &ConfigAccess::local(node), &account)
             .await
             .unwrap()
             .unwrap();
@@ -541,7 +552,9 @@ mod tests {
             ),
         )
         .await;
+        let cache = Arc::default();
         record_usage(
+            &cache,
             &node,
             &UsageAccount::Credential {
                 doc_id: None,
@@ -567,7 +580,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let state = state(node, &tempdir);
+        let state = ShimState {
+            usage_cache: cache,
+            ..state(node, &tempdir)
+        };
 
         let limits = rate_limits(&state).await;
         assert_eq!(limits["planType"], Value::Null);
