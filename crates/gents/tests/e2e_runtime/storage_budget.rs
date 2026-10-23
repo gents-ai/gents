@@ -7,7 +7,9 @@
 //! are dropped (#2537). A 0.21.0-rc3 node nevertheless reached 1.2 GB after
 //! 401 AgentRequests (155,896 AgentOutputSegment and 108,352
 //! RenderedRequestBlock rows), so these budgets fail the change that lets a
-//! store outgrow its content again.
+//! store outgrow its content again. The budgets are only meaningful while the
+//! content survives, so the same run checks that provider input replays the
+//! prior turns and that the transcript reconstructs what was streamed.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,14 +37,16 @@ const TOOL: &str = "audit_probe";
 
 const SESSIONS: usize = 3;
 const TURNS: usize = 6;
-/// Persistence batching for the workload. Production defaults to 1000 ms over
-/// streams that last seconds; the ratio of stream time to batch interval is
-/// what bounds segments, so the scripted streams last a few batch intervals.
-const STREAM_BATCH_MS: u64 = 40;
-const CHUNK_DELAY: Duration = Duration::from_millis(1);
+/// Longer than any scripted stream, so no flush is due by elapsed time and
+/// every segment comes from a structural boundary (first visible output, a
+/// tool call, a provider close). Segment counts are then exact on any
+/// runner. Time-based cadence is covered on a simulated clock by
+/// `streaming::canonical_tests` (#2923).
+const STREAM_BATCH_MS: u64 = 600_000;
 const REASONING_CHUNKS: usize = 160;
 const TEXT_CHUNKS: usize = 120;
-/// A small window so the later turns of each session reduce provider context.
+/// A small window: by the last turn of a session, provider input sits at the
+/// reduction budget.
 const CONTEXT_WINDOW: usize = 16_000;
 const COMPACTION_THRESHOLD: f64 = 0.5;
 
@@ -62,18 +66,19 @@ const COLLECTIONS: [&str; 9] = [
 /// The 0.21 targets, each stated against the content a request adds.
 ///
 /// Measured on main `2a1362fe3` (3 sessions x 6 turns, 2 inference calls and
-/// 1 tool call per request; three runs, identical where not noted):
+/// 1 tool call per request; three runs, identical):
 ///
 /// | Measure                                 | main           | budget  |
 /// |-----------------------------------------|----------------|---------|
 /// | turn 5 / turn 1 fresh block bytes       | 2.22x - 2.39x  | 1.50x   |
-/// | AgentOutputSegment per request          | 13 - 18        | 24      |
-/// | segments, 240 vs 24 chunks, same time   | 7-8 vs 6-7     | 2x + 2  |
-/// | flushed store bytes per AgentRequest    | ~169 KB        | 256 KiB |
+/// | AgentOutputSegment per request          | 8              | 8       |
+/// | segments, 240 vs 24 chunks              | 3 vs 3         | equal   |
+/// | flushed store bytes per AgentRequest    | ~155 KB        | 256 KiB |
 ///
 /// Only the first row fails on main: the bytes a turn adds to
 /// RenderedRequestBlock grow with the history it replays (turn 1 ~26 KB,
-/// turn 4 ~33-47 KB, turn 5 ~58-66 KB once tool results are stripped).
+/// turn 4 ~33-47 KB, turn 5 ~58-66 KB once the window strips its own tool
+/// result and the replayed prefix is captured again).
 mod budget {
     /// EXPECTED TO FAIL ON MAIN `2a1362fe3` (2.22x - 2.39x). Fresh
     /// RenderedRequestBlock bytes a late turn may add, relative to the first
@@ -81,14 +86,10 @@ mod budget {
     /// its new messages only, so the ratio stays near 1 however long the
     /// replayed history is.
     pub const LATE_TURN_BLOCK_BYTES_GROWTH: f64 = 1.5;
-    /// AgentOutputSegment rows per request. Two streams of ~180 ms at 40 ms
-    /// batches flush about 10 times; persisting every delta would write ~360.
-    /// The margin absorbs CI timer jitter, not per-delta writes.
-    pub const SEGMENTS_PER_REQUEST: usize = 24;
-    /// A stream split into 10x more chunks over the same wall time may write
-    /// at most `2 * few + 2` segments: chunk count must not drive persistence.
-    pub const CHUNK_COUNT_SEGMENT_FACTOR: usize = 2;
-    pub const CHUNK_COUNT_SEGMENT_SLACK: usize = 2;
+    /// AgentOutputSegment rows per request when only structural boundaries
+    /// flush (first visible output, the tool call, each provider close, the
+    /// authored input and the tool output). A per-delta writer would add ~360.
+    pub const SEGMENTS_PER_REQUEST: usize = 8;
     /// Flushed on-disk bytes per AgentRequest, against the ~12 KB of new
     /// content each scripted request carries. The 0.21.0-rc3 node that
     /// prompted this test stored ~3 MB per request.
@@ -116,8 +117,8 @@ async fn per_request_store_growth_follows_new_content_not_history() {
                 &agent.node_did,
                 AGENT_ID,
                 &format!("req-{marker}"),
-                &format!("session-budget-{session}"),
-                &format!("{marker}: audit the next module and report what changed."),
+                &session_id(session),
+                &prompt(&marker),
             )
             .await;
             wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
@@ -133,6 +134,8 @@ async fn per_request_store_growth_follows_new_content_not_history() {
     }
 
     let calibration = calibrate_segments(&db, &agent, &backend).await;
+    let bodies = backend.observed_completion_bodies();
+    let transcripts = load_transcripts(&db, &agent.node_did).await;
 
     agent.shutdown().await;
     db.simulate_process_crash().await.expect("flush workload");
@@ -146,6 +149,9 @@ async fn per_request_store_growth_follows_new_content_not_history() {
         elapsed: started.elapsed(),
     };
     eprintln!("{report}");
+
+    assert_provider_input_replays_history(&bodies);
+    assert_transcripts_reconstruct_streams(&transcripts);
     report.assert_budgets();
 }
 
@@ -153,66 +159,99 @@ fn turn_marker(session: usize, turn: usize) -> String {
     format!("budget-s{session}-t{turn}")
 }
 
-/// Each request: a reasoning stream that ends in one tool call, then a
-/// reasoning-and-text stream that answers from the tool output.
+fn session_id(session: usize) -> String {
+    format!("session-budget-{session}")
+}
+
+fn prompt(marker: &str) -> String {
+    format!("{marker}: audit the next module and report what changed.")
+}
+
+/// The first stream of a request: reasoning that ends in one tool call.
+fn first_reasoning(marker: &str) -> Vec<String> {
+    reasoning_fragments(marker, "a", REASONING_CHUNKS)
+}
+
+/// The second stream: more reasoning, then the answer.
+fn second_reasoning(marker: &str) -> Vec<String> {
+    reasoning_fragments(marker, "b", REASONING_CHUNKS / 2)
+}
+
+fn answer(marker: &str) -> Vec<String> {
+    text_fragments(marker, TEXT_CHUNKS, 20)
+}
+
+fn tool_result(note: &str) -> String {
+    (0..64)
+        .map(|line| format!("{note} finding {line:02}: unchanged invariant holds\n"))
+        .collect()
+}
+
+/// The last line of a turn's tool result: present only if the result was
+/// replayed in full.
+fn tool_result_tail(marker: &str) -> String {
+    format!("{marker} finding 63: unchanged invariant holds")
+}
+
 fn workload_plans() -> Vec<StreamPlan> {
     let mut plans = Vec::new();
     for session in 0..SESSIONS {
         for turn in 0..TURNS {
             let marker = turn_marker(session, turn);
-            let mut first = reasoning_chunks(&marker, REASONING_CHUNKS);
+            let mut first: Vec<_> = first_reasoning(&marker)
+                .into_iter()
+                .map(StreamChunk::reasoning)
+                .collect();
             first.push(StreamChunk::tool_call(
                 format!("call-{marker}"),
                 TOOL,
                 format!(r#"{{"note":"{marker}"}}"#),
             ));
-            let mut second = reasoning_chunks(&marker, REASONING_CHUNKS / 2);
-            second.extend(text_chunks(&marker, TEXT_CHUNKS, 20));
+            let second = second_reasoning(&marker)
+                .into_iter()
+                .map(StreamChunk::reasoning)
+                .chain(answer(&marker).into_iter().map(StreamChunk::text))
+                .collect();
             plans.push(StreamPlan::current_authored_user(
                 marker.clone(),
                 vec![
-                    StreamResponse::Stream(
-                        StreamScript::streams(marker.clone(), first).with_chunk_delay(CHUNK_DELAY),
-                    ),
-                    StreamResponse::Stream(
-                        StreamScript::streams(marker.clone(), second).with_chunk_delay(CHUNK_DELAY),
-                    ),
+                    StreamResponse::streams(marker.clone(), first),
+                    StreamResponse::streams(marker.clone(), second),
                 ],
             ));
         }
     }
-    for (marker, chunks, delay) in calibration_streams() {
+    for (marker, chunks) in calibration_streams() {
         plans.push(StreamPlan::current_authored_user(
             marker,
-            vec![StreamResponse::Stream(
-                StreamScript::streams(marker, text_chunks(marker, chunks, 4_800 / chunks))
-                    .with_chunk_delay(delay),
-            )],
+            vec![StreamResponse::Stream(StreamScript::streams(
+                marker,
+                text_fragments(marker, chunks, 4_800 / chunks)
+                    .into_iter()
+                    .map(StreamChunk::text)
+                    .collect(),
+            ))],
         ));
     }
     plans
 }
 
-/// Two text streams with the same bytes over the same wall time, one in 10x
-/// more chunks.
-fn calibration_streams() -> [(&'static str, usize, Duration); 2] {
-    [
-        ("budget-few-chunks", 24, Duration::from_millis(10)),
-        ("budget-many-chunks", 240, Duration::from_millis(1)),
-    ]
+/// The same answer in 24 chunks and in 240.
+fn calibration_streams() -> [(&'static str, usize); 2] {
+    [("budget-few-chunks", 24), ("budget-many-chunks", 240)]
 }
 
-fn reasoning_chunks(marker: &str, count: usize) -> Vec<StreamChunk> {
+fn reasoning_fragments(marker: &str, stream: &str, count: usize) -> Vec<String> {
     (0..count)
-        .map(|index| StreamChunk::reasoning(format!("[{marker} r{index:03}] weigh ")))
+        .map(|index| format!("[{marker} {stream}{index:03}] weigh "))
         .collect()
 }
 
-fn text_chunks(marker: &str, count: usize, width: usize) -> Vec<StreamChunk> {
+fn text_fragments(marker: &str, count: usize, width: usize) -> Vec<String> {
     (0..count)
         .map(|index| {
             let word = format!("{marker}:{index:03} ");
-            StreamChunk::text(word.repeat(width.div_ceil(word.len()).max(1)))
+            word.repeat(width.div_ceil(word.len()).max(1))
         })
         .collect()
 }
@@ -223,7 +262,7 @@ async fn calibrate_segments(
     backend: &MockStreamingBackend,
 ) -> Vec<(String, usize, usize)> {
     let mut rows = Vec::new();
-    for (marker, chunks, _) in calibration_streams() {
+    for (marker, chunks) in calibration_streams() {
         let before = count(db.node.as_ref(), "AgentOutputSegment").await;
         let doc_id = create_runtime_request(
             db.node.as_ref(),
@@ -240,6 +279,134 @@ async fn calibrate_segments(
         rows.push((marker.to_string(), chunks, segments));
     }
     rows
+}
+
+/// The text of a provider body's current authored user message.
+fn current_user_text(body: &Value) -> String {
+    body["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .rev()
+        .find(|message| message["role"] == "user")
+        .map(|message| match &message["content"] {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_default()
+}
+
+/// Every request is posted twice: before its tool call and after it. Later
+/// turns replay each earlier prompt and answer verbatim, and each earlier
+/// tool result as a stub naming the call and its size. A request's own tool
+/// result replays in full until the last turn, whose window strips it too.
+fn assert_provider_input_replays_history(bodies: &[Value]) {
+    for session in 0..SESSIONS {
+        for turn in 0..TURNS {
+            let marker = turn_marker(session, turn);
+            let posted: Vec<String> = bodies
+                .iter()
+                .filter(|body| current_user_text(body).starts_with(&format!("{marker}:")))
+                .map(Value::to_string)
+                .collect();
+            assert_eq!(
+                posted.len(),
+                2,
+                "{marker}: one body before and one after its tool call"
+            );
+            let [before_tool, after_tool] = [&posted[0], &posted[1]];
+            let own_in_full = after_tool.contains(&json_fragment(&tool_result(&marker)));
+            if turn + 1 < TURNS {
+                assert!(
+                    own_in_full,
+                    "{marker}: the follow-up call must carry this turn's own tool result in full"
+                );
+            } else {
+                // The last turn reaches the window's reduction budget, which
+                // strips the closed tool pair it just made.
+                assert!(
+                    !own_in_full && after_tool.contains(&json_fragment(&stripped_stub(&marker))),
+                    "{marker}: the window must strip this turn's tool result to its stub"
+                );
+            }
+            for prior in 0..turn {
+                let earlier = turn_marker(session, prior);
+                for body in [before_tool, after_tool] {
+                    for (what, expected) in [
+                        ("prompt", json_fragment(&prompt(&earlier))),
+                        ("answer", json_fragment(&answer(&earlier).concat())),
+                        ("tool result stub", json_fragment(&stripped_stub(&earlier))),
+                    ] {
+                        assert!(
+                            body.contains(&expected),
+                            "{marker}: provider input dropped the {what} of {earlier}"
+                        );
+                    }
+                    assert!(
+                        !body.contains(&tool_result_tail(&earlier)),
+                        "{marker}: {earlier}'s tool result must replay as its stub, not in full"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// What replaces a stripped tool result in provider input.
+fn stripped_stub(marker: &str) -> String {
+    let call = format!("call-{marker}");
+    let bytes = tool_result(marker).len();
+    format!(
+        "[tool: {TOOL}, call_id: {call}, {bytes} bytes \u{2014} full output: sessions \
+         {{\"action\":\"output\",\"call_id\":\"{call}\"}}]"
+    )
+}
+
+/// The durable transcript keeps every streamed reasoning and answer byte, and
+/// every tool result in full, whatever provider input stripped.
+fn assert_transcripts_reconstruct_streams(transcripts: &[String]) {
+    for (session, transcript) in transcripts.iter().enumerate() {
+        for turn in 0..TURNS {
+            let marker = turn_marker(session, turn);
+            for (what, expected) in [
+                ("first reasoning", first_reasoning(&marker).concat()),
+                ("second reasoning", second_reasoning(&marker).concat()),
+                ("answer", answer(&marker).concat()),
+                ("tool result", tool_result(&marker)),
+            ] {
+                assert!(
+                    transcript.contains(&json_fragment(&expected)),
+                    "{marker}: the transcript does not reconstruct the streamed {what}"
+                );
+            }
+        }
+    }
+}
+
+async fn load_transcripts(db: &TestDb, node_did: &str) -> Vec<String> {
+    let mut transcripts = Vec::new();
+    for session in 0..SESSIONS {
+        let messages = gents::trace_export::load_trace_transcript(
+            db.node.as_ref(),
+            &session_id(session),
+            node_did,
+            Some(node_did),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("load session transcript");
+        let messages: Vec<_> = messages.iter().map(|row| &row.message).collect();
+        transcripts.push(serde_json::to_string(&messages).expect("serialize transcript"));
+    }
+    transcripts
+}
+
+/// `text` as it appears inside a JSON string.
+fn json_fragment(text: &str) -> String {
+    let quoted = serde_json::to_string(text).expect("serialize string");
+    quoted[1..quoted.len() - 1].to_string()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -348,24 +515,23 @@ impl Report {
             }
         }
 
-        let ceiling = budget::SEGMENTS_PER_REQUEST;
         for sample in &self.samples {
             let segments = sample.added["AgentOutputSegment"];
-            if segments > ceiling {
+            if segments > budget::SEGMENTS_PER_REQUEST {
                 failures.push(format!(
-                    "s{}t{}: {segments} AgentOutputSegment rows for one request \
-                     (budget {ceiling} at {STREAM_BATCH_MS} ms batches)",
-                    sample.session, sample.turn
+                    "s{}t{}: {segments} AgentOutputSegment rows for one request (budget {})",
+                    sample.session,
+                    sample.turn,
+                    budget::SEGMENTS_PER_REQUEST
                 ));
             }
         }
 
         if let [(_, _, few), (_, _, many)] = self.calibration.as_slice() {
-            if *many > few * budget::CHUNK_COUNT_SEGMENT_FACTOR + budget::CHUNK_COUNT_SEGMENT_SLACK
-            {
+            if many != few {
                 failures.push(format!(
-                    "10x more chunks over the same wall time wrote {many} segments \
-                     instead of {few}: segment count follows chunk count"
+                    "the same answer in 10x more chunks wrote {many} segments instead of {few}: \
+                     segment count follows chunk count"
                 ));
             }
         }
@@ -532,9 +698,7 @@ impl ToolDyn for AuditProbe {
                 .ok()
                 .and_then(|value| value["note"].as_str().map(ToOwned::to_owned))
                 .unwrap_or_default();
-            Ok((0..64)
-                .map(|line| format!("{note} finding {line:02}: unchanged invariant holds\n"))
-                .collect())
+            Ok(tool_result(&note))
         })
     }
 }

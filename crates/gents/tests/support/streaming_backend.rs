@@ -53,10 +53,6 @@ pub struct StreamScript {
     chunks: Vec<StreamChunk>,
     pause_before_chunks: bool,
     pause_after_chunks: bool,
-    chunk_delay: Duration,
-    /// Chunk `i` is due `i * chunk_delay` after the first, so sleep overshoot
-    /// does not accumulate and equal schedules take equal wall time.
-    started: Arc<Mutex<Option<tokio::time::Instant>>>,
 }
 
 impl StreamScript {
@@ -69,8 +65,6 @@ impl StreamScript {
             chunks: chunks.into_iter().map(StreamChunk::text).collect(),
             pause_before_chunks: false,
             pause_after_chunks: true,
-            chunk_delay: Duration::ZERO,
-            started: Arc::default(),
         }
     }
 
@@ -83,8 +77,6 @@ impl StreamScript {
             chunks: chunks.into_iter().map(StreamChunk::text).collect(),
             pause_before_chunks: false,
             pause_after_chunks: false,
-            chunk_delay: Duration::ZERO,
-            started: Arc::default(),
         }
     }
 
@@ -94,16 +86,7 @@ impl StreamScript {
             chunks,
             pause_before_chunks: false,
             pause_after_chunks: false,
-            chunk_delay: Duration::ZERO,
-            started: Arc::default(),
         }
-    }
-
-    /// Spaces chunks like a provider does, so time-batched persistence sees
-    /// a stream that lasts `chunks * delay` instead of one instant burst.
-    pub fn with_chunk_delay(mut self, delay: Duration) -> Self {
-        self.chunk_delay = delay;
-        self
     }
 
     pub fn paused_before(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
@@ -112,8 +95,6 @@ impl StreamScript {
             chunks,
             pause_before_chunks: true,
             pause_after_chunks: false,
-            chunk_delay: Duration::ZERO,
-            started: Arc::default(),
         }
     }
 }
@@ -743,18 +724,6 @@ fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Respo
                         return None;
                     }
                     if index < script.chunks.len() {
-                        if index == 0 {
-                            *script.started.lock().expect("stream start mutex poisoned") =
-                                Some(tokio::time::Instant::now());
-                        } else if !script.chunk_delay.is_zero() {
-                            let started = script
-                                .started
-                                .lock()
-                                .expect("stream start mutex poisoned")
-                                .unwrap_or_else(tokio::time::Instant::now);
-                            let due = u32::try_from(index).unwrap_or(u32::MAX);
-                            tokio::time::sleep_until(started + script.chunk_delay * due).await;
-                        }
                         let event =
                             Event::default().data(chunk_payload(index, &script.chunks[index]));
                         state.record_chunk(&script.marker);
