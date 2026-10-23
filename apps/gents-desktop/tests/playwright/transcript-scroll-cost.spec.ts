@@ -177,10 +177,11 @@ test.describe("what a transcript scroll costs", () => {
       type: "cost",
       description: JSON.stringify({ short, long }),
     });
-    /* the transcript holds far more rows; it draws about as many. The rows
-       read ahead before the first measure vary by a page */
+    /* the transcript holds far more rows and still draws about a view's
+       worth: how many depends on where the reader stopped, not on how many
+       are held. The rows read ahead before the first measure vary by a page */
     expect(long.scroll.loaded).toBeGreaterThanOrEqual(short.scroll.loaded * 3);
-    expect(long.scroll.rows).toBeLessThanOrEqual(short.scroll.rows + 12);
+    expect(long.scroll.rows).toBeLessThanOrEqual(40);
 
     /* a reader's scroll finds the row under them by halving over the drawn
        rows; a streamed chunk measures the held row and the view. Far up a
