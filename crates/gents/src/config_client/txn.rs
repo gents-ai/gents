@@ -1129,6 +1129,19 @@ async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoun
 
 impl<'a> ConfigApplyTxn<'a> {
     #[cfg(test)]
+    pub(crate) async fn with_embedded_commit_ack_pause<F>(
+        reached: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> F::Output
+    where
+        F: Future,
+    {
+        EMBEDDED_FINALIZATION_PAUSE
+            .scope((EmbeddedFinalizationBoundary::AfterCommit, reached), future)
+            .await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn with_owned_local_operation_pause<F>(
         reached: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
