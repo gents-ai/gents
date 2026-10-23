@@ -18,11 +18,16 @@ use crate::admission::{
 
 impl From<Usage> for ProviderCallUsage {
     fn from(usage: Usage) -> Self {
-        Self {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cached_input_tokens: usage.cached_input_tokens,
-        }
+        Self(gents_protocol::usage::TokenUsage {
+            input_tokens: Some(usage.input_tokens),
+            output_tokens: Some(usage.output_tokens),
+            cached_input_tokens: (usage.cached_input_tokens > 0)
+                .then_some(usage.cached_input_tokens),
+            cache_creation_input_tokens: (usage.cache_creation_input_tokens > 0)
+                .then_some(usage.cache_creation_input_tokens),
+            final_response: true,
+            ..Default::default()
+        })
     }
 }
 
@@ -44,6 +49,7 @@ pub(crate) struct AdmittedCompletionClient<C> {
     inner: C,
     admission: AdmissionRegistry,
     connection: std::sync::Arc<str>,
+    profile_id: Option<String>,
 }
 
 impl<C> CompletionClient for AdmittedCompletionClient<C>
@@ -58,6 +64,7 @@ pub(crate) fn admitted_model<C>(
     admission: AdmissionRegistry,
     connection: String,
     model_name: &str,
+    profile_id: Option<&str>,
 ) -> AdmittedCompletionModel<C::CompletionModel>
 where
     C: ProviderClient,
@@ -66,6 +73,7 @@ where
         inner: client,
         admission,
         connection: connection.into(),
+        profile_id: profile_id.map(str::to_owned),
     }
     .completion_model(model_name)
 }
@@ -79,11 +87,15 @@ where
     type Client = AdmittedCompletionClient<M::Client>;
 
     fn make(client: &Self::Client, model: impl Into<String>) -> Self {
-        AdmittedCompletionModel::new(
-            M::make(&client.inner, model),
+        let model = model.into();
+        let mut admitted = AdmittedCompletionModel::new(
+            M::make(&client.inner, model.clone()),
             client.admission.clone(),
             client.connection.clone(),
-        )
+        );
+        admitted.model_name = Some(model);
+        admitted.profile_id = client.profile_id.clone();
+        admitted
     }
 
     async fn completion(
@@ -96,7 +108,13 @@ where
             .map_err(admitted_call_error)?;
         let cached = cached_input_tokens_observation(&response.raw_response);
         permit
-            .finish_success_with_cache(Some(response.usage.into()), cached)
+            .finish_success_with_cache(
+                Some(ProviderCallUsage(observed_token_usage(
+                    &response.raw_response,
+                    Some(response.usage),
+                ))),
+                cached,
+            )
             .await?;
         Ok(response)
     }
@@ -132,7 +150,7 @@ where
                             .take()
                             .expect("stream guard finalization starts exactly once");
                         terminal_guard.mark_stream_success(
-                            response.token_usage().map(Into::into),
+                            Some(ProviderCallUsage(observed_token_usage(response, response.token_usage()))),
                             cached_input_tokens_observation(response),
                         );
                         // The owned loop charges from the terminal item, while

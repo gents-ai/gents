@@ -79,6 +79,8 @@ pub enum MessagesParseError {
     /// resampling it until the transport budget is exhausted.
     #[error("the model declined to respond (stop_reason: refusal) (request-id {request_id})")]
     ProviderRefusal { request_id: String },
+    #[error("Claude Messages returned an invalid usage counter: {field}")]
+    MalformedUsage { field: &'static str },
 }
 
 impl From<MessagesParseError> for CompletionError {
@@ -152,6 +154,7 @@ pub struct MessagesSseState {
     last_reasoning_index: Option<u64>,
     seen_ids: RapidHashSet<String>,
     usage: Option<rig::completion::Usage>,
+    usage_fields: serde_json::Map<String, Value>,
     data: String,
     finished: bool,
     /// `request-id` response header, carried into stream-error messages only.
@@ -168,6 +171,7 @@ impl MessagesSseState {
             last_reasoning_index: None,
             seen_ids: RapidHashSet::new(),
             usage: None,
+            usage_fields: serde_json::Map::new(),
             data: String::new(),
             finished: false,
             request_id: None,
@@ -236,6 +240,7 @@ impl MessagesSseState {
             self.finished = true;
             events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
                 usage: self.usage.take(),
+                token_usage: messages_token_usage(&self.usage_fields, false)?,
             }));
         }
         Ok(events)
@@ -271,6 +276,32 @@ impl MessagesSseState {
         self.handle_payload(&payload)
     }
 
+    fn observe_usage(&mut self, value: &Value) -> Result<(), MessagesParseError> {
+        for field in [
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ] {
+            if let Some(value) = value.get(field).filter(|value| !value.is_null()) {
+                if value.as_u64().is_none() {
+                    return Err(MessagesParseError::MalformedUsage { field });
+                }
+                self.usage_fields.insert(field.to_string(), value.clone());
+            }
+        }
+        let usage = messages_token_usage(&self.usage_fields, false)?;
+        self.usage = Some(rig::completion::Usage {
+            input_tokens: usage.input_tokens.unwrap_or_default(),
+            output_tokens: usage.output_tokens.unwrap_or_default(),
+            total_tokens: usage.input_tokens.unwrap_or_default()
+                + usage.output_tokens.unwrap_or_default(),
+            cached_input_tokens: usage.cached_input_tokens.unwrap_or_default(),
+            cache_creation_input_tokens: usage.cache_creation_input_tokens.unwrap_or_default(),
+        });
+        Ok(())
+    }
+
     fn close_at_eof(
         &mut self,
         events: &mut Vec<RawStreamingChoice<ClaudeStreamResponse>>,
@@ -296,6 +327,14 @@ impl MessagesSseState {
             return Ok(events);
         };
         match kind {
+            "message_start" => {
+                if let Some(usage) = payload
+                    .get("message")
+                    .and_then(|message| message.get("usage"))
+                {
+                    self.observe_usage(usage)?;
+                }
+            }
             "content_block_start" => {
                 let Some(block) = payload.get("content_block") else {
                     return Ok(events);
@@ -608,7 +647,7 @@ impl MessagesSseState {
                     return Err(MessagesParseError::ProviderRefusal { request_id });
                 }
                 if let Some(value) = payload.get("usage") {
-                    self.usage = Some(usage_from_sse(value));
+                    self.observe_usage(value)?;
                 }
             }
             "message_stop" => {
@@ -619,6 +658,7 @@ impl MessagesSseState {
                     self.finished = true;
                     events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
                         usage: self.usage,
+                        token_usage: messages_token_usage(&self.usage_fields, true)?,
                     }));
                 }
             }
@@ -738,28 +778,38 @@ fn mapped_tool_call(
     )))
 }
 
-fn usage_from_sse(value: &Value) -> rig::completion::Usage {
-    let input_tokens = value
-        .get("input_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let output_tokens = value
-        .get("output_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    rig::completion::Usage {
+/// Messages usage deltas are cumulative and may omit the initial input fields.
+/// Input excludes cache reads/writes on this wire, so normalize their sum.
+/// https://platform.claude.com/docs/en/build-with-claude/streaming
+fn messages_token_usage(
+    fields: &serde_json::Map<String, Value>,
+    final_response: bool,
+) -> Result<gents_protocol::usage::TokenUsage, MessagesParseError> {
+    let value = |name: &str| fields.get(name).and_then(Value::as_u64);
+    let cache_read = value("cache_read_input_tokens");
+    let cache_write = value("cache_creation_input_tokens");
+    let input_tokens = value("input_tokens")
+        .map(|input| {
+            input
+                .checked_add(cache_read.unwrap_or_default())
+                .and_then(|input| input.checked_add(cache_write.unwrap_or_default()))
+                .ok_or(MessagesParseError::MalformedUsage {
+                    field: "input_tokens",
+                })
+        })
+        .transpose()?;
+    let observation = gents_protocol::usage::TokenUsage {
         input_tokens,
-        output_tokens,
-        total_tokens: input_tokens.saturating_add(output_tokens),
-        cached_input_tokens: value
-            .get("cache_read_input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        cache_creation_input_tokens: value
-            .get("cache_creation_input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-    }
+        output_tokens: value("output_tokens"),
+        cached_input_tokens: cache_read,
+        cache_creation_input_tokens: cache_write,
+        final_response,
+        ..Default::default()
+    };
+    observation
+        .validate()
+        .map_err(|_| MessagesParseError::MalformedUsage { field: "usage" })?;
+    Ok(observation)
 }
 
 /// Incremental line-splitter over a response body.

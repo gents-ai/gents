@@ -56,6 +56,7 @@ where
         admission,
         agent_connection_fingerprint(agent_config),
         &agent_config.model_name,
+        agent_config.profile_id.as_deref(),
     )
 }
 
@@ -486,6 +487,7 @@ pub(crate) async fn build_compaction_engine(
     summary.backend_endpoint = backend.backend_endpoint;
     summary.backend_auth = backend.backend_auth;
     summary.model_name = inference.profile.model_name.clone();
+    summary.profile_id = Some(inference.profile.profile_id.clone());
     summary.service_tier = inference.profile.service_tier;
     summary.resolved_reasoning_efforts = inference.resolved_reasoning_efforts();
     summary.context_window = inference.context_window()?;

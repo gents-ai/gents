@@ -32,6 +32,7 @@ pub mod timeline;
 pub mod tool_service_health;
 pub mod transcript;
 pub mod trigger_delivery;
+pub mod usage;
 pub mod wait_status;
 
 pub const ENGINEER_PROMPT: &str = include_str!("../prompts/engineer.md");

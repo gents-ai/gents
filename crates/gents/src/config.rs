@@ -34,6 +34,7 @@ pub struct ResolvedAgent {
     pub backend_endpoint: String,
     pub backend_auth: crate::document_config::BackendAuth,
     pub model_name: String,
+    pub profile_id: Option<String>,
     pub service_tier: Option<ServiceTier>,
     /// Provider-advertised effort choices for the selected model. `None` is
     /// unknown and must not be inferred from the model name at dispatch.
@@ -605,6 +606,7 @@ mod tests {
 
     fn agent_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedAgent {
         ResolvedAgent {
+            profile_id: None,
             agent_id: "general".to_string(),
             node: stub_node(),
             backend_id: Some("backend-general".to_string()),

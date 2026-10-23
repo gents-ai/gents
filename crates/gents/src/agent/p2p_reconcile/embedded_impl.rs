@@ -873,6 +873,7 @@ pub(super) mod tests {
             enabled: true,
         });
         Arc::new(ResolvedAgent {
+            profile_id: None,
             agent_id: "behavior-1".to_string(),
             node: principal,
             backend_id: Some("backend-behavior-1".to_string()),
