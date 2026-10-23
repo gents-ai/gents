@@ -439,7 +439,6 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         || AGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)
         || crate::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
-        || crate::graph_pipeline::GRAPH_PIPELINE_TOOL_NAMES.contains(&name)
 }
 
 /// Collections no datastore tool may read or write: protected eval material

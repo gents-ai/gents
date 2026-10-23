@@ -208,17 +208,6 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         Box::pin(async { Ok(None) })
     }
 
-    fn resolve_graph_session(
-        &self,
-        _task: &crate::runtime_snapshot::ResolvedTask,
-        _trigger_id: &str,
-        _correlation: Option<&str>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
-    > {
-        Box::pin(async { Ok(None) })
-    }
-
     fn has_active_runtime_request_for_trigger(
         &self,
         node_did: &str,
@@ -447,25 +436,6 @@ impl TriggerEngine {
             TriggerKind::Manual => None,
         };
 
-        let graph_session_id = if let Some(trigger_id) = intent.trigger_id.as_deref() {
-            match self
-                .materializer
-                .resolve_graph_session(&intent.task, trigger_id, intent.correlation.as_deref())
-                .await
-            {
-                Ok(session) => session,
-                Err(error) => {
-                    let result = FireResult::Errored {
-                        error: format!("resolve graph session: {error}"),
-                    };
-                    (intent.on_result)(result.clone());
-                    return result;
-                }
-            }
-        } else {
-            None
-        };
-
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let (node_scope, ctx_scope) =
             crate::template::task_node_ctx(&snapshot.local_did, &intent.task.agent_id, &now);
@@ -615,17 +585,9 @@ impl TriggerEngine {
                             !value.trim().is_empty(),
                             "session template rendered an empty ID"
                         );
-                        anyhow::ensure!(
-                            graph_session_id
-                                .as_ref()
-                                .is_none_or(|session| session == &value),
-                            "trigger session template disagrees with pinned graph session"
-                        );
                         value
                     }
-                    None => graph_session_id
-                        .clone()
-                        .unwrap_or_else(|| identity.session_id()),
+                    None => identity.session_id(),
                 };
                 let source_string = |field: &str| {
                     intent
@@ -681,7 +643,6 @@ impl TriggerEngine {
                         replace_prior: intent.concurrency
                             == crate::runtime_snapshot::ConcurrencyMode::LatestOnly,
                         target_existing: targeted_schedule
-                            || graph_session_id.is_some()
                             || snapshot
                                 .active_event_triggers()
                                 .get(intent.trigger_id.as_deref().unwrap())

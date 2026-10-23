@@ -1550,9 +1550,7 @@ mod tests {
         let bounded = |result: &str| {
             crate::truncation::truncate_text(
                 result,
-                crate::truncation::tool_result_truncation_mode(
-                    crate::self_config::RUN_GRAPH_TOOL_NAME,
-                ),
+                crate::truncation::tool_result_truncation_mode("run_graph"),
                 &limits,
             )
             .0

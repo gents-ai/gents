@@ -229,7 +229,7 @@ async fn agent_apply_in_txn(
             args.clone_from.is_none(),
             "agent edit does not accept clone_from; use agent clone"
         );
-        anyhow::ensure!(!args.root.is_present() && !args.preset.is_present() && args.enable_lsp.is_none() && args.enable_graph_tools.is_none() && args.network_mode.is_none(), "agent edit changes Agent fields and its system_prompt; change root and tool grants through tools update");
+        anyhow::ensure!(!args.root.is_present() && !args.preset.is_present() && args.enable_lsp.is_none() && args.network_mode.is_none(), "agent edit changes Agent fields and its system_prompt; change root and tool grants through tools update");
     }
     if operation == "disable" {
         anyhow::ensure!(
@@ -241,7 +241,6 @@ async fn agent_apply_in_txn(
                 && !args.preset.is_present()
                 && args.clone_from.is_none()
                 && args.enable_lsp.is_none()
-                && args.enable_graph_tools.is_none()
                 && args.network_mode.is_none(),
             "agent disable accepts only the target ID"
         );
@@ -365,10 +364,7 @@ async fn agent_apply_in_txn(
                     .get_or_insert_with(HostTools::default)
                     .root = args.root.owned_value();
             }
-            if args.enable_lsp.is_some()
-                || args.enable_graph_tools.is_some()
-                || args.network_mode.is_some()
-            {
+            if args.enable_lsp.is_some() || args.network_mode.is_some() {
                 tools.get_or_insert_with(Tools::default);
             }
             if let Some(mut tools) = tools {
@@ -396,12 +392,7 @@ async fn agent_apply_in_txn(
                     &policy,
                     stored_root.as_deref(),
                 )?;
-                apply_tool_grant_selection(
-                    &mut tools,
-                    args.enable_lsp,
-                    args.enable_graph_tools,
-                    args.network_mode,
-                );
+                apply_tool_grant_selection(&mut tools, args.enable_lsp, args.network_mode);
                 validate_tool_network_selection(args.network_mode)?;
                 context.tools_id = Some(tools.tools_id.clone());
                 if let Some(held) = held {

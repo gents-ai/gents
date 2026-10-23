@@ -51,10 +51,6 @@ export function engineerPatches(deployment: NodeView): ConfigComponentPatch[] {
       id: toolsId,
       changes: {
         self_config: structuredClone(setupSelfConfig),
-        built_ins: {
-          ...deployment.tools.find((tools) => tools.tools_id === toolsId)?.built_ins,
-          enable_graph_tools: true,
-        },
       },
     });
   }

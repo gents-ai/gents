@@ -156,14 +156,6 @@ pub(crate) struct LeanToolFlagCase {
     pub(crate) selected: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPresentationCase {
-    pub(crate) requested: bool,
-    pub(crate) self_config: bool,
-    pub(crate) pack_install: bool,
-    pub(crate) presented: bool,
-}
-
 /// A self-config write of a Tools `integrations` value (Lean `JobGuardRow`):
 /// `writer` is `"model"` or `"operator"`, `stored_integrations` is null when
 /// the stored Tools document has no `integrations`.
@@ -183,7 +175,6 @@ pub(crate) struct LeanJobGuardCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSelfConfigSelectionCases {
     pub(crate) tool_flag_cases: Vec<LeanToolFlagCase>,
-    pub(crate) graph_presentation_cases: Vec<LeanGraphPresentationCase>,
     pub(crate) job_guard_cases: Vec<LeanJobGuardCase>,
 }
 

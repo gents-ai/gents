@@ -1044,10 +1044,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         .self_config_selection_cases
         .tool_flag_cases
         .is_empty()
-        && !snapshot
-            .self_config_selection_cases
-            .graph_presentation_cases
-            .is_empty()
     {
         emitted.insert((
             "self_config_selection_cases".to_string(),

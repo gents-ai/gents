@@ -27,7 +27,6 @@ enum BackgroundTaskResult {
     Reconcile(Result<()>),
     Control(Result<()>),
     BackgroundCompletion(Result<()>),
-    GraphRunReconcile(Result<()>),
     PairingReconcile(Result<()>),
     EnrollmentReconcile(Result<()>),
     RegistryHeartbeat(Result<()>),
@@ -45,7 +44,6 @@ impl BackgroundTaskResult {
             Self::Reconcile(result) => result.context("generation supervisor task"),
             Self::Control(result) => result.context("control watcher task"),
             Self::BackgroundCompletion(result) => result.context("background completion task"),
-            Self::GraphRunReconcile(result) => result.context("graph run reconcile task"),
             Self::PairingReconcile(result) => result.context("pairing reconcile task"),
             Self::EnrollmentReconcile(result) => result.context("enrollment reconcile task"),
             Self::RegistryHeartbeat(result) => result.context("registry heartbeat task"),
@@ -778,20 +776,6 @@ async fn run_agent_owned(
                 completion_background_executions,
                 completion_job_driver,
                 completion_cancel,
-            )
-            .await,
-        )
-    });
-
-    let graph_run_node = agent.node.clone();
-    let graph_run_owner_did = agent.node_did().to_string();
-    let graph_run_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::GraphRunReconcile(
-            crate::graph_pipeline::run_graph_run_reconciler(
-                graph_run_node,
-                graph_run_owner_did,
-                graph_run_cancel,
             )
             .await,
         )

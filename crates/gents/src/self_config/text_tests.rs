@@ -529,7 +529,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
             page.len()
         );
     }
-    for alias in ["task", "trigger", "event-source", "agent", "graph"] {
+    for alias in ["task", "trigger", "event-source", "agent"] {
         call_config_tool(&tools, vec!["help".into(), alias.into()])
             .await
             .unwrap_or_else(|error| panic!("{alias}: {error}"));

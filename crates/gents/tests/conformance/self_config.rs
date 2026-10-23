@@ -435,8 +435,8 @@ fn generated_sibling_tools_cases_drive_production_tools_selection() {
         }
 
         let mut tools = gents::document_config::Tools::default();
-        apply_tool_grant_selection(&mut tools, None, None, Some(existing));
-        apply_tool_grant_selection(&mut tools, None, None, requested);
+        apply_tool_grant_selection(&mut tools, None, Some(existing));
+        apply_tool_grant_selection(&mut tools, None, requested);
         let selected = tools
             .host
             .as_ref()
@@ -457,8 +457,8 @@ fn generated_self_config_selection_cases_drive_production_tools_selection() {
     assert!(!cases.tool_flag_cases.is_empty());
     for case in &cases.tool_flag_cases {
         let mut tools = gents::document_config::Tools::default();
-        apply_tool_grant_selection(&mut tools, Some(case.existing), Some(case.existing), None);
-        apply_tool_grant_selection(&mut tools, case.requested, case.requested, None);
+        apply_tool_grant_selection(&mut tools, Some(case.existing), None);
+        apply_tool_grant_selection(&mut tools, case.requested, None);
         assert_eq!(
             tools
                 .integrations
@@ -468,37 +468,7 @@ fn generated_self_config_selection_cases_drive_production_tools_selection() {
             case.selected,
             "{case:?}: lsp"
         );
-        assert_eq!(
-            tools
-                .built_ins
-                .as_ref()
-                .and_then(|v| v.enable_graph_tools)
-                .unwrap_or(false),
-            case.selected,
-            "{case:?}: graph tools"
-        );
         assert!(tools.self_config.is_none());
-    }
-}
-
-#[test]
-fn generated_graph_presentation_cases_drive_production_tool_surface() {
-    let cases = lean_self_config_selection_cases();
-    assert!(!cases.graph_presentation_cases.is_empty());
-    for case in &cases.graph_presentation_cases {
-        let names = gents::self_config::self_config_tool_names(
-            &gents::tool_surface::SelfConfigToolConfig {
-                enabled: case.self_config,
-                enable_pack_install: case.pack_install,
-                enable_graph_tools: case.requested,
-                ..Default::default()
-            },
-        );
-        assert_eq!(
-            names.iter().any(|v| v == "run_graph"),
-            case.presented,
-            "{case:?}"
-        );
     }
 }
 
