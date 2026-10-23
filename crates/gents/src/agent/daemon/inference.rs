@@ -1241,6 +1241,7 @@ pub(super) mod tests {
         });
 
         Arc::new(ResolvedAgent {
+            profile_id: None,
             agent_id: "general".to_string(),
             node: principal,
             backend_id: Some("backend-general".to_string()),

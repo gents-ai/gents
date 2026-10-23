@@ -33,6 +33,66 @@ pub enum CachedInputTokensObservation {
     Reported(u64),
 }
 
+pub fn observed_token_usage<T>(
+    raw_response: &T,
+    fallback: Option<rig::completion::Usage>,
+) -> gents_protocol::usage::TokenUsage
+where
+    T: serde::Serialize,
+{
+    use gents_protocol::usage::TokenUsage;
+    let value = serde_json::to_value(raw_response).unwrap_or_default();
+    if let Some(observation) = value.get("token_usage") {
+        if let Ok(observation) = serde_json::from_value(observation.clone()) {
+            return observation;
+        }
+    }
+    let usage = value.get("usage").unwrap_or(&value);
+    let number = |name: &str| usage.get(name).and_then(serde_json::Value::as_u64);
+    let input = number("input_tokens").or_else(|| number("prompt_tokens"));
+    let reported_total = number("total_tokens");
+    let output = number("output_tokens")
+        .or_else(|| number("completion_tokens"))
+        .or_else(|| {
+            reported_total
+                .zip(input)
+                .and_then(|(total, input)| total.checked_sub(input))
+        });
+    let detail = |group: &str, name: &str| {
+        usage
+            .get(group)
+            .and_then(|value| value.get(name))
+            .and_then(serde_json::Value::as_u64)
+    };
+    if input.is_some() || output.is_some() || reported_total.is_some() {
+        return TokenUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cached_input_tokens: detail("input_tokens_details", "cached_tokens")
+                .or_else(|| detail("prompt_tokens_details", "cached_tokens"))
+                .or_else(|| number("cached_input_tokens")),
+            cache_creation_input_tokens: number("cache_creation_input_tokens"),
+            reasoning_output_tokens: detail("output_tokens_details", "reasoning_tokens")
+                .or_else(|| detail("completion_tokens_details", "reasoning_tokens")),
+            provider_total_tokens: reported_total,
+            final_response: true,
+        };
+    }
+    match fallback.filter(|usage| usage.input_tokens > 0 || usage.output_tokens > 0) {
+        Some(usage) => TokenUsage {
+            input_tokens: Some(usage.input_tokens),
+            output_tokens: Some(usage.output_tokens),
+            cached_input_tokens: (usage.cached_input_tokens > 0)
+                .then_some(usage.cached_input_tokens),
+            cache_creation_input_tokens: (usage.cache_creation_input_tokens > 0)
+                .then_some(usage.cache_creation_input_tokens),
+            final_response: true,
+            ..Default::default()
+        },
+        None => TokenUsage::default(),
+    }
+}
+
 /// Rig maps absent Responses cache details to zero; inspect the raw response
 /// so the durable nullable column preserves whether the provider reported it.
 pub fn cached_input_tokens_observation<T>(raw_response: &T) -> CachedInputTokensObservation
@@ -542,6 +602,36 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn raw_provider_counters_follow_the_usage_model() {
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+        let case = snapshot["provider_usage_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "wire_response")
+            .unwrap();
+        let expected: gents_protocol::usage::TokenUsage =
+            serde_json::from_value(case["observations"][0].clone()).unwrap();
+        for raw in [
+            serde_json::json!({"usage": {
+                "input_tokens":100, "output_tokens":20, "total_tokens":120,
+                "input_tokens_details":{"cached_tokens":64},
+                "cache_creation_input_tokens":36,
+                "output_tokens_details":{"reasoning_tokens":5}
+            }}),
+            serde_json::json!({"usage": {
+                "prompt_tokens":100, "completion_tokens":20, "total_tokens":120,
+                "prompt_tokens_details":{"cached_tokens":64},
+                "cache_creation_input_tokens":36,
+                "completion_tokens_details":{"reasoning_tokens":5}
+            }}),
+        ] {
+            assert_eq!(super::observed_token_usage(&raw, None), expected);
+        }
+    }
+
     use serde_json::{json, Value};
 
     use super::*;

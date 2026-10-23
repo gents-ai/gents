@@ -283,6 +283,14 @@ pub struct TimelineInferenceCallRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_input_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_output_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_total_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_completeness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_accounting_json: Option<String>,
 }
 
@@ -663,6 +671,14 @@ pub struct TimelineInferenceCallEvent {
     pub completion_tokens: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_output_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_total_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_completeness: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_accounting: Option<crate::rendered_request::ContextAccounting>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -826,6 +842,10 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 prompt_tokens: call.prompt_tokens,
                 completion_tokens: call.completion_tokens,
                 cached_input_tokens: call.cached_input_tokens,
+                cache_creation_input_tokens: call.cache_creation_input_tokens,
+                reasoning_output_tokens: call.reasoning_output_tokens,
+                provider_total_tokens: call.provider_total_tokens,
+                usage_completeness: call.usage_completeness.clone(),
                 context_accounting: call
                     .context_accounting_json
                     .as_deref()

@@ -14,6 +14,45 @@ use crate::llm::message::{
 };
 
 #[test]
+fn cumulative_usage_keeps_start_counters_and_requires_message_stop() {
+    let start = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":0,\"cache_read_input_tokens\":64,\"cache_creation_input_tokens\":36,\"output_tokens\":1}}}\n\n";
+    let delta = "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":20}}\n\n";
+    let snapshot: Value =
+        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+    for (name, stop) in [
+        (
+            "messages_cumulative",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        ),
+        ("messages_eof", ""),
+    ] {
+        let case = snapshot["provider_usage_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        let expected: gents_protocol::usage::TokenUsage =
+            serde_json::from_value(case["observations"][0].clone()).unwrap();
+        let events =
+            parse_messages_sse(&format!("{start}{delta}{stop}"), &RapidHashSet::new()).unwrap();
+        let response = events
+            .iter()
+            .find_map(|event| match event {
+                RawStreamingChoice::FinalResponse(response) => Some(response),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(response.token_usage, expected, "{name}");
+        assert_eq!(
+            response.usage.unwrap().input_tokens,
+            expected.input_tokens.unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn identity_matches_lean_body_witness_head() {
     let cases = crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases();
     assert!(!cases.is_empty());

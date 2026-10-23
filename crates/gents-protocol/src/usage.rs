@@ -1,0 +1,217 @@
+use anyhow::{ensure, Result};
+use serde::{Deserialize, Serialize};
+
+pub const TOKEN_COUNTER_LIMIT: u64 = i64::MAX as u64;
+
+/// Input includes cache reads and writes; reasoning is part of output.
+/// A missing counter remains unreported even when another counter is zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
+    pub provider_total_tokens: Option<u64>,
+    pub final_response: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageCompleteness {
+    Missing,
+    Partial,
+    Complete,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsageColumns {
+    #[serde(default)]
+    pub prompt_tokens: Option<i64>,
+    #[serde(default)]
+    pub completion_tokens: Option<i64>,
+    #[serde(default)]
+    pub cached_input_tokens: Option<i64>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<i64>,
+    #[serde(default)]
+    pub reasoning_output_tokens: Option<i64>,
+    #[serde(default)]
+    pub provider_total_tokens: Option<i64>,
+    #[serde(default)]
+    pub usage_completeness: Option<UsageCompleteness>,
+}
+
+impl TokenUsageColumns {
+    pub fn observation(&self) -> Result<TokenUsage> {
+        let counter = |value: Option<i64>| value.map(u64::try_from).transpose();
+        let observation = TokenUsage {
+            input_tokens: counter(self.prompt_tokens)?,
+            output_tokens: counter(self.completion_tokens)?,
+            cached_input_tokens: counter(self.cached_input_tokens)?,
+            cache_creation_input_tokens: counter(self.cache_creation_input_tokens)?,
+            reasoning_output_tokens: counter(self.reasoning_output_tokens)?,
+            provider_total_tokens: counter(self.provider_total_tokens)?,
+            final_response: self.usage_completeness == Some(UsageCompleteness::Complete),
+        };
+        observation.validate()?;
+        ensure!(
+            self.usage_completeness != Some(UsageCompleteness::Complete)
+                || observation.completeness() == UsageCompleteness::Complete,
+            "complete usage requires both input and output counters"
+        );
+        Ok(observation)
+    }
+}
+
+impl TokenUsage {
+    pub fn validate(&self) -> Result<()> {
+        for (name, value) in [
+            ("input", self.input_tokens),
+            ("output", self.output_tokens),
+            ("cache read", self.cached_input_tokens),
+            ("cache write", self.cache_creation_input_tokens),
+            ("reasoning", self.reasoning_output_tokens),
+            ("provider total", self.provider_total_tokens),
+        ] {
+            ensure!(
+                value.is_none_or(|value| value <= TOKEN_COUNTER_LIMIT),
+                "{name} token counter exceeds the durable range"
+            );
+        }
+        for (name, part, whole) in [
+            ("cache read", self.cached_input_tokens, self.input_tokens),
+            (
+                "cache write",
+                self.cache_creation_input_tokens,
+                self.input_tokens,
+            ),
+            (
+                "reasoning",
+                self.reasoning_output_tokens,
+                self.output_tokens,
+            ),
+        ] {
+            if let (Some(part), Some(whole)) = (part, whole) {
+                ensure!(part <= whole, "{name} exceeds its containing token counter");
+            }
+        }
+        if let (Some(input), Some(read), Some(write)) = (
+            self.input_tokens,
+            self.cached_input_tokens,
+            self.cache_creation_input_tokens,
+        ) {
+            ensure!(
+                read + write <= input,
+                "cache read and write exceed input tokens"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn completeness(&self) -> UsageCompleteness {
+        let has_counters = [
+            self.input_tokens,
+            self.output_tokens,
+            self.cached_input_tokens,
+            self.cache_creation_input_tokens,
+            self.reasoning_output_tokens,
+            self.provider_total_tokens,
+        ]
+        .iter()
+        .any(Option::is_some);
+        if !has_counters {
+            UsageCompleteness::Missing
+        } else if self.final_response && self.input_tokens.is_some() && self.output_tokens.is_some()
+        {
+            UsageCompleteness::Complete
+        } else {
+            UsageCompleteness::Partial
+        }
+    }
+
+    /// The provider's total is retained as evidence, never a second charge.
+    pub fn charged_tokens(&self) -> Result<Option<u64>> {
+        self.validate()?;
+        Ok(
+            match (self.completeness(), self.input_tokens, self.output_tokens) {
+                (UsageCompleteness::Complete, Some(input), Some(output)) => Some(input + output),
+                _ => None,
+            },
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenColumn {
+    pub known: u64,
+    pub reported: u64,
+}
+
+impl TokenColumn {
+    pub fn observed(&self) -> Option<u64> {
+        (self.reported > 0).then_some(self.known)
+    }
+
+    fn add(&mut self, value: Option<u64>) -> Result<()> {
+        if let Some(value) = value {
+            self.known = add_counter(self.known, value)?;
+            self.reported = add_counter(self.reported, 1)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TokenUsageSummary {
+    pub calls: u64,
+    pub incomplete_calls: u64,
+    pub input: TokenColumn,
+    pub output: TokenColumn,
+    pub cache_read: TokenColumn,
+    pub cache_write: TokenColumn,
+    pub reasoning: TokenColumn,
+    pub provider_total: TokenColumn,
+}
+
+impl TokenUsageSummary {
+    pub fn charged_total(&self) -> Option<u64> {
+        (self.incomplete_calls == 0).then_some(self.input.known + self.output.known)
+    }
+
+    pub fn fresh_input(&self) -> Option<u64> {
+        (self.input.reported == self.calls && self.cache_read.reported == self.calls)
+            .then(|| self.input.known.saturating_sub(self.cache_read.known))
+    }
+
+    pub fn from_observations<I>(observations: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = TokenUsage>,
+    {
+        let mut summary = Self::default();
+        for usage in observations {
+            usage.validate()?;
+            summary.calls = add_counter(summary.calls, 1)?;
+            if usage.completeness() != UsageCompleteness::Complete {
+                summary.incomplete_calls = add_counter(summary.incomplete_calls, 1)?;
+            }
+            summary.input.add(usage.input_tokens)?;
+            summary.output.add(usage.output_tokens)?;
+            summary.cache_read.add(usage.cached_input_tokens)?;
+            summary.cache_write.add(usage.cache_creation_input_tokens)?;
+            summary.reasoning.add(usage.reasoning_output_tokens)?;
+            summary.provider_total.add(usage.provider_total_tokens)?;
+        }
+        Ok(summary)
+    }
+}
+
+fn add_counter(left: u64, right: u64) -> Result<u64> {
+    let sum = left
+        .checked_add(right)
+        .filter(|sum| *sum <= TOKEN_COUNTER_LIMIT);
+    sum.ok_or_else(|| anyhow::anyhow!("token usage summary exceeds the durable range"))
+}

@@ -154,7 +154,7 @@ impl AdmissionRegistry {
             terminal_failure_reason: None,
         };
         scope_request(context, async {
-            self.acquire_current_call(connection).await
+            self.acquire_current_call(connection, None, None).await
         })
         .await
     }
@@ -163,7 +163,8 @@ impl AdmissionRegistry {
     pub(crate) async fn acquire_current_call_for_test(
         &self,
     ) -> Result<AdmissionPermit, AdmissionError> {
-        self.acquire_current_call(TEST_SLOT_CONNECTION).await
+        self.acquire_current_call(TEST_SLOT_CONNECTION, None, None)
+            .await
     }
 
     #[cfg(test)]
@@ -186,11 +187,13 @@ impl AdmissionRegistry {
     pub(super) async fn acquire_current_call(
         &self,
         connection: &str,
+        model_name: Option<&str>,
+        profile_id: Option<&str>,
     ) -> Result<AdmissionPermit, AdmissionError> {
         let context = current_context()?;
         let cancel_observer = context.inference_token.clone();
         let terminal_failure_observer = context.terminal_failure_reason.clone();
-        let pending = context.next_call(&self.inner.runtime_instance_id);
+        let pending = context.next_call(&self.inner.runtime_instance_id, model_name, profile_id);
         if pending.backend_id.trim().is_empty() {
             return Err(AdmissionError(format!(
                 "agent {} has no backend binding",

@@ -32,6 +32,8 @@ pub(crate) struct AdmittedCompletionModel<M> {
     pub(crate) inner: M,
     admission: AdmissionRegistry,
     connection: Arc<str>,
+    pub(crate) model_name: Option<String>,
+    pub(crate) profile_id: Option<String>,
 }
 
 impl<M> AdmittedCompletionModel<M> {
@@ -44,6 +46,8 @@ impl<M> AdmittedCompletionModel<M> {
             inner,
             admission,
             connection: connection.into(),
+            model_name: None,
+            profile_id: None,
         }
     }
 
@@ -59,7 +63,11 @@ impl<M> AdmittedCompletionModel<M> {
     {
         let mut permit = self
             .admission
-            .acquire_current_call(&self.connection)
+            .acquire_current_call(
+                &self.connection,
+                self.model_name.as_deref(),
+                self.profile_id.as_deref(),
+            )
             .await
             .map_err(AdmittedCallError::Admission)?;
         if observe_provider_activity {
@@ -162,13 +170,21 @@ impl AdmissionCallContext {
         }
     }
 
-    pub(super) fn next_call(&self, runtime_instance_id: &str) -> PendingCallMetadata {
+    pub(super) fn next_call(
+        &self,
+        runtime_instance_id: &str,
+        model_name: Option<&str>,
+        profile_id: Option<&str>,
+    ) -> PendingCallMetadata {
         let call_seq = self.call_seq.fetch_add(1, Ordering::SeqCst) + 1;
         let metadata = PendingCallMetadata {
             call_id: uuid::Uuid::new_v4().to_string(),
             runtime_instance_id: runtime_instance_id.to_string(),
             request_id: self.request_id.clone(),
             request_doc_id: self.request_doc_id.clone(),
+            session_id: self.session_id.clone(),
+            model_name: model_name.map(str::to_owned),
+            profile_id: profile_id.map(str::to_owned),
             call_seq,
             backend_id: self.backend_id.clone(),
             agent_id: self.agent_id.clone(),
