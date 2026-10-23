@@ -73,7 +73,7 @@ pub(super) fn recent_runs_for_task_views(
     })
 }
 
-pub(super) fn session_summaries(
+pub(crate) fn session_summaries(
     sessions: &[AgentSession],
     requests: &[AgentRequestRow],
     node_did: &str,
