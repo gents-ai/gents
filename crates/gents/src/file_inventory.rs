@@ -53,6 +53,21 @@ impl FileInventoryPrefix {
 }
 
 impl FileInventoryReceiver {
+    pub async fn receive_for_demand(
+        &self,
+        demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
+        receipt: FileInventoryPageReceipt,
+        verifier: &dyn NodeIdentity,
+    ) -> Result<Self> {
+        ensure!(
+            self.admission == demand.admission,
+            "file inventory receiver does not own this demand"
+        );
+        demand.validate_page_reference(&receipt)?;
+        self.receive(demand.derive_request_key()?, receipt, verifier)
+            .await
+    }
+
     pub async fn receive(
         &self,
         request_key: String,

@@ -366,6 +366,28 @@ structure PageCursor where
   offset : Nat
   deriving DecidableEq, Repr
 
+/-- The attempt identity is persisted by the client before transport. A retry
+of that attempt retains its identity; an explicit new attempt is distinct.
+Native request keys domain-separate the complete demand's canonical encoding;
+collision resistance and physical-reference decoding remain native premises. -/
+structure PageDemand where
+  admission : Request
+  attempt : String
+  cursor : Option PageCursor
+  deriving DecidableEq, Repr
+
+def PageDemand.wellFormed (demand : PageDemand) : Bool :=
+  [demand.attempt, demand.admission.key, demand.admission.peer,
+   demand.admission.requester, demand.admission.node, demand.admission.session].all
+    (fun value => !value.isEmpty) &&
+  match demand.cursor with
+  | none => true
+  | some cursor => cursor.binding.admission == demand.admission &&
+      !cursor.binding.digest.isEmpty && cursor.offset != 0 && cursor.offset % pageLimit == 0 &&
+      cursor.offset < cursor.binding.coverage.entries
+
+def sameDemand (left right : PageDemand) : Bool := left == right
+
 structure WirePage where
   binding : PageBinding
   offset : Nat
@@ -431,6 +453,15 @@ def WirePage.wellFormed (value : WirePage) : Bool :=
     value.next == (if following < value.binding.coverage.entries then
       some ⟨value.binding, following⟩ else none) &&
     coherentEntries value.entries
+
+/-- Correlation precedes the existing signed receiver checks. The native
+nonce comparison binds the complete demand's domain-separated key; it is not
+an untrusted boolean field received from the peer. -/
+def PageDemand.matchesPage (demand : PageDemand) (value : WirePage) (nonceMatches : Bool) : Bool :=
+  demand.wellFormed && nonceMatches && value.binding.admission == demand.admission &&
+    match demand.cursor with
+    | none => value.offset == 0
+    | some cursor => value.binding == cursor.binding && value.offset == cursor.offset
 
 /-- The existing admission and enrollment owners supply the two current
 observations. Issuance withholds the signed value if authorization changes

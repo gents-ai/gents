@@ -321,3 +321,107 @@ async fn generated_issuance_withholds_revoked_authority() {
     drop(names);
     tokio::fs::remove_dir_all(directory.path()).await.unwrap();
 }
+
+#[tokio::test]
+async fn generated_demands_preserve_attempt_and_cursor_identity() {
+    use gents_protocol::file_inventory::FileInventoryPageDemand;
+    let (directory, names) = tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let names = Names {
+            source: KeyIdentity::load_or_create(directory.path().join("source.key"), None).unwrap(),
+            other: KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap(),
+        };
+        (directory, names)
+    })
+    .await
+    .unwrap();
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_demand_cases"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    let decode = |value: &Value| FileInventoryPageDemand {
+        admission: names.admission(&value["admission"]),
+        attempt_id: text(&value["attempt"]),
+        cursor: (!value["cursor"].is_null()).then(|| FileInventoryCursor {
+            binding: names.binding(&value["cursor"]["binding"]),
+            offset: value["cursor"]["offset"].as_u64().unwrap(),
+        }),
+    };
+    let initial = decode(&cases[0]["demand"]);
+    for case in cases {
+        let demand = decode(&case["demand"]);
+        assert_eq!(
+            demand.validate_reference().is_ok(),
+            case["well_formed"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+        if demand.validate_reference().is_ok() {
+            let key = demand.derive_request_key().unwrap();
+            let stored = serde_json::to_vec(&demand).unwrap();
+            let restored: FileInventoryPageDemand = serde_json::from_slice(&stored).unwrap();
+            assert_eq!(restored.derive_request_key().unwrap(), key);
+            let value = &case["initial_page"];
+            let page = FileInventoryPage {
+                binding: names.binding(&value["binding"]),
+                offset: value["offset"].as_u64().unwrap(),
+                entries: value["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|entry| names.entry(entry))
+                    .collect(),
+                next: (!value["next"].is_null()).then(|| FileInventoryCursor {
+                    binding: names.binding(&value["next"]["binding"]),
+                    offset: value["next"]["offset"].as_u64().unwrap(),
+                }),
+            };
+            let mut receipt = FileInventoryPageReceipt {
+                version: FILE_INVENTORY_RECEIPT_VERSION,
+                request_key: key.clone(),
+                signer_did: names.source.did().to_owned(),
+                page,
+                signature: Vec::new(),
+            };
+            assert_eq!(
+                demand.validate_page_reference(&receipt).is_ok(),
+                case["matches_initial_page"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            if case["same_initial"] == true {
+                receipt.signature = names
+                    .source
+                    .sign(&receipt.signing_payload().unwrap())
+                    .await
+                    .unwrap();
+                let receiver = FileInventoryReceiver {
+                    admission: demand.admission.clone(),
+                    pages: vec![],
+                };
+                receiver
+                    .receive_for_demand(&demand, receipt.clone(), &names.source)
+                    .await
+                    .unwrap();
+                let mut another_attempt = demand.clone();
+                another_attempt.attempt_id.push_str("-new");
+                assert!(receiver
+                    .receive_for_demand(&another_attempt, receipt, &names.source)
+                    .await
+                    .is_err());
+            }
+
+            assert_eq!(
+                key == initial.derive_request_key().unwrap(),
+                case["same_initial"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+    drop(names);
+    tokio::fs::remove_dir_all(directory.path()).await.unwrap();
+}

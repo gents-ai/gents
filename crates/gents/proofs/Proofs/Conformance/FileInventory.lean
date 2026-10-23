@@ -286,6 +286,28 @@ def issuanceCasesJson : String := jsonArray (issuanceInputs.map fun value => obj
    ("expected", boolString (mayIssue value.envelope.page value.envelope.requestKey
      value.envelope.signer value.before value.after))])
 
+private def demandJson (value : PageDemand) : String := object
+  [("admission", hydrationRequestJson value.admission), ("attempt", jsonString value.attempt),
+   ("cursor", optional pageCursorJson value.cursor)]
+
+private def initialDemand : PageDemand := ⟨admission, "attempt-1", none⟩
+private def continuingDemand : PageDemand := ⟨admission, "attempt-1", some ⟨firstEnvelope.page.binding, 64⟩⟩
+
+def demandCasesJson : String :=
+  let demands := [initialDemand, continuingDemand,
+    {initialDemand with attempt := ""},
+    {initialDemand with admission := forkRequest},
+    {continuingDemand with cursor := some ⟨firstEnvelope.page.binding, 0⟩},
+    {continuingDemand with cursor := some ⟨firstEnvelope.page.binding, 1⟩},
+    {continuingDemand with cursor := some ⟨firstEnvelope.page.binding, 128⟩},
+    {initialDemand with attempt := "attempt-2"}]
+  jsonArray (demands.zipIdx |>.map fun (value, index) => object
+    [("name", jsonString ("demand_" ++ toString index)), ("demand", demandJson value),
+     ("well_formed", boolString value.wellFormed),
+     ("same_initial", boolString (sameDemand value initialDemand)),
+     ("initial_page", wirePageJson firstEnvelope.page),
+     ("matches_initial_page", boolString (value.matchesPage firstEnvelope.page true))])
+
 private def receivedJson (value : ReceivedPage) : String := object
   [("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope)]
 

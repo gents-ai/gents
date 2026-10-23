@@ -97,6 +97,77 @@ pub struct FileInventoryCursor {
     pub offset: u64,
 }
 
+/// Persist `attempt_id` before posting. Transport retries reuse this demand;
+/// an explicit fresh attempt changes its key without rewriting an old receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileInventoryPageDemand {
+    pub admission: FileInventoryAdmission,
+    pub attempt_id: String,
+    pub cursor: Option<FileInventoryCursor>,
+}
+
+impl FileInventoryPageDemand {
+    pub fn validate_reference(&self) -> Result<()> {
+        let request = &self.admission.request;
+        anyhow::ensure!(
+            [
+                self.attempt_id.as_str(),
+                &self.admission.session_doc_id,
+                &request.request_key,
+                &request.peer_id,
+                &request.requester_did,
+                &request.node_did,
+                &request.session_id,
+            ]
+            .iter()
+            .all(|value| !value.is_empty()),
+            "file inventory demand has an empty reference"
+        );
+        if let Some(cursor) = &self.cursor {
+            anyhow::ensure!(
+                cursor.binding.admission == self.admission
+                    && !cursor.binding.digest.is_empty()
+                    && cursor.offset != 0
+                    && cursor.offset % FILE_INVENTORY_PAGE_LIMIT as u64 == 0
+                    && cursor.offset < cursor.binding.coverage.entries,
+                "file inventory demand has an invalid continuation"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn derive_request_key(&self) -> Result<String> {
+        self.validate_reference()?;
+        let value = serde_json::to_string(self)?;
+        use sha2::{Digest, Sha256};
+        Ok(bs58::encode(Sha256::digest(canonical_domain_payload(
+            "gents-file-inventory-demand-v1",
+            [value.as_str()],
+        )))
+        .into_string())
+    }
+
+    pub fn validate_page_reference(&self, receipt: &FileInventoryPageReceipt) -> Result<()> {
+        anyhow::ensure!(
+            receipt.request_key == self.derive_request_key()?
+                && receipt.page.binding.admission == self.admission,
+            "file inventory receipt does not match its demand"
+        );
+        match &self.cursor {
+            None => anyhow::ensure!(
+                receipt.page.offset == 0,
+                "initial file inventory demand did not start at zero"
+            ),
+            Some(cursor) => anyhow::ensure!(
+                receipt.page.binding == cursor.binding && receipt.page.offset == cursor.offset,
+                "file inventory receipt does not match its continuation"
+            ),
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileInventoryPage {

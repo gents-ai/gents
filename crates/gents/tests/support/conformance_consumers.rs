@@ -70,6 +70,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_projection_cases_use_native_owners_and_scopes",
         },
         ConformanceConsumer::RustTest {
+            id: "file_inventory::tests::generated_demands_preserve_attempt_and_cursor_identity",
+            package: "gents",
+            source_path: "crates/gents/src/file_inventory/tests.rs",
+            module_path: "file_inventory::tests",
+            function: "generated_demands_preserve_attempt_and_cursor_identity",
+        },
+        ConformanceConsumer::RustTest {
             id: "file_inventory::tests::generated_issuance_withholds_revoked_authority",
             package: "gents",
             source_path: "crates/gents/src/file_inventory/tests.rs",

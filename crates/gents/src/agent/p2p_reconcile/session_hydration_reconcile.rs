@@ -447,10 +447,10 @@ pub async fn sign_file_inventory_page(
     node: Arc<EmbeddedNode>,
     enrollment: EnrollmentAuthorityHandle,
     identity: Arc<dyn NodeIdentity>,
-    admission: &gents_protocol::file_inventory::FileInventoryAdmission,
-    request_key: &str,
-    cursor: Option<&gents_protocol::file_inventory::FileInventoryCursor>,
+    demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
 ) -> Result<gents_protocol::file_inventory::FileInventoryPageReceipt> {
+    let request_key = demand.derive_request_key()?;
+    let admission = &demand.admission;
     let store = GraphqlHydrationStore {
         node,
         enrollment,
@@ -468,15 +468,20 @@ pub async fn sign_file_inventory_page(
         .authorization
         .context("file inventory has no authenticated enrollment fence")?;
     let snapshot = FileInventorySnapshot::load(&store.node, admission).await?;
-    let page = snapshot.page(cursor)?;
-    crate::file_inventory::sign_current_page(store.identity.as_ref(), request_key, page, || async {
-        let current = store.load_admission(&admission.request).await?;
-        Ok(current.authorization.as_ref() == Some(&fence)
-            && matches!(
-                decide_hydration(&admission.request, &current.catalog),
-                HydrationVerdict::Admit(_)
-            ))
-    })
+    let page = snapshot.page(demand.cursor.as_ref())?;
+    crate::file_inventory::sign_current_page(
+        store.identity.as_ref(),
+        &request_key,
+        page,
+        || async {
+            let current = store.load_admission(&admission.request).await?;
+            Ok(current.authorization.as_ref() == Some(&fence)
+                && matches!(
+                    decide_hydration(&admission.request, &current.catalog),
+                    HydrationVerdict::Admit(_)
+                ))
+        },
+    )
     .await
 }
 
