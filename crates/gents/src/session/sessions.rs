@@ -334,7 +334,7 @@ pub(crate) async fn load_agent_session_owner_in_txn(
     );
     let query = format!(
         r#"{{
-            AgentSession(filter: {{ {scope} }}) {{
+            AgentSession(filter: {{ {scope} }}, limit: 2) {{
                 {SESSION_SCOPE_FIELDS}
             }}
         }}"#

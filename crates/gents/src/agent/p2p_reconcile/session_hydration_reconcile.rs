@@ -32,6 +32,8 @@ use crate::session::canonical_rows::{
 };
 
 mod file_images;
+mod inventory;
+pub use inventory::FileInventorySnapshot;
 mod selection;
 use selection::load_hydration_selection;
 

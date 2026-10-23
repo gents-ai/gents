@@ -101,6 +101,44 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     let request_doc_id = call.request_doc_id().unwrap().to_owned();
     let session_id = call.session_id().to_owned();
     let requester_did = call.requester_did().map(str::to_owned);
+    let inventory_admission = ConfigAccess::transact_local_readonly(
+        &admission.node,
+        None,
+        "test.inventory.session",
+        |txn| {
+            let (session_id, requester_did, node_did) =
+                (&session_id, &requester_did, &admission.node_did);
+            Box::pin(async move {
+                let session = crate::session::load_agent_session_row_in_txn(
+                    txn,
+                    node_did,
+                    session_id,
+                    requester_did.as_deref(),
+                )
+                .await?
+                .unwrap();
+                Ok(gents_protocol::file_inventory::FileInventoryAdmission {
+                    session_doc_id: session.doc_id,
+                    request: gents_protocol::session_hydration::HydrationRequest {
+                        request_key: "native-inventory".into(),
+                        peer_id: "native-peer".into(),
+                        requester_did: requester_did.clone().unwrap(),
+                        node_did: node_did.clone(),
+                        session_id: session_id.clone(),
+                    },
+                })
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let pending_inventory =
+        crate::file_inventory::FileInventorySnapshot::load(&admission.node, &inventory_admission)
+            .await
+            .unwrap();
+    assert_eq!(pending_inventory.binding().coverage.pending, 1);
+    assert_eq!(pending_inventory.binding().coverage.unknown, 0);
+    assert!(pending_inventory.entries().is_empty());
     let load = |request: String, node: String, session: String, requester: Option<String>| {
         let access = access.clone();
         let doc_id = doc_id.clone();
@@ -185,6 +223,33 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
             "before": {"kind": "file", "content_hash": change["before"]["content_hash"]},
             "after": {"kind": "file", "content_hash": change["after"]["content_hash"]},
         })
+    );
+    let inventory =
+        crate::file_inventory::FileInventorySnapshot::load(&admission.node, &inventory_admission)
+            .await
+            .unwrap();
+    assert_eq!(inventory.binding().coverage.entries, 1);
+    assert_eq!(inventory.binding().coverage.pending, 0);
+    assert_eq!(inventory.binding().coverage.unknown, 0);
+    assert_ne!(
+        inventory.binding().digest,
+        pending_inventory.binding().digest
+    );
+    assert_eq!(
+        inventory.entries()[0].projection_doc_id,
+        projection["_docID"].as_str().unwrap()
+    );
+    assert_eq!(inventory.entries()[0].tool_call_doc_id, doc_id);
+    assert_eq!(inventory.entries()[0].scope.session_id, session_id);
+    assert!(!serde_json::to_string(inventory.entries())
+        .unwrap()
+        .contains("replacement bytes"));
+    let mut wrong_session = inventory_admission.clone();
+    wrong_session.session_doc_id = "different-physical-session".into();
+    assert!(
+        crate::file_inventory::FileInventorySnapshot::load(&admission.node, &wrong_session,)
+            .await
+            .is_err()
     );
     let ids = vec![projection["_docID"].as_str().unwrap().to_owned()];
     let owners = ConfigAccess::transact_local_readonly(

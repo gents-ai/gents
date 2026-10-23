@@ -618,12 +618,10 @@ impl ToolCallLifecycle {
         &self.tool_call_id
     }
 
-    #[cfg(test)]
     pub(crate) fn execution_generation(&self) -> Option<&str> {
         self.execution_generation.as_deref()
     }
 
-    #[cfg(test)]
     pub(crate) fn accepted_header_doc_id(&self) -> Option<&str> {
         self.accepted_header_doc_id.as_deref()
     }
