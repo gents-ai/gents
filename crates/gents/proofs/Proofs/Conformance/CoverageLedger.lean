@@ -1373,6 +1373,12 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_receiver_cases"
+      "FileInventoryReceiverCases"
+      "file_inventory::tests::generated_receivers_follow_signed_inventory_prefixes"
+      "Drives contiguous metadata pages with native signatures, complete bindings and reload verification. Atomic source enumeration, authenticated projection ownership and installed inventory transport remain refinement obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_image_hydration_cases"
       "FileImageHydrationCases"
       "agent::p2p_reconcile::file_image_hydration::tests::generated_cases_drive_exact_tool_selection"

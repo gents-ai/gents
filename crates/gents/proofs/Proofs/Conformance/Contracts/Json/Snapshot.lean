@@ -28,6 +28,7 @@ import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.FileImageHydration
+import Proofs.Conformance.FileInventory
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
@@ -538,6 +539,8 @@ def snapshotJson : String :=
       ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
+    ++ "\"file_inventory_receiver_cases\":"
+      ++ Conformance.FileInventoryContracts.receiverCasesJson ++ ","
     ++ "\"file_image_hydration_cases\":"
       ++ Conformance.FileImageHydrationContracts.casesJson ++ ","
     ++ "\"file_image_hydration_route_cases\":"

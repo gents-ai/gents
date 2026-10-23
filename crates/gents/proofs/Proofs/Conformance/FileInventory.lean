@@ -256,6 +256,8 @@ private def receiverInputJson (value : Examples.ReceiverInput) : String := objec
    ("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope),
    ("expected", optional receiverResultJson (receive value.state value.requestKey value.envelope))]
 
+def receiverCasesJson : String := jsonArray (receiverInputs.map receiverInputJson)
+
 /-- IDs, DIDs and image hashes are the existing models' abstract names. Native
 adapters bind them to actual Defra-created physical IDs, authenticated key
 identities and validated captures through their existing decode owners. Empty
@@ -268,6 +270,6 @@ def casesJson : String := object
    ("fork", object [("source", sourceJson forkSource), ("admission", hydrationRequestJson forkRequest),
       ("expected", selectionJson forkSource forkRequest)]),
    ("paging", jsonArray (pageInputs.map pageInputJson)),
-   ("receiver", jsonArray (receiverInputs.map receiverInputJson))]
+   ("receiver", receiverCasesJson)]
 
 end Conformance.FileInventoryContracts

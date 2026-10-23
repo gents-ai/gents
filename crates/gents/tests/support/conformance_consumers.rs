@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "file_inventory::tests::generated_receivers_follow_signed_inventory_prefixes",
+            package: "gents",
+            source_path: "crates/gents/src/file_inventory/tests.rs",
+            module_path: "file_inventory::tests",
+            function: "generated_receivers_follow_signed_inventory_prefixes",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::enrollment_reconcile::tests::generated_client_observation_admission_matches_lean",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/enrollment_reconcile.rs",
