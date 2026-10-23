@@ -1,8 +1,8 @@
 use anyhow::{ensure, Context, Result};
 use gents::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::file_inventory::{
-    admit_demand, begin_client_progress, receive_client_reply, resume_client_progress,
-    verified_client_response,
+    admit_demand, begin_client_progress, load_client_progress_for_scope, receive_client_reply,
+    resume_client_progress, verified_client_response,
 };
 use gents::NodeIdentity;
 use gents_protocol::file_inventory::{
@@ -34,6 +34,36 @@ impl ClientCore {
             matching.next().is_none(),
             "multiple runtime routes own this node"
         );
+        let local = ConfigAccess::local(self.node_arc());
+        let mut session = load_inventory_session(&local, node_did, session_id).await?;
+        if session.is_none() && !matches!(action, FileInventoryReadAction::Refresh { .. }) {
+            if let Some(retained) = load_client_progress_for_scope(
+                &self.node,
+                self.local_peer_id(),
+                node_did,
+                session_id,
+                &self.node_identity,
+            )
+            .await?
+            {
+                let cursor = match &action {
+                    FileInventoryReadAction::Read { cursor } => cursor.as_ref(),
+                    _ => None,
+                };
+                if matches!(action, FileInventoryReadAction::Read { .. })
+                    || retained
+                        .active()
+                        .pending_demand(&self.node_identity)
+                        .await?
+                        .is_none()
+                {
+                    return retained
+                        .observation(cursor, &self.node_identity)
+                        .await
+                        .map(Some);
+                }
+            }
+        }
         let operator_record = record.clone();
         let operator = tokio::task::spawn_blocking(move || {
             crate::local_runtime::cached_operator_endpoint(&operator_record)
@@ -41,8 +71,6 @@ impl ClientCore {
         })
         .await
         .context("reading cached runtime authority")?;
-        let local = ConfigAccess::local(self.node_arc());
-        let mut session = load_inventory_session(&local, node_did, session_id).await?;
         if session.is_none() {
             if let Some(endpoint) = &operator {
                 session = load_inventory_session(

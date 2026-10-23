@@ -598,7 +598,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME,
         gents_protocol::schemas::FILE_INVENTORY_PROGRESS,
-        "bafyreiaen7juv5cn2ds5dadjvxxk3huk7qkjz3ifo5gxbupt5ni2je47yq"
+        "bafyreifvr5ggapacp6y7b7vg2cmlwbkqmhbwia5julkp5cwa2x44drseye"
     ),
     baseline_entry!(
         gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME,

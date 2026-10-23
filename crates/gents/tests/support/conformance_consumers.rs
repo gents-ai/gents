@@ -91,6 +91,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_operator_inventory_requires_the_native_owner",
         },
         ConformanceConsumer::RustTest {
+            id: "file_inventory::tests::generated_client_scope_requires_a_unique_retained_admission",
+            package: "gents",
+            source_path: "crates/gents/src/file_inventory/tests.rs",
+            module_path: "file_inventory::tests",
+            function: "generated_client_scope_requires_a_unique_retained_admission",
+        },
+        ConformanceConsumer::RustTest {
             id: "file_inventory::tests::generated_client_progress_survives_reload_and_rollback",
             package: "gents",
             source_path: "crates/gents/src/file_inventory/tests.rs",

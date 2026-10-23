@@ -695,6 +695,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_operator_owner_cases,
         ),
         (
+            "file_inventory_client_scope_cases",
+            "FileInventoryClientScopeCases",
+            &snapshot.file_inventory_client_scope_cases,
+        ),
+        (
             "file_inventory_client_progress_cases",
             "FileInventoryClientProgressCases",
             &snapshot.file_inventory_client_progress_cases,

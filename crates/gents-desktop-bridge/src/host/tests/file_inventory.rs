@@ -310,10 +310,28 @@ async fn inventory_pages_refresh_and_reload_through_the_live_bridge() -> Result<
     );
     assert_eq!(retained.previous, complete.current);
     server.verify().await;
+    assert_eq!(metadata_requests(&server).await, 3);
+    ConfigAccess::transact_local_write(
+        &core.node_arc(),
+        None,
+        "test.inventory.remove_local_session",
+        |txn| {
+            let doc = &retained.admission.session_doc_id;
+            Box::pin(async move {
+                txn.execute(&format!(
+                    r#"mutation {{ delete_AgentSession(docID: "{}") {{ _docID }} }}"#,
+                    gents::graphql::escape_graphql_string(doc),
+                ))
+                .await
+            })
+        },
+    )
+    .await?;
     drop(client);
     task.await??;
     core.shutdown().await?;
     drop(core);
+    drop(server);
     let core = Arc::new(ClientCore::start_with_paths_and_options(paths, options).await?);
     let (mut client, task) = attach(core.clone()).await?;
     let reloaded = observation(call(&mut client, source.did(), 10, json!({"kind":"read"})).await?)?;
@@ -321,8 +339,19 @@ async fn inventory_pages_refresh_and_reload_through_the_live_bridge() -> Result<
     let unchanged =
         observation(call(&mut client, source.did(), 11, json!({"kind":"advance"})).await?)?;
     assert_eq!(unchanged, retained);
-    assert_eq!(metadata_requests(&server).await, 3);
-    server.verify().await;
+    let failed_refresh = call(
+        &mut client,
+        source.did(),
+        12,
+        json!({
+            "kind":"refresh", "attemptId":uuid::Uuid::new_v4().to_string(),
+        }),
+    )
+    .await?;
+    assert!(!failed_refresh["error"].is_null());
+    let after_failed_refresh =
+        observation(call(&mut client, source.did(), 13, json!({"kind":"read"})).await?)?;
+    assert_eq!(after_failed_refresh, retained);
     let stored = ConfigAccess::local(core.node_arc()).execute(
         "{ AgentRequest { _docID } FileInventoryRequest { _docID } ToolFileInventory { _docID } ToolFileChange { _docID } }",
     ).await?;

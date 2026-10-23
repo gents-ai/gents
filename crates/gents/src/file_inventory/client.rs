@@ -250,34 +250,55 @@ struct ProgressRow {
     document_id: String,
     progress_key: String,
     client_did: String,
+    scope_key: String,
     progress: ClientInventoryProgress,
 }
 
-async fn load_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    key: &str,
-    owner: &str,
-    admission: &FileInventoryAdmission,
-    verifier: &dyn NodeIdentity,
-) -> Result<Option<ProgressRow>> {
-    let response = txn
-        .execute_local_response(&format!(
-            r#"{{ FileInventoryProgress(filter: {{ progress_key: {{ _eq: "{}" }} }}, limit: 2) {{
-        _docID progress_key client_did progress }} }}"#,
-            escape_graphql_string(key)
-        ))
-        .await?;
-    let mut rows = required_rows::<ProgressRow>(&response, "FileInventoryProgress")?;
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum FileInventoryScopeError {
+    #[error("file inventory retained scope is invalid")]
+    Invalid,
+    #[error("file inventory retained scope is ambiguous")]
+    Ambiguous,
+}
+
+fn retained_scope_key(owner: &str, peer: &str, node: &str, session: &str) -> Result<String> {
     ensure!(
-        rows.len() <= 1,
-        "file inventory client progress is ambiguous"
+        [owner, peer, node, session]
+            .iter()
+            .all(|value| !value.is_empty()),
+        FileInventoryScopeError::Invalid
     );
-    let Some(row) = rows.pop() else {
-        return Ok(None);
-    };
+    Ok(bs58::encode(Sha256::digest(
+        gents_protocol::enrollment::canonical_domain_payload(
+            "gents-file-inventory-retained-scope-v1",
+            [owner, peer, node, session],
+        ),
+    ))
+    .into_string())
+}
+
+async fn validate_progress_row(
+    txn: &ConfigApplyTxn<'_>,
+    row: &ProgressRow,
+    node: &EmbeddedNode,
+    verifier: &dyn NodeIdentity,
+) -> Result<()> {
+    let owner = node
+        .node_identity_did()
+        .context("file inventory client identity is unavailable")?;
+    let request = &row.progress.admission().request;
     ensure!(
-        row.progress_key == key && row.client_did == owner && row.progress.admission() == admission,
-        "file inventory client progress crossed its scope"
+        row.client_did == owner
+            && row.progress_key == progress_key(node, row.progress.admission())?
+            && row.scope_key
+                == retained_scope_key(
+                    owner,
+                    &request.peer_id,
+                    &request.node_did,
+                    &request.session_id
+                )?,
+        "file inventory client index crossed its protected scope"
     );
     let owners = txn
         .document_owners(
@@ -295,6 +316,71 @@ async fn load_in_txn(
         "file inventory client progress is not owned by this client"
     );
     row.progress.validated(verifier).await?;
+    Ok(())
+}
+
+/// A uniquely indexed, protected observation can be read without contacting its
+/// source. The index grants no transport or image authority; callers that fetch
+/// new metadata must resolve the canonical session independently.
+pub async fn load_client_progress_for_scope(
+    node: &Arc<EmbeddedNode>,
+    peer: &str,
+    source: &str,
+    session: &str,
+    verifier: &dyn NodeIdentity,
+) -> Result<Option<ClientInventoryProgress>> {
+    let owner = node
+        .node_identity_did()
+        .context("file inventory client identity is unavailable")?;
+    let key = retained_scope_key(owner, peer, source, session)?;
+    ConfigAccess::transact_local_readonly(node, None, "file_inventory.retained_scope", |txn| {
+        let key = &key;
+        Box::pin(async move {
+            let response = txn.execute_local_response(&format!(
+                r#"{{ FileInventoryProgress(filter: {{ scope_key: {{ _eq: "{}" }} }}, limit: 2) {{
+                _docID progress_key client_did scope_key progress }} }}"#, escape_graphql_string(key),
+            )).await?;
+            let mut rows = required_rows::<ProgressRow>(&response, "FileInventoryProgress")?;
+            ensure!(rows.len() <= 1, FileInventoryScopeError::Ambiguous);
+            let Some(row) = rows.pop() else { return Ok(None); };
+            validate_progress_row(txn, &row, node, verifier).await?;
+            let request = &row.progress.admission().request;
+            ensure!(row.scope_key == *key && request.peer_id == peer
+                && request.node_did == source && request.session_id == session,
+                "file inventory retained scope does not match its admission");
+            Ok(Some(row.progress))
+        })
+    }).await
+}
+
+async fn load_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node: &EmbeddedNode,
+    key: &str,
+    owner: &str,
+    admission: &FileInventoryAdmission,
+    verifier: &dyn NodeIdentity,
+) -> Result<Option<ProgressRow>> {
+    let response = txn
+        .execute_local_response(&format!(
+            r#"{{ FileInventoryProgress(filter: {{ progress_key: {{ _eq: "{}" }} }}, limit: 2) {{
+        _docID progress_key client_did scope_key progress }} }}"#,
+            escape_graphql_string(key)
+        ))
+        .await?;
+    let mut rows = required_rows::<ProgressRow>(&response, "FileInventoryProgress")?;
+    ensure!(
+        rows.len() <= 1,
+        "file inventory client progress is ambiguous"
+    );
+    let Some(row) = rows.pop() else {
+        return Ok(None);
+    };
+    ensure!(
+        row.progress_key == key && row.client_did == owner && row.progress.admission() == admission,
+        "file inventory client progress crossed its scope"
+    );
+    validate_progress_row(txn, &row, node, verifier).await?;
     Ok(Some(row))
 }
 
@@ -310,7 +396,7 @@ pub async fn load_client_progress(
     ConfigAccess::transact_local_readonly(node, None, "file_inventory.load_client", |txn| {
         let key = key.as_str();
         Box::pin(async move {
-            Ok(load_in_txn(txn, key, owner, admission, verifier)
+            Ok(load_in_txn(txn, node, key, owner, admission, verifier)
                 .await?
                 .map(|row| row.progress))
         })
@@ -350,7 +436,7 @@ async fn start_client_progress(
     ConfigAccess::transact_local_write(node, None, "file_inventory.begin_client", |txn| {
         let key = key.as_str();
         Box::pin(async move {
-            let prior = load_in_txn(txn, key, owner, admission, verifier).await?;
+            let prior = load_in_txn(txn, node, key, owner, admission, verifier).await?;
             let next = match &prior {
                 Some(row) if !refresh => row.progress.clone(),
                 Some(row) => row.progress.restart(attempt_id, verifier).await?,
@@ -386,7 +472,7 @@ pub(super) async fn receive_in_txn(
     let owner = node
         .node_identity_did()
         .context("file inventory client identity is unavailable")?;
-    let row = load_in_txn(txn, &key, owner, &demand.admission, verifier)
+    let row = load_in_txn(txn, node, &key, owner, &demand.admission, verifier)
         .await?
         .context("file inventory attempt must be saved before transport")?;
     let next = row.progress.receive(demand, reply, verifier).await?;
@@ -407,7 +493,10 @@ async fn save_in_txn(
     let result = match prior {
         None => txn.execute_with_variables(
             "mutation($input: FileInventoryProgressMutationInputArg!) { create_FileInventoryProgress(input: $input) { _docID } }",
-            &serde_json::json!({"input": {"progress_key": key, "client_did": owner, "progress": progress}}),
+            &serde_json::json!({"input": {"progress_key": key, "client_did": owner,
+                "scope_key": retained_scope_key(owner, &progress.admission().request.peer_id,
+                    &progress.admission().request.node_did, &progress.admission().request.session_id)?,
+                "progress": progress}}),
         ).await?,
         Some(row) => txn.execute_with_variables(&format!(
             r#"mutation($input: FileInventoryProgressMutationInputArg!) {{ update_FileInventoryProgress(filter: {{ _docID: {{ _eq: "{}" }}, progress_key: {{ _eq: "{}" }} }}, input: $input) {{ _docID }} }}"#,

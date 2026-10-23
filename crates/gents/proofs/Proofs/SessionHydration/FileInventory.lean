@@ -710,6 +710,27 @@ structure ClientProgress where
   retired : List String := []
   deriving DecidableEq, Repr
 
+/-- A retained scope selects previously verified local observations only. It
+does not authorize fetching metadata or images. Multiple physical sessions or
+requesters for one logical scope remain ambiguous rather than choosing a latest
+row. Native index columns must agree with the protected progress admission. -/
+def retainedScopeMatches (peer node session : String) (admission : Request) : Bool :=
+  admission.peer == peer && admission.node == node && admission.session == session
+
+def selectRetainedScope (peer node session : String) (rows : List Request) :
+    Except String (Option Request) :=
+  if peer.isEmpty || node.isEmpty || session.isEmpty then .error "invalid"
+  else match rows.filter (retainedScopeMatches peer node session) with
+    | [] => .ok none
+    | [admission] => .ok (some admission)
+    | _ => .error "ambiguous"
+
+theorem duplicate_retained_scope_is_ambiguous (peer node session : String)
+    (admission : Request) (valid : (peer.isEmpty || node.isEmpty || session.isEmpty) = false)
+    (selected : retainedScopeMatches peer node session admission = true) :
+    selectRetainedScope peer node session [admission, admission] = .error "ambiguous" := by
+  simp [selectRetainedScope, valid, selected]
+
 def beginClient (admission : Request) (attempt : String) : ClientProgress :=
   ⟨⟨attempt, ⟨admission, []⟩, none⟩, none, []⟩
 

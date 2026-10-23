@@ -290,8 +290,9 @@ pub use operator::{read_operator_inventory, OperatorInventoryDenied};
 
 mod client;
 pub use client::{
-    begin_client_progress, load_client_progress, receive_client_reply, resume_client_progress,
-    ClientInventoryAttempt, ClientInventoryProgress,
+    begin_client_progress, load_client_progress, load_client_progress_for_scope,
+    receive_client_reply, resume_client_progress, ClientInventoryAttempt, ClientInventoryProgress,
+    FileInventoryScopeError,
 };
 
 pub(crate) mod delivery;

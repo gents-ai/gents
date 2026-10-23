@@ -1391,6 +1391,12 @@ def caseCoverage : List CoverageEntry :=
       "Drives actual operator reads and signed pages under the native source identity. HTTP extraction and installed consumption remain separate obligations.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_client_scope_cases"
+      "FileInventoryClientScopeCases"
+      "file_inventory::tests::generated_client_scope_requires_a_unique_retained_admission"
+      "Drives native retained scope lookup and exact admission recovery. Source authorization and installed consumption remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_client_progress_cases"
       "FileInventoryClientProgressCases"
       "file_inventory::tests::generated_client_progress_survives_reload_and_rollback"

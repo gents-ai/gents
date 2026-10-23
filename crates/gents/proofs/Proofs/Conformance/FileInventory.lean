@@ -428,6 +428,26 @@ private def clientActionJson : ClientAction → String
       [("attempt", jsonString attempt), ("reason", refusalReasonJson reason),
        ("verified", boolString verified)]
 
+def clientScopeCasesJson : String :=
+  let otherPhysical := {admission with nativeSession := admission.nativeSession + 1}
+  let otherRequester := {admission with requester := "other-requester"}
+  let cases : List (String × String × String × String × List Request) :=
+    [("missing", admission.peer, admission.node, admission.session, []),
+     ("exact", admission.peer, admission.node, admission.session, [admission]),
+     ("foreign_node", admission.peer, "other-node", admission.session, [admission]),
+     ("foreign_peer", "other-peer", admission.node, admission.session, [admission]),
+     ("foreign_session", admission.peer, admission.node, "other-session", [admission]),
+     ("ambiguous_physical", admission.peer, admission.node, admission.session, [admission, otherPhysical]),
+     ("ambiguous_requester", admission.peer, admission.node, admission.session, [admission, otherRequester]),
+     ("invalid", "", admission.node, admission.session, [admission])]
+  jsonArray (cases.map fun (name, peer, node, session, rows) =>
+    object [("name", jsonString name), ("peer", jsonString peer), ("node", jsonString node),
+      ("session", jsonString session), ("rows", jsonArray (rows.map hydrationRequestJson)),
+      ("expected", match selectRetainedScope peer node session rows with
+        | .error reason => tagged "error" [("reason", jsonString reason)]
+        | .ok none => tagged "missing"
+        | .ok (some selected) => tagged "selected" [("admission", hydrationRequestJson selected)])])
+
 private def clientSummaryJson (state : FileInventory.ClientProgress) : String := object
   [("attempt", jsonString state.active.id),
    ("pages", toString state.active.receiver.pages.length),

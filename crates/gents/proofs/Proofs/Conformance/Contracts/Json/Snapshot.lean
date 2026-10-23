@@ -547,6 +547,8 @@ def snapshotJson : String :=
       ++ Conformance.FileInventoryContracts.operatorOwnerCasesJson ++ ","
     ++ "\"file_inventory_client_progress_cases\":"
       ++ Conformance.FileInventoryContracts.clientProgressCasesJson ++ ","
+    ++ "\"file_inventory_client_scope_cases\":"
+      ++ Conformance.FileInventoryContracts.clientScopeCasesJson ++ ","
     ++ "\"file_inventory_preparation_cases\":"
       ++ Conformance.FileInventoryContracts.preparationCasesJson ++ ","
     ++ "\"file_inventory_completion_cases\":"

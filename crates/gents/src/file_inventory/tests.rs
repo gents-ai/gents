@@ -1093,6 +1093,111 @@ async fn generated_preparation_retries_keep_the_original_snapshot() {
 }
 
 #[tokio::test]
+async fn generated_client_scope_requires_a_unique_retained_admission() {
+    use crate::config_client::ConfigAccess;
+    use crate::tool_call_lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+    use serde_json::json;
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_client_scope_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let (fixture, _) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: format!("inventory-scope-{}", text(&case["name"])),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let path = fixture.path.clone();
+        let names = tokio::task::spawn_blocking(move || Names {
+            source: KeyIdentity::load_or_create(path.join("test-agent.key"), None).unwrap(),
+            other: KeyIdentity::load_or_create(path.join("other.key"), None).unwrap(),
+        })
+        .await
+        .unwrap();
+        for row in case["rows"].as_array().unwrap() {
+            begin_client_progress(
+                &fixture.node,
+                &names.admission(row),
+                "retained-attempt",
+                &names.source,
+            )
+            .await
+            .unwrap();
+        }
+        let peer = text(&case["peer"]);
+        let node = names.actor(&case["node"]);
+        let session = text(&case["session"]);
+        let actual =
+            load_client_progress_for_scope(&fixture.node, &peer, &node, &session, &names.source)
+                .await;
+        match text(&case["expected"]["kind"]).as_str() {
+            "error" => {
+                let expected = match text(&case["expected"]["reason"]).as_str() {
+                    "invalid" => FileInventoryScopeError::Invalid,
+                    "ambiguous" => FileInventoryScopeError::Ambiguous,
+                    other => panic!("unknown retained-scope error: {other}"),
+                };
+                assert_eq!(
+                    actual
+                        .unwrap_err()
+                        .downcast_ref::<FileInventoryScopeError>(),
+                    Some(&expected),
+                    "{case}"
+                );
+            }
+            "missing" => assert!(actual.unwrap().is_none(), "{case}"),
+            "selected" => assert_eq!(
+                actual.unwrap().unwrap().admission(),
+                &names.admission(&case["expected"]["admission"]),
+                "{case}"
+            ),
+            other => panic!("unknown retained-scope result: {other}"),
+        }
+        if case["name"] == "exact" {
+            let rows = ConfigAccess::local(fixture.node.clone()).execute(
+                "{ FileInventoryProgress { _docID progress_key client_did scope_key progress } }",
+            ).await.unwrap();
+            let mut row = rows["data"]["FileInventoryProgress"][0].clone();
+            let id = row.as_object_mut().unwrap().remove("_docID").unwrap();
+            row["progress_key"] = json!("forged-index-key");
+            ConfigAccess::transact_local_write(&fixture.node, None, "test.inventory.scope_index_corruption", |txn| {
+                let (row, id) = (&row, &id);
+                Box::pin(async move {
+                    txn.execute(&format!(r#"mutation {{ delete_FileInventoryProgress(docID: "{}") {{ _docID }} }}"#,
+                        crate::graphql::escape_graphql_string(id.as_str().unwrap()))).await?;
+                    txn.execute_with_variables(
+                        "mutation($input: FileInventoryProgressMutationInputArg!) { create_FileInventoryProgress(input: $input) { _docID } }",
+                        &json!({"input":row}),
+                    ).await
+                })
+            }).await.unwrap();
+            assert!(load_client_progress_for_scope(
+                &fixture.node,
+                &peer,
+                &node,
+                &session,
+                &names.source
+            )
+            .await
+            .is_err());
+        }
+        let path = fixture.path.clone();
+        fixture.node.shutdown().await;
+        drop(fixture);
+        tokio::fs::remove_dir_all(path).await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn generated_client_progress_survives_reload_and_rollback() {
     use crate::config_client::ConfigAccess;
     use crate::tool_call_lifecycle::admission_fixture::{
