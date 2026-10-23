@@ -277,8 +277,8 @@ impl DefraRenderedRequestSink {
                 .context("encoding rendered-request provenance payload")?;
         let provenance_json = canonical_json_string(&rendered.provenance_json)
             .context("encoding rendered-request provenance_json")?;
-        let [request_chunks, provenance_chunks] =
-            super::encoding::chunk_capture_payloads([&request_layout, &provenance_payload_layout]);
+        let request_chunks = super::encoding::chunk_capture_layout(&request_layout);
+        let provenance_chunks = super::encoding::chunk_capture_layout(&provenance_payload_layout);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
 
         let capture_container = crate::config_client::ConfigAccess::transact_local_write(
@@ -1397,7 +1397,7 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(rows.len(), keys.len(), "one document per content key");
         let layout = super::super::encoding::capture_block_layout(&request_json).unwrap();
-        let chunks = super::super::encoding::chunk_capture_body(&layout);
+        let chunks = super::super::encoding::chunk_capture_layout(&layout);
         assert!(chunks.len() > CAPTURE_BLOCK_CREATE_BATCH);
         for chunk in chunks {
             assert!(keys.contains(&chunk.content_key));
@@ -1416,6 +1416,165 @@ mod tests {
                 super::super::canonical_json(&request_json)
             );
         }
+        node.shutdown().await;
+    }
+
+    async fn block_payload_bytes(node: &EmbeddedNode) -> std::collections::BTreeMap<String, usize> {
+        let response = node
+            .execute(r#"{ RenderedRequestBlock { content_key payload } }"#)
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        response.data.unwrap()["RenderedRequestBlock"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                (
+                    row["content_key"].as_str().unwrap().to_owned(),
+                    row["payload"].as_str().unwrap().len(),
+                )
+            })
+            .collect()
+    }
+
+    /// The shape an agent loop captures each turn: stable tools, a growing
+    /// wire message list under an output budget that shrinks every call, and
+    /// a provenance trace whose context accounting changes on every call while
+    /// its tool-result list only grows. From `RETAINED_FROM` the trace also
+    /// retains the native message list, as it does once context is reduced.
+    const RETAINED_FROM: usize = 40;
+
+    fn agent_loop_turn(turn: usize) -> RenderedCompletionRequest {
+        let mut messages = vec![json!({"role": "user", "content": capture_text(1, 8 * 1024)})];
+        let mut native =
+            vec![json!({"role": "user", "content": [{"text": capture_text(1, 8 * 1024)}]})];
+        let mut threaded = Vec::new();
+        for step in 0..turn {
+            let call_id = format!("call-{step:04}");
+            messages.push(
+                json!({"role": "assistant", "tool_calls": [{"id": call_id, "type": "function",
+                "function": {"name": "exec", "arguments": "{\"cmd\":\"rg capture\"}"}}]}),
+            );
+            messages.push(json!({"role": "tool", "tool_call_id": call_id,
+                "content": capture_text(500 + step as u64, 3 * 1024)}));
+            native.push(json!({"role": "assistant", "id": format!("msg-{step:04}")}));
+            native.push(json!({"role": "user", "content": [{"tool_result": call_id,
+                "text": capture_text(500 + step as u64, 3 * 1024)}]}));
+            threaded.push(json!({"call_id": null, "message_index": 2 * step + 2, "tool_call_id": call_id,
+                "content": [{"type": "text", "text": format!("[tool: exec, call_id: {call_id}, 3072 bytes — full output: sessions {}]", capture_text(900 + step as u64, 160))}]}));
+        }
+        let mut rendered = rendered_turn(
+            turn,
+            json!({"model": "m", "stream": true, "max_tokens": 32_000 - 300 * turn, "messages": messages,
+                "tools": [{"type": "function", "function": {"name": "exec", "description": capture_text(2, 12 * 1024)}}]}),
+        );
+        rendered.provenance_payload_json = json!({
+            "build_path": "budgeted",
+            "context_accounting": {"accounting_version": 2, "attempt": 0, "compaction_reason": "below_threshold",
+                "compaction_threshold_tokens": 786_432, "context_window": 1_048_576,
+                "configured_max_output_tokens": 32_768, "estimated_input_tokens": 6000 + 900 * turn,
+                "components": {"additional_parameters": 82, "documents": 0, "messages": 5000 + 900 * turn,
+                    "output_schema": 0, "tool_schemas": 3000},
+                "estimator": "openai_chat_wire_json_bytes_div_4_v1", "turn_index": turn},
+            "effective_message_count": messages.len(),
+            "reduction_keys": [],
+            "trace_version": 4,
+            "assistant_message_ids": [],
+            "effective_messages": (turn >= RETAINED_FROM).then_some(native),
+            "threaded_tool_results": threaded,
+        });
+        rendered
+    }
+
+    #[tokio::test]
+    async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
+        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let mut stored = std::collections::BTreeMap::new();
+        let mut first_provenance_leaf = None;
+        let mut checked_turns = 0;
+        let mut previous_wire = std::collections::BTreeSet::new();
+        for turn in 0..64 {
+            let rendered = agent_loop_turn(turn);
+            sink.capture(rendered.clone()).await.unwrap();
+            let after = block_payload_bytes(node.as_ref()).await;
+            let new_blocks = after
+                .keys()
+                .filter(|key| !stored.contains_key(*key))
+                .count();
+            let new_bytes: usize = after
+                .iter()
+                .filter(|(key, _)| !stored.contains_key(*key))
+                .map(|(_, len)| len)
+                .sum();
+            stored = after;
+
+            let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
+            let wire = manifest_entries(
+                node.as_ref(),
+                row["request_json"].as_str().unwrap(),
+                "request_body",
+            )
+            .await
+            .into_iter()
+            .map(|(_, key, _)| key)
+            .collect::<std::collections::BTreeSet<_>>();
+            if turn > 0 {
+                let fresh = wire.difference(&previous_wire).count();
+                assert!(
+                    fresh <= 6,
+                    "turn {turn}: {fresh} fresh wire-body leaves; history was re-cut"
+                );
+            }
+            previous_wire = wire;
+            let leaves = manifest_entries(
+                node.as_ref(),
+                row["request_json"].as_str().unwrap(),
+                "provenance_payload",
+            )
+            .await;
+            let first_leaf = (leaves.len() >= 3).then(|| leaves[0].1.clone());
+            // Each turn appends ~3.6 KiB of wire content, repeated in the
+            // native trace once it is retained; the remainder is the rewritten
+            // tail leaves and right manifest spines of both payloads.
+            // The turn that starts retaining native messages stores that
+            // list's framing once; every other turn pays for its append.
+            if turn != RETAINED_FROM && first_leaf.is_some() && first_provenance_leaf.is_some() {
+                checked_turns += 1;
+                assert_eq!(
+                    first_provenance_leaf, first_leaf,
+                    "turn {turn}: per-call accounting re-cut the stable provenance prefix"
+                );
+                assert!(
+                    new_blocks <= 14,
+                    "turn {turn}: {new_blocks} new blocks for one appended tool round"
+                );
+                assert!(
+                    new_bytes <= 32 * 1024,
+                    "turn {turn}: {new_bytes} new block bytes for one appended tool round"
+                );
+            }
+            first_provenance_leaf = first_leaf;
+            assert_eq!(
+                super::super::decode_capture_pair_embedded(
+                    node.as_ref(),
+                    super::super::CAPTURE_VERSION,
+                    row["request_json"].as_str().unwrap(),
+                )
+                .await
+                .unwrap(),
+                (
+                    super::super::canonical_json(&rendered.request_json),
+                    super::super::canonical_json(&rendered.provenance_payload_json)
+                )
+            );
+        }
+        assert!(
+            checked_turns >= 24,
+            "the provenance trace must span several blocks"
+        );
         node.shutdown().await;
     }
 
