@@ -82,7 +82,8 @@ def physicalEntryAt (owner session : Nat) (rows : List AssignmentRow)
               | [parent] => some parent
               | _ => none
             if RequestHead.verifiedEdge ⟨owner, session, goal⟩ parent.request row.request then
-              physicalEntryAt owner session rows includeWakes fuel (some goal) parent.request.doc
+              if includeWakes && row.openingGoals.contains goal then some row.request.doc
+              else physicalEntryAt owner session rows includeWakes fuel (some goal) parent.request.doc
             else none
       | none =>
           if includeWakes && expectedGoal.any (fun goal =>

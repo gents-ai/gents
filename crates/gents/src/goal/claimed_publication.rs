@@ -191,6 +191,11 @@ async fn stage_claimed_continuation(
         &created_at,
         session_hop,
     )?;
+    create.input.goal_assignment = Some(continuation_assignment(
+        &goal,
+        &parent,
+        children.first().and_then(|child| child.doc_id.as_deref()),
+    )?);
     let expected = GoalBackedRequestFingerprint::from_create(&create)?;
 
     if let Some(child) = children.first() {
@@ -315,6 +320,15 @@ async fn stage_claimed_continuation(
         .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
         .and_then(serde_json::Value::as_str)
         .context("claimed child create omitted document ID")?;
+    if goal.assignment_root_request_doc_id.is_none() {
+        bind_goal_first_request_in_txn(
+            txn,
+            &goal,
+            child_doc,
+            create.input.goal_assignment.as_ref(),
+        )
+        .await?;
+    }
     Ok(Some(GoalResumeReceipt {
         goal_status: goal.parsed_status().context("goal has an unknown status")?,
         goal_id: goal.goal_id,

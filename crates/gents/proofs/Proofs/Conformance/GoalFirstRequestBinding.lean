@@ -56,4 +56,57 @@ private def encode (value : Case) : String :=
     ",\"task_binding_valid\":" ++ toString (taskBindingValid taskSelected taskObserved "initial-goal") ++ "}"
 
 def json : String := jsonArray (cases.map encode)
+
+structure ContinuationCase where
+  name : String
+  goal : String := "goal"
+  current : Option String := none
+  parentDoc : String := "parent"
+  parent : Option Enrollment.GoalAssignmentInput := none
+  receiptDoc : Option String := none
+
+def continuationCases : List ContinuationCase :=
+  [ { name := "fresh-continuation-opens-assignment" }
+  , { name := "unbound-signed-predecessor-refused", parent := some ⟨"goal", none⟩ }
+  , { name := "receipt-cannot-repair-unbound-goal", receiptDoc := some "child" }
+  , { name := "opening-receipt-keeps-signed-self", current := some "child", receiptDoc := some "child" }
+  , { name := "signed-opening-parent-keeps-physical-root", current := some "parent", parent := some ⟨"goal", none⟩ }
+  , { name := "untagged-opening-parent-keeps-physical-root", current := some "parent" }
+  , { name := "later-parent-keeps-physical-root", current := some "root", parent := some ⟨"goal", some "root"⟩ }
+  , { name := "later-receipt-keeps-physical-root", current := some "root", parent := some ⟨"goal", some "root"⟩, receiptDoc := some "child" }
+  , { name := "foreign-signed-goal-refused", current := some "root", parent := some ⟨"other", some "root"⟩ }
+  , { name := "foreign-signed-root-refused", current := some "root", parent := some ⟨"goal", some "other"⟩ }
+  , { name := "unrelated-untagged-parent-refused", current := some "root" }
+  , { name := "opening-receipt-cannot-borrow-parent-reference", current := some "child", parent := some ⟨"goal", some "parent"⟩, receiptDoc := some "child" }
+  , { name := "empty-goal-refused", goal := "" }
+  , { name := "empty-parent-refused", parentDoc := "" }
+  , { name := "empty-root-refused", current := some "" }
+  , { name := "empty-receipt-refused", receiptDoc := some "" }
+  , { name := "parent-is-not-its-own-child", current := some "parent", receiptDoc := some "parent" }
+  ]
+
+private def referenceJson (reference : Option Enrollment.GoalAssignmentInput) : String :=
+  match reference with
+  | none => "null"
+  | some reference => "{\"goal_id\":" ++ jsonString reference.goalId ++
+      ",\"root_request_doc_id\":" ++ optional reference.rootRequestDocId ++ "}"
+
+private def encodeContinuation (value : ContinuationCase) : String :=
+  let edges : List (Option Enrollment.GoalAssignmentInput) :=
+    [none, some ⟨"goal", none⟩, some ⟨"goal", some "root"⟩,
+      some ⟨"goal", some "parent"⟩, some ⟨"other", none⟩, some ⟨"goal", some "other"⟩]
+  "{\"name\":" ++ jsonString value.name ++ ",\"goal\":" ++ jsonString value.goal ++
+    ",\"current\":" ++ optional value.current ++ ",\"parent_doc\":" ++ jsonString value.parentDoc ++
+    ",\"parent\":" ++ referenceJson value.parent ++ ",\"receipt_doc\":" ++ optional value.receiptDoc ++
+    ",\"expected\":" ++ referenceJson (continuationReference? value.goal value.current
+      value.parentDoc value.parent value.receiptDoc) ++
+    ",\"edges\":" ++ jsonArray (edges.map fun child =>
+      "{\"child\":" ++ referenceJson child ++ ",\"accepted\":" ++
+        toString (continuationEdge value.goal value.parentDoc value.parent child) ++ "}") ++ "}"
+
+def continuationsJson : String := jsonArray (continuationCases.map encodeContinuation)
+
+example : (continuationCases.take 4).map (fun value => continuationReference? value.goal
+    value.current value.parentDoc value.parent value.receiptDoc) =
+    [some ⟨"goal", none⟩, none, none, some ⟨"goal", none⟩] := by native_decide
 end Conformance.GoalFirstRequestBinding

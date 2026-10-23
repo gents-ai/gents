@@ -29,6 +29,7 @@ pub use first_request_binding::task_assignment_goal_id;
 pub(crate) use first_request_binding::{
     bind_goal_first_request_in_txn, validate_task_goal_identity_in_txn,
 };
+use first_request_binding::{continuation_assignment, continuation_reference_matches};
 pub(crate) use history::{load_goal_versions_for_session, GoalVersion};
 pub use observation::{
     bind_goal_input, load_session_goal_observation, load_session_goal_observation_state,

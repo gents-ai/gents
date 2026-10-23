@@ -6,6 +6,46 @@ use gents_protocol::request_admission::{
 };
 use std::sync::Arc;
 
+#[test]
+fn generated_continuation_assignments_preserve_physical_bindings() {
+    let cases =
+        &crate::lean_vocab_test::lean_contract_snapshot().goal_continuation_assignment_cases;
+    assert_eq!(cases.len(), 17);
+    for case in cases {
+        let parent: Option<GoalAssignmentInput> =
+            serde_json::from_value(case["parent"].clone()).unwrap();
+        let expected: Option<GoalAssignmentInput> =
+            serde_json::from_value(case["expected"].clone()).unwrap();
+        assert_eq!(
+            continuation_reference(
+                case["goal"].as_str().unwrap(),
+                case["current"].as_str(),
+                case["parent_doc"].as_str().unwrap(),
+                parent.as_ref(),
+                case["receipt_doc"].as_str(),
+            ),
+            expected,
+            "{}",
+            case["name"]
+        );
+        for edge in case["edges"].as_array().unwrap() {
+            let child: Option<GoalAssignmentInput> =
+                serde_json::from_value(edge["child"].clone()).unwrap();
+            assert_eq!(
+                continuation_reference_matches(
+                    case["goal"].as_str().unwrap(),
+                    case["parent_doc"].as_str().unwrap(),
+                    parent.as_ref(),
+                    child.as_ref(),
+                ),
+                edge["accepted"].as_bool().unwrap(),
+                "{}: {edge}",
+                case["name"]
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn generated_first_request_bindings_commit_exact_physical_roots() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().goal_first_request_binding_cases;

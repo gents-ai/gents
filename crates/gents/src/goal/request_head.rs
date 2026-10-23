@@ -53,14 +53,12 @@ pub(crate) fn verify_goal_continuation_edge(
         .input
         .as_ref()
         .and_then(|input| input.goal_assignment.as_ref());
-    let expected_reference = parent_reference.map(|reference| reference.continuation(parent_doc));
+    let child_reference = child
+        .input
+        .as_ref()
+        .and_then(|input| input.goal_assignment.as_ref());
     anyhow::ensure!(
-        child
-            .input
-            .as_ref()
-            .and_then(|input| input.goal_assignment.as_ref())
-            == expected_reference.as_ref()
-            && parent_reference.is_none_or(|reference| reference.goal_id == goal_id),
+        continuation_reference_matches(goal_id, parent_doc, parent_reference, child_reference),
         "continuation receipt changed its signed goal assignment"
     );
     let sequence = facts.sequence;
@@ -88,7 +86,7 @@ pub(super) fn verify_goal_continuation_receipt(
     )?;
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
     let agent_id = parent.agent_id.clone();
-    let expected = prepare_goal_continuation(
+    let mut expected = prepare_goal_continuation(
         &parent,
         agent_id,
         &goal.goal_id,
@@ -107,6 +105,11 @@ pub(super) fn verify_goal_continuation_receipt(
             .and_then(|hop| u32::try_from(hop).ok())
             .context("continuation receipt lacks its hop")?,
     )?;
+    expected.input.goal_assignment = Some(continuation_assignment(
+        goal,
+        &parent,
+        child.doc_id.as_deref(),
+    )?);
     let actual: GoalBackedRequestFingerprint =
         serde_json::from_value(serde_json::to_value(child)?)?;
     anyhow::ensure!(
@@ -134,6 +137,14 @@ pub(crate) fn latest_goal_request<'a>(
                         Some(&goal.goal_id),
                         &openings,
                     )
+                    .inspect_err(|error| {
+                        tracing::debug!(
+                            goal_id = %goal.goal_id,
+                            request_doc_id = ?row.doc_id,
+                            %error,
+                            "Goal assignment ancestry is unavailable"
+                        );
+                    })
                     .ok()?;
                     super::request_assignment::request_belongs_to_goal(goal, entry)
                         .then(|| row.doc_id.clone())
@@ -394,6 +405,12 @@ fn authenticated_physical_entry<'a>(
             .get(parent_doc)
             .context("Goal continuation parent is absent from its owner/session observation")?;
         verify_goal_continuation_edge(node_did, session_id, goal_id, parent, row)?;
+        if assignment_openings
+            .and_then(|openings| openings.get(doc))
+            .is_some_and(|goals| goals.contains(goal_id))
+        {
+            return Ok(row);
+        }
         row = parent;
     }
 }
@@ -443,14 +460,24 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
     if pending.is_empty() {
         return Ok(true);
     }
-    let binding =
-        authenticated_goal_request_members(&goal.node_did, &goal.session_id, root, &requests)?;
-    anyhow::ensure!(
-        binding.entry.doc_id.as_deref() == Some(root),
-        "Task assignment root is a continuation"
-    );
     let by_doc = request_rows_by_doc(&goal.node_did, &goal.session_id, &requests)?;
     let openings = assignment_openings(std::slice::from_ref(goal));
+    let opening = *by_doc
+        .get(root)
+        .context("Goal assignment opening is absent from its owner/session")?;
+    let entry = authenticated_assignment_entry(
+        &goal.node_did,
+        &goal.session_id,
+        opening,
+        &by_doc,
+        Some(&goal.goal_id),
+        &openings,
+    )?;
+    anyhow::ensure!(
+        entry.doc_id.as_deref() == Some(root)
+            && super::request_assignment::request_belongs_to_goal(goal, entry),
+        "Goal assignment has no authenticated physical opening"
+    );
     let mut allowed = true;
     for row in pending {
         let doc = row
@@ -475,7 +502,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         let mutation = crate::lifecycle::queue::supersede_pending_mutation(
             doc,
             &goal.node_did,
-            &binding.entry.request_id,
+            &entry.request_id,
             root,
             reason,
         );
