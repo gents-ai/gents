@@ -1,0 +1,9 @@
+type ToolFileInventory @branchable @policy(id: "2e14bb0746cf90a5e955db6b9bb5d9098f6aa0776849c8bcb68db4dd1e67ea82", resource: "file_images") {
+    tool_call_doc_id: String @index @immutable
+    observation_doc_id: String @index @immutable
+    request_doc_id: String @index @immutable
+    node_did: String @index @immutable
+    session_id: String @index @immutable
+    requester_did: String @index @immutable
+    changes: JSON @immutable
+}

@@ -137,6 +137,7 @@ use defra_node::EmbeddedNode;
 
 pub(crate) mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
+pub(crate) mod file_inventory;
 mod file_review_access;
 pub(crate) mod query;
 pub use file_review_access::VerifiedFileImageReceipt;

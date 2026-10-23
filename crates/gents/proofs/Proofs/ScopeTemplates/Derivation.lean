@@ -582,4 +582,10 @@ theorem file_images_are_not_ordinary_replication :
     "ToolFileChange" ∉ clientToRuntimeCollections := by
   decide
 
+theorem file_inventory_is_not_ordinary_replication :
+    "ToolFileInventory" ∉ clientCollections ∧
+    "ToolFileInventory" ∉ conversationCollections ∧
+    "ToolFileInventory" ∉ clientToRuntimeCollections := by
+  decide
+
 end ScopeTemplates

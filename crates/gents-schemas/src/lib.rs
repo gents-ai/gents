@@ -35,6 +35,8 @@ pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
 pub const TOOL_FILE_CHANGE_NAME: &str = "ToolFileChange";
 pub const TOOL_FILE_CHANGE: &str = include_str!("../schemas/agent/tool_file_change.graphql");
+pub const TOOL_FILE_INVENTORY_NAME: &str = "ToolFileInventory";
+pub const TOOL_FILE_INVENTORY: &str = include_str!("../schemas/agent/tool_file_inventory.graphql");
 pub const TOOL_FILE_CHANGE_POLICY: &str =
     include_str!("../schemas/agent/tool_file_change_policy.yaml");
 pub const TOOL_FILE_CHANGE_POLICY_ID: &str =
@@ -221,6 +223,7 @@ pub const ALL: &[&str] = &[
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
     TOOL_FILE_CHANGE,
+    TOOL_FILE_INVENTORY,
     COMPACTION_ENTRY,
     RENDERED_REQUEST,
     RENDERED_REQUEST_BLOCK,
@@ -300,6 +303,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     TOOL_FILE_CHANGE_NAME,
+    TOOL_FILE_INVENTORY_NAME,
     COMPACTION_ENTRY_NAME,
     RENDERED_REQUEST_NAME,
     RENDERED_REQUEST_BLOCK_NAME,
@@ -363,8 +367,11 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
 
 /// Whole-collection subscriptions would bypass the file-review selection
 /// boundary. These records use filtered control routes or document-scoped push.
-pub const EXPLICIT_DELIVERY_COLLECTION_NAMES: &[&str] =
-    &[TOOL_FILE_CHANGE_NAME, FILE_IMAGE_HYDRATION_REQUEST_NAME];
+pub const EXPLICIT_DELIVERY_COLLECTION_NAMES: &[&str] = &[
+    TOOL_FILE_CHANGE_NAME,
+    TOOL_FILE_INVENTORY_NAME,
+    FILE_IMAGE_HYDRATION_REQUEST_NAME,
+];
 
 pub fn requires_explicit_delivery(name: &str) -> bool {
     EXPLICIT_DELIVERY_COLLECTION_NAMES.contains(&name)
