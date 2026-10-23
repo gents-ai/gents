@@ -256,7 +256,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
                 // Invalidate the captured read while a later owner query is in
                 // flight so the selected patch must be rejected at publication.
                 store.invalidate_projection(true);
-                serde_json::json!({"seeds_0": []})
+                serde_json::json!({"seeds_0": [], "newest_0": []})
             } else if body.contains("RequestDependencies") {
                 serde_json::json!({"r0": []})
             } else if body.contains("DesktopRequestSessionContext") {

@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       full_candidate:
-        description: Run the full non-PR candidate suites.
+        description: Run non-PR candidate tests, including the full selected Rust suites.
         required: true
         type: boolean
         default: true
@@ -19,6 +19,12 @@ on:
         description: Exact 40-character commit SHA expected at the dispatched ref.
         required: true
         type: string
+      rust_suite:
+        description: Select one Rust suite for a focused rerun, or all CI jobs.
+        required: true
+        type: choice
+        default: all
+        options: [all, runtime, support, desktop, cli]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -100,6 +106,7 @@ jobs:
           python3 .github/scripts/test-afterburner-downloads.py
 
   publish-control-tests:
+    if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
     # Focused, network-free tests for the staged-prerelease publication
     # control script (fake gh). No secrets; read-only token.
     runs-on: ubuntu-latest
@@ -132,28 +139,13 @@ jobs:
         macOS,
         ARM64,
         studio,
-        "${{ matrix.host }}",
-        "${{ matrix.slot }}",
+        "${{ (matrix.suite == 'runtime' || matrix.suite == 'support') && 'studio-1' || 'studio-2' }}",
+        "ci-${{ matrix.suite }}",
       ]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Keep each suite on one runner process so the host-local sccache
-          # stays warm for its crates. Pair a heavy suite with a lighter one
-          # on each physical Studio.
-          - suite: runtime
-            host: studio-1
-            slot: ci-runtime
-          - suite: support
-            host: studio-1
-            slot: ci-support
-          - suite: desktop
-            host: studio-2
-            slot: ci-desktop
-          - suite: cli
-            host: studio-2
-            slot: ci-cli
+        suite: ${{ fromJSON(inputs.rust_suite != '' && inputs.rust_suite != 'all' && format('["{0}"]', inputs.rust_suite) || '["runtime","support","desktop","cli"]') }}
     # Each job starts from an empty RUNNER_TEMP target tree; the size-capped
     # host sccache service supplies cached rlibs. Binaries, test harnesses,
     # proc macros, and build scripts are not cacheable and relink every run.
@@ -432,10 +424,11 @@ jobs:
 
   lean-proofs:
     if: >-
-      github.event_name != 'pull_request' ||
+      (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&
       (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
     # Reuse the warm proof cache on studio-1's light support slot. This keeps
     # the runtime slot free once repository-guard releases the Rust matrix.
     runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
@@ -510,10 +503,11 @@ jobs:
 
   desktop-packages:
     if: >-
-      github.event_name != 'pull_request' ||
+      (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&
       (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
     # Package boundary, publishability, and package-local tests are independent
     # of the desktop application/browser gate and should not block it.
     runs-on: ubuntu-latest
@@ -556,10 +550,11 @@ jobs:
 
   desktop-ui:
     if: >-
-      github.event_name != 'pull_request' ||
+      (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&
       (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
     # This job exercises browser-only code. Keep scarce macOS capacity for the
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
@@ -637,10 +632,11 @@ jobs:
 
   desktop-ui-bombadil:
     if: >-
-      github.event_name != 'pull_request' ||
+      (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&
       (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
     # Bombadil's exact Linux failure trace passes on macOS. Keep this small
     # platform-specific smoke on a Studio while the portable UI suite runs on
     # hosted Linux; it normally releases the slot before Rust becomes ready.
@@ -685,6 +681,7 @@ jobs:
           path: apps/gents-desktop/test-results/bombadil
 
   triage-hygiene:
+    if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
     # The issue-triage bot holds `issues: write` and runs on a daily cron. These
     # tests are the only fence on its decision function, so every pull request
     # must run them.
@@ -705,6 +702,7 @@ jobs:
         run: npm run test:triage
 
   notary-control-tests:
+    if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
     # Focused, network-free tests for the staged-artifact notarization control
     # scripts. They need real macOS ditto/shasum, so they run on a hosted
     # macOS runner with no secrets. Draft PRs run them too.
