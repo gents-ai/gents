@@ -131,6 +131,54 @@ where
     Vec::<T>::deserialize(value).with_context(|| format!("decode required {field} rows"))
 }
 
+pub(crate) fn cursor_after_arg(after: Option<&str>) -> String {
+    after
+        .map(|cursor| format!(", after: \"{}\"", escape_graphql_string(cursor)))
+        .unwrap_or_default()
+}
+
+pub(crate) fn cursor_page<T>(
+    response: &defra_node::QueryResponse,
+    collection: &str,
+) -> Result<(Vec<T>, Option<String>)>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let cursor = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_cursor"))
+        .context("cursor query omitted _cursor")?;
+    let rows = cursor
+        .get(collection)
+        .context("cursor query omitted collection rows")?;
+    let page: Vec<T> = serde_json::from_value(rows.clone())
+        .with_context(|| format!("decode {collection} cursor page"))?;
+    let page_info = cursor
+        .get("_pageInfo")
+        .context("cursor query omitted _pageInfo")?;
+    let has_next = page_info
+        .get("hasNext")
+        .and_then(serde_json::Value::as_bool)
+        .context("cursor query omitted hasNext")?;
+    let next = if has_next {
+        anyhow::ensure!(
+            !page.is_empty(),
+            "cursor query returned an empty page with hasNext"
+        );
+        Some(
+            page_info
+                .get("endCursor")
+                .and_then(serde_json::Value::as_str)
+                .context("cursor query omitted endCursor")?
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+    Ok((page, next))
+}
+
 pub fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
 where
     T: DeserializeOwned,

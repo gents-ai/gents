@@ -64,3 +64,103 @@ fn missing_authorized_roots_do_not_certify_empty_selection() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
+    use gents_protocol::session_hydration::SessionHydrationCollection;
+    let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
+        .await
+        .unwrap();
+    let node = Arc::new(builder.build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let did = node.node_identity_did().unwrap().to_owned();
+    let request = HydrationRequest {
+        request_key: "paged-peer:paged-session".into(),
+        peer_id: "paged-peer".into(),
+        requester_did: did.clone(),
+        node_did: did,
+        session_id: "paged-session".into(),
+    };
+    let expected = ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.hydration.seed_cursor_pages",
+        |txn| {
+            let request = &request;
+            Box::pin(async move {
+                let mut expected = BTreeSet::new();
+                let did = escape_graphql_string(&request.node_did);
+                for index in 0..132 {
+                    let session = if index < 129 {
+                        "paged-session"
+                    } else {
+                        "other-session"
+                    };
+                    let response = txn
+                        .execute_local_response(&format!(
+                            r#"mutation {{ create_CompactionEntry(input: {{
+                        compaction_key: "paged-{index}", session_id: "{session}",
+                        node_did: "{did}", requester_did: "{did}", sequence: {index}
+                        }}) {{ _docID }} }}"#
+                        ))
+                        .await?;
+                    let row = crate::graphql::single_mutation_document(
+                        &response,
+                        "create_CompactionEntry",
+                    )?
+                    .context("expected one created compaction")?;
+                    if index < 129 {
+                        expected.insert(row["_docID"].as_str().unwrap().to_owned());
+                    }
+                }
+                Ok(expected)
+            })
+        },
+    )
+    .await
+    .unwrap();
+    ConfigAccess::transact_local_readonly(
+        &node,
+        None,
+        "test.hydration.enumerate_cursor_pages",
+        |txn| {
+            let request = &request;
+            let expected = &expected;
+            Box::pin(async move {
+                let filter = crate::session::session_scope_filter(
+                    &request.node_did,
+                    &request.session_id,
+                    Some(&request.requester_did),
+                );
+                let response = txn
+                    .execute_local_response(&pages::page_query(
+                        SessionHydrationCollection::CompactionEntry,
+                        &filter,
+                        None,
+                    ))
+                    .await?;
+                let (first, next) =
+                    crate::graphql::cursor_page::<serde_json::Value>(&response, "CompactionEntry")?;
+                assert_eq!(first.len(), pages::PAGE_SIZE);
+                assert!(next.is_some());
+                let selected = load_hydration_selection_in_txn(txn, request).await?;
+                assert!(selected
+                    .documents
+                    .iter()
+                    .all(|document| document.collection
+                        == SessionHydrationCollection::CompactionEntry));
+                let actual = selected
+                    .documents
+                    .iter()
+                    .map(|document| document.doc_id.clone())
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(&actual, expected);
+                assert_eq!(actual.len(), 129);
+                Ok(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+    node.shutdown().await;
+}

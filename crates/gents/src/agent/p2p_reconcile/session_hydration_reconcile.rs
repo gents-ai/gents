@@ -33,7 +33,7 @@ use crate::session::canonical_rows::{
 
 mod file_images;
 mod selection;
-use selection::{load_hydration_selection, HYDRATION_TOOL_CALL_FIELDS};
+use selection::load_hydration_selection;
 
 #[derive(Clone, Copy)]
 enum DeliveryTarget<'a> {
@@ -727,28 +727,6 @@ fn hydration_admission_query(session_id: &str, peer_id: &str) -> String {
     )
 }
 
-fn hydration_selection_query(session_id: &str, node_did: &str, requester_did: &str) -> String {
-    format!(
-        r#"{{
-            AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                _docID request_id requester_did node_did session_id lifecycle_state terminal_output
-            }}
-            AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                {AGENT_MESSAGE_FIELDS}
-            }}
-            AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                {HYDRATION_TOOL_CALL_FIELDS}
-            }}
-            AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                {AGENT_OUTPUT_SEGMENT_FIELDS}
-            }}
-            CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                _docID requester_did node_did session_id
-            }}
-        }}"#
-    )
-}
-
 fn applied_pairing_route(
     row: AppliedPairingRow,
     desired_agents: &BTreeMap<String, String>,
@@ -1203,18 +1181,28 @@ mod tests {
 
     #[tokio::test]
     async fn hydration_catalog_filter_is_accepted_by_real_schema() {
-        let node = crate::test_support::node_builder().build().await.unwrap();
+        let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
+            .await
+            .unwrap();
+        let node = Arc::new(builder.build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let admission = hydration_admission_query("session-1", "peer-1");
         let response = node.execute(&admission).await;
         ensure_no_errors(&response, "real hydration admission query").unwrap();
-        let query =
-            hydration_selection_query("session-1", "did:key:agent-1", "did:key:requester-1");
-        let response = node.execute(&query).await;
-        ensure_no_errors(&response, "real hydration selection query").unwrap();
-        assert!(query.contains("AgentOutputSegment"));
-        assert!(!query.contains("AgentResponse"));
-        assert!(!query.contains("AgentToolResult"));
+        let did = node.node_identity_did().unwrap().to_owned();
+        let request = HydrationRequest {
+            request_key: "peer-1:session-1".into(),
+            peer_id: "peer-1".into(),
+            requester_did: did.clone(),
+            node_did: did,
+            session_id: "session-1".into(),
+        };
+        assert!(load_hydration_selection(&node, &request)
+            .await
+            .unwrap()
+            .documents
+            .is_empty());
+        node.shutdown().await;
     }
 
     #[tokio::test]

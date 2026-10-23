@@ -19,11 +19,7 @@ pub(super) async fn load_hydration_selection_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &HydrationRequest,
 ) -> Result<HydrationSelection> {
-    let session_id = escape_graphql_string(&request.session_id);
-    let node_did = escape_graphql_string(&request.node_did);
-    let requester_did = escape_graphql_string(&request.requester_did);
-    let query = hydration_selection_query(&session_id, &node_did, &requester_did);
-    let response = txn.execute_local_response(&query).await?;
+    let response = pages::load_session_rows(txn, request).await?;
 
     let mut root_headers = required_rows::<serde_json::Value>(&response, "AgentMessage")?
         .iter()
@@ -243,7 +239,7 @@ async fn load_origin_headers(
         let agent = escape_graphql_string(node_did);
         let requester = escape_graphql_string(requester_did);
         let response = txn.execute_local_response(&format!(
-            r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
+            r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
         )).await?;
         let decoded = required_rows::<serde_json::Value>(&response, "AgentMessage")?
             .iter()
@@ -291,12 +287,16 @@ async fn load_request_segments(
     requester_did: &str,
 ) -> Result<()> {
     for request_id in request_ids {
-        let response = txn
-            .execute_local_response(
-                &crate::session::canonical_rows::request_output_segments_query(&request_id),
-            )
-            .await?;
-        let values = required_rows::<serde_json::Value>(&response, "AgentOutputSegment")?;
+        let filter = format!(
+            "request_doc_id: {{ _eq: \"{}\" }}",
+            escape_graphql_string(&request_id)
+        );
+        let values = pages::load_rows(
+            txn,
+            gents_protocol::session_hydration::SessionHydrationCollection::AgentOutputSegment,
+            &filter,
+        )
+        .await?;
         for row in crate::session::canonical_rows::decode_scoped_request_output_segments(
             &values,
             node_did,
@@ -375,7 +375,7 @@ async fn load_referenced_bases(
             "_docID requester_did node_did session_id"
         };
         let response = txn.execute_local_response(&format!(
-            r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {fields} }} }}"#
+            r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}, limit: 2) {{ {fields} }} }}"#
         )).await?;
         if collection == SessionHydrationCollection::AgentToolCall {
             let found = required_rows::<gents_protocol::row::AgentToolCallRow>(&response, name)?;
@@ -457,19 +457,29 @@ pub(super) async fn load_effect_children(
     if parents.is_empty() {
         return Ok(());
     }
-    let parents = crate::graphql::graphql_string_list_literal(parents);
+    let parents: Vec<_> = parents.into_iter().collect();
     let agent = escape_graphql_string(&request.node_did);
     let requester = escape_graphql_string(&request.requester_did);
-    let response = txn.execute_local_response(&format!(
-        r#"{{ AgentToolCall(filter: {{ plugin_parent_tool_call_doc_id: {{ _in: {parents} }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {HYDRATION_TOOL_CALL_FIELDS} }} }}"#
-    )).await?;
     let mut ignored = Vec::new();
-    for row in required_rows::<gents_protocol::row::AgentToolCallRow>(&response, "AgentToolCall")? {
-        if !effects
-            .iter()
-            .any(|known| row.doc_id.as_deref() == Some(&known.document.doc_id))
-        {
-            observe_tool_call(row, &mut ignored, effects);
+    for parents in parents.chunks(pages::PAGE_SIZE) {
+        let parents = crate::graphql::graphql_string_list_literal(parents.iter().copied());
+        let filter = format!(
+            r#"plugin_parent_tool_call_doc_id: {{ _in: {parents} }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }}"#
+        );
+        let values = pages::load_rows(
+            txn,
+            gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall,
+            &filter,
+        )
+        .await?;
+        for value in values {
+            let row: gents_protocol::row::AgentToolCallRow = serde_json::from_value(value)?;
+            if !effects
+                .iter()
+                .any(|known| row.doc_id.as_deref() == Some(&known.document.doc_id))
+            {
+                observe_tool_call(row, &mut ignored, effects);
+            }
         }
     }
     Ok(())
@@ -477,3 +487,5 @@ pub(super) async fn load_effect_children(
 
 #[cfg(test)]
 mod tests;
+
+mod pages;
