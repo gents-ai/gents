@@ -159,6 +159,28 @@ private def pageJson (value : Page) : String := object
   [("snapshot", snapshotJson value.snapshot), ("offset", toString value.offset),
    ("entries", jsonArray (value.entries.map entryJson)), ("next", optional cursorJson value.next)]
 
+private def sourceProjectionCaseJson (value : SelectionCase) : String :=
+  let pages := match snapshot value.source.model admission with
+    | .error _ => []
+    | .ok current => (List.range (max 1 ((current.entries.length + pageLimit - 1) / pageLimit))).map
+        (fun index => pageJson (makePage current (index * pageLimit)))
+  object [("name", jsonString value.name), ("source", sourceJson value.source),
+    ("admission", hydrationRequestJson admission), ("expected", selectionJson value.source admission),
+    ("pages", jsonArray pages)]
+
+/-- Native projection checks refine this subset of the executable source cases.
+Canonical admission, fork selection and transport remain separate consumers. -/
+def sourceProjectionCasesJson : String :=
+  let selected := selectionCases.filter fun value =>
+    ["accepted_terminal_capture", "legacy_missing_capture_is_unknown",
+     "active_missing_capture_is_pending", "uncommitted_capture_before_terminal",
+     "projection_wrong_request", "projection_wrong_actual_session",
+     "projection_wrong_actual_requester", "projection_wrong_actual_node",
+     "projection_foreign_stored_owner", "invalid_empty_capture_not_empty_inventory",
+     "duplicate_paths_in_capture"].contains value.name
+  let largeCase : SelectionCase := ⟨"one_capture_exceeds_one_page", oneLargeCapture, .selected 65 0 0 false⟩
+  jsonArray ((selected ++ [largeCase]).map sourceProjectionCaseJson)
+
 private def receiptJson : VerifiedReceipt → String
   | .transcriptV1 request documents => tagged "transcript_v1"
       [("admission", hydrationRequestJson request),

@@ -6,7 +6,9 @@ use gents_protocol::file_inventory::{
 use rapidhash::{HashSetExt, RapidHashSet};
 use serde::{Deserialize, Serialize};
 
-pub use crate::agent::p2p_reconcile::session_hydration_reconcile::FileInventorySnapshot;
+pub use crate::agent::p2p_reconcile::session_hydration_reconcile::{
+    FileInventoryPageError, FileInventorySnapshot,
+};
 use crate::NodeIdentity;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

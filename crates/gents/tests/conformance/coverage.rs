@@ -680,6 +680,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.workspace_path_capability_cases,
         ),
         (
+            "file_inventory_source_projection_cases",
+            "FileInventorySourceProjectionCases",
+            &snapshot.file_inventory_source_projection_cases,
+        ),
+        (
             "file_inventory_receiver_cases",
             "FileInventoryReceiverCases",
             &snapshot.file_inventory_receiver_cases,

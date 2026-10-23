@@ -96,3 +96,285 @@ async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
     node.shutdown().await;
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
+
+#[tokio::test]
+async fn generated_projection_cases_use_native_owners_and_scopes() {
+    use base64::Engine as _;
+    use gents_protocol::file_changes::{
+        FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
+    };
+    use serde_json::{json, Value};
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_source_projection_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let (fixture, mut request_owner) =
+            published_admission_with_owner(PublishedAdmissionOptions {
+                name: format!("inventory-projection-{name}"),
+                real_identity: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let node = fixture.node;
+        let mut tool = fixture.tool;
+        let model_tool = &case["source"]["tools"][0];
+        if model_tool["state"] == "completed" {
+            tool.complete("fixture terminal").await.unwrap();
+        }
+        let scope = FileImageScope {
+            requester_did: tool.requester_did().unwrap().into(),
+            node_did: tool.node_did().into(),
+            session_id: tool.session_id().into(),
+        };
+        let tool_id = tool.doc_id().unwrap().to_owned();
+        let request_id = tool.request_doc_id().unwrap().to_owned();
+        let session = ConfigAccess::transact_local_readonly(
+            &node,
+            None,
+            "test.inventory.model_session",
+            |txn| {
+                let scope = &scope;
+                Box::pin(async move {
+                    crate::session::load_agent_session_row_in_txn(
+                        txn,
+                        &scope.node_did,
+                        &scope.session_id,
+                        Some(&scope.requester_did),
+                    )
+                    .await
+                })
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let admission = FileInventoryAdmission {
+            session_doc_id: session.doc_id,
+            request: HydrationRequest {
+                request_key: name.into(),
+                peer_id: "fixture-peer".into(),
+                requester_did: scope.requester_did.clone(),
+                node_did: scope.node_did.clone(),
+                session_id: scope.session_id.clone(),
+            },
+        };
+        let root = fixture.path.to_str().unwrap().to_owned();
+        let image = |bytes: &[u8]| FileImage::File {
+            content_hash: format!("sha256:{:x}", Sha256::digest(bytes)),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            permissions: FilePermissions {
+                readonly: false,
+                unix_mode: None,
+            },
+            links: Some(1),
+        };
+        let change = FileChangeImages {
+            root: root.clone(),
+            path: "src/1.rs".into(),
+            before: image(b"before"),
+            after: image(b"after"),
+        };
+        let mut seen_paths = BTreeSet::new();
+        let mut paths = Vec::new();
+        for projection in case["source"]["projections"].as_array().unwrap() {
+            for modeled in projection["changes"].as_array().unwrap() {
+                let path = modeled["path"].as_str().unwrap().to_owned();
+                if seen_paths.insert(path.clone()) {
+                    paths.push(path);
+                }
+            }
+        }
+        if paths.is_empty() {
+            paths.push(change.path.clone());
+        }
+        let batch = ToolFileChanges {
+            version: FILE_CHANGES_VERSION,
+            tool_call_doc_id: tool_id.clone(),
+            changes: paths
+                .into_iter()
+                .map(|path| FileChangeImages {
+                    path,
+                    ..change.clone()
+                })
+                .collect(),
+        };
+        crate::toolset::FileChanges::decode(&tool_id, serde_json::to_value(&batch).unwrap())
+            .unwrap();
+        for projection in case["source"]["projections"].as_array().unwrap() {
+            let observation_input = json!({ "tool_call_doc_id": tool_id, "request_doc_id": request_id,
+                "node_did": scope.node_did, "session_id": scope.session_id, "requester_did": scope.requester_did,
+                "file_changes": batch });
+            let observation = ConfigAccess::transact_local_write(&node, None, "test.inventory.model_observation", |txn| {
+                let input = &observation_input;
+                Box::pin(async move {
+                    let response = txn.execute_with_variables(
+                        "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+                        &json!({"input": input})).await?;
+                    crate::graphql::created_doc_id(&response, "ToolFileChange")
+                })
+            }).await.unwrap();
+            let mut changes = Vec::new();
+            for modeled in projection["changes"].as_array().unwrap() {
+                let mut metadata = FileChangeMetadata::from(&change);
+                metadata.path = modeled["path"].as_str().unwrap().into();
+                changes.push(metadata);
+            }
+            let actor = |value: &Value| match value.as_str().unwrap() {
+                "node-1" => scope.node_did.clone(),
+                "reader-1" => scope.requester_did.clone(),
+                "session-1" => scope.session_id.clone(),
+                other => other.to_owned(),
+            };
+            let projected_request = if projection["request"] == model_tool["request"] {
+                request_id.clone()
+            } else {
+                "different-physical-request".into()
+            };
+            let input = json!({ "tool_call_doc_id": tool_id, "observation_doc_id": observation,
+                "request_doc_id": projected_request, "node_did": actor(&projection["scope"]["node"]),
+                "session_id": actor(&projection["scope"]["session"]),
+                "requester_did": actor(&projection["scope"]["requester"]), "changes": changes });
+            let foreign = if projection["owner"] != "node-1" {
+                let key_path = fixture.path.join("foreign-projection.key");
+                Some(
+                    tokio::task::spawn_blocking(move || {
+                        crate::identity::KeyIdentity::load_or_create(key_path, None)
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                )
+            } else {
+                None
+            };
+            let identity = foreign
+                .as_ref()
+                .map(|identity| identity.did().parse().unwrap());
+            let id = ConfigAccess::transact_local_write(&node, identity, "test.inventory.model_projection", |txn| {
+                let input = &input;
+                Box::pin(async move {
+                    let response = txn.execute_with_variables(
+                        "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
+                        &json!({"input": input})).await?;
+                    crate::graphql::created_doc_id(&response, "ToolFileInventory")
+                })
+            }).await.unwrap();
+            if let Some(foreign) = foreign {
+                node.add_dac_actor_relationship(
+                    foreign.did(),
+                    "ToolFileInventory",
+                    &id,
+                    "reader",
+                    &scope.node_did,
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let result = FileInventorySnapshot::load(&node, &admission).await;
+        let expected = &case["expected"];
+        match expected["kind"].as_str().unwrap() {
+            "rejected" => assert!(
+                result.is_err(),
+                "{name}: accepted invalid source projection"
+            ),
+            "selected" => {
+                let actual = result.unwrap_or_else(|error| panic!("{name}: {error:#}"));
+                let facts = expected["snapshot"]["tools"].as_array().unwrap();
+                let pending = facts
+                    .iter()
+                    .filter(|fact| fact["capture"]["kind"] == "pending")
+                    .count();
+                let unknown = facts
+                    .iter()
+                    .filter(|fact| fact["capture"]["kind"] == "unknown")
+                    .count();
+                let entries = facts
+                    .iter()
+                    .filter_map(|fact| fact["capture"]["projection"]["changes"].as_array())
+                    .map(Vec::len)
+                    .sum::<usize>();
+                assert_eq!(
+                    actual.binding.coverage,
+                    FileInventoryCoverage {
+                        entries: entries as u64,
+                        pending: pending as u64,
+                        unknown: unknown as u64
+                    },
+                    "{name}"
+                );
+                let mut cursor = None;
+                let mut issued = None;
+                for expected_page in case["pages"].as_array().unwrap() {
+                    let page = actual.page(cursor.as_ref()).unwrap();
+                    assert!(page.well_formed(), "{name}");
+                    assert_eq!(
+                        page.offset,
+                        expected_page["offset"].as_u64().unwrap(),
+                        "{name}"
+                    );
+                    let expected_entries = expected_page["entries"].as_array().unwrap();
+                    assert_eq!(page.entries.len(), expected_entries.len(), "{name}");
+                    assert_eq!(
+                        page.entries
+                            .iter()
+                            .map(|entry| entry.change.path.as_str())
+                            .collect::<Vec<_>>(),
+                        expected_entries
+                            .iter()
+                            .map(|entry| entry["change"]["path"].as_str().unwrap())
+                            .collect::<Vec<_>>(),
+                        "{name}"
+                    );
+                    assert_eq!(
+                        page.next.as_ref().map(|next| next.offset),
+                        expected_page["next"]["offset"].as_u64(),
+                        "{name}"
+                    );
+                    if issued.is_none() {
+                        issued = page.next.clone();
+                    }
+                    cursor = page.next;
+                }
+                assert!(cursor.is_none(), "{name}");
+                for offset in [0, 1, actual.binding.coverage.entries] {
+                    let cursor = FileInventoryCursor {
+                        binding: actual.binding.clone(),
+                        offset,
+                    };
+                    assert_eq!(
+                        actual.page(Some(&cursor)),
+                        Err(FileInventoryPageError::InvalidCursor),
+                        "{name}"
+                    );
+                }
+                if let Some(issued) = issued {
+                    crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+                        node.clone(), &mut request_owner, &scope.node_did, 1, "write_file",
+                        "later-inventory-tool", json!({"path": "later.rs"}),
+                        crate::tool_call_lifecycle::AwaitMode::Foreground, true,
+                    ).await.unwrap();
+                    let changed = FileInventorySnapshot::load(&node, &admission)
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        changed.page(Some(&issued)),
+                        Err(FileInventoryPageError::StaleSnapshot),
+                        "{name}"
+                    );
+                }
+            }
+            other => panic!("unhandled source projection outcome {other}"),
+        }
+        node.shutdown().await;
+        tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+    }
+}

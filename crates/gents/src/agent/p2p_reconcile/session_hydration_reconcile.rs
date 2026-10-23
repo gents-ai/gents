@@ -33,7 +33,7 @@ use crate::session::canonical_rows::{
 
 mod file_images;
 mod inventory;
-pub use inventory::FileInventorySnapshot;
+pub use inventory::{FileInventoryPageError, FileInventorySnapshot};
 mod selection;
 use selection::load_hydration_selection;
 

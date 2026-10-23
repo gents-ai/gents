@@ -1373,6 +1373,12 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_source_projection_cases"
+      "FileInventorySourceProjectionCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_projection_cases_use_native_owners_and_scopes"
+      "Refines source projection scope, terminal coverage, path coherence, authenticated native owners and unsigned bounded pages. Remaining canonical admission, fork, publication and signed page transport refinements stay separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_receiver_cases"
       "FileInventoryReceiverCases"
       "file_inventory::tests::generated_receivers_follow_signed_inventory_prefixes"

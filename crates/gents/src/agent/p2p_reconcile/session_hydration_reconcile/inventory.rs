@@ -6,7 +6,8 @@ use gents_protocol::enrollment::canonical_domain_payload;
 use gents_protocol::file_image_hydration::FileImageScope;
 use gents_protocol::file_inventory::{
     coherent_inventory_entries, FileChangeMetadata, FileInventoryAdmission, FileInventoryBinding,
-    FileInventoryCoverage, FileInventoryEntry,
+    FileInventoryCoverage, FileInventoryCursor, FileInventoryEntry, FileInventoryPage,
+    FILE_INVENTORY_PAGE_LIMIT,
 };
 use gents_protocol::session_hydration::SessionHydrationCollection;
 use serde::Serialize;
@@ -20,6 +21,14 @@ use sha2::{Digest, Sha256};
 pub struct FileInventorySnapshot {
     binding: FileInventoryBinding,
     entries: Vec<FileInventoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum FileInventoryPageError {
+    #[error("file inventory snapshot changed; restart enumeration")]
+    StaleSnapshot,
+    #[error("file inventory cursor is not a continuation boundary")]
+    InvalidCursor,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -64,6 +73,41 @@ impl FileInventorySnapshot {
 
     pub fn entries(&self) -> &[FileInventoryEntry] {
         &self.entries
+    }
+
+    /// These pages are unsigned. Enrollment and pairing authorization remain
+    /// with the delivery owner; a page never grants retained-image access.
+    pub fn page(
+        &self,
+        cursor: Option<&FileInventoryCursor>,
+    ) -> std::result::Result<FileInventoryPage, FileInventoryPageError> {
+        let offset = match cursor {
+            None => 0,
+            Some(cursor) => {
+                if cursor.binding != self.binding {
+                    return Err(FileInventoryPageError::StaleSnapshot);
+                }
+                if cursor.offset == 0
+                    || cursor.offset % FILE_INVENTORY_PAGE_LIMIT as u64 != 0
+                    || cursor.offset >= self.binding.coverage.entries
+                {
+                    return Err(FileInventoryPageError::InvalidCursor);
+                }
+                usize::try_from(cursor.offset).map_err(|_| FileInventoryPageError::InvalidCursor)?
+            }
+        };
+        let following = offset
+            .saturating_add(FILE_INVENTORY_PAGE_LIMIT)
+            .min(self.entries.len());
+        Ok(FileInventoryPage {
+            binding: self.binding.clone(),
+            offset: offset as u64,
+            entries: self.entries[offset..following].to_vec(),
+            next: (following < self.entries.len()).then(|| FileInventoryCursor {
+                binding: self.binding.clone(),
+                offset: following as u64,
+            }),
+        })
     }
 
     pub async fn load(
