@@ -539,6 +539,8 @@ def snapshotJson : String :=
       ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
+    ++ "\"file_inventory_fork_cases\":"
+      ++ Conformance.FileInventoryContracts.forkCasesJson ++ ","
     ++ "\"file_inventory_source_projection_cases\":"
       ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
     ++ "\"file_inventory_receiver_cases\":"

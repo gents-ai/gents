@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_fork_inventory_retains_only_selected_native_origins",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests.rs",
+            module_path: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests",
+            function: "generated_fork_inventory_retains_only_selected_native_origins",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_projection_cases_use_native_owners_and_scopes",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests.rs",

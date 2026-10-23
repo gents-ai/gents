@@ -1373,6 +1373,12 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_fork_cases"
+      "FileInventoryForkCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_fork_inventory_retains_only_selected_native_origins"
+      "Uses the native fork owner and source snapshot reader to preserve selected physical origins while excluding later parent work. Signed inventory transport and installed acceptance remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_source_projection_cases"
       "FileInventorySourceProjectionCases"
       "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_projection_cases_use_native_owners_and_scopes"

@@ -127,6 +127,10 @@ private def selectionCaseJson (value : SelectionCase) : String := object
   [("name", jsonString value.name), ("source", sourceJson value.source),
    ("admission", hydrationRequestJson admission), ("expected", selectionJson value.source admission)]
 
+def forkCasesJson : String := jsonArray [object
+  [("name", jsonString "authorized_fork_origin"), ("source", sourceJson forkSource),
+   ("admission", hydrationRequestJson forkRequest), ("expected", selectionJson forkSource forkRequest)]]
+
 private def actionJson : ToolExecution.ToolCallContext.Action → String
   | .dispatch => tagged "dispatch"
   | .spawnFailed failure => tagged "spawn_failed" [("failure", jsonString failure.toDefraDB)]

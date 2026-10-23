@@ -378,3 +378,230 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
         tokio::fs::remove_dir_all(fixture.path).await.unwrap();
     }
 }
+
+async fn retain_fork_fixture_capture(
+    node: &Arc<EmbeddedNode>,
+    tool: &crate::tool_call_lifecycle::ToolCallLifecycle,
+    path: &str,
+) {
+    use base64::Engine as _;
+    use gents_protocol::file_changes::*;
+    use serde_json::json;
+    let bytes = b"fixture bytes";
+    let change = FileChangeImages {
+        root: "/fixture/workspace".into(),
+        path: path.into(),
+        before: FileImage::Missing,
+        after: FileImage::File {
+            content_hash: format!("sha256:{:x}", Sha256::digest(bytes)),
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            permissions: FilePermissions {
+                readonly: false,
+                unix_mode: None,
+            },
+            links: Some(1),
+        },
+    };
+    let changes = ToolFileChanges {
+        version: FILE_CHANGES_VERSION,
+        tool_call_doc_id: tool.doc_id().unwrap().into(),
+        changes: vec![change.clone()],
+    };
+    crate::toolset::FileChanges::decode(
+        tool.doc_id().unwrap(),
+        serde_json::to_value(&changes).unwrap(),
+    )
+    .unwrap();
+    ConfigAccess::transact_local_write(node, None, "test.inventory.fork_capture", |txn| {
+        let changes = &changes;
+        let change = &change;
+        Box::pin(async move {
+            let mut input = json!({"tool_call_doc_id": tool.doc_id().unwrap(), "request_doc_id": tool.request_doc_id().unwrap(),
+                "node_did": tool.node_did(), "session_id": tool.session_id(), "requester_did": tool.requester_did(),
+                "file_changes": changes});
+            let response = txn.execute_with_variables(
+                "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+                &json!({"input": input})).await?;
+            let observation = crate::graphql::created_doc_id(&response, "ToolFileChange")?;
+            input.as_object_mut().unwrap().remove("file_changes");
+            input["changes"] = json!([FileChangeMetadata::from(change)]);
+            input["observation_doc_id"] = json!(observation);
+            txn.execute_with_variables(
+                "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
+                &json!({"input": input})).await?;
+            Ok(())
+        })
+    }).await.unwrap();
+}
+
+#[tokio::test]
+async fn generated_fork_inventory_retains_only_selected_native_origins() {
+    use crate::session::{fork, ForkBoundary, ForkParams};
+    use crate::tool_call_lifecycle::admission_fixture::{
+        claimed_signed_request, publish_accepted_on_claimed_request,
+    };
+    use serde_json::Value;
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_fork_cases"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let (fixture, mut request_owner) =
+            published_admission_with_owner(PublishedAdmissionOptions {
+                name: "inventory-native-fork".into(),
+                real_identity: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let node = fixture.node;
+        let mut origin_tool = fixture.tool;
+        let parent = origin_tool.session_id().to_owned();
+        let did = origin_tool.node_did().to_owned();
+        let requester = origin_tool.requester_did().unwrap().to_owned();
+        origin_tool.complete("origin complete").await.unwrap();
+        retain_fork_fixture_capture(&node, &origin_tool, "selected.rs").await;
+        request_owner
+            .terminalize_owned(
+                crate::lifecycle::RequestTerminalOutcome::Failed,
+                gents_protocol::output::TerminalOutput::Message {
+                    message_doc_id: origin_tool.accepted_header_doc_id().unwrap().to_owned(),
+                },
+                Some("fixture finished"),
+            )
+            .await
+            .unwrap();
+        crate::test_support::install_test_agent(&node, &did, "general").await;
+        let headers = ConfigAccess::local(node.clone())
+            .execute(&format!(
+                "{{ AgentMessage(filter: {{ {} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
+                crate::session::session_scope_filter(&did, &parent, Some(&requester)),
+            ))
+            .await
+            .unwrap();
+        let turns = headers["data"]["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| crate::session::is_user_turn(row).unwrap())
+            .count();
+        let child = fork(
+            &node,
+            ForkParams {
+                source_session_id: &parent,
+                boundary: ForkBoundary::UserTurn(turns as u32),
+                caller_node_did: &did,
+                caller_requester_did: Some(&requester),
+                target_agent_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let load_admission = |session_id: String| {
+            let (node, did, requester) = (node.clone(), did.clone(), requester.clone());
+            async move {
+                let session = ConfigAccess::transact_local_readonly(
+                    &node,
+                    None,
+                    "test.inventory.fork_session",
+                    |txn| {
+                        let (did, requester, session_id) = (&did, &requester, &session_id);
+                        Box::pin(async move {
+                            crate::session::load_agent_session_row_in_txn(
+                                txn,
+                                did,
+                                session_id,
+                                Some(requester),
+                            )
+                            .await
+                        })
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                FileInventoryAdmission {
+                    session_doc_id: session.doc_id,
+                    request: HydrationRequest {
+                        request_key: format!("fork-inventory-{session_id}"),
+                        peer_id: "fixture-peer".into(),
+                        node_did: did,
+                        requester_did: requester,
+                        session_id,
+                    },
+                }
+            }
+        };
+        let child_admission = load_admission(child.session_id.clone()).await;
+        let before_later_parent_work = FileInventorySnapshot::load(&node, &child_admission)
+            .await
+            .unwrap();
+        let key_path = fixture.path.join("test-agent.key");
+        let identity =
+            tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
+                .await
+                .unwrap()
+                .unwrap();
+        let mut later_request =
+            claimed_signed_request(&node, "later-parent-request", &parent, &identity, None).await;
+        let mut later_tool = publish_accepted_on_claimed_request(
+            node.clone(),
+            &mut later_request,
+            &did,
+            0,
+            "write_file",
+            "later-parent-tool",
+            serde_json::json!({"path": "later.rs"}),
+            crate::tool_call_lifecycle::AwaitMode::Foreground,
+            true,
+        )
+        .await
+        .unwrap();
+        later_tool.complete("later complete").await.unwrap();
+        retain_fork_fixture_capture(&node, &later_tool, "later.rs").await;
+        let snapshot = FileInventorySnapshot::load(&node, &child_admission)
+            .await
+            .unwrap();
+        let expected = &case["expected"];
+        assert_eq!(expected["kind"], "selected");
+        let selected = expected["snapshot"]["tools"].as_array().unwrap();
+        let expected_entries = selected
+            .iter()
+            .map(|fact| {
+                fact["capture"]["projection"]["changes"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+            })
+            .sum::<usize>();
+        assert_eq!(snapshot.entries.len(), expected_entries);
+        assert!(!snapshot.entries.is_empty());
+        for entry in &snapshot.entries {
+            assert_eq!(entry.tool_call_doc_id, origin_tool.doc_id().unwrap());
+            assert_eq!(entry.scope.session_id, parent);
+            assert_ne!(entry.scope.session_id, child.session_id);
+            assert_eq!(entry.change.path, "selected.rs");
+        }
+        let parent_snapshot =
+            FileInventorySnapshot::load(&node, &load_admission(parent.clone()).await)
+                .await
+                .unwrap();
+        assert_eq!(
+            parent_snapshot.entries.len(),
+            case["source"]["projections"].as_array().unwrap().len()
+        );
+        assert!(parent_snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.tool_call_doc_id == later_tool.doc_id().unwrap()));
+        assert_eq!(
+            snapshot.binding, before_later_parent_work.binding,
+            "unselected parent work must not alter the child's inventory snapshot"
+        );
+        node.shutdown().await;
+        tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+    }
+}
