@@ -785,8 +785,7 @@ async fn load_session_transcript_window_with_access(
             unanswered
                 .iter()
                 .filter_map(|row| row.request_doc_id.as_deref())
-                .collect::<BTreeSet<_>>()
-                .into_iter(),
+                .collect::<BTreeSet<_>>(),
         );
         let wanted = unanswered
             .iter()

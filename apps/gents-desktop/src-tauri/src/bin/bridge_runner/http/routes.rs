@@ -342,13 +342,14 @@ pub(super) async fn handle_request(
         ("POST", "/desktop/session/rows") => {
             let request = serde_json::from_str::<SessionRowsRequest>(&request.body)
                 .context("decoding session rows request")?;
-            let rows = runtime.block_on(session_rows(
+            let rows = session_rows(
                 fixture.desktop_core(),
                 request.session_id,
                 request.node_did,
                 request.window,
                 request.limit,
-            ))?;
+            )
+            .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("POST", "/desktop/session/live-delta") => {
