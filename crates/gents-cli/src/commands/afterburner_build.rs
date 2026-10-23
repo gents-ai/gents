@@ -330,6 +330,50 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "cpp");
     }
 
+    /// The build wraps a JS or TS source in Afterburner's stdin/stdout harness,
+    /// which calls `module.exports(input)`; a scaffolded echo plugin must run
+    /// under it, not only compile.
+    fn assert_scaffolded_echo_runs(language: &str, entry: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("pkg");
+        write_package(
+            &root,
+            language,
+            entry,
+            gents::pack::authoring::scaffold::echo_source(entry).as_bytes(),
+        );
+        let bytes = assert_compiles_to_wasm32_wasip1(&root, language);
+        let plugin: gents::pack::PackPlugin = serde_json::from_value(serde_json::json!({
+            "name": "sample",
+            "description": "a test plugin",
+            "artifact": format!("plugins/{language}.afb"),
+            "language": language,
+            "input_schema": {"type": "object"},
+        }))
+        .unwrap();
+        let input = serde_json::json!({"hello": "world"});
+        let result = gents::plugin::PluginRunner::compile(&bytes, &plugin)
+            .unwrap()
+            .call(&input, &gents::plugin::PluginBudget::default())
+            .unwrap();
+        assert_eq!(
+            (result.verdict, result.output),
+            (gents::plugin::PluginVerdict::Success, input),
+            "{language}: {}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn js_echo_scaffold_runs_under_the_harness() {
+        assert_scaffolded_echo_runs("js", "source/main.js");
+    }
+
+    #[test]
+    fn ts_echo_scaffold_runs_under_the_harness() {
+        assert_scaffolded_echo_runs("ts", "source/main.ts");
+    }
+
     #[test]
     fn js_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();

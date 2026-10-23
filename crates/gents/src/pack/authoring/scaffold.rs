@@ -387,7 +387,7 @@ pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) ->
     Ok(language)
 }
 
-fn echo_source(entry: &str) -> String {
+pub fn echo_source(entry: &str) -> String {
     match entry {
         "source/main.rs" => "use std::io::{Read, Write};\n\n\
             fn main() -> std::io::Result<()> {\n    let mut input = Vec::new();\n    \
@@ -400,9 +400,11 @@ fn echo_source(entry: &str) -> String {
             if (fwrite(buffer, 1, n, stdout) != n) return 1;\n    }\n    return ferror(stdin) ? 1 : 0;\n}\n",
         "source/main.cpp" => "#include <iostream>\n\nint main() {\n    std::cout << std::cin.rdbuf();\n    \
             return std::cout.good() ? 0 : 1;\n}\n",
-        "source/main.js" | "source/main.ts" => "const chunk = new Uint8Array(4096);\nconst parts = [];\nfor (;;) {\n  \
-            const n = Javy.IO.readSync(0, chunk);\n  if (n === 0) break;\n  parts.push(chunk.slice(0, n));\n}\n\
-            for (const part of parts) Javy.IO.writeSync(1, part);\n",
+        // `gents pack build` wraps a JS or TS source in Afterburner's stdin/stdout
+        // harness, which reads the input and calls `module.exports(input)`; the
+        // source itself touches no stdin or stdout.
+        "source/main.js" => "module.exports = (input) => input;\n",
+        "source/main.ts" => "module.exports = (input: unknown) => input;\n",
         "source/main.py" => "import sys\n\nsys.stdout.write(sys.stdin.read())\n",
         "source/main.rb" => "$stdout.write($stdin.read)\n",
         _ => "",
