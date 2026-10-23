@@ -196,3 +196,26 @@ fn openrouter_in_flight_402_waits_for_retry_after() {
         FailureClass::Transport
     );
 }
+
+#[test]
+fn model_refusal_is_a_non_retryable_permanent_failure() {
+    // The Claude Messages parser surfaces a content-free refusal as a provider
+    // error carrying the "stop_reason: refusal" marker. Resending the identical
+    // body earns the identical refusal, so the loop must fail fast rather than
+    // resample and burn the subscription's quota.
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            "the model declined to respond (stop_reason: refusal) (request-id req_abc)".into(),
+        ));
+
+    let classified = classify_completion_error(&error);
+
+    assert!(matches!(
+        classified,
+        InferenceError::PermanentFailure { .. }
+    ));
+    assert!(
+        !classified.is_retryable(),
+        "a model refusal is deterministic and must not be resampled"
+    );
+}

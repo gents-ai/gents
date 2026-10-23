@@ -566,3 +566,61 @@ async fn captured_claude_sends(
     }
     bodies
 }
+
+#[tokio::test]
+async fn claude_refusal_after_partial_text_ends_after_one_attempt() {
+    // Recorded shape of a streaming refusal that follows partial output: a
+    // text block opens (a provider audit event) and streams a delta, then the
+    // turn closes with stop_reason "refusal". The stream has already produced
+    // items, yet the refusal is deterministic, so the loop must fail on this
+    // attempt with the named refusal instead of retracting and resampling.
+    let refusal = [
+        serde_json::json!({"type":"message_start","message":{"id":"msg_refusal",
+            "role":"assistant","content":[],"stop_reason":null,
+            "usage":{"input_tokens":4,"output_tokens":1}}}),
+        serde_json::json!({"type":"content_block_start","index":0,
+            "content_block":{"type":"text","text":""}}),
+        serde_json::json!({"type":"content_block_delta","index":0,
+            "delta":{"type":"text_delta","text":"I can help with part of"}}),
+        serde_json::json!({"type":"content_block_stop","index":0}),
+        serde_json::json!({"type":"message_delta",
+            "delta":{"stop_reason":"refusal","stop_sequence":null},
+            "usage":{"output_tokens":6}}),
+        serde_json::json!({"type":"message_stop"}),
+    ]
+    .iter()
+    .map(|event| format!("data: {event}\n\n"))
+    .collect::<String>();
+
+    let run = run_claude_fixture_turns(
+        refusal,
+        gents_protocol::rendered_request::CaptureScopeKind::Inference,
+    )
+    .await;
+    let collected = run.collected;
+
+    assert_eq!(
+        collected.text_chunks,
+        vec!["I can help with part of".to_string()],
+        "the partial text streamed before the refusal"
+    );
+    assert!(
+        collected.retractions.is_empty(),
+        "a refusal is not retracted and resampled: {:?}",
+        collected.retractions
+    );
+    assert_eq!(collected.attempts.len(), 1, "{:?}", collected.attempts);
+    assert!(
+        !collected.attempts[0].will_retry,
+        "the refusal attempt is terminal"
+    );
+    let error = collected.error.expect("the refusal ends the request");
+    assert!(
+        error.contains("stop_reason: refusal"),
+        "the terminal error names the refusal: {error}"
+    );
+    assert!(
+        !error.contains("no visible output") && !error.contains("retry budget exhausted"),
+        "the refusal is not reported as a transport failure: {error}"
+    );
+}

@@ -9,6 +9,31 @@ pub enum ProviderAttemptClose {
     Partial,
 }
 
+/// What a pending-output mark grew. Reasoning batches more coarsely than
+/// visible output, so a writer needs to know which one it is holding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingOutput {
+    Reasoning,
+    Visible,
+}
+
+impl PendingOutput {
+    pub fn of_audit(event: &crate::provider_audit::ClaudeAuditEvent) -> Self {
+        use crate::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
+        match event {
+            ClaudeAuditEvent::BlockStart {
+                kind: ClaudeBlockKind::Text | ClaudeBlockKind::ToolUse { .. },
+                ..
+            }
+            | ClaudeAuditEvent::BlockStop { .. } => Self::Visible,
+            ClaudeAuditEvent::BlockStart { .. }
+            | ClaudeAuditEvent::ThinkingText { .. }
+            | ClaudeAuditEvent::Signature { .. }
+            | ClaudeAuditEvent::RedactedData { .. } => Self::Reasoning,
+        }
+    }
+}
+
 pub struct CanonicalPublishedTurn<Accepted> {
     pub message_doc_id: String,
     pub accepted_tools: Vec<Accepted>,
@@ -88,6 +113,7 @@ pub trait StreamWriter: Send + Sync {
     fn mark_pending_output(
         &self,
         _doc_id: &str,
+        _output: PendingOutput,
     ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send {
         std::future::ready(Ok(true))
     }

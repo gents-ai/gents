@@ -1197,7 +1197,7 @@ fn hydration_selection_query(session_id: &str, node_did: &str, requester_did: &s
             AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
                 {HYDRATION_TOOL_CALL_FIELDS}
             }}
-            AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
+            AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session_id}" }}, _or: [{{ node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}] }}) {{
                 {AGENT_OUTPUT_SEGMENT_FIELDS}
             }}
             CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
@@ -1673,6 +1673,22 @@ mod tests {
         assert!(query.contains("AgentOutputSegment"));
         assert!(!query.contains("AgentResponse"));
         assert!(!query.contains("AgentToolResult"));
+    }
+
+    /// Every segment a node writes shares its `node_did`. Scope fields beside
+    /// `session_id` let the planner pick the `node_did` index and scan every
+    /// segment on the node, so the selection must stay on the session index.
+    #[tokio::test]
+    async fn hydration_segment_selection_uses_the_session_index() {
+        let node = crate::test_support::node_builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let query =
+            hydration_selection_query("session-1", "did:key:agent-1", "did:key:requester-1");
+        let plan = node.execute(&format!("query @explain {query}")).await;
+        ensure_no_errors(&plan, "hydration selection plan").unwrap();
+        let plan = plan.data.unwrap().to_string();
+        assert!(plan.contains("AgentOutputSegment_session_id_ASC"), "{plan}");
+        assert!(!plan.contains("AgentOutputSegment_node_did_ASC"), "{plan}");
     }
 
     #[tokio::test]

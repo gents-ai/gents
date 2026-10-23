@@ -6,6 +6,28 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## 0.21.0 - 2026-10-22
 
+- A fresh node stores far less per request. Reasoning-only stream growth,
+  including Claude thinking audits and auxiliary sinks, flushes an
+  `AgentOutputSegment` every five batch intervals instead of every one (about
+  60% fewer segment documents on a live workload). Capture v4 lays out
+  per-call fields (`context_accounting`, `effective_message_count`,
+  `max_tokens` and its variants) after the growing lists and chunks strings of
+  2 KB or more on their own, so a later turn no longer re-stores the front
+  block or re-cuts history: turn-5 capture growth falls from 2.2-2.4x turn 1
+  to 1.1-1.2x. A storage budget e2e test enforces these per-request bounds.
+- Tool output appends, delivery, delivery replay and background completion
+  notifications read segments by `request_doc_id` and `source` instead of
+  scanning every segment on the node (20 s to 0.2 s on a 157k-segment store);
+  session hydration stays on the `session_id` index, and the `/metrics`
+  scrape reads finished inference calls through a new `(call_kind, ended_at)`
+  index bounded to the scrape window.
+- A Claude `stop_reason: refusal` ends the turn after one attempt with "the
+  model declined to respond", including after partial output, instead of
+  resampling until "completion produced no visible output: transport retry
+  budget exhausted".
+- DefraDB is pinned to main `42c13e35e`, which gives an embedded node's
+  database the on-demand network edge so P2P pushes no longer panic on a
+  pool worker.
 - Rendered request captures (capture v4) store shared, content-defined
   manifest trees, so unchanged history is not stored again with each request;
   context reduction snapshots reference those pinned blocks, unsigned

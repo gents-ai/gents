@@ -172,6 +172,8 @@ mod recovery_orphan_conformance;
 mod request_scope_conformance;
 #[cfg(test)]
 mod session_activity_conformance;
+#[cfg(test)]
+mod source_read_conformance;
 
 mod plugin_effect;
 pub(crate) use crate::streaming::AcceptedToolCall;

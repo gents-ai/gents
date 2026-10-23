@@ -621,8 +621,7 @@ async fn publish_native_tool_notification(
     native: &ToolNotificationPublication,
 ) -> Result<()> {
     use crate::session::canonical_rows::{
-        transcript_message_create_variables, AGENT_OUTPUT_SEGMENT_FIELDS,
-        CREATE_AGENT_MESSAGE_MUTATION,
+        transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
     };
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter,
@@ -633,7 +632,6 @@ async fn publish_native_tool_notification(
     let request = escape_graphql_string(&parent.doc_id);
     let facts = txn.execute(&format!(r#"{{
         AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, await_mode: {{ _eq: "background" }} }}, limit: 2) {{ _docID lifecycle_state }}
-        AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
     }}"#)).await?;
     let tools = facts["data"]["AgentToolCall"]
         .as_array()
@@ -654,16 +652,17 @@ async fn publish_native_tool_notification(
     let writer = OutputWriter::ToolExecution {
         tool_call_doc_id: native.tool_call_doc_id.clone(),
     };
-    let source_rows = crate::session::canonical_rows::decode_scoped_request_output_segments(
-        facts["data"]["AgentOutputSegment"]
-            .as_array()
-            .context("tool output query omitted rows")?,
+    let source_rows = crate::session::load_source_rows_in_txn(
+        txn,
+        &parent.doc_id,
+        &source,
         &parent.node_did,
-        Some(&parent.session_id),
+        &parent.session_id,
         parent.requester_did.as_deref(),
-    )?
+    )
+    .await?
     .into_iter()
-    .filter(|row| row.segment.source == source && row.segment.writer == writer)
+    .filter(|row| row.segment.writer == writer)
     .collect::<Vec<_>>();
     let closes = source_rows
         .iter()

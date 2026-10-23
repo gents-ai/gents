@@ -346,6 +346,10 @@ jobs:
           cargo test -p gents --lib callback::
           cargo test -p gents --test onboarding_evals
           cargo test -p gents --test eval_runner_canary
+          # Per-request store budgets: a capture, segment or write-drop
+          # regression must fail the PR that grows the store, not a user's
+          # node after release.
+          cargo test -p gents --test e2e_runtime storage_budget:: -- --nocapture
           # The client-authored list-sync fence (#1123/#1125) must fail the
           # PR that drifts the surface, not the post-merge main run.
           cargo test -p gents --test misc client_authored_collections_fence::
