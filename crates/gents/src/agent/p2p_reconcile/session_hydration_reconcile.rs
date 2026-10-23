@@ -441,6 +441,45 @@ struct GraphqlHydrationStore {
     identity: Arc<dyn NodeIdentity>,
 }
 
+/// Read-only source operation. The caller must still persist and deliver its
+/// correlated receipt through the owned transport; no image readers are added.
+pub async fn sign_file_inventory_page(
+    node: Arc<EmbeddedNode>,
+    enrollment: EnrollmentAuthorityHandle,
+    identity: Arc<dyn NodeIdentity>,
+    admission: &gents_protocol::file_inventory::FileInventoryAdmission,
+    request_key: &str,
+    cursor: Option<&gents_protocol::file_inventory::FileInventoryCursor>,
+) -> Result<gents_protocol::file_inventory::FileInventoryPageReceipt> {
+    let store = GraphqlHydrationStore {
+        node,
+        enrollment,
+        identity,
+    };
+    let loaded = store.load_admission(&admission.request).await?;
+    anyhow::ensure!(
+        matches!(
+            decide_hydration(&admission.request, &loaded.catalog),
+            HydrationVerdict::Admit(_)
+        ),
+        "file inventory session is not authorized"
+    );
+    let fence = loaded
+        .authorization
+        .context("file inventory has no authenticated enrollment fence")?;
+    let snapshot = FileInventorySnapshot::load(&store.node, admission).await?;
+    let page = snapshot.page(cursor)?;
+    crate::file_inventory::sign_current_page(store.identity.as_ref(), request_key, page, || async {
+        let current = store.load_admission(&admission.request).await?;
+        Ok(current.authorization.as_ref() == Some(&fence)
+            && matches!(
+                decide_hydration(&admission.request, &current.catalog),
+                HydrationVerdict::Admit(_)
+            ))
+    })
+    .await
+}
+
 struct EmbeddedHydrationDelivery {
     node: Arc<EmbeddedNode>,
 }

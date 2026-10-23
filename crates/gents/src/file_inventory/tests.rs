@@ -261,3 +261,63 @@ fn metadata_wire_erases_and_rejects_image_bytes() {
     let image = serde_json::json!({"kind":"file", "content_hash":"hash", "data":"retained bytes"});
     assert!(serde_json::from_value::<FileImageMetadata>(image).is_err());
 }
+
+#[tokio::test]
+async fn generated_issuance_withholds_revoked_authority() {
+    let (directory, names) = tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let names = Names {
+            source: KeyIdentity::load_or_create(directory.path().join("source.key"), None).unwrap(),
+            other: KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap(),
+        };
+        (directory, names)
+    })
+    .await
+    .unwrap();
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_issuance_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let envelope = names.receipt(&case["envelope"]).await;
+        let signer = if case["envelope"]["signer"] == "node-1" {
+            &names.source
+        } else {
+            &names.other
+        };
+        let observations = std::sync::atomic::AtomicUsize::new(0);
+        let result = sign_current_page(signer, &envelope.request_key, envelope.page, || {
+            let key = if observations.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                "before"
+            } else {
+                "after"
+            };
+            std::future::ready(Ok(case[key].as_bool().unwrap()))
+        })
+        .await;
+        assert_eq!(
+            result.is_ok(),
+            case["expected"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+        if let Ok(receipt) = result {
+            let receiver = FileInventoryReceiver {
+                admission: receipt.page.binding.admission.clone(),
+                pages: vec![],
+            };
+            let received = receiver
+                .receive(receipt.request_key.clone(), receipt, &names.source)
+                .await
+                .unwrap();
+            assert!(received.validated(&names.source).await.unwrap().is_some());
+        }
+    }
+    drop(names);
+    tokio::fs::remove_dir_all(directory.path()).await.unwrap();
+}

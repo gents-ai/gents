@@ -100,6 +100,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) trigger_delivery: serde_json::Value,
     pub(crate) operator_base_freeze_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
+    pub(crate) file_inventory_issuance_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_fork_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_source_projection_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_receiver_cases: Vec<serde_json::Value>,

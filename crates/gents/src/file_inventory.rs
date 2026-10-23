@@ -126,5 +126,42 @@ impl FileInventoryReceiver {
     }
 }
 
+/// Authorization observations come only from the existing source owner. The
+/// signed bytes stay local until the second observation succeeds.
+pub(crate) async fn sign_current_page<F, Fut>(
+    identity: &dyn NodeIdentity,
+    request_key: &str,
+    page: gents_protocol::file_inventory::FileInventoryPage,
+    authorized: F,
+) -> Result<FileInventoryPageReceipt>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+{
+    ensure!(
+        !request_key.is_empty()
+            && page.well_formed()
+            && identity.did() == page.binding.admission.request.node_did,
+        "file inventory signing requires an exact source, nonce and well-formed page"
+    );
+    ensure!(
+        authorized().await?,
+        "file inventory authorization changed before signing"
+    );
+    let mut receipt = FileInventoryPageReceipt {
+        version: FILE_INVENTORY_RECEIPT_VERSION,
+        request_key: request_key.to_owned(),
+        signer_did: identity.did().to_owned(),
+        page,
+        signature: Vec::new(),
+    };
+    receipt.signature = identity.sign(&receipt.signing_payload()?).await?;
+    ensure!(
+        authorized().await?,
+        "file inventory authorization changed while signing"
+    );
+    Ok(receipt)
+}
+
 #[cfg(test)]
 mod tests;

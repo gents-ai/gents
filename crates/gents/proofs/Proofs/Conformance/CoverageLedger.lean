@@ -1373,6 +1373,12 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::file_image_hydration::tests::generated_routes_follow_executable_scope_filters")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_issuance_cases"
+      "FileInventoryIssuanceCases"
+      "file_inventory::tests::generated_issuance_withholds_revoked_authority"
+      "Drives native signing with current authority observations before and after issuance. Durable demand/receipt transport and installed acceptance remain obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_fork_cases"
       "FileInventoryForkCases"
       "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_fork_inventory_retains_only_selected_native_origins"

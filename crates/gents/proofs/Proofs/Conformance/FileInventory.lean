@@ -264,6 +264,28 @@ private def envelopeJson (value : PageEnvelope) : String := object
    ("request_key", jsonString value.requestKey), ("signer", jsonString value.signer),
    ("signature_verified", boolString value.signatureVerified), ("page", wirePageJson value.page)]
 
+structure IssuanceInput where
+  name : String
+  envelope : PageEnvelope := firstEnvelope
+  before : Bool := true
+  after : Bool := true
+
+private def issuanceInputs : List IssuanceInput :=
+  [ {name := "current_authority"}
+  , {name := "revoked_before_signing", before := false}
+  , {name := "revoked_during_signing", after := false}
+  , {name := "revoked_both", before := false, after := false}
+  , {name := "foreign_signer", envelope := {firstEnvelope with signer := "node-2"}}
+  , {name := "empty_nonce", envelope := {firstEnvelope with requestKey := ""}}
+  , {name := "malformed_page", envelope := {firstEnvelope with page := {firstEnvelope.page with entries := []}}}
+  , {name := "unknown_coverage", envelope := unknownEnvelope} ]
+
+def issuanceCasesJson : String := jsonArray (issuanceInputs.map fun value => object
+  [("name", jsonString value.name), ("envelope", envelopeJson value.envelope),
+   ("before", boolString value.before), ("after", boolString value.after),
+   ("expected", boolString (mayIssue value.envelope.page value.envelope.requestKey
+     value.envelope.signer value.before value.after))])
+
 private def receivedJson (value : ReceivedPage) : String := object
   [("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope)]
 

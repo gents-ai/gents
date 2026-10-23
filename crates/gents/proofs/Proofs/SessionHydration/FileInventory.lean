@@ -432,6 +432,18 @@ def WirePage.wellFormed (value : WirePage) : Bool :=
       some ⟨value.binding, following⟩ else none) &&
     coherentEntries value.entries
 
+/-- The existing admission and enrollment owners supply the two current
+observations. Issuance withholds the signed value if authorization changes
+while native signing is in flight; this adds no permission or image grant. -/
+def mayIssue (value : WirePage) (nonce signer : String) (before after : Bool) : Bool :=
+  value.wellFormed && !nonce.isEmpty && signer == value.binding.admission.node && before && after
+
+theorem revoked_after_signing_cannot_issue (value : WirePage) (nonce signer : String) (before : Bool) :
+    mayIssue value nonce signer before false = false := by simp [mayIssue]
+
+theorem revoked_before_signing_cannot_issue (value : WirePage) (nonce signer : String) (after : Bool) :
+    mayIssue value nonce signer false after = false := by simp [mayIssue]
+
 /-- All authorization remains with the existing source/identity owners. This
 receiver checks their signed metadata representation, not another access
 policy. Fork entries retain the attested actual scope, including origins. -/
