@@ -48,9 +48,7 @@ pub async fn ensure_standard_home(
     runtime: &tokio::runtime::Handle,
     options: ProvisionOptions,
 ) -> Result<()> {
-    let blocking = runtime.clone();
-    runtime
-        .spawn_blocking(move || blocking.block_on(ensure_standard_home_inner(options)))
+    gents::storage_backend::drive_unsendable(runtime, move || ensure_standard_home_inner(options))
         .await
         .context("joining managed Gents provision task")?
 }

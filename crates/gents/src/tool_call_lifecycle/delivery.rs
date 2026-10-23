@@ -2375,7 +2375,7 @@ mod spawned_background_tests {
     #[tokio::test]
     async fn spawn_receipt_survives_modeled_publication_contention() {
         let witness = crate::lean_vocab_test::lean_r6_background_theorem_witnesses()
-            .into_iter()
+            .iter()
             .find(|w| w.witness_kind == "receipt_contention")
             .expect("executable receipt contention witness");
         let (node, path, mut tool) = published_spawn_parent("receipt-contention").await;
