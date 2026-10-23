@@ -41,6 +41,7 @@ pub const MAX_LIVE_REASONING_BYTES: usize = 4 * 1024;
 /// Visible text, tool calls and the first reasoning bytes keep their cadence.
 pub const REASONING_BATCH_FACTOR: u32 = 5;
 
+use gents_loop::stream_writer::PendingOutput;
 pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
@@ -78,7 +79,7 @@ struct StreamBuffer {
 impl StreamBuffer {
     fn flush_interval(&self, batch_interval: Duration) -> Duration {
         let reasoning_only = self.current.content_bytes == self.persisted.content_bytes
-            && self.current.audit_progress_seq == self.persisted.audit_progress_seq;
+            && self.current.visible_progress_seq == self.persisted.visible_progress_seq;
         if reasoning_only {
             batch_interval.saturating_mul(REASONING_BATCH_FACTOR)
         } else {
@@ -92,7 +93,8 @@ struct StreamBufferSnapshot {
     content_bytes: usize,
     reasoning: String,
     reasoning_progress_seq: usize,
-    audit_progress_seq: usize,
+    visible_progress_seq: usize,
+    reasoning_marked: bool,
 }
 
 impl StreamBufferSnapshot {
@@ -102,12 +104,24 @@ impl StreamBufferSnapshot {
 
     fn record_reasoning(&mut self, reasoning: &str) {
         append_live_reasoning_preview(&mut self.reasoning, reasoning);
-        self.reasoning_progress_seq = self.reasoning_progress_seq.saturating_add(1);
+        self.mark(PendingOutput::Reasoning);
+    }
+
+    fn mark(&mut self, output: PendingOutput) {
+        match output {
+            PendingOutput::Reasoning => {
+                self.reasoning_progress_seq = self.reasoning_progress_seq.wrapping_add(1);
+                self.reasoning_marked = true;
+            }
+            PendingOutput::Visible => {
+                self.visible_progress_seq = self.visible_progress_seq.wrapping_add(1);
+            }
+        }
     }
 
     fn first_visible_since(&self, persisted: &Self) -> bool {
         (persisted.content_bytes == 0 && self.content_bytes > 0)
-            || (persisted.reasoning.is_empty() && !self.reasoning.is_empty())
+            || (!persisted.reasoning_marked && self.reasoning_marked)
     }
 }
 
@@ -538,17 +552,31 @@ impl DefraStreamWriter {
             .get_mut(doc_id)
             .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
         if buf.current.content_bytes == 0
-            && buf.current.reasoning.is_empty()
+            && !buf.current.reasoning_marked
             && buf.persisted.content_bytes == 0
-            && buf.persisted.reasoning.is_empty()
+            && !buf.persisted.reasoning_marked
         {
             return Ok(());
         }
         buf.current.content_bytes = 0;
         buf.current.reasoning.clear();
+        buf.current.reasoning_marked = false;
         buf.persisted = buf.current.clone();
         buf.last_flush_at = Instant::now();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl DefraStreamWriter {
+    /// Moves the batch clock as if `elapsed` had passed since the last flush.
+    pub(crate) async fn advance_batch_clock(&self, doc_id: &str, elapsed: Duration) {
+        if let Some(buffer) = self.buffers.lock().await.get_mut(doc_id) {
+            buffer.last_flush_at = buffer
+                .last_flush_at
+                .checked_sub(elapsed)
+                .expect("batch clock moved before process start");
+        }
     }
 }
 
@@ -650,18 +678,14 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
 }
 
 impl StreamWriter for DefraStreamWriter {
-    async fn mark_pending_output(&self, doc_id: &str) -> Result<bool> {
-        {
-            let mut buffers = self.buffers.lock().await;
-            let buffer = buffers
-                .get_mut(doc_id)
-                .context("no output buffer for audit")?;
-            buffer.current.audit_progress_seq = buffer
-                .current
-                .audit_progress_seq
-                .checked_add(1)
-                .context("audit batching sequence exhausted")?;
-        }
+    async fn mark_pending_output(&self, doc_id: &str, output: PendingOutput) -> Result<bool> {
+        self.buffers
+            .lock()
+            .await
+            .get_mut(doc_id)
+            .context("no output buffer for audit")?
+            .current
+            .mark(output);
         let Some(snapshot) = self.pending_snapshot(doc_id, false).await? else {
             return Ok(false);
         };
