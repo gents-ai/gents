@@ -26,6 +26,165 @@ use crate::lean_vocab_test::{
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 
+#[tokio::test]
+async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
+    use crate::config_client::ConfigApplyTxn;
+    use crate::identity::{KeyIdentity, NodeIdentity};
+    use gents_protocol::output::OutputOutcome;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+    let node = Arc::new(
+        crate::test_support::node_builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        uuid::Uuid::new_v4().to_string(),
+        identity.did(),
+        identity.did(),
+        "general",
+        uuid::Uuid::new_v4().to_string(),
+        "Name this conversation",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::local_self(identity.did()),
+    );
+    crate::sign_agent_request_create(&identity, &mut create)
+        .await
+        .unwrap();
+    let access = ConfigAccess::local(node.clone());
+    let created = access
+        .write(
+            "test.title_flush_parent",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+    let parent_doc = crate::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    let parent = crate::request_admission::load_request_for_admission_test(&node, &parent_doc)
+        .await
+        .unwrap();
+    let title = crate::lifecycle::materialize::write_pending_auxiliary_request(
+        &node,
+        &parent,
+        RequestPurpose::TitleAudit,
+        parent.content.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let mut lifecycle =
+        RequestLifecycle::new_with_node_did(node.clone(), "general", identity.did(), title, 60);
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let writer = DefraStreamWriter::new(node.clone(), identity.did(), Duration::from_millis(1));
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let request = lifecycle.request();
+    let scope: CaptureScope = "title.1".parse().unwrap();
+    let generation = lifecycle.execution_generation().unwrap();
+    let source = OutputSource::ProviderTurn {
+        scope,
+        turn_index: 0,
+        attempt: 0,
+    };
+    let output_writer = OutputWriter::RequestExecution {
+        execution_generation: generation.into(),
+    };
+    let sink = auxiliary::sink(
+        node.clone(),
+        request.clone(),
+        generation.into(),
+        ProviderInputProfile::OpenAiChatCompletions,
+        Duration::from_millis(1),
+    );
+    let observation = |event| AuxiliaryOutputObservation {
+        capture_scope: scope,
+        turn: 0,
+        attempt: 0,
+        event,
+    };
+    (sink.observe)(observation(AuxiliaryOutputEvent::AttemptStarted))
+        .await
+        .unwrap();
+    let committed = Arc::new(tokio::sync::Notify::new());
+    let mut flush = Box::pin(ConfigApplyTxn::with_embedded_commit_ack_pause(
+        committed.clone(),
+        async {
+            (sink.observe)(observation(AuxiliaryOutputEvent::ReasoningDelta {
+                id: None,
+                fragment: "received before shutdown".into(),
+            }))
+            .await?;
+            (sink.flush_pending)(scope, 0, 0).await
+        },
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            () = committed.notified() => {},
+            result = &mut flush => panic!("flush skipped the commit boundary: {result:?}"),
+        }
+    })
+    .await
+    .expect("title flush reaches its real commit before acknowledgement");
+    drop(flush);
+
+    let query = format!(
+        "{{AgentOutputSegment(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{{AGENT_OUTPUT_SEGMENT_FIELDS}}} AgentMessage {{_docID}}}}",
+        crate::graphql::escape_graphql_string(&request.doc_id),
+    );
+    let before = access.execute(&query).await.unwrap();
+    let originals = before["data"]["AgentOutputSegment"].as_array().unwrap();
+    assert_eq!(originals.len(), 1);
+    assert!(originals[0]["close"].is_null());
+    (sink.observe)(observation(AuxiliaryOutputEvent::ClosePartial))
+        .await
+        .expect("shutdown must replay the committed flush before closing the source");
+    let after = access.execute(&query).await.unwrap();
+    let raw = after["data"]["AgentOutputSegment"].as_array().unwrap();
+    assert_eq!(raw.len(), 2, "one data flush and one closure");
+    assert!(
+        raw.contains(&originals[0]),
+        "retain the exact physical flush and timestamp"
+    );
+    assert!(after["data"]["AgentMessage"].as_array().unwrap().is_empty());
+    let rows = raw
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    let close = rows.iter().find(|row| row.segment.close.is_some()).unwrap();
+    assert!(
+        matches!(close.segment.close.as_ref(), Some(SourceClose::Closed {
+        outcome: OutputOutcome::Partial, segments: 1, stream_bytes,
+    }) if stream_bytes == &[24])
+    );
+    let observed = rows
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    let retained =
+        reconstruct_dense_prefix(&observed, &request.doc_id, &source, &output_writer, None)
+            .unwrap();
+    assert_eq!(retained.streams.len(), 1);
+    assert_eq!(
+        retained.streams[0].declaration.payload,
+        StreamPayload::Reasoning
+    );
+    assert_eq!(retained.streams[0].text, "received before shutdown");
+    node.shutdown().await;
+}
+
 fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
     let LeanCanonicalSource::Auxiliary {
         auxiliary_kind,
