@@ -39,4 +39,19 @@ describe("how each session was last seen", () => {
       }).places,
     ).toEqual([{ session: "b", place: at(2) }]);
   });
+
+  it("keeps which started sessions a dock shows nested, and forgets none open", () => {
+    sessionViews.setOpened("lead", ["w1", "w1-child"]);
+    expect(sessionViews.openedOf("lead")).toEqual(["w1", "w1-child"]);
+    sessionViews.setOpened("lead", []);
+    expect(sessionViews.openedOf("lead")).toEqual([]);
+    expect(
+      restoreSessionViews({
+        opened: [
+          { session: "a", rows: [1] },
+          { session: "b", rows: ["x"] },
+        ],
+      }).opened,
+    ).toEqual([{ session: "b", rows: ["x"] }]);
+  });
 });
