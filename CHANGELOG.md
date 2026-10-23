@@ -4,8 +4,15 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
-## 0.21.0 - 2026-10-22
+## 0.21.0 - 2026-10-23
 
+- The desktop reads a session's transcript by message number, and one scroll
+  owner draws it as a virtual list, so long sessions open and scroll without
+  loading every row.
+- Received task bodies show with explicit routing details instead of routing
+  headers in the chat text.
+- Cold Goal observations stay on the authorized replica.
+- The rollback clock uses real time outside the modeled rollback interval.
 - A fresh node stores far less per request. Reasoning-only stream growth,
   including Claude thinking audits and auxiliary sinks, flushes an
   `AgentOutputSegment` every five batch intervals instead of every one (about
