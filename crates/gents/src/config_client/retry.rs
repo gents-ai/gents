@@ -5,9 +5,9 @@ use super::write_telemetry::ConflictSource;
 
 pub(super) const TRANSACT_CONFLICT_MAX_RETRIES: u32 = 3;
 pub(super) const RECEIPT_WRITE_MAX_RETRIES: u32 = 4;
-/// One sibling commits per conflict round. A request's concurrent siblings are
-/// its background slots plus the foreground call and the round that refuses
-/// the rest, so they settle within one round each.
+/// Qualifies a full admitted cohort plus two overflow receipts sharing the
+/// request publication owner. This is bounded retry, not a progress guarantee
+/// under unbounded concurrent writes.
 pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
     crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u32 + 2;
 

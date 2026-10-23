@@ -112,9 +112,12 @@ pub(crate) fn terminal_failure_pending_for_test(tool_call_doc_id: &str) -> bool 
 #[cfg(test)]
 fn take_terminal_failure_for_test(tool_call_doc_id: &str) -> bool {
     let mut pending = FAIL_NEXT_TERMINAL.lock().unwrap();
-    let before = pending.len();
-    pending.retain(|id| id != tool_call_doc_id);
-    pending.len() != before
+    if let Some(index) = pending.iter().position(|id| id == tool_call_doc_id) {
+        pending.remove(index);
+        true
+    } else {
+        false
+    }
 }
 
 /// A deferred plugin write was refused or failed inside the terminal's
@@ -1085,6 +1088,9 @@ impl ToolCallLifecycle {
                 let plugin_writes = plugin_writes.clone();
                 let file_changes = file_changes.clone();
                 Box::pin(async move {
+                    if tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME {
+                        txn.contend_with_request_siblings();
+                    }
                     let now = fixture_now.unwrap_or_else(Utc::now);
                     let published = terminalize_transaction(
                         txn,
@@ -2364,6 +2370,34 @@ mod spawned_background_tests {
             .map(decode_transcript_message_row)
             .collect::<Result<Vec<_>>>()
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn spawn_receipt_survives_modeled_publication_contention() {
+        let witness = crate::lean_vocab_test::lean_r6_background_theorem_witnesses()
+            .into_iter()
+            .find(|w| w.witness_kind == "receipt_contention")
+            .expect("executable receipt contention witness");
+        let (node, path, mut tool) = published_spawn_parent("receipt-contention").await;
+        let doc_id = tool.doc_id().unwrap().to_owned();
+        let before = tool_delivery_rows(&node, &tool.session_id).await.len();
+        for _ in 0..witness.numeric_bound {
+            fail_next_terminal_for_test(&doc_id);
+        }
+        assert!(tool.complete_owned("receipt", None).await.unwrap());
+        assert!(!terminal_failure_pending_for_test(&doc_id));
+        assert_eq!(tool.state, ToolCallState::Completed);
+        assert_eq!(
+            tool_delivery_rows(&node, &tool.session_id).await.len(),
+            before + 1
+        );
+        assert!(tool.complete_owned("receipt", None).await.is_err());
+        assert_eq!(
+            tool_delivery_rows(&node, &tool.session_id).await.len(),
+            before + 1
+        );
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(path);
     }
 
     #[tokio::test]
