@@ -37,7 +37,7 @@ fn definitions() -> Vec<EvalDefinition> {
 fn every_native_case_validates_and_uses_shipped_checks() {
     let registry = CheckRegistry::builtin();
     let definitions = definitions();
-    assert_eq!(definitions.len(), 6);
+    assert_eq!(definitions.len(), 5);
     let mut application_definitions = Vec::new();
     for fixture in ["engineer_datastore", "engineer_explain"] {
         let dir = root().parent().unwrap().join(fixture);
