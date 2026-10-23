@@ -20,7 +20,8 @@ use gents_desktop_bridge::commands::{
     rename_session, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
     save_backend_config, save_event_source_config, save_inference_profile_config, save_node_config,
     save_schedule_config, save_task_config, save_tool_service_config, save_tools_config,
-    save_trigger_config, send_chat_message, set_default_agent, test_tool_service_config,
+    save_trigger_config, send_chat_message, session_rows, set_default_agent,
+    test_tool_service_config,
 };
 use gents_desktop_bridge::interrupt::interrupt_request;
 use gents_desktop_bridge::provenance::session_provenance_request;
@@ -41,7 +42,7 @@ use gents_desktop_bridge::types::{
     EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
     InferenceProfileSaveRequest, NativeExecutorStatusView, NodeConfigSaveRequest,
     PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest, ScheduleRunRequest,
-    ScheduleSaveRequest, SessionRenameRequest, TaskRunRequest, TaskSaveRequest,
+    ScheduleSaveRequest, SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
     ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
     TriggerDeleteRequest, TriggerSaveRequest,
 };
@@ -55,6 +56,16 @@ struct SessionSnapshotRequest {
     request_id: Option<String>,
     timeline_limit: Option<usize>,
     timeline_before_item_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionRowsRequest {
+    #[serde(default)]
+    node_did: Option<String>,
+    session_id: String,
+    window: SessionRowsWindow,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,6 +338,18 @@ pub(super) async fn handle_request(
             )
             .await;
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
+        }
+        ("POST", "/desktop/session/rows") => {
+            let request = serde_json::from_str::<SessionRowsRequest>(&request.body)
+                .context("decoding session rows request")?;
+            let rows = runtime.block_on(session_rows(
+                fixture.desktop_core(),
+                request.session_id,
+                request.node_did,
+                request.window,
+                request.limit,
+            ))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("POST", "/desktop/session/live-delta") => {
             let request = serde_json::from_str::<SessionLiveDeltaRequest>(&request.body)

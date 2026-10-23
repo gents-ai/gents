@@ -10,7 +10,7 @@ const MAX_FORK_ORIGIN_DEPTH: usize = 32;
 const MAX_CANONICAL_DEPENDENCY_ROWS: usize = 2_048;
 
 #[derive(Clone, Copy)]
-enum TranscriptAccess<'a> {
+pub(super) enum TranscriptAccess<'a> {
     Local(&'a EmbeddedNode),
     Config(&'a gents::config_client::ConfigAccess),
 }
@@ -22,6 +22,51 @@ impl TranscriptAccess<'_> {
             Self::Config(access) => execute_access_graphql_query(access, query, operation).await,
         }
     }
+}
+
+/// Request documents by physical identity, in batches, returning the rows
+/// found and how many distinct identities were asked for. A caller that
+/// needs every one compares the two; a transcript read does not, since a
+/// request can be unreadable or not yet replicated while its messages are.
+pub(super) async fn read_request_documents(
+    access: TranscriptAccess<'_>,
+    doc_ids: &[String],
+    operation: &str,
+) -> Result<(Vec<AgentRequestRow>, usize)> {
+    const BATCH_SIZE: usize = 128;
+    let mut expected =
+        rapidhash::RapidHashSet::with_capacity_and_hasher(doc_ids.len(), Default::default());
+    let unique_doc_ids = doc_ids
+        .iter()
+        .filter(|doc_id| expected.insert((*doc_id).clone()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut rows = Vec::with_capacity(unique_doc_ids.len());
+    let mut observed =
+        rapidhash::RapidHashSet::with_capacity_and_hasher(unique_doc_ids.len(), Default::default());
+    for batch in unique_doc_ids.chunks(BATCH_SIZE) {
+        let ids = gents::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
+        let query =
+            format!(r#"{{ {AGENT_REQUEST_NAME}(docIDs: {ids}) {{ {AGENT_REQUEST_FIELDS} }} }}"#);
+        let data = access.execute(&query, operation).await?;
+        let batch_rows: Vec<AgentRequestRow> = parse_query_rows(&data, AGENT_REQUEST_NAME)?;
+        for row in &batch_rows {
+            let doc_id = row
+                .doc_id
+                .as_ref()
+                .with_context(|| format!("{operation} lacks physical identity"))?;
+            anyhow::ensure!(
+                batch.contains(doc_id),
+                "{operation} returned an unrelated document"
+            );
+            anyhow::ensure!(
+                observed.insert(doc_id.to_owned()),
+                "{operation} duplicated a document"
+            );
+        }
+        rows.extend(batch_rows);
+    }
+    Ok((rows, unique_doc_ids.len()))
 }
 
 fn scope_filter(node_did: &str, requester_did: Option<&str>) -> String {
@@ -444,6 +489,17 @@ pub fn session_unsendable_reason(session: &AgentSession, sender_did: &str) -> Op
     })
 }
 
+/// The stretch of a session's message order a transcript read covers: the
+/// newest messages, or those before or after a message number. Message
+/// numbers are the session's sequences, so a reader holding rows can ask for
+/// the next stretch without resolving a row key first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TranscriptWindow {
+    Tip,
+    Before(i64),
+    After(i64),
+}
+
 pub async fn load_session_transcript_page(
     node: &EmbeddedNode,
     session_id: &str,
@@ -482,6 +538,46 @@ pub async fn load_session_transcript_page_on(
     .await
 }
 
+pub async fn load_session_transcript_window(
+    node: &EmbeddedNode,
+    session_id: &str,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+    window: TranscriptWindow,
+    requested_limit: Option<usize>,
+) -> Result<SessionTranscriptQueryPage> {
+    load_session_transcript_window_with_access(
+        TranscriptAccess::Local(node),
+        session_id,
+        node_did,
+        requester_did,
+        window,
+        requested_limit,
+        true,
+    )
+    .await
+}
+
+pub async fn load_session_transcript_window_on(
+    access: &gents::config_client::ConfigAccess,
+    session_id: &str,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+    window: TranscriptWindow,
+    requested_limit: Option<usize>,
+) -> Result<SessionTranscriptQueryPage> {
+    load_session_transcript_window_with_access(
+        TranscriptAccess::Config(access),
+        session_id,
+        node_did,
+        requester_did,
+        window,
+        requested_limit,
+        true,
+    )
+    .await
+}
+
 async fn load_session_transcript_page_with_access(
     access: TranscriptAccess<'_>,
     session_id: &str,
@@ -489,6 +585,42 @@ async fn load_session_transcript_page_with_access(
     requester_did: Option<&str>,
     before_item_key: Option<&str>,
     requested_limit: Option<usize>,
+) -> Result<SessionTranscriptQueryPage> {
+    let window = match before_item_key {
+        Some(cursor) => TranscriptWindow::Before(
+            resolve_transcript_cursor_sequence(
+                access,
+                session_id.trim(),
+                node_did,
+                requester_did,
+                cursor,
+            )
+            .await?,
+        ),
+        None => TranscriptWindow::Tip,
+    };
+    let mut page = load_session_transcript_window_with_access(
+        access,
+        session_id,
+        node_did,
+        requester_did,
+        window,
+        requested_limit,
+        false,
+    )
+    .await?;
+    page.query_count += u64::from(before_item_key.is_some());
+    Ok(page)
+}
+
+async fn load_session_transcript_window_with_access(
+    access: TranscriptAccess<'_>,
+    session_id: &str,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+    window: TranscriptWindow,
+    requested_limit: Option<usize>,
+    with_requests: bool,
 ) -> Result<SessionTranscriptQueryPage> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
@@ -499,12 +631,15 @@ async fn load_session_transcript_page_with_access(
         .clamp(1, MAX_SESSION_TRANSCRIPT_PAGE_SIZE);
     let message_query_limit = limit.saturating_add(1);
     let tool_call_query_limit = SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET.saturating_add(1);
-    let before_sequence = match before_item_key {
-        Some(cursor) => Some(
-            resolve_transcript_cursor_sequence(access, session_id, node_did, requester_did, cursor)
-                .await?,
-        ),
-        None => None,
+    /* a forward read walks up the order from its cursor; the others walk
+    down from the newest message or from theirs */
+    let forward = matches!(window, TranscriptWindow::After(_));
+    let beyond = |sequence: i64, boundary: i64| {
+        if forward {
+            sequence < boundary
+        } else {
+            sequence > boundary
+        }
     };
     let escaped_session_id = escape_graphql_string(session_id);
     let node_filter = node_did
@@ -515,16 +650,22 @@ async fn load_session_transcript_page_with_access(
         .map(escape_graphql_string)
         .map(|requester_did| format!(", requester_did: {{ _eq: \"{requester_did}\" }}"))
         .unwrap_or_else(|| ", requester_did: { _eq: null }".to_string());
-    let message_sequence_filter = before_sequence
-        .map(|sequence| format!(", sequence: {{ _lt: {sequence} }}"))
-        .unwrap_or_default();
-    let tool_before_sequence_filter = before_sequence
-        .map(|sequence| format!(", message_sequence: {{ _lt: {sequence} }}"))
-        .unwrap_or_default();
+    let (message_sequence_filter, tool_sequence_filter) = match window {
+        TranscriptWindow::Tip => (String::new(), String::new()),
+        TranscriptWindow::Before(sequence) => (
+            format!(", sequence: {{ _lt: {sequence} }}"),
+            format!(", message_sequence: {{ _lt: {sequence} }}"),
+        ),
+        TranscriptWindow::After(sequence) => (
+            format!(", sequence: {{ _gt: {sequence} }}"),
+            format!(", message_sequence: {{ _gt: {sequence} }}"),
+        ),
+    };
+    let direction = if forward { "ASC" } else { "DESC" };
     let message_order = if node_did.is_some() {
-        "[{ sequence: DESC }]"
+        format!("[{{ sequence: {direction} }}]")
     } else {
-        "[{ sequence: DESC }, { message_key: DESC }]"
+        format!("[{{ sequence: {direction} }}, {{ message_key: {direction} }}]")
     };
     let transcript_query = format!(
         r#"query DesktopSessionTranscriptPage {{
@@ -534,8 +675,8 @@ async fn load_session_transcript_page_with_access(
     limit: {message_query_limit}
   ) {{ {AGENT_MESSAGE_FIELDS} }}
   AgentToolCall(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}{tool_before_sequence_filter} }},
-    order: [{{ message_sequence: DESC }}, {{ tool_call_key: DESC }}],
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}{tool_sequence_filter} }},
+    order: [{{ message_sequence: {direction} }}, {{ tool_call_key: {direction} }}],
     limit: {tool_call_query_limit}
   ) {{ {AGENT_TOOL_CALL_FIELDS} }}
 }}"#
@@ -580,7 +721,7 @@ async fn load_session_transcript_page_with_access(
         queried_tool_calls
             .last()
             .and_then(|row| row.message_sequence)
-            .is_some_and(|sequence| sequence <= i64::from(boundary))
+            .is_some_and(|sequence| !beyond(sequence, i64::from(boundary)))
     });
     let tools_exhausted =
         queried_tool_calls.len() < tool_call_query_limit || crossed_message_boundary;
@@ -589,7 +730,7 @@ async fn load_session_transcript_page_with_access(
         .filter(|row| {
             deferred_message_sequence.is_none_or(|boundary| {
                 row.message_sequence
-                    .is_some_and(|sequence| sequence > i64::from(boundary))
+                    .is_some_and(|sequence| beyond(sequence, i64::from(boundary)))
             })
         })
         .cloned()
@@ -600,7 +741,7 @@ async fn load_session_transcript_page_with_access(
             .and_then(|row| row.message_sequence)
             .expect("null tool sequences rejected above");
         tool_calls.retain(|row| row.message_sequence != Some(deferred_sequence));
-        messages.retain(|row| i64::from(row.message.sequence) > deferred_sequence);
+        messages.retain(|row| beyond(i64::from(row.message.sequence), deferred_sequence));
         if tool_calls.is_empty() {
             bail!(
                 "session transcript has more than {} tool calls at sequence {deferred_sequence}; the sequence-atomic tool budget cannot represent it losslessly",
@@ -608,18 +749,159 @@ async fn load_session_transcript_page_with_access(
             );
         }
     }
+    /* A tool's result arrives in a later delivery message, which a page cut
+    can leave out; those deliveries are read too, as sources for results
+    only, never as rows. Each delivery answers at least one call. */
+    let answered = messages
+        .iter()
+        .flat_map(|row| row.message.blocks.iter())
+        .filter_map(|block| match block {
+            gents_protocol::output::MessageBlock::ToolResult {
+                tool_call_doc_id, ..
+            } => Some(tool_call_doc_id.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let unanswered = tool_calls
+        .iter()
+        .filter(|row| {
+            row.request_doc_id.is_some()
+                && row
+                    .doc_id
+                    .as_deref()
+                    .is_some_and(|doc_id| !answered.contains(doc_id))
+        })
+        .collect::<Vec<_>>();
+    let mut result_messages = Vec::new();
+    let mut result_query_count = 0;
+    if with_requests && !unanswered.is_empty() {
+        let after = messages
+            .iter()
+            .map(|row| i64::from(row.message.sequence))
+            .chain(unanswered.iter().filter_map(|row| row.message_sequence))
+            .max()
+            .unwrap_or_default();
+        let owners = gents::graphql::graphql_string_list_literal(
+            unanswered
+                .iter()
+                .filter_map(|row| row.request_doc_id.as_deref())
+                .collect::<BTreeSet<_>>()
+                .into_iter(),
+        );
+        let wanted = unanswered
+            .iter()
+            .filter_map(|row| row.doc_id.as_deref())
+            .collect::<BTreeSet<_>>();
+        let query = format!(
+            r#"query DesktopSessionTranscriptResults {{
+  AgentMessage(
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}, role: {{ _eq: "user" }}, sequence: {{ _gt: {after} }}, request_doc_id: {{ _in: {owners} }} }},
+    order: [{{ sequence: ASC }}],
+    limit: {}
+  ) {{ {AGENT_MESSAGE_FIELDS} }}
+}}"#,
+            unanswered.len()
+        );
+        let data = access
+            .execute(&query, "session transcript tool results")
+            .await?;
+        result_query_count = 1;
+        result_messages =
+            parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?
+                .into_iter()
+                .filter(|row| {
+                    row.message.blocks.iter().any(|block| {
+                    matches!(
+                        block,
+                        gents_protocol::output::MessageBlock::ToolResult { tool_call_doc_id, .. }
+                            if wanted.contains(tool_call_doc_id.as_str())
+                    )
+                })
+                })
+                .collect::<Vec<_>>();
+    }
     let (canonical_dependencies, dependency_query_count, dependency_rows) =
-        load_page_canonical_dependencies(access, &messages).await?;
+        load_page_canonical_dependencies(
+            access,
+            &messages
+                .iter()
+                .chain(result_messages.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+        .await?;
+    /* the requests these rows belong to: rows name their request, and a
+    runtime control or delegated input is told apart by it */
+    let request_doc_ids = if !with_requests {
+        Vec::new()
+    } else {
+        messages
+            .iter()
+            .filter_map(|row| row.message.request_doc_id.clone())
+            .chain(
+                tool_calls
+                    .iter()
+                    .filter_map(|row| row.request_doc_id.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    let (requests, _) = if request_doc_ids.is_empty() {
+        (Vec::new(), 0)
+    } else {
+        read_request_documents(access, &request_doc_ids, "session transcript requests").await?
+    };
+    let request_query_count = request_doc_ids.len().div_ceil(128) as u64;
     let source_exhausted = messages_exhausted && tools_exhausted;
     let queried_rows = queried_messages
         .len()
         .saturating_add(queried_tool_calls.len())
-        .saturating_add(dependency_rows);
-    let query_count = 1 + u64::from(before_item_key.is_some()) + dependency_query_count;
+        .saturating_add(dependency_rows)
+        .saturating_add(requests.len())
+        .saturating_add(result_messages.len());
+    let query_count = 1 + dependency_query_count + request_query_count + result_query_count;
+    /* the message numbers this read proves: every message inside the span is
+    in the page, so a gap inside it is empty rather than unread */
+    let kept = messages
+        .iter()
+        .map(|row| i64::from(row.message.sequence))
+        .chain(tool_calls.iter().filter_map(|row| row.message_sequence));
+    let (low, high) = kept.fold(
+        (None, None),
+        |(low, high): (Option<i64>, Option<i64>), at| {
+            (
+                Some(low.map_or(at, |low| low.min(at))),
+                Some(high.map_or(at, |high| high.max(at))),
+            )
+        },
+    );
+    let covered = match window {
+        TranscriptWindow::Tip => TranscriptSpan {
+            from: if source_exhausted { Some(0) } else { low },
+            through: None,
+        },
+        TranscriptWindow::Before(cursor) => TranscriptSpan {
+            from: if source_exhausted {
+                Some(0)
+            } else {
+                low.or(Some(cursor))
+            },
+            through: Some(cursor - 1),
+        },
+        TranscriptWindow::After(cursor) => TranscriptSpan {
+            from: Some(cursor + 1),
+            through: if source_exhausted {
+                None
+            } else {
+                high.or(Some(cursor))
+            },
+        },
+    };
     tracing::debug!(
         target: "gents_desktop_core::query",
         session_id,
-        before_sequence,
+        ?window,
         requested_limit = limit,
         message_query_limit,
         tool_call_query_limit,
@@ -636,13 +918,16 @@ async fn load_session_transcript_page_with_access(
             tool_calls,
             ..ClientStoreRows::default()
         }),
+        requests,
+        result_messages,
         canonical_dependencies,
         query_count,
         queried_rows,
         message_query_limit,
         tool_call_query_limit,
         source_exhausted,
-        has_newer: before_sequence.is_some(),
+        has_newer: !matches!(window, TranscriptWindow::Tip),
+        covered,
     })
 }
 

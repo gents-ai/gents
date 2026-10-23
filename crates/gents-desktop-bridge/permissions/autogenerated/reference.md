@@ -2676,6 +2676,32 @@ Denies the desktop_session_rename command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-session-rows`
+
+</td>
+<td>
+
+Enables the desktop_session_rows command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-session-rows`
+
+</td>
+<td>
+
+Denies the desktop_session_rows command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-session-snapshot`
 
 </td>

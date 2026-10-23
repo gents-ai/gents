@@ -1519,6 +1519,18 @@
           "markdownDescription": "Denies the desktop_session_rename command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_session_rows command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-session-rows",
+          "markdownDescription": "Enables the desktop_session_rows command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_session_rows command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-session-rows",
+          "markdownDescription": "Denies the desktop_session_rows command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_session_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-session-snapshot",
@@ -1777,10 +1789,10 @@
           "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
         },
         {
-          "description": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-goal`",
+          "description": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`",
           "type": "string",
           "const": "session-read",
-          "markdownDescription": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-goal`"
+          "markdownDescription": "Session/conversation snapshot and live-delta reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-session-goal`"
         },
         {
           "description": "Explicit selected-session hydration retry\n#### This permission set includes:\n\n- `allow-desktop-session-hydration-retry`",
