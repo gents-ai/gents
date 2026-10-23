@@ -658,4 +658,82 @@ theorem completed_advance_has_exact_count (admission : Request) (previous : Opti
         subst after
         simpa only [List.length_append, beq_iff_eq] using hc
 
+/-- A client retains signed pages for one durable attempt. The native decoder
+rechecks the complete demand and signature of every stored page or refusal.
+Neither the prior completed view nor a partially received view grants images. -/
+structure ClientAttempt where
+  id : String
+  receiver : Receiver
+  refusal : Option RefusalReason := none
+  deriving DecidableEq, Repr
+
+def ClientAttempt.pending (state : ClientAttempt) : Option PageDemand :=
+  if state.refusal.isSome || state.receiver.complete then none
+  else some ⟨state.receiver.admission, state.id,
+    state.receiver.pages.getLast?.bind (·.envelope.page.next)⟩
+
+structure ClientProgress where
+  active : ClientAttempt
+  previous : Option ClientAttempt := none
+  retired : List String := []
+  deriving DecidableEq, Repr
+
+def beginClient (admission : Request) (attempt : String) : ClientProgress :=
+  ⟨⟨attempt, ⟨admission, []⟩, none⟩, none, []⟩
+
+/-- Repeating the same explicit attempt is a retry. Starting a distinct one
+retains the last complete signed view while new enumeration remains pending. -/
+def restartClient (state : ClientProgress) (attempt : String) : Option ClientProgress :=
+  if attempt.isEmpty then none
+  else if state.active.id == attempt then some state
+  else if state.retired.contains attempt then none
+  else some ⟨⟨attempt, ⟨state.active.receiver.admission, []⟩, none⟩,
+    (if state.active.receiver.complete then some state.active else state.previous),
+    state.retired ++ [state.active.id]⟩
+
+def clientPage (state : ClientProgress) (attempt requestKey : String)
+    (envelope : PageEnvelope) (nonceMatches : Bool) : Option ClientProgress := do
+  if !nonceMatches || state.active.id != attempt then none else pure ()
+  let received := ReceivedPage.mk requestKey envelope
+  if state.active.receiver.pages.contains received then some state else do
+    let pending ← state.active.pending
+    if !pending.matchesPage envelope.page nonceMatches then none else pure ()
+    let receiver ← receive state.active.receiver requestKey envelope
+    some {state with active := {state.active with receiver := receiver}}
+
+/-- Native refusal verification supplies exact-demand correlation before this
+transition. A verified terminal refusal never extends or completes a prefix. -/
+def clientRefusal (state : ClientProgress) (attempt : String)
+    (reason : RefusalReason) (verified : Bool) : Option ClientProgress :=
+  if !verified || state.active.id != attempt then none
+  else if state.active.refusal == some reason then some state
+  else if state.active.pending.isNone then none
+  else some {state with active := {state.active with refusal := some reason}}
+
+def commitClient (prior candidate : ClientProgress) (write : TerminalWriteResult) : ClientProgress :=
+  if write == .committed then candidate else prior
+
+theorem client_rollback_preserves_attempt (prior candidate : ClientProgress) :
+    commitClient prior candidate .failed = prior := rfl
+
+theorem restarting_same_client_attempt_is_retry (state : ClientProgress)
+    (h : state.active.id.isEmpty = false) :
+    restartClient state state.active.id = some state := by
+  simp [restartClient, h]
+
+theorem retired_client_attempt_cannot_restart (state : ClientProgress) (attempt : String)
+    (h : state.active.id ≠ attempt) (retired : state.retired.contains attempt = true) :
+    restartClient state attempt = none := by
+  have mem : attempt ∈ state.retired := by simpa using retired
+  simp [restartClient, h, mem]
+
+theorem wrong_nonce_cannot_replay_client_page (state : ClientProgress)
+    (attempt key : String) (envelope : PageEnvelope) :
+    clientPage state attempt key envelope false = none := by
+  simp [clientPage]
+
+theorem refused_client_has_no_next_page (state : ClientAttempt)
+    (h : state.refusal.isSome = true) : state.pending = none := by
+  simp [ClientAttempt.pending, h]
+
 end SessionHydration.FileInventory

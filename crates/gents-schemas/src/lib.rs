@@ -169,6 +169,9 @@ pub const FILE_INVENTORY_REQUEST: &str =
     include_str!("../schemas/agent/file_inventory_request.graphql");
 pub const FILE_INVENTORY_PAGE_NAME: &str = "FileInventoryPage";
 pub const FILE_INVENTORY_PAGE: &str = include_str!("../schemas/agent/file_inventory_page.graphql");
+pub const FILE_INVENTORY_PROGRESS_NAME: &str = "FileInventoryProgress";
+pub const FILE_INVENTORY_PROGRESS: &str =
+    include_str!("../schemas/agent/file_inventory_progress.graphql");
 pub const FILE_INVENTORY_REPLY_NAME: &str = "FileInventoryReply";
 pub const FILE_INVENTORY_REPLY: &str =
     include_str!("../schemas/agent/file_inventory_reply.graphql");
@@ -260,6 +263,7 @@ pub const ALL: &[&str] = &[
     FILE_INVENTORY_REQUEST,
     FILE_INVENTORY_PAGE,
     FILE_INVENTORY_REPLY,
+    FILE_INVENTORY_PROGRESS,
     FILE_IMAGE_HYDRATION_RECEIPT,
     AGENT_SESSION_INPUT_EDIT,
     AGENT_SESSION_GOAL_CONTROL,
@@ -343,6 +347,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     FILE_INVENTORY_REQUEST_NAME,
     FILE_INVENTORY_PAGE_NAME,
     FILE_INVENTORY_REPLY_NAME,
+    FILE_INVENTORY_PROGRESS_NAME,
     FILE_IMAGE_HYDRATION_RECEIPT_NAME,
     AGENT_SESSION_INPUT_EDIT_NAME,
     AGENT_SESSION_GOAL_CONTROL_NAME,
@@ -410,6 +415,7 @@ pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ADMIN_PIN_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     FILE_INVENTORY_REPLY_NAME,
+    FILE_INVENTORY_PROGRESS_NAME,
     FILE_IMAGE_HYDRATION_RECEIPT_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
 ];

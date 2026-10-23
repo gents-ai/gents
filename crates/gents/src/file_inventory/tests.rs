@@ -1091,3 +1091,279 @@ async fn generated_preparation_retries_keep_the_original_snapshot() {
     drop(names);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
+
+#[tokio::test]
+async fn generated_client_progress_survives_reload_and_rollback() {
+    use crate::config_client::ConfigAccess;
+    use crate::tool_call_lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+    use gents_protocol::file_inventory::{FileInventoryPageDemand, FileInventoryReply};
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_client_progress_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let (fixture, _) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: format!("inventory-client-{}", text(&case["name"])),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let path = fixture.path.clone();
+        let names = tokio::task::spawn_blocking(move || Names {
+            source: KeyIdentity::load_or_create(path.join("test-agent.key"), None).unwrap(),
+            other: KeyIdentity::load_or_create(path.join("other.key"), None).unwrap(),
+        })
+        .await
+        .unwrap();
+        let admission = names.admission(&case["admission"]);
+        let mut state = begin_client_progress(
+            &fixture.node,
+            &admission,
+            text(&case["attempt"]).as_str(),
+            &names.source,
+        )
+        .await
+        .unwrap();
+        let initial_demand = state
+            .active()
+            .pending_demand(&names.source)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            load_client_progress(&fixture.node, &admission, &names.source)
+                .await
+                .unwrap()
+                .unwrap(),
+            state
+        );
+        assert_eq!(
+            initial_demand,
+            state
+                .active()
+                .pending_demand(&names.source)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+        let mut seen: Vec<(FileInventoryPageDemand, FileInventoryReply)> = Vec::new();
+        for step in case["steps"].as_array().unwrap() {
+            let action = &step["action"];
+            let attempt = text(&action["attempt"]);
+            let mut candidate = None;
+            let mut delivered = None;
+            let expected_accept = step["accepted"] == true;
+            let committed = step["committed"] == true;
+            if action["kind"] == "restart" {
+                candidate = Some(state.restart(&attempt, &names.source).await);
+            } else {
+                let mut demand = state
+                    .active()
+                    .pending_demand(&names.source)
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| FileInventoryPageDemand {
+                        admission: admission.clone(),
+                        attempt_id: attempt.clone(),
+                        cursor: state
+                            .active()
+                            .receiver()
+                            .pages
+                            .last()
+                            .and_then(|page| page.receipt.page.next.clone()),
+                    });
+                demand.attempt_id = attempt.clone();
+                let reply = if action["kind"] == "page" {
+                    let page = names.page(&action["page"]);
+                    demand.cursor = (page.offset != 0).then(|| FileInventoryCursor {
+                        binding: page.binding.clone(),
+                        offset: page.offset,
+                    });
+                    let mut receipt = sign_current_page(
+                        &names.source,
+                        &demand.derive_request_key().unwrap(),
+                        page,
+                        || std::future::ready(Ok(true)),
+                    )
+                    .await
+                    .unwrap();
+                    if action["nonce_matches"] == false {
+                        receipt.request_key.push_str("-wrong");
+                        receipt.signature = names
+                            .source
+                            .sign(&receipt.signing_payload().unwrap())
+                            .await
+                            .unwrap();
+                    }
+                    FileInventoryReply::Page(receipt)
+                } else {
+                    let mut receipt = sign_refusal(
+                        &names.source,
+                        &demand,
+                        serde_json::from_value(action["reason"].clone()).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                    if action["verified"] == false {
+                        receipt.signature[0] ^= 1;
+                    }
+                    FileInventoryReply::Refused(receipt)
+                };
+                let reply = seen
+                    .iter()
+                    .find(|(prior_demand, prior_reply)| {
+                        prior_demand == &demand
+                            && match (prior_reply, &reply) {
+                                (
+                                    FileInventoryReply::Page(left),
+                                    FileInventoryReply::Page(right),
+                                ) => {
+                                    left.page == right.page && left.request_key == right.request_key
+                                }
+                                (
+                                    FileInventoryReply::Refused(left),
+                                    FileInventoryReply::Refused(right),
+                                ) => left == right,
+                                _ => false,
+                            }
+                    })
+                    .map(|(_, prior)| prior.clone())
+                    .unwrap_or(reply);
+                seen.push((demand.clone(), reply.clone()));
+                delivered = Some((demand, reply));
+            }
+            let result = match &delivered {
+                Some((demand, reply)) => state.receive(demand, reply, &names.source).await,
+                None => candidate.unwrap(),
+            };
+            assert_eq!(
+                result.is_ok(),
+                expected_accept,
+                "{}: {action}; {result:?}",
+                case["name"]
+            );
+            match &delivered {
+                Some((demand, reply)) => {
+                    let stored = ConfigAccess::transact_local_write(
+                        &fixture.node,
+                        None,
+                        "test.inventory.client_commit",
+                        |txn| {
+                            let (node, verifier) = (&fixture.node, &names.source);
+                            Box::pin(async move {
+                                let next =
+                                    client::receive_in_txn(txn, node, demand, reply, verifier)
+                                        .await?;
+                                anyhow::ensure!(committed, "rollback after retaining client page");
+                                Ok(next)
+                            })
+                        },
+                    )
+                    .await;
+                    assert_eq!(
+                        stored.is_ok(),
+                        expected_accept && committed,
+                        "{}: {action}; {stored:?}",
+                        case["name"]
+                    );
+                }
+                None if expected_accept && committed => {
+                    begin_client_progress(&fixture.node, &admission, &attempt, &names.source)
+                        .await
+                        .unwrap();
+                }
+                _ => {}
+            }
+            if expected_accept && committed {
+                state = result.unwrap();
+            }
+            let restored = load_client_progress(&fixture.node, &admission, &names.source)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(restored, state);
+            let serialized = serde_json::to_vec(&restored).unwrap();
+            let decoded: ClientInventoryProgress = serde_json::from_slice(&serialized).unwrap();
+            let prefix = decoded.validated(&names.source).await.unwrap();
+            let pending = decoded
+                .active()
+                .pending_demand(&names.source)
+                .await
+                .unwrap();
+            let summary = serde_json::json!({
+                "attempt": decoded.active().attempt_id(),
+                "retired": serde_json::to_value(&decoded).unwrap()["retired_attempts"],
+                "pages": decoded.active().receiver().pages.len(),
+                "complete": prefix.as_ref().is_some_and(FileInventoryPrefix::complete),
+                "known": prefix.as_ref().is_some_and(FileInventoryPrefix::known_inventory),
+                "refusal": decoded.active().refusal().map(|receipt| receipt.reason),
+                "pending_offset": pending.map(|demand| demand.cursor.map_or(0, |cursor| cursor.offset)),
+                "previous_pages": decoded.previous().map(|prior| prior.receiver().pages.len()),
+            });
+            assert_eq!(summary, step["expected"], "{}: {action}", case["name"]);
+            let mut tampered = serde_json::to_value(&decoded).unwrap();
+            if let Some(signature) = tampered["active"]["receiver"]["pages"]
+                .as_array_mut()
+                .and_then(|pages| pages.first_mut())
+                .and_then(|page| page["receipt"]["signature"].as_array_mut())
+            {
+                signature[0] = serde_json::json!(signature[0].as_u64().unwrap() ^ 1);
+                let tampered: ClientInventoryProgress = serde_json::from_value(tampered).unwrap();
+                assert!(tampered.validated(&names.source).await.is_err());
+            }
+        }
+        let path = fixture.path.clone();
+        fixture.node.shutdown().await;
+        drop(fixture);
+        let reopened = std::sync::Arc::new(
+            crate::defra_node::EmbeddedNode::builder()
+                .data_path(&path)
+                .with_node_identity_did(names.source.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        let persisted = load_client_progress(&reopened, &admission, &names.source)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            persisted, state,
+            "{} after actual database reopen",
+            case["name"]
+        );
+        let mut corrupt = serde_json::to_value(&persisted).unwrap();
+        let signature = if corrupt["active"]["receiver"]["pages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+        {
+            &mut corrupt["active"]["refusal"]["signature"]
+        } else {
+            &mut corrupt["active"]["receiver"]["pages"][0]["receipt"]["signature"]
+        };
+        signature[0] = serde_json::json!(signature[0].as_u64().unwrap() ^ 1);
+        ConfigAccess::transact_local_write(&reopened, None, "test.inventory.corrupt_retained_page", |txn| {
+            let corrupt = &corrupt;
+            Box::pin(async move {
+                txn.execute_with_variables("mutation($input: FileInventoryProgressMutationInputArg!) { update_FileInventoryProgress(input: $input) { _docID } }",
+                    &serde_json::json!({"input": {"progress": corrupt}})).await
+            })
+        }).await.unwrap();
+        assert!(load_client_progress(&reopened, &admission, &names.source)
+            .await
+            .is_err());
+        reopened.shutdown().await;
+        drop(reopened);
+        drop(names);
+        tokio::fs::remove_dir_all(path).await.unwrap();
+    }
+}

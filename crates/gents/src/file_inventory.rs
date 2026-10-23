@@ -285,6 +285,12 @@ pub(crate) async fn settle_reply(
     }
 }
 
+mod client;
+pub use client::{
+    begin_client_progress, load_client_progress, receive_client_reply, ClientInventoryAttempt,
+    ClientInventoryProgress,
+};
+
 pub(crate) mod delivery;
 pub(crate) mod requests;
 pub use delivery::VerifiedInventoryResponse;

@@ -31,6 +31,7 @@ async fn inventory_metadata_collection_fallback_stays_owned_by_its_node() {
     for name in [
         TOOL_FILE_INVENTORY_NAME,
         gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME,
         gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
     ] {
         let collection = node.get_collection(name).unwrap().unwrap();
@@ -60,6 +61,10 @@ async fn inventory_metadata_refuses_an_unprotected_collection() {
         (
             gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
             gents_protocol::schemas::FILE_INVENTORY_PAGE,
+        ),
+        (
+            gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME,
+            gents_protocol::schemas::FILE_INVENTORY_PROGRESS,
         ),
     ] {
         let node = common::fresh_node().await;
@@ -129,5 +134,30 @@ async fn inventory_transport_has_its_pinned_fresh_schemas() {
             .all(|(_, actual, expected)| actual == expected),
         "{observed:?}"
     );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
+    use gents_protocol::schemas::{FILE_INVENTORY_PROGRESS, FILE_INVENTORY_PROGRESS_NAME};
+    let node = common::fresh_node().await;
+    node.add_schema(FILE_INVENTORY_PROGRESS).await.unwrap();
+    let collection = node
+        .get_collection(FILE_INVENTORY_PROGRESS_NAME)
+        .unwrap()
+        .unwrap();
+    let entry = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == FILE_INVENTORY_PROGRESS_NAME)
+        .unwrap();
+    assert_eq!(collection.version_id, entry.expected_version.unwrap());
+    let policy = collection.policy.unwrap();
+    assert_eq!(policy.id, TOOL_FILE_CHANGE_POLICY_ID);
+    assert_eq!(policy.resource_name, TOOL_FILE_CHANGE_POLICY_RESOURCE);
+    assert!(gents_protocol::schemas::is_local_only_collection(
+        FILE_INVENTORY_PROGRESS_NAME
+    ));
+    assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
+        .contains(&FILE_INVENTORY_PROGRESS_NAME));
     node.shutdown().await;
 }

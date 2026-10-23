@@ -401,6 +401,82 @@ def preparationCasesJson : String := jsonArray (preparationInputs.map fun value 
    ("unprepared_continuation", pageResultJson (page lateAfter.model admission
       (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩)))])
 
+private inductive ClientAction where
+  | restart (attempt : String)
+  | page (attempt : String) (envelope : PageEnvelope) (nonceMatches : Bool := true)
+  | refused (attempt : String) (reason : RefusalReason) (verified : Bool := true)
+
+private def clientAction (state : FileInventory.ClientProgress) : ClientAction → Option FileInventory.ClientProgress
+  | .restart attempt => restartClient state attempt
+  | .page attempt envelope nonce =>
+      let key := attempt ++ "/" ++ toString envelope.page.offset
+      clientPage state attempt key {envelope with requestKey := key} nonce
+  | .refused attempt reason verified => clientRefusal state attempt reason verified
+
+private def clientActionJson : ClientAction → String
+  | .restart attempt => tagged "restart" [("attempt", jsonString attempt)]
+  | .page attempt envelope nonce => tagged "page"
+      [("attempt", jsonString attempt), ("page", wirePageJson envelope.page),
+       ("nonce_matches", boolString nonce)]
+  | .refused attempt reason verified => tagged "refused"
+      [("attempt", jsonString attempt), ("reason", refusalReasonJson reason),
+       ("verified", boolString verified)]
+
+private def clientSummaryJson (state : FileInventory.ClientProgress) : String := object
+  [("attempt", jsonString state.active.id),
+   ("pages", toString state.active.receiver.pages.length),
+   ("retired", jsonArray (state.retired.map jsonString)),
+   ("complete", boolString state.active.receiver.complete),
+   ("known", boolString (knownInventory state.active.receiver)),
+   ("refusal", optional refusalReasonJson state.active.refusal),
+   ("pending_offset", optional (fun demand => toString
+      (demand.cursor.map (·.offset) |>.getD 0)) state.active.pending),
+   ("previous_pages", optional (fun prior => toString prior.receiver.pages.length) state.previous)]
+
+private def clientStepsJson (state : FileInventory.ClientProgress) : List (ClientAction × TerminalWriteResult) → List String
+  | [] => []
+  | (action, write) :: rest =>
+      let candidate := clientAction state action
+      let next := commitClient state (candidate.getD state) write
+      object [("action", clientActionJson action), ("committed", boolString (write == .committed)),
+        ("accepted", boolString candidate.isSome), ("expected", clientSummaryJson next)] ::
+        clientStepsJson next rest
+
+def clientProgressCasesJson : String :=
+  let scripts : List (String × List (ClientAction × TerminalWriteResult)) :=
+    [("reload_retry_refresh_and_late_reply", [
+        (.page "attempt-1" firstEnvelope, .committed),
+        (.page "attempt-1" firstEnvelope false, .committed),
+        (.page "attempt-1" firstEnvelope, .committed),
+        (.page "attempt-1" secondEnvelope, .committed),
+        (.page "attempt-1" secondEnvelope, .committed),
+        (.restart "attempt-2", .committed),
+        (.restart "attempt-2", .committed),
+        (.page "attempt-1" firstEnvelope, .committed),
+        (.refused "attempt-2" .stale, .committed),
+        (.refused "attempt-2" .stale, .committed),
+        (.restart "attempt-3", .committed),
+        (.page "attempt-3" firstEnvelope, .committed),
+        (.page "attempt-3" secondEnvelope, .failed),
+        (.page "attempt-3" secondEnvelope, .committed),
+        (.restart "attempt-1", .committed),
+        (.restart "attempt-2", .committed)]),
+     ("refusal_is_not_empty", [
+        (.refused "attempt-1" .unavailable, .committed),
+        (.page "attempt-1" firstEnvelope, .committed),
+        (.refused "attempt-1" .rejected, .committed)]),
+     ("unverified_and_wrong_nonce", [
+        (.refused "attempt-1" .rejected false, .committed),
+        (.page "attempt-1" firstEnvelope false, .committed),
+        (.page "attempt-1" secondEnvelope, .committed),
+        (.restart "", .committed),
+        (.page "attempt-1" firstEnvelope, .failed),
+        (.page "attempt-1" firstEnvelope, .committed)])]
+  jsonArray (scripts.map fun (name, steps) => object
+    [("name", jsonString name), ("admission", hydrationRequestJson admission),
+     ("attempt", jsonString "attempt-1"),
+     ("steps", jsonArray (clientStepsJson (beginClient admission "attempt-1") steps))])
+
 def completionCasesJson : String :=
   let candidates := [Reply.page firstEnvelope.page, .refused .stale,
     .refused .rejected, .refused .unavailable]

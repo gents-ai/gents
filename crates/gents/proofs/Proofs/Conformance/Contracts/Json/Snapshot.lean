@@ -543,6 +543,8 @@ def snapshotJson : String :=
       ++ Conformance.FileInventoryContracts.refusalCasesJson ++ ","
     ++ "\"file_inventory_reply_journal_cases\":"
       ++ Conformance.FileInventoryContracts.replyJournalCasesJson ++ ","
+    ++ "\"file_inventory_client_progress_cases\":"
+      ++ Conformance.FileInventoryContracts.clientProgressCasesJson ++ ","
     ++ "\"file_inventory_preparation_cases\":"
       ++ Conformance.FileInventoryContracts.preparationCasesJson ++ ","
     ++ "\"file_inventory_completion_cases\":"

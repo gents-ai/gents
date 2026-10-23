@@ -6,7 +6,10 @@ use crate::agent::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
     EmbeddedRemoteP2pAdmin, GraphqlEnrollmentStore, PairingFilters, RemoteP2pAdmin,
 };
-use crate::file_inventory::{admit_demand, FileInventoryReceiver, VerifiedInventoryResponse};
+use crate::file_inventory::{
+    admit_demand, begin_client_progress, load_client_progress, receive_client_reply,
+    FileInventoryReceiver, VerifiedInventoryResponse,
+};
 use crate::identity::KeyIdentity;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::tool_call_lifecycle::admission_fixture::{
@@ -316,10 +319,13 @@ async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
             source.clone(),
             source_cancel.clone(),
         )));
-    let mut receiver = FileInventoryReceiver {
-        admission: demand.admission.clone(),
-        pages: vec![],
-    };
+    begin_client_progress(
+        &client_node,
+        &demand.admission,
+        &demand.attempt_id,
+        client.as_ref(),
+    )
+    .await?;
     for _ in 0..expected["state"]["pages"]
         .as_array()
         .context("modeled pages")?
@@ -327,12 +333,35 @@ async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
     {
         let page = receive_page(&client_node, &demand, client.as_ref()).await?;
         let next = page.page.next.clone();
-        receiver = receiver
-            .receive_for_demand(&demand, page, client.as_ref())
-            .await?;
+        let progress = receive_client_reply(
+            &client_node,
+            &demand,
+            &gents_protocol::file_inventory::FileInventoryReply::Page(page),
+            client.as_ref(),
+        )
+        .await?;
+        anyhow::ensure!(
+            load_client_progress(&client_node, &demand.admission, client.as_ref())
+                .await?
+                .as_ref()
+                == Some(&progress),
+            "client did not durably retain the signed inventory prefix"
+        );
         demand.cursor = next;
     }
-    let restored: FileInventoryReceiver = serde_json::from_slice(&serde_json::to_vec(&receiver)?)?;
+    let progress = load_client_progress(&client_node, &demand.admission, client.as_ref())
+        .await?
+        .context("durable client inventory")?;
+    anyhow::ensure!(
+        progress
+            .active()
+            .pending_demand(client.as_ref())
+            .await?
+            .is_none(),
+        "complete client inventory has another demand"
+    );
+    let receiver = progress.active().receiver();
+    let restored: FileInventoryReceiver = serde_json::from_slice(&serde_json::to_vec(receiver)?)?;
     let prefix = restored
         .validated(client.as_ref())
         .await?
