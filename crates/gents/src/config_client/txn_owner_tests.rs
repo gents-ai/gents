@@ -1787,6 +1787,34 @@ resources:
             assert_eq!(visible, expected, "read_only={read_only}");
         }
     }
+    for (actor, expected_owner) in [(Some(READER), Some(OWNER)), (None, None)] {
+        let ids = vec![doc_id.clone()];
+        let observations = ConfigAccess::transact_local_readonly(
+            &node,
+            actor.map(|did| identity::Did::new(did).unwrap()),
+            "test.identity_owner_observation",
+            move |txn| {
+                let ids = ids.clone();
+                Box::pin(async move {
+                    let rows = txn.execute("{ IdentityFact { _docID } }").await?;
+                    let owners = txn.document_owners("IdentityFact", &ids).await?;
+                    assert_eq!(owners.len(), 1);
+                    assert_eq!(owners[0].doc_id, ids[0]);
+                    assert_eq!(
+                        rows["data"]["IdentityFact"].as_array().unwrap().len(),
+                        usize::from(expected_owner.is_some())
+                    );
+                    Ok(owners)
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            observations[0].owner.as_ref().map(identity::Did::as_str),
+            expected_owner
+        );
+    }
     node.shutdown().await;
 }
 

@@ -539,13 +539,15 @@ impl Drop for CallerOperationGuard {
     }
 }
 
-async fn execute_owned_native(
-    node: Arc<EmbeddedNode>,
-    request: QueryRequest,
-    handle: TransactionHandle,
+async fn execute_owned_native<T, F>(
+    native: F,
     tracker: Arc<NativeOperationTracker>,
     operation: Option<&'static str>,
-) -> Result<defra_node::QueryResponse> {
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
     let permit = tracker.start()?;
     let mut caller = CallerOperationGuard::new(Arc::clone(&tracker));
     let dispatcher = tracing::dispatcher::get_default(Clone::clone);
@@ -567,12 +569,8 @@ async fn execute_owned_native(
             }
             let native_started = Instant::now();
             let result = match operation {
-                Some(operation) => {
-                    ACTIVE_EMBEDDED_TRANSACTION
-                        .scope(operation, node.execute_request_in_txn(request, &handle))
-                        .await
-                }
-                None => node.execute_request_in_txn(request, &handle).await,
+                Some(operation) => ACTIVE_EMBEDDED_TRANSACTION.scope(operation, native).await,
+                None => native.await,
             };
             record_slow_native_phase(operation, "execute-native-await", native_started.elapsed());
             drop(permit);
@@ -1671,12 +1669,13 @@ impl<'a> ConfigApplyTxn<'a> {
                 native_operations,
             } => {
                 let started = Instant::now();
+                let node = Arc::clone(node);
+                let request = QueryRequest::new(document)
+                    .with_variables(variables.clone())
+                    .with_identity(identity.clone());
+                let handle = handle.clone();
                 let result = execute_owned_native(
-                    Arc::clone(node),
-                    QueryRequest::new(document)
-                        .with_variables(variables.clone())
-                        .with_identity(identity.clone()),
-                    handle.clone(),
+                    async move { node.execute_request_in_txn(request, &handle).await },
                     Arc::clone(native_operations),
                     self.operation,
                 )
@@ -1702,6 +1701,46 @@ impl<'a> ConfigApplyTxn<'a> {
             after_successful_mutation_for_test().await?;
         }
         Ok(response)
+    }
+
+    /// Observes authenticated owners for known live documents in this exact
+    /// transaction. Unknown owners cannot certify absence or completeness.
+    /// HTTP transactions lack this native capability and are refused explicitly.
+    pub async fn document_owners(
+        &self,
+        collection: &str,
+        doc_ids: &[String],
+    ) -> Result<Vec<query::owners::DocumentOwnerObservation>> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        let TxnBackend::Embedded {
+            node,
+            handle,
+            identity,
+            native_operations,
+        } = &self.backend
+        else {
+            anyhow::bail!("authenticated transaction owner observations require embedded access");
+        };
+        let node = Arc::clone(node);
+        let handle = handle.clone();
+        let identity = identity.clone();
+        let collection = collection.to_owned();
+        let doc_ids = doc_ids.to_vec();
+        execute_owned_native(
+            async move {
+                node.observe_document_owners_in_txn(&handle, &collection, &doc_ids, identity)
+                    .await
+            },
+            Arc::clone(native_operations),
+            self.operation,
+        )
+        .await?
+        .map_err(|error| match error {
+            query::error::QueryError::TransactionConflict(_) => {
+                retry::transaction_conflict(ConflictSource::TypedError)
+            }
+            error => retry::transaction_storage_failure(error.into()),
+        })
     }
 
     pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
@@ -1753,10 +1792,11 @@ impl<'a> ConfigApplyTxn<'a> {
             anyhow::bail!("native transaction responses require embedded access");
         };
         let started = Instant::now();
+        let node = Arc::clone(node);
+        let request = QueryRequest::new(document).with_identity(identity.clone());
+        let handle = handle.clone();
         let result = execute_owned_native(
-            Arc::clone(node),
-            QueryRequest::new(document).with_identity(identity.clone()),
-            handle.clone(),
+            async move { node.execute_request_in_txn(request, &handle).await },
             Arc::clone(native_operations),
             self.operation,
         )
