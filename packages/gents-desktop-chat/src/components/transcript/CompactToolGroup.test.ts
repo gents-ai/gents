@@ -272,3 +272,26 @@ describe("compact action summaries", () => {
     expect(JSON.stringify(groups)).toBe(original);
   });
 });
+
+it("preserves a physical turn boundary even when logical request IDs repeat", () => {
+  const first = tool("first");
+  const second = tool("second");
+  first.requestTurn = {
+    requestDocId: "physical-first",
+    requestId: "repeated",
+    settled: true,
+  };
+  second.requestTurn = {
+    requestDocId: "physical-second",
+    requestId: "repeated",
+    settled: false,
+  };
+  const groups: RenderedTimelineItem[] = [first, second].map(
+    (entry, index) => ({
+      kind: "toolGroup",
+      itemKey: `group-${index}`,
+      tools: [entry],
+    }),
+  );
+  expect(coalesceToolGroups(groups)).toEqual(groups);
+});

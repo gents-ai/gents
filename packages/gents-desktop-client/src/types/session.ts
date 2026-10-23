@@ -30,3 +30,5 @@ export type { PendingMessageSteerRequest } from "../generated/PendingMessageStee
 export type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
 export type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 export type { PendingQueueEntryView } from "../generated/PendingQueueEntryView.js";
+
+export type { RequestTurnView } from "../generated/RequestTurnView.js";

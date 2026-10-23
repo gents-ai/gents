@@ -842,7 +842,9 @@ mod paging_coverage_tests {
         snapshot
             .timeline_items
             .push(RenderedTimelineItem::AssistantMessage {
+                request_turn: None,
                 item_key: "assistant-2".into(),
+                request_id: None,
                 sequence: Some(2),
                 content: None,
                 reasoning: None,
