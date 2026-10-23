@@ -1,3 +1,4 @@
+import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 import { useApp, useView } from "@/app/AppContext";
 import { navigate } from "@/lib/router";
 import { workspace } from "@/app/workspace";
@@ -23,8 +24,8 @@ export function useComposerSend(agentId: string | null | undefined) {
   const [draft, setDraft] = useDraft(drafts, draftKey);
   const selectedSessionId = stores.selection.use.sessionId();
 
-  const send = async (text: string) => {
-    const pending = sendMessage(text, agentId);
+  const send = async (text: string, followUp?: QueueDelivery) => {
+    const pending = sendMessage(text, agentId, followUp);
     const intentGeneration = captureComposeIntent();
     const result = await pending;
     if (result) setDraft((current) => (current === text ? "" : current));

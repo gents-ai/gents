@@ -1,6 +1,13 @@
 import type { ThemePreference } from "@/theme";
-import type { NavMode, SentTurnPlacement } from "@/preferences";
-import { preferences, useNavMode, useSentTurnPlacement, useTheme } from "@/preferences";
+import type { FollowUp, NavMode, SentTurnPlacement } from "@/preferences";
+import {
+  preferences,
+  useFollowUp,
+  useNavMode,
+  useSentTurnPlacement,
+  useTheme,
+} from "@/preferences";
+import { MOD } from "../Shortcuts";
 import { ChoiceRow } from "../agent/editors";
 import { Group } from "../agent/rows";
 
@@ -8,6 +15,7 @@ export function GeneralPanel() {
   const theme = useTheme();
   const nav = useNavMode();
   const sentTurn = useSentTurnPlacement();
+  const followUp = useFollowUp();
   return (
     <div>
       <Group title="Appearance">
@@ -45,6 +53,23 @@ export function GeneralPanel() {
           items={[
             { value: "follow", label: "Follow the reply" },
             { value: "anchor", label: "Keep my message at the top" },
+          ]}
+        />
+        <ChoiceRow
+          id="settings-follow-up"
+          label="Follow-up behavior"
+          description={
+            <>
+              What a message sent while the agent works does.
+              <br />
+              {MOD}↵ sends one message the other way.
+            </>
+          }
+          value={followUp}
+          onChange={(v) => preferences.setFollowUp(v as FollowUp)}
+          items={[
+            { value: "steer", label: "Steer the running turn" },
+            { value: "queue", label: "Queue for after it" },
           ]}
         />
       </Group>
