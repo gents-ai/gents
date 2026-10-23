@@ -2307,6 +2307,10 @@ fn validate_workspace_receipt_path_rows(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each expectation comes from a separate scenario section"
+)]
 async fn await_stages(
     graphql: &GraphqlEndpoint,
     trigger_ids: &[String],
@@ -4192,7 +4196,13 @@ mod tests {
         });
         let unsigned = json!({ "cid": "bafy-unsigned", "signature": null });
 
-        assert!(require_signed_commits("AgentMessage", "doc-1", &[signed.clone()], signer).is_ok());
+        assert!(require_signed_commits(
+            "AgentMessage",
+            "doc-1",
+            std::slice::from_ref(&signed),
+            signer
+        )
+        .is_ok());
         assert!(require_signed_commits("AgentMessage", "doc-1", &[], signer).is_err());
         let error = require_signed_commits("AgentMessage", "doc-1", &[signed, unsigned], signer)
             .unwrap_err()

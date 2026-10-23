@@ -26,6 +26,10 @@ use super::protocol::{now_millis, send_notification};
 use super::store::query_node_json;
 use super::{ConnectionState, ShimState};
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the watcher owns each turn coordinate it reports against"
+)]
 pub(super) fn spawn_background_tool_watcher(
     connection: ConnectionState,
     state: ShimState,
@@ -49,6 +53,10 @@ pub(super) fn spawn_background_tool_watcher(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the watcher owns each turn coordinate it reports against"
+)]
 fn spawn_background_tool_watcher_handle(
     connection: ConnectionState,
     state: ShimState,
@@ -446,6 +454,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test seed helper takes the seeded row's fields"
+    )]
     async fn seed_background_tool(
         node: &EmbeddedNode,
         request_id: &str,

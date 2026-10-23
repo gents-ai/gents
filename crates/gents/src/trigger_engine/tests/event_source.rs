@@ -11,8 +11,10 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
         resolved_event_trigger("complete-seed", "RescanSource", resolved_task("observe"));
     trigger.correlation_field = Some("correlation".to_owned());
     trigger.filter = Some("{correlation: {_like: \"group-%\"}}".to_owned());
-    let snapshot =
-        snapshot_with_event_triggers(1, HashMap::from([("complete-seed".to_owned(), trigger)]));
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        RapidHashMap::from_iter([("complete-seed".to_owned(), trigger)]),
+    );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(&snapshot).await;
@@ -86,7 +88,7 @@ async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real
     let trigger = resolved_event_trigger("trigger-branchable", "BranchableProbe", task);
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("trigger-branchable".to_string(), trigger)]),
+        RapidHashMap::from_iter([("trigger-branchable".to_string(), trigger)]),
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let subs = Arc::new(FakeUpdateSubscriptionSource::new());
@@ -138,8 +140,10 @@ async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_documen
         "WorkspaceReceipt",
         resolved_task("{{ event.source_doc_id }}"),
     );
-    let snapshot =
-        snapshot_with_event_triggers(1, HashMap::from([("receipt-trigger".to_string(), trigger)]));
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        RapidHashMap::from_iter([("receipt-trigger".to_string(), trigger)]),
+    );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(snapshot.as_ref()).await;
@@ -166,8 +170,10 @@ async fn an_event_source_on_a_branchable_runtime_collection_delivers_the_documen
     assert!(!source.has_seen("WorkspaceReceipt", ""));
 }
 
+type ReconciliationRecord = (u64, String, Result<(), String>);
+
 #[derive(Default)]
-struct SubscriptionObserver(std::sync::Mutex<Vec<(u64, String, Result<(), String>)>>);
+struct SubscriptionObserver(std::sync::Mutex<Vec<ReconciliationRecord>>);
 
 impl crate::RuntimeSnapshotObserver for SubscriptionObserver {
     fn on_generation_published(&self, _generation: u64, _fingerprint: &str, _behaviors: &[String]) {
@@ -200,7 +206,7 @@ async fn event_source_acknowledges_exact_configuration_after_subscription_setup(
         .has_errors());
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "ready-trigger".into(),
             resolved_event_trigger("ready-trigger", "ReadyInput", resolved_task("observe")),
         )]),
@@ -236,7 +242,7 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "delayed-schema".into(),
             resolved_event_trigger(
                 "delayed-schema",
@@ -271,7 +277,7 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
 async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let triggers = HashMap::from([(
+    let triggers = RapidHashMap::from_iter([(
         "missing".into(),
         resolved_event_trigger("missing", "AbsentInput", resolved_task("observe")),
     )]);
@@ -289,7 +295,7 @@ async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations()
     assert!(failures
         .iter()
         .all(|(_, _, result)| result.as_ref().unwrap_err().contains("AbsentInput")));
-    let removed = snapshot_with_event_triggers(3, HashMap::new());
+    let removed = snapshot_with_event_triggers(3, RapidHashMap::new());
     source.reconcile_subscriptions(&removed).await;
     assert_eq!(
         observer.0.lock().unwrap().last(),
@@ -301,7 +307,7 @@ async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations()
 async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let triggers = HashMap::from([(
+    let triggers = RapidHashMap::from_iter([(
         "eventual".into(),
         resolved_event_trigger("eventual", "EventualInput", resolved_task("observe")),
     )]);
@@ -389,21 +395,21 @@ fn event_test_behavior() -> Arc<ResolvedAgent> {
 
 fn snapshot_with_event_triggers(
     generation: u64,
-    triggers: HashMap<String, ResolvedEventTrigger>,
+    triggers: RapidHashMap<String, ResolvedEventTrigger>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
         vec![event_test_behavior()],
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
     )
     .with_automation(crate::runtime_snapshot::ResolvedAutomation {
         event_triggers: triggers,
         ..Default::default()
     })
     .with_node(stub_principal());
-    Arc::new(resolved.activate(generation, HashMap::new()))
+    Arc::new(resolved.activate(generation, RapidHashMap::new()))
 }
 
 async fn persist_event_bindings(
@@ -491,7 +497,7 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
     let task = resolved_task("ignored");
     let snap1 = snapshot_with_event_triggers(
         1,
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "trigger-a".to_string(),
             resolved_event_trigger("trigger-a", "CollectionA", task.clone()),
         )]),
@@ -510,7 +516,7 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
 
     let snap2 = snapshot_with_event_triggers(
         2,
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "trigger-b".to_string(),
             resolved_event_trigger("trigger-b", "CollectionB", task),
         )]),
@@ -544,8 +550,10 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-webhook", "WebhookEvent", task.clone());
-    let snapshot =
-        snapshot_with_event_triggers(1, HashMap::from([("trigger-webhook".to_string(), trigger)]));
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        RapidHashMap::from_iter([("trigger-webhook".to_string(), trigger)]),
+    );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
     let mut source = EventSource::new(rx, node.clone(), cancel.clone());
@@ -631,7 +639,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     );
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("trigger-after-callback".to_string(), trigger)]),
+        RapidHashMap::from_iter([("trigger-after-callback".to_string(), trigger)]),
     );
     persist_event_bindings(&node, snapshot.as_ref()).await;
     let (_tx, rx) = watch::channel(snapshot.clone());
@@ -723,8 +731,10 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
         filter: Some(r#"{ kind: { _eq: "include" } }"#.into()),
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
     };
-    let snapshot =
-        snapshot_with_event_triggers(1, HashMap::from([("group-trigger".to_string(), trigger)]));
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        RapidHashMap::from_iter([("group-trigger".to_string(), trigger)]),
+    );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node, CancellationToken::new());
 
@@ -805,7 +815,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("durable-group-trigger".to_string(), trigger)]),
+        RapidHashMap::from_iter([("durable-group-trigger".to_string(), trigger)]),
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node, CancellationToken::new());
@@ -867,7 +877,7 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
     };
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("deferred-correlation-trigger".to_string(), trigger)]),
+        RapidHashMap::from_iter([("deferred-correlation-trigger".to_string(), trigger)]),
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
@@ -950,7 +960,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
     };
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([
+        RapidHashMap::from_iter([
             (ready.trigger_id.clone(), ready),
             (pending.trigger_id.clone(), pending),
         ]),
@@ -1072,7 +1082,7 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
     };
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([
+        RapidHashMap::from_iter([
             (ready.trigger_id.clone(), ready),
             (pending.trigger_id.clone(), pending),
         ]),
@@ -1137,7 +1147,7 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     };
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("quiesced-group-trigger".to_string(), trigger)]),
+        RapidHashMap::from_iter([("quiesced-group-trigger".to_string(), trigger)]),
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut first_source = EventSource::new(rx, node.clone(), CancellationToken::new());
@@ -1230,7 +1240,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
     };
     let snapshot_one = snapshot_with_event_triggers(
         1,
-        HashMap::from([
+        RapidHashMap::from_iter([
             ("fingerprint-trigger".to_string(), trigger.clone()),
             ("fingerprint-trigger-2".to_string(), second_trigger.clone()),
         ]),
@@ -1244,7 +1254,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
     task_only_change.task.prompt_template = "second prompt".into();
     let snapshot_two = snapshot_with_event_triggers(
         2,
-        HashMap::from([
+        RapidHashMap::from_iter([
             ("fingerprint-trigger".to_string(), task_only_change),
             ("fingerprint-trigger-2".to_string(), second_trigger.clone()),
         ]),
@@ -1260,7 +1270,7 @@ async fn generation_bump_recovers_only_when_group_membership_definition_changes(
     membership_change.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
     let snapshot_three = snapshot_with_event_triggers(
         3,
-        HashMap::from([
+        RapidHashMap::from_iter([
             ("fingerprint-trigger".to_string(), membership_change),
             ("fingerprint-trigger-2".to_string(), second_trigger),
         ]),
@@ -1307,7 +1317,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
     );
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("trigger-filtered".to_string(), trigger)]),
+        RapidHashMap::from_iter([("trigger-filtered".to_string(), trigger)]),
     );
     persist_event_bindings(&node, snapshot.as_ref()).await;
     let (_tx, rx) = watch::channel(snapshot.clone());
@@ -1398,8 +1408,10 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
         ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-hydrate", "WebhookEvent", task.clone());
-    let snapshot =
-        snapshot_with_event_triggers(1, HashMap::from([("trigger-hydrate".to_string(), trigger)]));
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        RapidHashMap::from_iter([("trigger-hydrate".to_string(), trigger)]),
+    );
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -1567,8 +1579,10 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
         ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-fired", "WebhookEvent", task.clone());
-    let snapshot =
-        snapshot_with_event_triggers(1, HashMap::from([("trigger-fired".to_string(), trigger)]));
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        RapidHashMap::from_iter([("trigger-fired".to_string(), trigger)]),
+    );
     let (_tx, rx) = watch::channel(snapshot.clone());
 
     let cancel = CancellationToken::new();
@@ -1663,7 +1677,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let trigger = resolved_event_trigger("trigger-skip-err", "WebhookEvent", task.clone());
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("trigger-skip-err".to_string(), trigger)]),
+        RapidHashMap::from_iter([("trigger-skip-err".to_string(), trigger)]),
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
 
@@ -1816,7 +1830,7 @@ async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
     let trigger = resolved_event_trigger("trigger-noupdate", "WebhookEvent", task);
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("trigger-noupdate".to_string(), trigger)]),
+        RapidHashMap::from_iter([("trigger-noupdate".to_string(), trigger)]),
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
@@ -1869,7 +1883,7 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
     let trigger = resolved_event_trigger("trigger-firstseen", "WebhookEvent", task);
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([("trigger-firstseen".to_string(), trigger)]),
+        RapidHashMap::from_iter([("trigger-firstseen".to_string(), trigger)]),
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let cancel = CancellationToken::new();
@@ -1948,7 +1962,7 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
     let trigger_beta = resolved_event_trigger("trigger-beta", "WebhookEvent", task);
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([
+        RapidHashMap::from_iter([
             ("trigger-alpha".to_string(), trigger_alpha),
             ("trigger-beta".to_string(), trigger_beta),
         ]),
@@ -2027,7 +2041,7 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
     );
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([
+        RapidHashMap::from_iter([
             ("trigger-a-lex-first".to_string(), trigger_a),
             ("trigger-b-matches".to_string(), trigger_b),
         ]),
@@ -2083,7 +2097,7 @@ async fn event_source_reconcile_excludes_invalid_source_collection_identifiers()
     let task = resolved_task("ignored");
     let snapshot = snapshot_with_event_triggers(
         1,
-        HashMap::from([
+        RapidHashMap::from_iter([
             (
                 "trigger-injection".to_string(),
                 resolved_event_trigger(

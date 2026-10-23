@@ -54,7 +54,10 @@ pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<
     }
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
+impl<M> AgentDaemon<M>
+where
+    M: crate::llm::rig_compat::ProviderModel,
+{
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner. The loop remains the
     /// sole final legality authority.
@@ -118,9 +121,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             .await
         };
         let provider_request = assembled.map_err(anyhow::Error::new)?;
-        Ok(config
+        config
             .provider_input_counter
-            .estimate_request(&provider_request)?)
+            .estimate_request(&provider_request)
     }
 
     pub(super) async fn handle_request(
@@ -483,11 +486,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                     prior_provider_prefix,
                                     exact,
                                 )?;
-                            if compaction_generation_is_latest
-                                && compacted_through_sequence.is_some()
+                            if let (true, Some(compacted_through_sequence)) =
+                                (compaction_generation_is_latest, compacted_through_sequence)
                             {
-                                let compacted_through_sequence = compacted_through_sequence
-                                    .expect("the persistence branch requires a proven cursor");
                                 match session::save_exact_compaction_entry(
                                     &self.node,
                                     session::NewExactSessionCompaction {

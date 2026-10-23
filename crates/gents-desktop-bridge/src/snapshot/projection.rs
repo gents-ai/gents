@@ -3,7 +3,7 @@ use crate::types::{
     DesktopRuntimeSnapshot, InferenceBackendView, SkillView,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SnapshotGrants {
     pub session_read: bool,
     pub mailbox_read: bool,
@@ -11,19 +11,6 @@ pub struct SnapshotGrants {
     pub config_read: bool,
     pub operations_read: bool,
     pub runtime_admin: bool,
-}
-
-impl Default for SnapshotGrants {
-    fn default() -> Self {
-        Self {
-            session_read: false,
-            mailbox_read: false,
-            fleet_read: false,
-            config_read: false,
-            operations_read: false,
-            runtime_admin: false,
-        }
-    }
 }
 
 impl SnapshotGrants {

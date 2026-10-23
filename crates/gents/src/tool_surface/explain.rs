@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use rapidhash::RapidHashSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -114,7 +115,7 @@ impl AgentToolSurfaceConfig {
         &self,
         mcp_services_online: bool,
         own_node_did: &str,
-        active_agent_ids: &HashSet<String>,
+        active_agent_ids: &RapidHashSet<String>,
     ) -> ToolSurfaceExplanation {
         let availability = RuntimeToolAvailability::for_mcp_presence(mcp_services_online);
         let surface = self.resolve_with_available_agent_targets_for_runtime_availability(
@@ -129,7 +130,7 @@ impl AgentToolSurfaceConfig {
         &self,
         availability: RuntimeToolAvailability,
         own_node_did: &str,
-        active_agent_ids: &HashSet<String>,
+        active_agent_ids: &RapidHashSet<String>,
     ) -> ToolSurface {
         let mut agent_tools = self.agent_tools().clone();
         agent_tools.targets.retain(|target| {
@@ -142,7 +143,7 @@ impl AgentToolSurfaceConfig {
         &self,
         availability: RuntimeToolAvailability,
         own_node_did: &str,
-        active_agent_ids: &HashSet<String>,
+        active_agent_ids: &RapidHashSet<String>,
     ) -> ToolSurfaceExplanation {
         let surface = self.resolve_with_available_agent_targets_for_runtime_availability(
             availability.clone(),

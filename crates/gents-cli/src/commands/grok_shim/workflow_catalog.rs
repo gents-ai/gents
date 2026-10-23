@@ -50,7 +50,7 @@ pub(super) async fn list(
     plugin_home: &Path,
 ) -> Result<Value> {
     let tools =
-        gents::ConfigAccess::transact_local_readonly(&node, None, "grok.workflows_list", |txn| {
+        gents::ConfigAccess::transact_local_readonly(node, None, "grok.workflows_list", |txn| {
             Box::pin(async move { load_agent_tools_in_txn(txn, node_did, agent_id).await })
         })
         .await?;

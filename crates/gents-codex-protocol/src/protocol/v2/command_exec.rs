@@ -1,7 +1,7 @@
 use super::SandboxPolicy;
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +51,7 @@ pub struct CommandExecParams {
     pub cwd: Option<PathBuf>,
     /// Environment overrides merged into the server-computed environment;
     /// `null` unsets an inherited variable.
-    pub env: Option<HashMap<String, Option<String>>>,
+    pub env: Option<RapidHashMap<String, Option<String>>>,
     /// Initial PTY size in character cells; only valid when `tty` is true.
     pub size: Option<CommandExecTerminalSize>,
     /// Sandbox policy; cannot be combined with `permissionProfile`. Defaults

@@ -18,7 +18,7 @@ use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
 use crate::support::{
     build_request, create_request_with_valid_until, create_retry_request, first_row, test_db,
-    AGENT_NAME, BACKEND_ID, DEADLINE_SECS, NODE_DID,
+    RetryRequestSpec, AGENT_NAME, BACKEND_ID, DEADLINE_SECS, NODE_DID,
 };
 
 const STREAM_MODEL: &str = "default";
@@ -147,13 +147,15 @@ async fn resend_from_stale_populates_retry_chain() {
     let resend_1_created_at = chrono::Utc::now().to_rfc3339();
     let resend_1_doc_id = create_retry_request(
         &db.node,
-        &resend_1_id,
-        &session_id,
-        &original_request_id,
-        &original_request_id,
-        "hello",
-        &resend_1_created_at,
-        Some(&past),
+        &RetryRequestSpec {
+            request_id: &resend_1_id,
+            session_id: &session_id,
+            retry_parent_request: &original_request_id,
+            retry_root_request: &original_request_id,
+            content: "hello",
+            created_at: &resend_1_created_at,
+            valid_until: Some(&past),
+        },
     )
     .await;
 
@@ -182,13 +184,15 @@ async fn resend_from_stale_populates_retry_chain() {
     let resend_2_created_at = chrono::Utc::now().to_rfc3339();
     let resend_2_doc_id = create_retry_request(
         &db.node,
-        &resend_2_id,
-        &session_id,
-        &resend_1_id,
-        &original_request_id,
-        "hello",
-        &resend_2_created_at,
-        None,
+        &RetryRequestSpec {
+            request_id: &resend_2_id,
+            session_id: &session_id,
+            retry_parent_request: &resend_1_id,
+            retry_root_request: &original_request_id,
+            content: "hello",
+            created_at: &resend_2_created_at,
+            valid_until: None,
+        },
     )
     .await;
 

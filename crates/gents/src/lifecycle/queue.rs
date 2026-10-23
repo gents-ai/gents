@@ -69,8 +69,6 @@ pub(crate) use input::{
     background_wake_queue, is_automated_wakeup, row_is_automated_wakeup, row_queue,
 };
 pub(crate) use intake::{pending_ids_in_txn, steering_inputs, steering_snapshot};
-#[cfg(test)]
-use management::replace_pending_user_messages;
 pub(crate) use management::{
     apply_pending_user_edit_in_txn, persisted_replacements_in_txn,
     validate_pending_user_edit_in_txn, PersistedReplacements,
@@ -80,10 +78,13 @@ pub use management::{
     prepare_pending_user_edit, PendingQueueEntry, PendingQueueProjection, PendingQueueSnapshot,
     REMOVED_REASON, REPLACED_REASON,
 };
+#[cfg(test)]
+use management::{replace_pending_user_messages, PendingEditActor};
 pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
 #[cfg(test)]
 use mutation::session_request_create_mutation;
 use mutation::session_request_create_mutation_at_hop;
+use mutation::SessionRequestFields;
 pub use position::validate_position;
 pub(crate) use position::{effective_slots, InvalidQueuePosition};
 pub use submission::prepare_user_message_input;

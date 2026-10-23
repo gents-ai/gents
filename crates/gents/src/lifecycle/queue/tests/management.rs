@@ -1,7 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::lean_vocab_test::LeanQueueManagementOperation;
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 async fn queue_image(
     db: &TestDb,
@@ -64,8 +64,8 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             (false, 0) => Some("2000-01-01T00:00:00Z"),
             (false, _) => Some("malformed"),
         };
-        let mut bound = HashMap::new();
-        let mut names: HashMap<u64, String> = HashMap::new();
+        let mut bound = RapidHashMap::new();
+        let mut names: RapidHashMap<u64, String> = RapidHashMap::new();
         let signed = |id: u64, arrival: usize| {
             gents_protocol::request_admission::AgentRequestCreate::base(
                 gents_protocol::request_admission::RequestPurpose::Normal,
@@ -239,9 +239,11 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             &access,
             db.identity.as_ref(),
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(caller_did),
-            db.node_did(),
-            &session_id,
-            caller_did,
+            PendingEditActor {
+                node_did: db.node_did(),
+                session_id: &session_id,
+                requester_did: caller_did,
+            },
             edit,
             &replacements
                 .iter()

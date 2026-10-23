@@ -32,8 +32,8 @@ pub fn load_or_create_file_identity(path: &Path) -> Result<RawIdentity> {
 
     let private_key = crypto::generate_ed25519().map_err(anyhow::Error::from)?;
     let bytes = private_key.raw();
-    match publish_private_key_file(path, &bytes) {
-        Ok(true) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, &bytes)
+    match publish_private_key_file(path, bytes) {
+        Ok(true) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, bytes)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("constructing identity from {}", path.display())),
         Ok(false) => load_file_identity(path),

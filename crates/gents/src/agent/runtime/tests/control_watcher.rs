@@ -1,9 +1,7 @@
 use super::support::*;
 use super::*;
-use crate::agent::DocumentResolveContext;
 use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 use crate::identity::NodeIdentity;
-use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RECONCILE_PHASE_EVENT_TARGET};
 use anyhow::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -97,28 +95,8 @@ const TEST_CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
 
 const PROPOSAL_TIMEOUT: Duration = Duration::from_secs(5);
 
-async fn run_test_control_watcher(
-    node: Arc<defra_node::EmbeddedNode>,
-    subscription: ControlSubscription,
-    node_did: String,
-    resolve_context: DocumentResolveContext,
-    proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
-    runtime_status: RuntimeStatusHandle,
-    health_events_rx: mpsc::Receiver<()>,
-    shutdown: watch::Receiver<bool>,
-) -> Result<()> {
-    run_control_watcher_with_timing(
-        node,
-        subscription,
-        node_did,
-        resolve_context,
-        proposals_tx,
-        runtime_status,
-        health_events_rx,
-        shutdown,
-        TEST_CONTROL_WATCHER_TIMING,
-    )
-    .await
+async fn run_test_control_watcher(inputs: ControlWatcherInputs) -> Result<()> {
+    run_control_watcher_with_timing(inputs, TEST_CONTROL_WATCHER_TIMING).await
 }
 
 async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, enabled: bool) {
@@ -232,16 +210,16 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     .unwrap();
 
     let watcher_task = tokio::spawn(
-        run_test_control_watcher(
-            node.clone(),
+        run_test_control_watcher(ControlWatcherInputs {
+            node: node.clone(),
             subscription,
-            agent.node_did().to_string(),
+            node_did: agent.node_did().to_string(),
             resolve_context,
-            proposal_tx,
-            runtime_status.clone(),
-            mpsc::channel::<()>(1).1,
-            shutdown_rx,
-        )
+            proposals_tx: proposal_tx,
+            runtime_status: runtime_status.clone(),
+            health_events_rx: mpsc::channel::<()>(1).1,
+            shutdown: shutdown_rx,
+        })
         .with_subscriber(subscriber),
     );
 
@@ -348,14 +326,16 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
     let subscription = subscribe_control_changes(&node).unwrap();
     let watcher_task = tokio::spawn(run_control_watcher_with_timing(
-        node.clone(),
-        subscription,
-        agent.node_did().to_string(),
-        resolve_context,
-        proposal_tx,
-        runtime_status,
-        mpsc::channel::<()>(1).1,
-        shutdown_rx,
+        ControlWatcherInputs {
+            node: node.clone(),
+            subscription,
+            node_did: agent.node_did().to_string(),
+            resolve_context,
+            proposals_tx: proposal_tx,
+            runtime_status,
+            health_events_rx: mpsc::channel::<()>(1).1,
+            shutdown: shutdown_rx,
+        },
         ControlWatcherTiming {
             debounce: Duration::from_secs(3600),
             ..TEST_CONTROL_WATCHER_TIMING
@@ -436,16 +416,16 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     let subscriber = Registry::default().with(phases);
 
     let watcher_task = tokio::spawn(
-        run_test_control_watcher(
-            node.clone(),
-            subscribe_control_changes(&node).unwrap(),
-            agent.node_did().to_string(),
+        run_test_control_watcher(ControlWatcherInputs {
+            node: node.clone(),
+            subscription: subscribe_control_changes(&node).unwrap(),
+            node_did: agent.node_did().to_string(),
             resolve_context,
-            proposal_tx,
-            runtime_status.clone(),
-            health_rx,
-            shutdown_rx,
-        )
+            proposals_tx: proposal_tx,
+            runtime_status: runtime_status.clone(),
+            health_events_rx: health_rx,
+            shutdown: shutdown_rx,
+        })
         .with_subscriber(subscriber),
     );
 
@@ -560,16 +540,16 @@ async fn control_watcher_recovers_after_resolve_error() {
     let subscriber = Registry::default().with(reloads);
 
     let watcher_task = tokio::spawn(
-        run_test_control_watcher(
-            node.clone(),
-            subscribe_control_changes(&node).unwrap(),
-            agent.node_did().to_string(),
+        run_test_control_watcher(ControlWatcherInputs {
+            node: node.clone(),
+            subscription: subscribe_control_changes(&node).unwrap(),
+            node_did: agent.node_did().to_string(),
             resolve_context,
-            proposal_tx,
-            runtime_status.clone(),
-            mpsc::channel::<()>(1).1,
-            shutdown_rx,
-        )
+            proposals_tx: proposal_tx,
+            runtime_status: runtime_status.clone(),
+            health_events_rx: mpsc::channel::<()>(1).1,
+            shutdown: shutdown_rx,
+        })
         .with_subscriber(subscriber),
     );
 
@@ -633,16 +613,16 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
-    let watcher_task = tokio::spawn(run_test_control_watcher(
-        node.clone(),
-        subscribe_control_changes(&node).unwrap(),
-        agent.node_did().to_string(),
+    let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
+        node: node.clone(),
+        subscription: subscribe_control_changes(&node).unwrap(),
+        node_did: agent.node_did().to_string(),
         resolve_context,
-        proposal_tx,
-        runtime_status.clone(),
-        mpsc::channel::<()>(1).1,
-        shutdown_rx,
-    ));
+        proposals_tx: proposal_tx,
+        runtime_status: runtime_status.clone(),
+        health_events_rx: mpsc::channel::<()>(1).1,
+        shutdown: shutdown_rx,
+    }));
 
     tokio::task::yield_now().await;
 
@@ -781,16 +761,16 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     .await
     .unwrap();
 
-    let watcher_task = tokio::spawn(run_test_control_watcher(
-        node.clone(),
+    let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
+        node: node.clone(),
         subscription,
-        node_did.clone(),
+        node_did: node_did.clone(),
         resolve_context,
-        proposal_tx,
-        runtime_status.clone(),
-        mpsc::channel::<()>(1).1,
-        shutdown_rx,
-    ));
+        proposals_tx: proposal_tx,
+        runtime_status: runtime_status.clone(),
+        health_events_rx: mpsc::channel::<()>(1).1,
+        shutdown: shutdown_rx,
+    }));
 
     let snapshot = tokio::time::timeout(Duration::from_secs(5), proposal_rx.recv())
         .await
@@ -918,16 +898,16 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     runtime_status.initialize_startup(&agent_id).await.unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
-    let watcher_task = tokio::spawn(run_test_control_watcher(
-        node.clone(),
-        subscribe_control_changes(&node).unwrap(),
-        node_did.clone(),
+    let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
+        node: node.clone(),
+        subscription: subscribe_control_changes(&node).unwrap(),
+        node_did: node_did.clone(),
         resolve_context,
-        proposal_tx,
+        proposals_tx: proposal_tx,
         runtime_status,
-        mpsc::channel::<()>(1).1,
-        shutdown_rx,
-    ));
+        health_events_rx: mpsc::channel::<()>(1).1,
+        shutdown: shutdown_rx,
+    }));
     tokio::task::yield_now().await;
 
     write_tools_naming_plugin(&node, &node_did, &format!("{agent_id}:tools")).await;

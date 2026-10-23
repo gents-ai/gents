@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -78,7 +78,7 @@ async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idem
             Arc::new(McpConnection {
                 endpoint: endpoint.to_string(),
                 node_did_header: None,
-                trace_context_headers: HashMap::new(),
+                trace_context_headers: RapidHashMap::new(),
                 last_used: super::fresh_last_used(),
                 resume_policy: SessionResumePolicy::detached(&service_id),
                 list_tools_fn: Box::new(|| Box::pin(async { Ok(ListToolsResult::default()) })),
@@ -175,7 +175,7 @@ async fn mcp_pool_reconnects_when_trace_context_changes() {
     let (endpoint, requests) = spawn_header_capture_mcp_server().await;
     let pool = McpPool::new().with_trace_context_headers(move || {
         let sequence = sequence_for_headers.fetch_add(1, Ordering::SeqCst) + 1;
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "traceparent".to_string(),
             format!("00-{sequence:032x}-00f067aa0ba902b7-01"),
         )])
@@ -212,7 +212,7 @@ async fn replacing_connection_terminates_old_streamable_http_session() {
     let (endpoint, http_log) = spawn_session_tracking_mcp_server().await;
     let pool = McpPool::new().with_trace_context_headers(move || {
         let sequence = sequence_for_headers.fetch_add(1, Ordering::SeqCst) + 1;
-        HashMap::from([(
+        RapidHashMap::from_iter([(
             "traceparent".to_string(),
             format!("00-{sequence:032x}-00f067aa0ba902b7-01"),
         )])

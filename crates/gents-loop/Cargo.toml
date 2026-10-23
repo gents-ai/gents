@@ -20,6 +20,7 @@ native = ["rig-core/reqwest", "rig-core/rustls"]
 typescript = ["dep:ts-rs"]
 
 [dependencies]
+rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow = { workspace = true }
 async-stream = "0.3"

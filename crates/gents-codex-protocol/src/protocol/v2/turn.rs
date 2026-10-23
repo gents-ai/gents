@@ -2,10 +2,10 @@ use super::ApprovalsReviewer;
 use super::AskForApproval;
 use super::SandboxPolicy;
 use super::Turn;
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -29,7 +29,7 @@ pub struct TurnEnvironmentParams {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    pub responsesapi_client_metadata: Option<RapidHashMap<String, String>>,
     /// Omitted uses the thread sticky environments. Empty disables
     /// environment access for this turn. Non-empty selects the first
     /// environment as the current turn environment.
@@ -72,7 +72,7 @@ pub struct TurnStartResponse {
 pub struct TurnSteerParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    pub responsesapi_client_metadata: Option<RapidHashMap<String, String>>,
     /// The request fails when this does not match the currently active turn.
     pub expected_turn_id: String,
 }

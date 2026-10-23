@@ -148,26 +148,32 @@ pub async fn desktop_managed_server_validate_root(
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_status<R: Runtime>(
+pub async fn desktop_managed_server_status<R>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     let status = managed_server_status_for(&app, &state).await?;
     let _ = app.emit(MANAGED_SERVER_UPDATED_EVENT, status.clone());
     Ok(status)
 }
 
-async fn observe_managed_server_status<R: Runtime>(
+async fn observe_managed_server_status<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     let stored = load_bound_preference(state).await?;
-    let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
     let last_exit = if (native.job_loaded || native.failed)
         && !native.running
         && !native.requires_approval
     {
-        match run_native(native_service(&app, &state)?, |service| service.last_exit()).await {
+        match run_native(native_service(app, state)?, |service| service.last_exit()).await {
             Ok(reason) => reason,
             Err(error) => {
                 tracing::debug!(target: "gents_desktop::managed_server", error = %error.message, "could not read the native service exit record");
@@ -237,10 +243,13 @@ async fn observe_managed_server_status<R: Runtime>(
     Ok(status)
 }
 
-pub(crate) async fn managed_server_status_for<R: Runtime>(
+pub(crate) async fn managed_server_status_for<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     ensure_allowed(state)?;
     observe_managed_server_status(app, state).await
 }
@@ -283,11 +292,14 @@ async fn pairing_is_ready(state: &DesktopAppState, node_did: Option<&str>) -> bo
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_start<R: Runtime>(
+pub async fn desktop_managed_server_start<R>(
     app: AppHandle<R>,
     request: ManagedServerStartRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     ensure_allowed(&state)?;
     let lifecycle = state.managed_server_lifecycle.lock().await;
     start_managed_server(&app, request, &state, lifecycle).await
@@ -413,14 +425,20 @@ enum Launched {
     ApprovalPending(String),
 }
 
-struct NativeLaunch<'a, R: Runtime> {
+struct NativeLaunch<'a, R>
+where
+    R: Runtime,
+{
     app: &'a AppHandle<R>,
     state: &'a DesktopAppState,
     node_home: &'a Path,
     enable_at_login: bool,
 }
 
-impl<R: Runtime> ManagedLaunch for NativeLaunch<'_, R> {
+impl<R> ManagedLaunch for NativeLaunch<'_, R>
+where
+    R: Runtime,
+{
     async fn requires_approval(&self) -> Result<bool, BridgeError> {
         native_requires_approval(self.app, self.state).await
     }
@@ -462,12 +480,15 @@ struct LaunchFailure<'a> {
     lifecycle: Option<LifecycleGuard<'a>>,
 }
 
-async fn launch_managed_server<'a, L: ManagedLaunch>(
+async fn launch_managed_server<'a, L>(
     state: &'a DesktopAppState,
     token: &StartWait,
     lifecycle: LifecycleGuard<'a>,
     launch: &L,
-) -> Result<(ManagedServerStatus, LifecycleGuard<'a>), LaunchFailure<'a>> {
+) -> Result<(ManagedServerStatus, LifecycleGuard<'a>), LaunchFailure<'a>>
+where
+    L: ManagedLaunch,
+{
     let mut lifecycle = Some(lifecycle);
     let mut attempted_start = false;
     let result: anyhow::Result<ManagedServerStatus> = async {
@@ -512,12 +533,15 @@ async fn launch_managed_server<'a, L: ManagedLaunch>(
     }
 }
 
-async fn start_when_approved<'a, L: ManagedLaunch>(
+async fn start_when_approved<'a, L>(
     state: &'a DesktopAppState,
     token: &StartWait,
     lifecycle: &mut Option<LifecycleGuard<'a>>,
     launch: &L,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    L: ManagedLaunch,
+{
     let started = tokio::time::Instant::now();
     loop {
         let refusal = match launch.start().await {
@@ -551,12 +575,15 @@ async fn start_when_approved<'a, L: ManagedLaunch>(
     }
 }
 
-async fn start_managed_server<'a, R: Runtime>(
+async fn start_managed_server<'a, R>(
     app: &AppHandle<R>,
     request: ManagedServerStartRequest,
     state: &'a DesktopAppState,
     lifecycle: LifecycleGuard<'a>,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     ensure_app_not_quitting(state)?;
     let node_name = request.node_name.trim();
     if node_name.is_empty() {
@@ -644,7 +671,7 @@ async fn start_managed_server<'a, R: Runtime>(
             core.refresh_local_standard_peer(&node_home, &target.node_name)
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
-            start_managed_runtime_pairing(&state, core, node_home, target).await;
+            start_managed_runtime_pairing(state, core, node_home, target).await;
         }
         external.pairing_ready = pairing_is_ready(state, external.node_did.as_deref()).await;
         return Ok(external);
@@ -665,6 +692,7 @@ async fn start_managed_server<'a, R: Runtime>(
             ensure_default_port_identity(&node_home).await?;
         }
         gents_server::server_host::ensure_standard_home(
+            tauri::async_runtime::handle().inner(),
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
                 node_name: node_name.to_string(),
@@ -733,7 +761,7 @@ async fn start_managed_server<'a, R: Runtime>(
         }),
     };
 
-    let _lifecycle = match launched {
+    match launched {
         Ok(lifecycle) => {
             finish_start_wait(state, &token).await;
             state.managed_server.lock().await.incompatible_store = None;
@@ -814,13 +842,16 @@ where
     Ok((message, typed_error))
 }
 
-async fn install_then_launch<'a, L: ManagedLaunch>(
+async fn install_then_launch<'a, L>(
     state: &'a DesktopAppState,
     token: &StartWait,
     lifecycle: LifecycleGuard<'a>,
     install: impl Future<Output = Result<(), BridgeError>>,
     launch: &L,
-) -> Result<(ManagedServerStatus, LifecycleGuard<'a>), LaunchFailure<'a>> {
+) -> Result<(ManagedServerStatus, LifecycleGuard<'a>), LaunchFailure<'a>>
+where
+    L: ManagedLaunch,
+{
     if let Err(error) = install.await {
         return Err(LaunchFailure {
             error: error.into(),
@@ -831,14 +862,17 @@ async fn install_then_launch<'a, L: ManagedLaunch>(
     launch_managed_server(state, token, lifecycle, launch).await
 }
 
-async fn fail_managed_start<R: Runtime>(
+async fn fail_managed_start<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     token: &StartWait,
     node_home: &Path,
     initial_enabled: bool,
     failure: LaunchFailure<'_>,
-) -> BridgeError {
+) -> BridgeError
+where
+    R: Runtime,
+{
     let refused_kind = refused_kind(&failure.error);
     let settled = settle_launch_failure(state, token, failure, || async {
         run_native(native_service(app, state)?, move |service| {
@@ -884,11 +918,14 @@ async fn fail_managed_start<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_reset<R: Runtime>(
+pub async fn desktop_managed_server_reset<R>(
     request: ManagedServerResetRequest,
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<ManagedServerResetResult, BridgeError> {
+) -> Result<ManagedServerResetResult, BridgeError>
+where
+    R: Runtime,
+{
     let full_reset = request.full_reset.unwrap_or(false);
     if full_reset && !cfg!(target_os = "macos") {
         return Err(BridgeError::new(
@@ -1042,13 +1079,16 @@ pub(super) async fn retire_orphaned_client_state(
     Ok(Some(result))
 }
 
-async fn retire_incompatible_home<R: Runtime>(
+async fn retire_incompatible_home<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     confirmation: &str,
     disposition: HomeResetDisposition,
     full_reset: bool,
-) -> Result<ManagedServerResetResult, BridgeError> {
+) -> Result<ManagedServerResetResult, BridgeError>
+where
+    R: Runtime,
+{
     let plan = plan_state_reset(state, full_reset).await?;
     plan.check_confirmation(confirmation, disposition)?;
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
@@ -1273,10 +1313,13 @@ enum NativeProgress {
     Failed(gents_server::native_service::ServiceExit),
 }
 
-async fn observe_native_progress<R: Runtime>(
+async fn observe_native_progress<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<NativeProgress, BridgeError> {
+) -> Result<NativeProgress, BridgeError>
+where
+    R: Runtime,
+{
     run_native(native_service(app, state)?, |service| {
         let status = service.status()?;
         if status.requires_approval {
@@ -1299,11 +1342,14 @@ async fn observe_native_progress<R: Runtime>(
     .await
 }
 
-async fn wait_for_managed_server<R: Runtime>(
+async fn wait_for_managed_server<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     node_home: &Path,
-) -> anyhow::Result<Readiness> {
+) -> anyhow::Result<Readiness>
+where
+    R: Runtime,
+{
     await_runtime_readiness(
         MANAGED_SERVER_READY_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
@@ -1443,12 +1489,15 @@ async fn adopt_booting_runtime<'a>(
     })
 }
 
-async fn wait_for_booting_managed_server<'a, R: Runtime>(
+async fn wait_for_booting_managed_server<'a, R>(
     app: &AppHandle<R>,
     state: &'a DesktopAppState,
     node_home: &Path,
     lifecycle: LifecycleGuard<'a>,
-) -> Result<BootOutcome<'a>, BridgeError> {
+) -> Result<BootOutcome<'a>, BridgeError>
+where
+    R: Runtime,
+{
     let token = begin_start_wait(state).await;
     emit_status(app, state).await;
     tracing::info!(
@@ -1507,10 +1556,13 @@ async fn settle_adoption<'a>(
     Err(typed)
 }
 
-async fn native_requires_approval<R: Runtime>(
+async fn native_requires_approval<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<bool, BridgeError> {
+) -> Result<bool, BridgeError>
+where
+    R: Runtime,
+{
     let refused = state.managed_server.lock().await.approval_refused;
     Ok(
         run_native(native_service(app, state)?, |service| service.status())
@@ -1519,10 +1571,13 @@ async fn native_requires_approval<R: Runtime>(
     )
 }
 
-async fn await_managed_server_approval<R: Runtime>(
+async fn await_managed_server_approval<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    R: Runtime,
+{
     await_background_approval(
         BACKGROUND_APPROVAL_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
@@ -1568,10 +1623,13 @@ where
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_open_login_items<R: Runtime>(
+pub async fn desktop_managed_server_open_login_items<R>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     ensure_allowed(&state)?;
     let (opened, result) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
@@ -1727,32 +1785,41 @@ fn validate_ready_runtime(
     Ok(())
 }
 
-fn ensure_launchable_here<R: Runtime>(
-    app: &AppHandle<R>,
-    state: &DesktopAppState,
-) -> Result<(), BridgeError> {
+fn ensure_launchable_here<R>(app: &AppHandle<R>, state: &DesktopAppState) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
     ensure_installable_location(executable.service_path())
 }
 
-fn native_service<R: Runtime>(
+fn native_service<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<gents_server::native_service::NativeServiceManager, BridgeError> {
+) -> Result<gents_server::native_service::NativeServiceManager, BridgeError>
+where
+    R: Runtime,
+{
     build_native_service(app, state, false)
 }
 
-fn launchable_native_service<R: Runtime>(
+fn launchable_native_service<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<gents_server::native_service::NativeServiceManager, BridgeError> {
+) -> Result<gents_server::native_service::NativeServiceManager, BridgeError>
+where
+    R: Runtime,
+{
     build_native_service(app, state, true)
 }
 
-pub(crate) fn refresh_packaged_install<R: Runtime>(
+pub(crate) fn refresh_packaged_install<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     if state.policy.node_home.is_none() {
         return Ok(());
     }
@@ -1801,10 +1868,13 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
     service.install().map_err(native_error)
 }
 
-pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
+pub(crate) async fn restart_outdated_managed_job<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let Some(node_home) = state.policy.node_home.clone() else {
         return Ok(());
     };
@@ -1850,11 +1920,14 @@ pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
     restarted
 }
 
-fn build_native_service<R: Runtime>(
+fn build_native_service<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     install_runtime: bool,
-) -> Result<gents_server::native_service::NativeServiceManager, BridgeError> {
+) -> Result<gents_server::native_service::NativeServiceManager, BridgeError>
+where
+    R: Runtime,
+{
     let home = state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
@@ -2183,22 +2256,28 @@ fn combine_cleanup_error(original: String, owner: &str, cleanup: String) -> Stri
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_stop<R: Runtime>(
+pub async fn desktop_managed_server_stop<R>(
     app: AppHandle<R>,
     disable_auto_start: bool,
     state: State<'_, DesktopAppState>,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     ensure_allowed(&state)?;
     let _lifecycle = lock_lifecycle_superseding_start(&state).await;
     stop_managed_server_locked(&app, disable_auto_start, &state).await
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_set_auto_start<R: Runtime>(
+pub async fn desktop_managed_server_set_auto_start<R>(
     app: AppHandle<R>,
     enabled: bool,
     state: State<'_, DesktopAppState>,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     ensure_allowed(&state)?;
     let _lifecycle = state.managed_server_lifecycle.lock().await;
     ensure_app_not_quitting(&state)?;
@@ -2216,11 +2295,14 @@ pub async fn desktop_managed_server_set_auto_start<R: Runtime>(
     desktop_managed_server_status(app, state).await
 }
 
-async fn stop_managed_server_locked<R: Runtime>(
+async fn stop_managed_server_locked<R>(
     app: &AppHandle<R>,
     disable_auto_start: bool,
     state: &DesktopAppState,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     {
         let mut managed = state.managed_server.lock().await;
         managed.starting = false;
@@ -2233,7 +2315,7 @@ async fn stop_managed_server_locked<R: Runtime>(
     };
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
     ensure_native_owns_running_endpoint(&port, native.job_loaded)?;
-    drain_managed_runtime_pairing(&state).await;
+    drain_managed_runtime_pairing(state).await;
     if let Err(error) = run_native(native_service(app, state)?, move |service| {
         service.stop(disable_auto_start)
     })
@@ -2247,10 +2329,13 @@ async fn stop_managed_server_locked<R: Runtime>(
     observe_managed_server_status(app, state).await
 }
 
-pub(crate) async fn prepare_app_exit<R: Runtime>(
+pub(crate) async fn prepare_app_exit<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let _lifecycle = state.managed_server_lifecycle.lock().await;
     let service = match native_service(app, state) {
         Ok(service) => service,
@@ -2284,10 +2369,13 @@ fn ensure_app_not_quitting(state: &DesktopAppState) -> Result<(), BridgeError> {
     Ok(())
 }
 
-pub(crate) async fn start_configured_managed_server<R: Runtime>(
+pub(crate) async fn start_configured_managed_server<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     if state.policy.managed_server != ManagedServerPolicy::Allowed
         || state.policy.node_home.is_none()
     {
@@ -2322,11 +2410,14 @@ pub(crate) async fn start_configured_managed_server<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_restart<R: Runtime>(
+pub async fn desktop_managed_server_restart<R>(
     app: AppHandle<R>,
     request: ManagedServerRestartRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<ManagedServerStatus, BridgeError> {
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+{
     ensure_allowed(&state)?;
     let authority = EffectiveManagedAuthority::from_request(
         request.tool_ceiling,
@@ -2374,9 +2465,12 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     if let Err(error) = stop_before_reprovision(
         || async { run_native(native_service(&app, &state)?, |service| service.stop(false)).await },
         || async {
-            gents_server::server_host::ensure_standard_home(provision)
-                .await
-                .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+            gents_server::server_host::ensure_standard_home(
+                tauri::async_runtime::handle().inner(),
+                provision,
+            )
+            .await
+            .map_err(|error| BridgeError::untyped(format!("{error:#}")))
         },
         || async {
             save_confirmed_preference(
@@ -2640,7 +2734,10 @@ fn parse_tool_ceiling(value: &str) -> Option<ManagedServerToolCeiling> {
     }
 }
 
-async fn emit_status<R: Runtime>(app: &AppHandle<R>, state: &DesktopAppState) {
+async fn emit_status<R>(app: &AppHandle<R>, state: &DesktopAppState)
+where
+    R: Runtime,
+{
     let status = match observe_managed_server_status(app, state).await {
         Ok(status) => status,
         Err(error) => {
@@ -3070,6 +3167,7 @@ mod tests {
         };
         save_preference(&state, &forge).await.unwrap();
         gents_server::server_host::ensure_standard_home(
+            &crate::tests::support::runtime_handle(),
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
                 node_name: "Scout".to_string(),
@@ -5856,8 +5954,7 @@ mod tests {
         )
         .await
         .expect("an unobservable refusal is not retried in a loop")
-        .err()
-        .expect("the start fails");
+        .expect_err("the start fails");
         assert!(
             failure.error.to_string().contains("Input/output error"),
             "{}",
@@ -5952,8 +6049,7 @@ mod tests {
         let lifecycle = state.managed_server_lifecycle.lock().await;
         let failure = launch_managed_server(&state, &token, lifecycle, &launch)
             .await
-            .err()
-            .expect("start fails");
+            .expect_err("start fails");
         assert!(failure.error.to_string().contains("kickstart failed"));
         assert!(failure.attempted_start);
         assert!(failure.lifecycle.is_some());
@@ -6004,7 +6100,7 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(1), async { tokio::join!(start, stop) })
                 .await
                 .expect("start ends promptly after stop");
-        let failure = failure.err().expect("a cancelled start fails");
+        let failure = failure.expect_err("a cancelled start fails");
         assert!(failure.error.to_string().contains("cancelled"));
         assert!(!failure.attempted_start);
         assert_eq!(launch.starts(), 0);
@@ -6036,7 +6132,7 @@ mod tests {
         })
         .await
         .expect("start ends promptly after restart");
-        let failure = failure.err().expect("the superseded start fails");
+        let failure = failure.expect_err("the superseded start fails");
         assert!(failure.attempted_start);
         assert!(failure.lifecycle.is_none(), "restart owns the lifecycle");
         assert!(
@@ -6201,8 +6297,7 @@ mod tests {
         let launch = FakeLaunch::default();
         let failure = launch_managed_server(&state, &token, lifecycle, &launch)
             .await
-            .err()
-            .expect("a start cancelled while it held the lock does not launch");
+            .expect_err("a start cancelled while it held the lock does not launch");
         assert!(failure.error.to_string().contains("stopped"));
         assert_eq!(launch.starts(), 0);
         drop(failure);
@@ -6261,7 +6356,7 @@ mod tests {
         })
         .await
         .expect("restart ends promptly after stop");
-        let failure = failure.err().expect("the stopped restart fails");
+        let failure = failure.expect_err("the stopped restart fails");
         assert!(failure.error.to_string().contains("stopped"));
         assert!(failure.attempted_start);
         assert!(failure.lifecycle.is_none());
@@ -6293,14 +6388,17 @@ mod tests {
         })
         .await
         .expect("restart ends promptly");
-        let failure = failure.err().expect("the restart is cancelled");
+        let failure = failure.expect_err("the restart is cancelled");
         assert!(failure.error.to_string().contains("stopped"));
         assert!(failure.lifecycle.is_none());
         assert!(token.is_cancelled());
         assert!(!state.managed_server.lock().await.starting);
     }
 
-    async fn futures_poll_once<F: Future + Unpin>(future: F) -> Option<F::Output> {
+    async fn futures_poll_once<F>(future: F) -> Option<F::Output>
+    where
+        F: Future + Unpin,
+    {
         let mut future = future;
         std::future::poll_fn(|cx| {
             std::task::Poll::Ready(match std::pin::Pin::new(&mut future).poll(cx) {
@@ -6367,7 +6465,7 @@ mod tests {
         })
         .await
         .expect("restart ends promptly after stop");
-        let failure = failure.err().expect("the stopped restart fails");
+        let failure = failure.expect_err("the stopped restart fails");
         assert!(failure.error.to_string().contains("stopped"));
         assert!(!failure.attempted_start);
         assert!(failure.lifecycle.is_none());
@@ -6652,8 +6750,7 @@ mod tests {
             &launch,
         )
         .await
-        .err()
-        .expect("a failed install fails the launch");
+        .expect_err("a failed install fails the launch");
         assert!(!failure.attempted_start);
         assert_eq!(launch.starts(), 0);
 
@@ -6663,7 +6760,6 @@ mod tests {
             Ok(())
         })
         .await
-        .ok()
         .expect("an uncancelled failure is recorded");
         assert!(message.contains("copying the Gents runtime failed"));
         assert!(

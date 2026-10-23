@@ -42,6 +42,10 @@ fn route_reconcile_fence(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the supervisor task owns each handle for its lifetime"
+)]
 pub(super) fn spawn_p2p_supervisor_task(
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
@@ -213,6 +217,10 @@ fn removal_retry_delay(failures: u32) -> Duration {
     Duration::from_secs(2_u64.saturating_pow(failures.min(5)))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "supervisor state borrowed from separate owners"
+)]
 async fn run_saved_peer_repair_cycle(
     bus: &dyn events::Bus,
     p2p: &Arc<dyn P2POps>,

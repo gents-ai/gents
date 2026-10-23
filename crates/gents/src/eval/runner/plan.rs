@@ -65,8 +65,10 @@ pub fn not_evidence_slots(existing: &[TrialRecord]) -> u32 {
 
 pub const MAX_ABANDONED_ATTEMPTS: u32 = 10;
 
+type SlotAttempts = (u32, Option<(u32, bool)>);
+
 pub fn abandonment_bounded_slots(existing: &[TrialRecord]) -> u32 {
-    let mut slots: BTreeMap<(&str, &str, u32), (u32, Option<(u32, bool)>)> = BTreeMap::new();
+    let mut slots: BTreeMap<(&str, &str, u32), SlotAttempts> = BTreeMap::new();
     for record in existing {
         let key = (
             record.identity.cell_id.as_str(),

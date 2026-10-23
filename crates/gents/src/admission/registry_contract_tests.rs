@@ -101,7 +101,7 @@ struct Harness {
     held: VecDeque<AdmissionPermit>,
     outcomes: Observation,
     started: usize,
-    slots: std::collections::HashMap<String, u64>,
+    slots: rapidhash::RapidHashMap<String, u64>,
 }
 
 impl Harness {
@@ -210,7 +210,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
         held: VecDeque::new(),
         outcomes: Observation::default(),
         started: 0,
-        slots: std::collections::HashMap::new(),
+        slots: rapidhash::RapidHashMap::default(),
     };
     for (index, (action, expected)) in case.actions.iter().zip(&case.expected).enumerate() {
         match action {
@@ -306,11 +306,20 @@ async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
             CallKind::Inference,
         )
     };
-    registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
+    registry.reconcile(
+        1,
+        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(1, 1))]),
+    );
     let old = registry.active_for_test(backend_id).unwrap();
     let mut first = acquire("rollback-old-owner").await.unwrap();
-    registry.reconcile(2, &[(backend_id.to_owned(), config(2, 2))].into());
-    registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
+    registry.reconcile(
+        2,
+        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(2, 2))]),
+    );
+    registry.reconcile(
+        1,
+        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(1, 1))]),
+    );
     let restored = registry.active_for_test(backend_id).unwrap();
     assert!(!Arc::ptr_eq(&old, &restored));
     assert!(Arc::ptr_eq(&old.pool, &restored.pool));

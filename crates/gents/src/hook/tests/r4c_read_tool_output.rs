@@ -470,7 +470,7 @@ async fn read_tool_output_pages_gap_free_across_budget() {
 #[tokio::test]
 async fn read_process_multibyte_utf8_page_boundary_slices_on_char_boundary() {
     let char_3byte: char = '\u{2019}';
-    let raw: String = std::iter::repeat(char_3byte).take(64).collect();
+    let raw: String = std::iter::repeat_n(char_3byte, 64).collect();
     assert_eq!(
         raw.len(),
         192,

@@ -1314,10 +1314,12 @@ mod tests {
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+    type RecordedCapabilities = (bool, bool, bool, Option<String>);
+
     struct RecordingDelegate {
         late_push: bool,
         payloads: Mutex<Vec<String>>,
-        capabilities: Mutex<Option<(bool, bool, bool, Option<String>)>>,
+        capabilities: Mutex<Option<RecordedCapabilities>>,
         client_ids: Mutex<Vec<u64>>,
         disconnects: AtomicUsize,
         instance_id: u64,
@@ -1888,12 +1890,11 @@ mod tests {
             !target.join("nested").exists(),
             "the symlink target must be untouched"
         );
-        assert_eq!(
+        assert!(
             std::fs::symlink_metadata(&link)
                 .expect("link metadata")
                 .file_type()
                 .is_symlink(),
-            true,
             "the symlink itself must be left in place"
         );
         assert_eq!(

@@ -120,7 +120,7 @@ async fn run_file_action(
         )
         .await;
     }
-    let path = resolve_inbound_path(context, file).map_err(|err| policy(err))?;
+    let path = resolve_inbound_path(context, file).map_err(policy)?;
     let text = std::fs::read_to_string(&path).map_err(|err| {
         ToolError::reported_failure(FailureClass::ArgumentInvalid, err.to_string())
     })?;
@@ -409,14 +409,13 @@ fn validate_known_request_shape(method: &str, params: &Value) -> Result<(), Tool
                 return Err(arg_invalid("query required for workspace/symbol"));
             }
         }
-        m if m.starts_with("textDocument/") => {
-            if params
+        m if m.starts_with("textDocument/")
+            && params
                 .pointer("/textDocument/uri")
                 .and_then(Value::as_str)
-                .is_none()
-            {
-                return Err(arg_invalid("textDocument.uri required"));
-            }
+                .is_none() =>
+        {
+            return Err(arg_invalid("textDocument.uri required"));
         }
         _ => {}
     }
@@ -979,7 +978,7 @@ pub(crate) async fn run_linter_diagnostics(
 }
 
 fn status_text(
-    states: std::collections::HashMap<String, super::pool::PoolServerState>,
+    states: rapidhash::RapidHashMap<String, super::pool::PoolServerState>,
     servers: &[CatalogServer],
     workspace: &std::path::Path,
 ) -> String {

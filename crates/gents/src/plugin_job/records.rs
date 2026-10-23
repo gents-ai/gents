@@ -54,11 +54,10 @@ pub struct JobStepState {
     pub resume: Option<JobResume>,
 }
 
-async fn read_record<R: ConfigRead>(
-    reader: &R,
-    row_doc_id: &str,
-    field: &str,
-) -> Result<Option<Value>> {
+async fn read_record<R>(reader: &R, row_doc_id: &str, field: &str) -> Result<Option<Value>>
+where
+    R: ConfigRead,
+{
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {field} }} }}"#,
         escape_graphql_string(row_doc_id)
@@ -89,7 +88,10 @@ async fn write_record(
     Ok(())
 }
 
-fn decode<T: serde::de::DeserializeOwned>(value: Option<Value>, what: &str) -> Result<Option<T>> {
+fn decode<T>(value: Option<Value>, what: &str) -> Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
     value
         .map(|value| serde_json::from_value(value).with_context(|| format!("decoding {what}")))
         .transpose()
@@ -110,7 +112,10 @@ pub async fn write_pin_in_txn(
     }
 }
 
-pub async fn read_pin<R: ConfigRead>(reader: &R, row_doc_id: &str) -> Result<Option<JobPin>> {
+pub async fn read_pin<R>(reader: &R, row_doc_id: &str) -> Result<Option<JobPin>>
+where
+    R: ConfigRead,
+{
     decode(read_record(reader, row_doc_id, "job_pin").await?, "job_pin")
 }
 
@@ -148,10 +153,10 @@ pub async fn write_step_state_in_txn(
     .await
 }
 
-pub async fn read_step_state<R: ConfigRead>(
-    reader: &R,
-    row_doc_id: &str,
-) -> Result<Option<JobStepState>> {
+pub async fn read_step_state<R>(reader: &R, row_doc_id: &str) -> Result<Option<JobStepState>>
+where
+    R: ConfigRead,
+{
     decode(
         read_record(reader, row_doc_id, "job_step_state").await?,
         "job_step_state",
@@ -222,10 +227,10 @@ pub async fn write_progress_in_txn(
     Ok(merged)
 }
 
-pub async fn read_progress<R: ConfigRead>(
-    reader: &R,
-    row_doc_id: &str,
-) -> Result<Option<JobProgress>> {
+pub async fn read_progress<R>(reader: &R, row_doc_id: &str) -> Result<Option<JobProgress>>
+where
+    R: ConfigRead,
+{
     decode(
         read_record(reader, row_doc_id, "job_progress").await?,
         "job_progress",

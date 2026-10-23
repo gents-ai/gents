@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 use gents_protocol::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
@@ -44,7 +44,7 @@ pub fn strip_tool_results_sourced(
 ) -> (Vec<SourcedMessage>, FileActivity) {
     let file_activity = extract_file_activity_iter(messages.iter().map(|item| &item.message));
     let mut stripped_messages = Vec::with_capacity(messages.len());
-    let mut tool_calls = HashMap::new();
+    let mut tool_calls = RapidHashMap::new();
 
     for SourcedMessage {
         source_index,
@@ -106,8 +106,8 @@ pub fn strip_tool_results_sourced(
 fn resolved_keys_per_turn<'a>(
     len: usize,
     messages: impl IntoIterator<Item = &'a Message>,
-) -> Vec<std::collections::HashSet<String>> {
-    let mut per_turn = vec![std::collections::HashSet::new(); len];
+) -> Vec<rapidhash::RapidHashSet<String>> {
+    let mut per_turn = vec![rapidhash::RapidHashSet::default(); len];
     let mut active_turn: Option<usize> = None;
     for (index, message) in messages.into_iter().enumerate() {
         match message {
@@ -152,8 +152,8 @@ pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<So
         match message {
             Message::Assistant { id, content } => {
                 let resolved = &resolved_per_turn[index];
-                let mut announced: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
+                let mut announced: rapidhash::RapidHashSet<String> =
+                    rapidhash::RapidHashSet::default();
                 let mut kept_indices = Vec::new();
                 let kept: Vec<AssistantContent> = content
                     .into_iter()
@@ -199,7 +199,7 @@ pub fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
 }
 
 pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<SourcedMessage> {
-    let mut pending_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pending_calls: rapidhash::RapidHashSet<String> = rapidhash::RapidHashSet::default();
     let mut kept_messages = Vec::with_capacity(messages.len());
     for SourcedMessage {
         source_index,
@@ -440,7 +440,7 @@ pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
 }
 
 pub fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
-    let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pending: rapidhash::RapidHashSet<String> = rapidhash::RapidHashSet::default();
     let mut boundaries = Vec::new();
 
     for (index, message) in messages.iter().enumerate() {
@@ -483,7 +483,7 @@ pub fn extract_file_activity(messages: &[Message]) -> FileActivity {
 
 fn extract_file_activity_iter<'a>(messages: impl IntoIterator<Item = &'a Message>) -> FileActivity {
     let mut activity = FileActivity::default();
-    let mut pending: HashMap<String, ToolCallInfo> = HashMap::new();
+    let mut pending: RapidHashMap<String, ToolCallInfo> = RapidHashMap::new();
 
     for message in messages {
         match message {
@@ -584,7 +584,7 @@ fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
 
 fn strip_tool_result(
     mut tool_result: ToolResult,
-    tool_calls: &HashMap<String, ToolCallInfo>,
+    tool_calls: &RapidHashMap<String, ToolCallInfo>,
 ) -> ToolResult {
     let existing = parse_stub(&tool_result);
     let byte_count = existing

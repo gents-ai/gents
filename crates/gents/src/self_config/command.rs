@@ -398,7 +398,7 @@ fn log_config_call(
     };
     let error_kind = error.as_deref().map(|error| {
         error
-            .split(|c: char| c == ':' || c == ';')
+            .split([':', ';'])
             .next()
             .unwrap_or("")
             .trim()
@@ -1916,7 +1916,7 @@ impl ConfigCommandTool {
         )
         .await?
         .map(|(_, document)| document)
-        .ok_or_else(|| super::ops::MissingConfigDocument { target, id })?;
+        .ok_or(super::ops::MissingConfigDocument { target, id })?;
         if target == SelfConfigTarget::InferenceBackend {
             document.remove("auth");
             document.insert(

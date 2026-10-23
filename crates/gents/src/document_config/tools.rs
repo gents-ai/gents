@@ -628,7 +628,7 @@ impl Tools {
             values: impl IntoIterator<Item = &'a str>,
             exact_tools: bool,
         ) {
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = rapidhash::RapidHashSet::default();
             for value in values {
                 if value.trim().is_empty() {
                     errors.push(format!("{field} contains a blank name"));
@@ -1373,7 +1373,10 @@ pub fn unwire_plugin(
 
 /// Compact full-document serialization. Explicit sparse patches use a separate
 /// representation so an omitted field is not confused with clearing a field.
-fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+fn is_default<T>(value: &T) -> bool
+where
+    T: Default + PartialEq,
+{
     value == &T::default()
 }
 

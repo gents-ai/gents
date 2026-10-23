@@ -594,7 +594,7 @@ async fn recovery_receipt_fixture(
             Box::pin(async move {
                 let now = chrono::Utc::now().to_rfc3339();
                 crate::session::ensure_session_in_txn(
-                    &txn,
+                    txn,
                     &request.session_id,
                     &request.node_did,
                     &request.agent_id,
@@ -605,7 +605,7 @@ async fn recovery_receipt_fixture(
                 )
                 .await?;
                 let session = crate::session::load_agent_session_row_in_txn(
-                    &txn,
+                    txn,
                     &request.node_did,
                     &request.session_id,
                     request.requester_did.as_deref(),
@@ -613,7 +613,7 @@ async fn recovery_receipt_fixture(
                 .await?
                 .expect("recovery session");
                 let facts =
-                    crate::session::load_scoped_request_facts_in_txn(&txn, &session.session, false)
+                    crate::session::load_scoped_request_facts_in_txn(txn, &session.session, false)
                         .await?;
                 let fact = facts
                     .iter()
@@ -621,7 +621,7 @@ async fn recovery_receipt_fixture(
                     .expect("recovery request fact");
                 assert!(
                     crate::session::advance_session_request_observation_in_txn(
-                        &txn,
+                        txn,
                         fact,
                         &request.content,
                         &now,
@@ -1636,10 +1636,9 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         replay_start.is_ok(),
         "exactly one accepted handle must win pending-to-running dispatch: first={first_start:?}, replay={replay_start:?}"
     );
-    let loser_error = if first_start.is_ok() {
-        replay_start.as_ref().unwrap_err()
-    } else {
-        first_start.as_ref().unwrap_err()
+    let loser_error = match (&first_start, &replay_start) {
+        (Ok(_), Err(error)) | (Err(error), _) => error,
+        (Ok(_), Ok(_)) => unreachable!("exactly one handle wins, asserted above"),
     };
     assert!(
         format!("{loser_error:#}").contains("no longer pending"),

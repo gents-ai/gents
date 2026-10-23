@@ -98,7 +98,7 @@ pub fn apply_session_timeline_page_with_query(
     }
     let candidates = &snapshot.timeline_items[..end];
     let (page, has_older, has_newer, oldest_item_key) = {
-        let mut pending_anchors = HashMap::new();
+        let mut pending_anchors = RapidHashMap::new();
         let mut next_sequence = None;
         for item in candidates.iter().rev() {
             if let crate::types::RenderedTimelineItem::ToolGroup {
@@ -164,7 +164,7 @@ pub fn apply_session_timeline_page_with_query(
         }
 
         let mut remaining = limit - non_durable_items;
-        let mut selected_sequences = HashSet::new();
+        let mut selected_sequences = RapidHashSet::new();
         for (&sequence, &item_count) in sequence_counts.iter().rev() {
             if item_count > remaining {
                 if selected_sequences.is_empty() && non_durable_items == 0 {

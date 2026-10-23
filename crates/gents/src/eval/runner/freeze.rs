@@ -345,12 +345,15 @@ fn validate_seed_range(request: &RunRequest) -> Result<()> {
     )))
 }
 
-async fn read_document<T: serde::de::DeserializeOwned>(
+async fn read_document<T>(
     access: &ConfigAccess,
     collection: Collection,
     owner: &str,
     id: &str,
-) -> Result<Option<T>> {
+) -> Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
     let found = access
         .transact_readonly("eval.freeze.read_configuration", |txn| {
             Box::pin(

@@ -52,20 +52,20 @@ pub struct EnrollmentAuthorizationFence {
 }
 
 enum EnrollmentAuthorityCommand {
-    FreshAuthorization {
+    Authorization {
         member_did: String,
         member_peer: String,
         ack: oneshot::Sender<Result<Option<EnrollmentAuthorizationFence>>>,
     },
-    FreshMemberAdmission {
+    MemberAdmission {
         member_did: String,
         ack: oneshot::Sender<Result<bool>>,
     },
-    FreshPeerAuthorization {
+    PeerAuthorization {
         member_peer: String,
         ack: oneshot::Sender<Result<Option<EnrollmentAuthorizationFence>>>,
     },
-    FreshMemberAuthorization {
+    MemberAuthorization {
         member_did: String,
         ack: oneshot::Sender<Result<Option<EnrollmentAuthorizationFence>>>,
     },
@@ -116,7 +116,7 @@ impl EnrollmentAuthorityHandle {
     ) -> Result<Option<EnrollmentAuthorizationFence>> {
         let (ack, result) = oneshot::channel();
         self.commands
-            .send(EnrollmentAuthorityCommand::FreshAuthorization {
+            .send(EnrollmentAuthorityCommand::Authorization {
                 member_did: member_did.to_string(),
                 member_peer: member_peer.to_string(),
                 ack,
@@ -137,7 +137,7 @@ impl EnrollmentAuthorityHandle {
     ) -> Result<Option<EnrollmentAuthorizationFence>> {
         let (ack, result) = oneshot::channel();
         self.commands
-            .send(EnrollmentAuthorityCommand::FreshPeerAuthorization {
+            .send(EnrollmentAuthorityCommand::PeerAuthorization {
                 member_peer: member_peer.to_string(),
                 ack,
             })
@@ -156,7 +156,7 @@ impl EnrollmentAuthorityHandle {
     ) -> Result<Option<EnrollmentAuthorizationFence>> {
         let (ack, result) = oneshot::channel();
         self.commands
-            .send(EnrollmentAuthorityCommand::FreshMemberAuthorization {
+            .send(EnrollmentAuthorityCommand::MemberAuthorization {
                 member_did: member_did.to_string(),
                 ack,
             })
@@ -208,7 +208,7 @@ impl PeerAdmissionAuthority for EnrollmentAuthorityHandle {
     async fn fresh_member_authorized(&self, member_did: &str) -> Result<bool> {
         let (ack, result) = oneshot::channel();
         self.commands
-            .send(EnrollmentAuthorityCommand::FreshMemberAdmission {
+            .send(EnrollmentAuthorityCommand::MemberAdmission {
                 member_did: member_did.to_string(),
                 ack,
             })
@@ -275,10 +275,10 @@ pub(crate) fn test_enrollment_authority(
         while let Some(command) = command_receiver.recv().await {
             let current = task_current.read().await.clone();
             match command {
-                EnrollmentAuthorityCommand::FreshMemberAuthorization { member_did, ack } => {
+                EnrollmentAuthorityCommand::MemberAuthorization { member_did, ack } => {
                     let _ = ack.send(Ok(current.filter(|value| value.member_did == member_did)));
                 }
-                EnrollmentAuthorityCommand::FreshAuthorization {
+                EnrollmentAuthorityCommand::Authorization {
                     member_did,
                     member_peer,
                     ack,
@@ -287,10 +287,10 @@ pub(crate) fn test_enrollment_authority(
                         value.member_did == member_did && value.member_peer == member_peer
                     })));
                 }
-                EnrollmentAuthorityCommand::FreshPeerAuthorization { member_peer, ack } => {
+                EnrollmentAuthorityCommand::PeerAuthorization { member_peer, ack } => {
                     let _ = ack.send(Ok(current.filter(|value| value.member_peer == member_peer)));
                 }
-                EnrollmentAuthorityCommand::FreshMemberAdmission { member_did, ack } => {
+                EnrollmentAuthorityCommand::MemberAdmission { member_did, ack } => {
                     let _ = ack.send(Ok(
                         current.is_some_and(|value| value.member_did == member_did)
                     ));
@@ -396,7 +396,7 @@ async fn handle_authority_command(
     command: EnrollmentAuthorityCommand,
 ) {
     match command {
-        EnrollmentAuthorityCommand::FreshAuthorization {
+        EnrollmentAuthorityCommand::Authorization {
             member_did,
             member_peer,
             ack,
@@ -413,7 +413,7 @@ async fn handle_authority_command(
             };
             let _ = ack.send(result);
         }
-        EnrollmentAuthorityCommand::FreshMemberAdmission { member_did, ack } => {
+        EnrollmentAuthorityCommand::MemberAdmission { member_did, ack } => {
             let result = match store.load_authority_projection().await {
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
@@ -433,7 +433,7 @@ async fn handle_authority_command(
             };
             let _ = ack.send(result);
         }
-        EnrollmentAuthorityCommand::FreshPeerAuthorization { member_peer, ack } => {
+        EnrollmentAuthorityCommand::PeerAuthorization { member_peer, ack } => {
             let result = match store.load_authority_projection().await {
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
@@ -446,7 +446,7 @@ async fn handle_authority_command(
             };
             let _ = ack.send(result);
         }
-        EnrollmentAuthorityCommand::FreshMemberAuthorization { member_did, ack } => {
+        EnrollmentAuthorityCommand::MemberAuthorization { member_did, ack } => {
             let result = match store.load_authority_projection().await {
                 Ok(projection) => {
                     owner.publish_ready(projection.clone());
@@ -960,7 +960,7 @@ impl EnrollmentRouteRow {
                 .map(|values| values.iter().cloned().collect::<BTreeSet<_>>())
                 .as_ref()
                 == Some(collections)
-            && self.replicator_addresses.as_deref() == Some(&[route.address.clone()])
+            && self.replicator_addresses.as_deref() == Some(std::slice::from_ref(&route.address))
     }
 }
 

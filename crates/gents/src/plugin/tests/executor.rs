@@ -972,9 +972,7 @@ mod bound {
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
         let asked = answer(fx.home.path(), true, false);
-        let output = approval::scope_composed(in_session(&tool, &target, &work, true))
-            .await
-            .unwrap();
+        let output = in_session(&tool, &target, &work, true).await.unwrap();
         assert_eq!(output, r#"{"read":true}"#);
         let prompt = asked.await.unwrap();
         assert_eq!(
@@ -995,9 +993,7 @@ mod bound {
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
         let asked = answer(fx.home.path(), false, true);
-        let error = approval::scope_composed(in_session(&tool, &target, &work, true))
-            .await
-            .unwrap_err();
+        let error = in_session(&tool, &target, &work, true).await.unwrap_err();
         let prompt = tokio::time::timeout(std::time::Duration::from_secs(10), asked)
             .await
             .expect("the operator was asked about the child's path")
@@ -2183,9 +2179,10 @@ mod job_calls {
             .unwrap()
     }
 
-    fn answers<T: serde::de::DeserializeOwned>(
-        call: &PluginCall,
-    ) -> BTreeMap<String, RoundResult<T>> {
+    fn answers<T>(call: &PluginCall) -> BTreeMap<String, RoundResult<T>>
+    where
+        T: serde::de::DeserializeOwned,
+    {
         assert_eq!(
             call.outcome.verdict,
             PluginVerdict::Success,

@@ -342,8 +342,7 @@ fn collection_name_from_patch(patch: &Value) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("schema patch must start with an op containing path"))?;
     let collection = path
         .split('/')
-        .filter(|segment| !segment.is_empty())
-        .next()
+        .find(|segment| !segment.is_empty())
         .ok_or_else(|| anyhow::anyhow!("schema patch path has no collection name: {path}"))?;
     Ok(collection.to_string())
 }

@@ -242,7 +242,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
             Box::pin(async move {
                 let response = txn
                     .execute_with_variables(
-                        &mutation,
+                        mutation,
                         &serde_json::json!({
                             "terminal_output": gents_protocol::output::TerminalOutput::NoMessage
                         }),

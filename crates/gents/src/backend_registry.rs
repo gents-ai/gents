@@ -460,7 +460,7 @@ pub async fn record_model_catalog_in_txn(
     );
     let observed_at = chrono::DateTime::parse_from_rfc3339(&catalog.observed_at)
         .context("invalid catalog observation timestamp")?;
-    let mut names = std::collections::HashSet::new();
+    let mut names = rapidhash::RapidHashSet::default();
     for model in &catalog.models {
         anyhow::ensure!(
             !model.model_name.trim().is_empty() && model.model_name.trim() == model.model_name,

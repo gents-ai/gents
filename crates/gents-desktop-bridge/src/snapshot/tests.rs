@@ -172,6 +172,10 @@ pub(super) fn push_canonical_text_message(
     rows.output_segments.push(segment);
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "session_basic.rs and session_state.rs call this positionally"
+)]
 fn push_canonical_text_message_for_node(
     rows: &mut ClientStoreRows,
     doc_id: &str,
@@ -193,6 +197,8 @@ fn push_canonical_text_message_for_node(
     rows.output_segments.push(segment);
 }
 
+#[path = "../../../gents/src/lean_vocab_test/support.rs"]
+mod lean_vocab_test;
 #[path = "tests/mcp_health.rs"]
 mod mcp_health;
 #[path = "tests/runtime.rs"]

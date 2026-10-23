@@ -50,11 +50,17 @@ test.describe("a large session index", () => {
     const edge = list.locator("li[data-index]").last();
     await expect(edge).toBeAttached();
     const index = Number(await edge.getAttribute("data-index"));
-    const previous = list.locator(`li[data-index="${index}"] a`);
-    const next = list.locator(`li[data-index="${index + 1}"] a`);
-    await expect(next).toHaveCount(0);
-    await previous.evaluate((link: HTMLAnchorElement) => {
-      link.focus({ preventScroll: true });
+    /* a row's controls: its link, then its actions; Tab leaves a row from the
+       last of them and enters the next at the first */
+    const controls = "a[href], button:not([disabled])";
+    const previous = list.locator(`li[data-index="${index}"]`).locator(controls).last();
+    const next = list
+      .locator(`li[data-index="${index + 1}"]`)
+      .locator(controls)
+      .first();
+    await expect(list.locator(`li[data-index="${index + 1}"]`)).toHaveCount(0);
+    await previous.evaluate((control: HTMLElement) => {
+      control.focus({ preventScroll: true });
     });
     await expect(previous).toBeFocused();
     await page.keyboard.press("Tab");

@@ -215,7 +215,7 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
                 row.get("request_id")?.as_str()?,
             ))
         })
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     let headers = response
         .data
         .as_ref()
@@ -268,10 +268,13 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
     messages
 }
 
-async fn bounded_diagnostic<T: Debug>(
+async fn bounded_diagnostic<T>(
     timeout_duration: Duration,
     diagnostic: impl std::future::Future<Output = T>,
-) -> String {
+) -> String
+where
+    T: Debug,
+{
     match tokio::time::timeout(timeout_duration, diagnostic).await {
         Ok(value) => format!("{value:?}"),
         Err(_) => format!("<unavailable: diagnostic query timed out after {timeout_duration:?}>"),
@@ -1078,8 +1081,7 @@ async fn set_parent_state(node: &EmbeddedNode, request_id: &str, lifecycle_state
 #[tokio::test]
 async fn wait_envelope_bounds_oversized_background_tool_result() {
     let big_line = "x".repeat(200);
-    let big_output = std::iter::repeat(big_line)
-        .take(500)
+    let big_output = std::iter::repeat_n(big_line, 500)
         .collect::<Vec<_>>()
         .join("\n");
     let full_len = big_output.len();
@@ -1896,7 +1898,7 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
         2
     );
     for handle in &handles {
-        wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, &handle).await;
+        wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, handle).await;
     }
     let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
         &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
@@ -1915,8 +1917,8 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
                 .expect("completed process canonical raw output")
         })
         .collect::<Vec<_>>();
-    assert!(outputs.iter().any(|output| *output == "entered-one\n"));
-    assert!(outputs.iter().any(|output| *output == "entered-two\n"));
+    assert!(outputs.contains(&"entered-one\n"));
+    assert!(outputs.contains(&"entered-two\n"));
     turn.runtime.shutdown().await;
 }
 

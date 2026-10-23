@@ -30,11 +30,14 @@ use crate::snapshot::build_client_snapshot_with_grants;
 use crate::state::{snapshot_grants, DesktopAppState};
 use crate::types::{ClientUpdateEvent, DesktopClientSnapshot};
 
-pub(crate) async fn emit_config_update_and_snapshot<R: Runtime>(
+pub(crate) async fn emit_config_update_and_snapshot<R>(
     app: &AppHandle<R>,
     core: &Arc<ClientCore>,
     state: &State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let _ = app.emit(
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),

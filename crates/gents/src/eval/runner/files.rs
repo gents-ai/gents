@@ -34,7 +34,10 @@ mod tests {
     fn a_failed_encoding_preserves_the_previous_snapshot_and_cleans_up_staging() {
         struct Invalid;
         impl Serialize for Invalid {
-            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
                 Err(serde::ser::Error::custom("encoding failed"))
             }
         }

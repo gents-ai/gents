@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashSet};
+use rapidhash::{HashSetExt, RapidHashSet};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -194,7 +195,7 @@ pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
             "CallbackBinding {name} must be non-empty"
         );
     }
-    let mut unique = HashSet::new();
+    let mut unique = RapidHashSet::new();
     for field in &binding.input_fields {
         crate::graphql::validate_graphql_name(field)?;
         anyhow::ensure!(
@@ -287,12 +288,15 @@ pub fn strip_secret_fields(value: Value) -> Value {
     }
 }
 
-async fn load_config<T: serde::de::DeserializeOwned + Send>(
+async fn load_config<T>(
     node: &std::sync::Arc<EmbeddedNode>,
     collection: crate::Collection,
     owner: &str,
     id: &str,
-) -> Result<Option<T>> {
+) -> Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned + Send,
+{
     crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
@@ -322,7 +326,7 @@ pub async fn list_enabled_bindings(
     );
     let response = graphql_with_transaction_retry(node, &query, "query CallbackBinding").await?;
     let mut bindings: Vec<CallbackBindingDoc> = rows(&response, "CallbackBinding")?;
-    let mut ids = HashSet::new();
+    let mut ids = RapidHashSet::new();
     for binding in &bindings {
         anyhow::ensure!(
             binding.node_did == owner && ids.insert(&binding.binding_id),
@@ -520,7 +524,7 @@ pub(crate) fn succeeded_repair_cutoff(now: chrono::DateTime<chrono::Utc>) -> Str
 
 pub(crate) fn succeeded_missing_result(
     succeeded: Vec<CallbackInvocationDoc>,
-    result_invocation_ids: &HashSet<String>,
+    result_invocation_ids: &RapidHashSet<String>,
 ) -> Vec<CallbackInvocationDoc> {
     succeeded
         .into_iter()
@@ -532,13 +536,13 @@ async fn load_callback_results_for_invocations(
     node: &EmbeddedNode,
     invocation_ids: impl IntoIterator<Item = &str>,
     owner: &str,
-) -> Result<HashSet<String>> {
+) -> Result<RapidHashSet<String>> {
     let ids: Vec<String> = invocation_ids
         .into_iter()
         .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
         .collect();
     if ids.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(RapidHashSet::new());
     }
     let query = format!(
         r#"{{

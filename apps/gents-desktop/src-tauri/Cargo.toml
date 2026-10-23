@@ -24,6 +24,7 @@ gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true
 gents-protocol = { path = "../../../crates/gents-protocol" }
 reqwest.workspace = true
+rapidhash = { workspace = true }
 tauri = { version = "2", features = ["image-png", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"

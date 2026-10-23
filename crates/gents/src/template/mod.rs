@@ -5,7 +5,8 @@ use minijinja::{
     machinery::{self, Instruction, Instructions},
     AutoEscape, Environment, ErrorKind, UndefinedBehavior,
 };
-use std::{cmp::Reverse, collections::BinaryHeap, collections::HashSet};
+use rapidhash::{HashSetExt, RapidHashSet};
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 pub mod catalog;
 
@@ -221,7 +222,7 @@ pub fn check_template_vocabulary(template: &str) -> Result<(), TemplateError> {
         index += 1;
     }
 
-    let mut judged = HashSet::new();
+    let mut judged = RapidHashSet::new();
     for (use_site, name) in used {
         if !judged.insert((use_site, name.clone())) {
             continue;
@@ -587,7 +588,7 @@ fn jump_target(instruction: &Instruction<'_>) -> Option<u32> {
     }
 }
 
-fn callable_scope_names() -> HashSet<String> {
+fn callable_scope_names() -> RapidHashSet<String> {
     let every_root = TemplateScope {
         session: Some(serde_json::Value::Null),
         request: Some(serde_json::Value::Null),
@@ -598,7 +599,7 @@ fn callable_scope_names() -> HashSet<String> {
         node: serde_json::Value::Null,
         ctx: serde_json::Value::Null,
     };
-    let mut names: HashSet<String> = template_context(&every_root)
+    let mut names: RapidHashSet<String> = template_context(&every_root)
         .as_object()
         .map(|roots| roots.keys().cloned().collect())
         .unwrap_or_default();
@@ -843,9 +844,7 @@ fn collect_refs_in_body(body: &str, out: &mut Vec<VariableRef>) {
 }
 
 fn utf8_char_len(first: u8) -> usize {
-    if first < 0x80 {
-        1
-    } else if first < 0xC0 {
+    if first < 0xC0 {
         1
     } else if first < 0xE0 {
         2

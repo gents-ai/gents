@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -272,7 +272,7 @@ fn selected_tool_call_doc_ids(
     headers: &[crate::session::canonical_rows::TranscriptMessageRow],
     message_limit: usize,
 ) -> Vec<String> {
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     let mut doc_ids = Vec::new();
     for header in headers.iter().take(message_limit) {
         let mut count = 0;
@@ -317,10 +317,10 @@ async fn load_tool_call_summaries(
     scope: &str,
     headers: &[crate::session::canonical_rows::TranscriptMessageRow],
     message_limit: usize,
-) -> Result<HashMap<String, Value>> {
+) -> Result<RapidHashMap<String, Value>> {
     let doc_ids = selected_tool_call_doc_ids(headers, message_limit);
     let Some(query) = tool_call_batch_query(scope, &doc_ids) else {
-        return Ok(HashMap::new());
+        return Ok(RapidHashMap::new());
     };
     let response = txn.execute(&query).await?;
     rows(&response, "AgentToolCall")?
@@ -336,7 +336,7 @@ async fn load_tool_call_summaries(
 }
 
 fn tool_summaries(
-    tool_calls: &HashMap<String, Value>,
+    tool_calls: &RapidHashMap<String, Value>,
     header: &gents_protocol::output::TranscriptMessage,
     message: &Message,
 ) -> Result<Value> {

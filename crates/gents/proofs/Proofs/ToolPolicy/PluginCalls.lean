@@ -102,6 +102,9 @@ inductive ConsentRoute where
 def consentRoute (interactive _composed : Bool) : ConsentRoute :=
   if interactive then .ask else .deny
 
+/-- A plugin call composed inside another plugin's effects routes consent
+exactly as a direct call does, so the runtime does not carry composition as an
+input to consent. -/
 theorem composed_child_waits_like_a_direct_call (interactive : Bool) :
     consentRoute interactive true = consentRoute interactive false := by
   simp [consentRoute]

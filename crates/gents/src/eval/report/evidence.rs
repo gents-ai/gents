@@ -411,7 +411,7 @@ pub(crate) mod tests {
         assert_eq!(both.keys, 4);
         assert_eq!((both.dropped_baseline, both.dropped_candidate), (0, 0));
         assert!(both.pairs.iter().all(|pair| pair.candidate_bp == 10_000));
-        assert_eq!(concat_paired(&[one.clone()]), one);
+        assert_eq!(concat_paired(std::slice::from_ref(&one)), one);
     }
 
     #[test]

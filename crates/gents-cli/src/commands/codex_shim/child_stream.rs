@@ -60,8 +60,8 @@ async fn watch_loaded_caused_thread(
     if link.client_projection.is_some_and(|head| head.is_active()) {
         let announce_turn = baseline_turn.is_none();
         let options = baseline_turn.map_or_else(
-            || TurnStreamOptions::fresh_caused(),
-            |turn| TurnStreamOptions::resumed_caused(turn),
+            TurnStreamOptions::fresh_caused,
+            TurnStreamOptions::resumed_caused,
         );
         project_child_request(connection, state, &link, options, announce_turn).await?;
     }

@@ -11,7 +11,10 @@ use tokio::sync::{oneshot, Mutex};
 
 use super::flush_while_polling as while_polling;
 
-fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
+fn poll_once<F>(future: Pin<&mut F>) -> Poll<F::Output>
+where
+    F: Future,
+{
     let waker = futures::task::noop_waker();
     let mut context = Context::from_waker(&waker);
     future.poll(&mut context)

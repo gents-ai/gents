@@ -263,7 +263,7 @@ async fn wait_for_runtime_process_state(
                 }}
             }}"#
         );
-        let response = graphql_with_transaction_retry(&node, &query, "NodeReadiness query").await?;
+        let response = graphql_with_transaction_retry(node, &query, "NodeReadiness query").await?;
         let process_state = response
             .data
             .as_ref()

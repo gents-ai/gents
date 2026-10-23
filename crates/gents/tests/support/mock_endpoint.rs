@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
@@ -91,7 +91,7 @@ impl Drop for MockModelEndpoint {
     }
 }
 
-fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
+fn headers_to_map(headers: &HeaderMap) -> RapidHashMap<String, String> {
     headers
         .iter()
         .map(|(name, value)| {

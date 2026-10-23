@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -51,7 +52,8 @@ const LIVE_EVERY: Duration = Duration::from_secs(5);
 pub struct EmbeddedExecutor {
     pub runtime_options: DocumentRuntimeOptions,
     pub runs_dir: PathBuf,
-    provisioned: Mutex<HashMap<String, Provisioned>>,
+    runtime: tokio::runtime::Handle,
+    provisioned: Mutex<RapidHashMap<String, Provisioned>>,
 }
 
 struct Provisioned {
@@ -60,17 +62,26 @@ struct Provisioned {
 }
 
 impl EmbeddedExecutor {
-    pub fn new(runtime_options: DocumentRuntimeOptions, runs_dir: PathBuf) -> Self {
+    /// `runtime` drives trial homes, whose opening is not `Send`, on blocking threads.
+    pub fn new(
+        runtime_options: DocumentRuntimeOptions,
+        runs_dir: PathBuf,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             runtime_options,
             runs_dir,
-            provisioned: Mutex::new(HashMap::new()),
+            runtime,
+            provisioned: Mutex::new(RapidHashMap::new()),
         }
     }
 
     async fn provision_home(&self, spec: &TrialSpec) -> Result<TrialLocator> {
         let dir = spec.trial_dir.join("home");
-        let home = opened(move || async move { EmbeddedHome::create_retained(&dir).await }).await?;
+        let home = opened(&self.runtime, move || async move {
+            EmbeddedHome::create_retained(&dir).await
+        })
+        .await?;
         let workspace = workspace_dir(&spec.trial_dir);
         if let Err(error) = std::fs::create_dir_all(&workspace) {
             close(home).await;
@@ -105,7 +116,7 @@ impl EmbeddedExecutor {
 
     /// Callers take this guard in a `let` statement and drop it at the
     /// semicolon: holding it across an await would make the future `!Send`.
-    fn provisioned(&self) -> std::sync::MutexGuard<'_, HashMap<String, Provisioned>> {
+    fn provisioned(&self) -> std::sync::MutexGuard<'_, RapidHashMap<String, Provisioned>> {
         self.provisioned
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -294,18 +305,21 @@ impl TrialExecutor for EmbeddedExecutor {
         };
         let dir = trial_dir.join("home");
         let workspace = workspace_dir(&trial_dir);
-        let home =
-            match opened(move || async move { EmbeddedHome::open_retained(&dir).await }).await {
-                Ok(home) => home,
-                Err(error) => {
-                    tracing::warn!(
-                        error = %format!("{error:#}"),
-                        home = %trial_dir.display(),
-                        "eval trial home is no longer readable"
-                    );
-                    return None;
-                }
-            };
+        let home = match opened(&self.runtime, move || async move {
+            EmbeddedHome::open_retained(&dir).await
+        })
+        .await
+        {
+            Ok(home) => home,
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    home = %trial_dir.display(),
+                    "eval trial home is no longer readable"
+                );
+                return None;
+            }
+        };
         let requests = match session_requests(&home.node, &at.session_id).await {
             Ok(requests) => requests,
             Err(error) => {
@@ -396,14 +410,13 @@ fn http_status(reason: &str) -> Option<u16> {
 }
 
 /// Open a trial home from a `Send` future: `EmbeddedNode::build` is not `Send`,
-/// so the open is polled on a blocking thread of the current runtime.
-async fn opened<Open, Opening>(open: Open) -> Result<EmbeddedHome>
+/// so the open is polled on a blocking thread of `runtime`.
+async fn opened<Open, Opening>(runtime: &tokio::runtime::Handle, open: Open) -> Result<EmbeddedHome>
 where
     Open: FnOnce() -> Opening + Send + 'static,
     Opening: std::future::Future<Output = Result<EmbeddedHome>>,
 {
-    let runtime = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || runtime.block_on(open()))
+    crate::storage_backend::drive_unsendable(runtime, open)
         .await
         .context("opening a trial home")?
 }
@@ -779,10 +792,15 @@ async fn run_stages(
         }
         let stage = &reviewed;
         spec.progress.stage_started(&stage.stage_id);
-        let evidence = run_stage(
-            spec, cancel, home, runtime, locator, workspace, stage, ready,
-        )
-        .await;
+        let env = StageEnv {
+            cancel,
+            home,
+            runtime,
+            locator,
+            workspace,
+            ready,
+        };
+        let evidence = run_stage(spec, &env, stage).await;
         let mut summary = spec.review.summarize(&evidence);
         summary["usage"] =
             serde_json::to_value(usage_of(&evidence.inference_calls)).unwrap_or(Value::Null);
@@ -797,16 +815,25 @@ async fn run_stages(
     stages
 }
 
-async fn run_stage(
-    spec: &TrialSpec,
-    cancel: &CancellationToken,
-    home: &EmbeddedHome,
-    runtime: &RunningRuntime,
-    locator: &TrialLocator,
-    workspace: &Path,
-    stage: &StageSpec,
-    ready: &watch::Receiver<Reconciled>,
-) -> StageEvidence {
+#[derive(Clone, Copy)]
+struct StageEnv<'a> {
+    cancel: &'a CancellationToken,
+    home: &'a EmbeddedHome,
+    runtime: &'a RunningRuntime,
+    locator: &'a TrialLocator,
+    workspace: &'a Path,
+    ready: &'a watch::Receiver<Reconciled>,
+}
+
+async fn run_stage(spec: &TrialSpec, env: &StageEnv<'_>, stage: &StageSpec) -> StageEvidence {
+    let StageEnv {
+        cancel,
+        home,
+        runtime,
+        locator,
+        workspace,
+        ready,
+    } = *env;
     let observed = submit_and_observe(spec, cancel, home, runtime, locator, stage, ready).await;
     StageEvidence {
         stage_id: stage.stage_id.clone(),
@@ -2550,7 +2577,11 @@ mod tests {
             .join("base")
             .join("pack");
         write_slot_pack(&pack_dir, "gents:inference-slot:primary");
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir.clone(),
+            crate::test_support::runtime_handle(),
+        );
         let spec = TrialSpec {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
@@ -2887,7 +2918,11 @@ mod tests {
             .join("base")
             .join("pack");
         write_minimal_pack(&pack_dir);
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir.clone(),
+            crate::test_support::runtime_handle(),
+        );
         let spec = TrialSpec {
             pack_dir,
             pack_digest: "sha256:wrong".to_string(),
@@ -2980,8 +3015,11 @@ mod tests {
         };
         close(home).await;
 
-        let executor =
-            EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs.path().to_owned());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs.path().to_owned(),
+            crate::test_support::runtime_handle(),
+        );
         let evidence = executor.recollect(&locator, &[]).await.unwrap();
         assert_eq!(evidence.stages.len(), 2);
         assert!(evidence.anchor.terminal_states.is_empty());
@@ -3006,7 +3044,11 @@ mod tests {
                 .unwrap(),
         )
         .await;
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir.clone(),
+            crate::test_support::runtime_handle(),
+        );
         let locator = |hint: &str| TrialLocator {
             trial_node_did: "did:key:zAny".to_string(),
             session_id: "s-1".to_string(),
@@ -3045,7 +3087,11 @@ mod tests {
         )
         .await;
         std::os::unix::fs::symlink(&outside, runs_dir.join("ws").join("workspace")).unwrap();
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir);
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir,
+            crate::test_support::runtime_handle(),
+        );
         for hint in ["linked", "real", "ws"] {
             let locator = TrialLocator {
                 trial_node_did: "did:key:zAny".to_string(),
@@ -3056,10 +3102,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn discarding_is_a_send_future() {
-        fn assert_send<T: Send>(_: T) {}
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), PathBuf::new());
+    #[tokio::test]
+    async fn discarding_is_a_send_future() {
+        fn assert_send<T>(_: T)
+        where
+            T: Send,
+        {
+        }
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            PathBuf::new(),
+            crate::test_support::runtime_handle(),
+        );
         assert_send(executor.discard("t1"));
     }
 
@@ -3067,7 +3121,11 @@ mod tests {
     async fn a_discarded_trial_is_forgotten_and_executes_as_unprovisioned() {
         let dir = tempfile::tempdir().unwrap();
         let runs_dir = dir.path().join("runs");
-        let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
+        let executor = EmbeddedExecutor::new(
+            DocumentRuntimeOptions::default(),
+            runs_dir.clone(),
+            crate::test_support::runtime_handle(),
+        );
         let spec = TrialSpec {
             trial_dir: runs_dir.join("run-1").join("trials").join("t1"),
             ..TrialSpec::empty_for_tests("t1")
@@ -3123,13 +3181,15 @@ mod tests {
         let runtime = exited_runtime();
         let evidence = run_stage(
             &spec,
-            &CancellationToken::new(),
-            &home,
-            &runtime,
-            &locator,
-            &workspace,
+            &StageEnv {
+                cancel: &CancellationToken::new(),
+                home: &home,
+                runtime: &runtime,
+                locator: &locator,
+                workspace: &workspace,
+                ready: &watch::channel(None).1,
+            },
             &stage,
-            &watch::channel(None).1,
         )
         .await;
 
@@ -3183,13 +3243,15 @@ mod tests {
                     agent_id: "subject".to_string(),
                     ..TrialSpec::empty_for_tests("t1")
                 },
-                &CancellationToken::new(),
-                &home,
-                &runtime,
-                &locator,
-                &workspace,
+                &StageEnv {
+                    cancel: &CancellationToken::new(),
+                    home: &home,
+                    runtime: &runtime,
+                    locator: &locator,
+                    workspace: &workspace,
+                    ready: &watch::channel(None).1,
+                },
                 &stage,
-                &watch::channel(None).1,
             ),
         )
         .await
@@ -3336,13 +3398,15 @@ mod tests {
             Duration::from_secs(30),
             run_stage(
                 &spec,
-                &CancellationToken::new(),
-                &home,
-                &runtime,
-                &locator,
-                &workspace,
+                &StageEnv {
+                    cancel: &CancellationToken::new(),
+                    home: &home,
+                    runtime: &runtime,
+                    locator: &locator,
+                    workspace: &workspace,
+                    ready: &ready,
+                },
                 &stage,
-                &ready,
             ),
         )
         .await;

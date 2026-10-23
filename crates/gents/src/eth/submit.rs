@@ -1,7 +1,7 @@
 //! Journaled simulate-before-sign submission: signed bytes are persisted before
 //! broadcast so recovery rebroadcasts the same transaction hash, never a new nonce.
 
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -76,9 +76,11 @@ pub(crate) struct SubmitReceipt {
     pub(crate) receipt: Option<Value>,
 }
 
+type NonceSlot = Arc<tokio::sync::Mutex<()>>;
+
 #[derive(Debug, Default)]
 pub(crate) struct NonceGate {
-    inner: Mutex<HashMap<(String, u64), Arc<tokio::sync::Mutex<()>>>>,
+    inner: Mutex<RapidHashMap<(String, u64), NonceSlot>>,
 }
 
 impl NonceGate {
@@ -129,14 +131,17 @@ struct SubmissionRecord {
     receipt_json: Option<String>,
 }
 
-pub(crate) async fn submit_transaction<T: JsonRpcTransport>(
+pub(crate) async fn submit_transaction<T>(
     node: &Arc<EmbeddedNode>,
     client: &EthRpcClient<T>,
     secret: &[u8; 32],
     request: SubmitRequest,
     nonces: &NonceGate,
     options: SubmitOptions,
-) -> Result<SubmitReceipt> {
+) -> Result<SubmitReceipt>
+where
+    T: JsonRpcTransport,
+{
     validate_request(&request)?;
     let derived = address_from_secret(secret).context("deriving submit signer address")?;
     if !derived.eq_ignore_ascii_case(&request.from) {
@@ -279,12 +284,15 @@ fn verify_existing(
     Ok(())
 }
 
-async fn resume_submission<T: JsonRpcTransport>(
+async fn resume_submission<T>(
     node: &Arc<EmbeddedNode>,
     client: &EthRpcClient<T>,
     record: SubmissionRecord,
     options: SubmitOptions,
-) -> Result<SubmitReceipt> {
+) -> Result<SubmitReceipt>
+where
+    T: JsonRpcTransport,
+{
     if let Some(receipt) = terminal_receipt(&record)? {
         return Ok(receipt);
     }
@@ -352,10 +360,10 @@ fn terminal_receipt(record: &SubmissionRecord) -> Result<Option<SubmitReceipt>> 
     }))
 }
 
-async fn fetch_receipt<T: JsonRpcTransport>(
-    client: &EthRpcClient<T>,
-    tx_hash: &str,
-) -> Result<Option<Value>> {
+async fn fetch_receipt<T>(client: &EthRpcClient<T>, tx_hash: &str) -> Result<Option<Value>>
+where
+    T: JsonRpcTransport,
+{
     let value = client
         .transaction_receipt(tx_hash)
         .await
@@ -396,14 +404,17 @@ async fn persist_receipt(
     })
 }
 
-async fn simulate<T: JsonRpcTransport>(
+async fn simulate<T>(
     client: &EthRpcClient<T>,
     request: &SubmitRequest,
     nonce: u64,
     gas_limit: u64,
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
-) -> Result<()> {
+) -> Result<()>
+where
+    T: JsonRpcTransport,
+{
     let mut tx = transaction_object(request);
     if let Value::Object(map) = &mut tx {
         map.insert("nonce".to_string(), json!(format!("0x{nonce:x}")));
@@ -430,12 +441,15 @@ async fn simulate<T: JsonRpcTransport>(
     Ok(())
 }
 
-async fn next_nonce<T: JsonRpcTransport>(
+async fn next_nonce<T>(
     node: &EmbeddedNode,
     client: &EthRpcClient<T>,
     from: &str,
     chain_id: u64,
-) -> Result<u64> {
+) -> Result<u64>
+where
+    T: JsonRpcTransport,
+{
     let pending = transaction_count(client, from).await?;
     let journaled = max_in_flight_nonce(node, from, chain_id).await?;
     Ok(match journaled {
@@ -482,10 +496,10 @@ async fn max_in_flight_nonce(
         .max())
 }
 
-async fn transaction_count<T: JsonRpcTransport>(
-    client: &EthRpcClient<T>,
-    address: &str,
-) -> Result<u64> {
+async fn transaction_count<T>(client: &EthRpcClient<T>, address: &str) -> Result<u64>
+where
+    T: JsonRpcTransport,
+{
     let result = client
         .pending_nonce(address)
         .await
@@ -496,10 +510,10 @@ async fn transaction_count<T: JsonRpcTransport>(
     parse_hex_u64(value).context("decoding nonce")
 }
 
-async fn gas_fees<T: JsonRpcTransport>(
-    client: &EthRpcClient<T>,
-    request: &SubmitRequest,
-) -> Result<(u64, u128, u128)> {
+async fn gas_fees<T>(client: &EthRpcClient<T>, request: &SubmitRequest) -> Result<(u64, u128, u128)>
+where
+    T: JsonRpcTransport,
+{
     let estimate = client
         .estimate_gas(transaction_object(request))
         .await
@@ -784,7 +798,7 @@ fn rlp_length_prefix(length: usize, short_offset: u8, long_offset: u8) -> Vec<u8
 
 fn decode_hex(value: &str) -> Result<Vec<u8>> {
     let hex = value.strip_prefix("0x").unwrap_or(value).trim();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         bail!("odd-length hex {value}");
     }
     (0..hex.len())

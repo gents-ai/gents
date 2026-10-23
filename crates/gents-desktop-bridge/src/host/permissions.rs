@@ -68,7 +68,7 @@ impl LocalTarget {
 
 enum Target {
     Unavailable(WorkspacePermissionsState),
-    Local(LocalTarget),
+    Local(Box<LocalTarget>),
 }
 
 pub(super) async fn state(
@@ -187,7 +187,7 @@ async fn target(
     tokio::task::spawn_blocking(move || local_target(&home, &requester, &request, support))
         .await
         .map_err(|error| super::backend_error(error.into()))?
-        .map(Target::Local)
+        .map(|local| Target::Local(Box::new(local)))
         .map_err(super::backend_error)
 }
 

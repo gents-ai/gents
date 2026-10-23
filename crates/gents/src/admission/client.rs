@@ -49,11 +49,14 @@ impl<M> AdmittedCompletionModel<M> {
 
     /// Run one provider call under an admission permit, racing the request's
     /// interrupt token. On success the caller owns the permit's terminal.
-    pub(crate) async fn admit<T, E: std::fmt::Display>(
+    pub(crate) async fn admit<T, E>(
         &self,
         observe_provider_activity: bool,
         call: impl Future<Output = Result<T, E>>,
-    ) -> Result<(T, AdmissionPermit), AdmittedCallError<E>> {
+    ) -> Result<(T, AdmissionPermit), AdmittedCallError<E>>
+    where
+        E: std::fmt::Display,
+    {
         let mut permit = self
             .admission
             .acquire_current_call(&self.connection)

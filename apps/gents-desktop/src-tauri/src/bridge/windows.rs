@@ -1,6 +1,5 @@
 //! AppKit's tab-bar + button sends newWindowForTab: through the responder
 //! chain.
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use objc2::{
@@ -57,12 +56,6 @@ define_class!(
     }
 );
 
-thread_local! {
-    // NSResponder.nextResponder does not retain its target; this must live
-    // until process exit.
-    static TAB_RESPONDER: RefCell<Option<Retained<TabResponder>>> = const { RefCell::new(None) };
-}
-
 pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
     let mtm = MainThreadMarker::new().expect("native setup on the main thread");
     let application = NSApplication::sharedApplication(mtm);
@@ -72,7 +65,9 @@ pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
         responder.setNextResponder(application.nextResponder().as_deref());
         application.setNextResponder(Some(&responder));
     }
-    TAB_RESPONDER.with(|slot| *slot.borrow_mut() = Some(responder));
+    // NSResponder.nextResponder does not retain its target; the responder
+    // must live until process exit.
+    std::mem::forget(responder);
     NSWindow::setAllowsAutomaticWindowTabbing(true, mtm);
     let menu = Menu::default(app.handle())?;
     let items = menu.items()?;

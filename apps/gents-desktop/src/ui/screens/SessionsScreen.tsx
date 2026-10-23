@@ -1,24 +1,46 @@
 import {
+  Fragment,
   memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useState,
   type ComponentProps,
+  type CSSProperties,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
-  ChevronDown,
+  ChevronsDownUp,
+  ChevronsUpDown,
   CornerDownRight,
   Lock,
   MessageSquare,
   Play,
   Plus,
   Search,
+  ChevronRight,
+  SquareStack,
   X,
 } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
+import {
+  Breadcrumb,
+  BreadcrumbEllipsis,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@gents/ui/components/breadcrumb";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
@@ -42,25 +64,47 @@ import { SessionStatus } from "./SessionStatus";
 import { SessionFilters, matchesView } from "./SessionFilters";
 import { emptyFilter, hasFilter } from "@/lib/session-filter";
 import { sessionRows, type SessionRow as Row } from "@/lib/session-rows";
-import { listViews, useListViews } from "@/app/listViews";
 import {
-  NO_SESSIONS,
-  parentOf as parentOfIn,
-  useFleet,
-  workersOf,
-} from "../hooks/useFleet";
+  REVEAL_EVENT,
+  SessionRowActions,
+  SessionRowMenu,
+  takeReveal,
+} from "./SessionRowMenu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
+import { listViews, useListViews } from "@/app/listViews";
+import { NO_SESSIONS, useFleet } from "../hooks/useFleet";
 
-const rowKey = (row: Row) =>
-  row.kind === "session" ? sessionKeyOf(row.session) : `${row.of}-workers`;
-const rowHeight = (row: Row) => (row.kind === "toggle" ? 37 : row.child ? 41 : 61);
+/* a session, and after an open group that leaves some out, the way to all
+   of them */
+type Item = { kind: "session" | "more"; row: Row };
+const itemKey = ({ kind, row }: Item) =>
+  kind === "session" ? sessionKeyOf(row.session) : `${sessionKeyOf(row.session)}-more`;
+const itemHeight = ({ kind, row }: Item) =>
+  kind === "more" ? 33 : row.depth ? 41 : 61 + (row.path?.length ? 16 : 0);
+/* a long group arrives as fast as a short one */
+const ENTRANCE_STEPS = 4;
+const NONE_FRESH: ReadonlySet<string> = new Set();
+/* where an opened row's status sits: each depth one step in */
+const STEP = 24;
+const titleOf = (session: SessionSummary) => session.title ?? "Untitled";
 
-export function SessionsScreen({ nodeDid }: { nodeDid?: string }) {
+export function SessionsScreen({
+  nodeDid,
+  under,
+  entry,
+}: {
+  nodeDid?: string;
+  /** the session whose started sessions the list shows */
+  under?: string;
+  /** the history entry showing the list, which keeps the rows opened on it */
+  entry?: object;
+}) {
   const nodes = useFleet(useShallow(fleetNodes));
   const homeDid = useHomeDid();
   const selectedNodeDid = useSelectedNodeDid();
   const [query, setQuery] = useState<string | null>(null);
   const filter = useListViews((v) => v.sessionFilter);
-  const openSessions = useListViews((v) => v.openSessions);
+  const opened = useOpened(entry);
 
   const placement = { nodes, selectedNodeDid, homeDid };
   const defaultNodeIds = nodesInScope(defaultScope("sessions"), placement).map(
@@ -90,49 +134,49 @@ export function SessionsScreen({ nodeDid }: { nodeDid?: string }) {
       ),
     ),
   );
-  const parents = useFleet(
-    useShallow((s) =>
-      Object.fromEntries(inScope.map((c) => [sessionKeyOf(c), parentOfIn(s, c)])),
-    ),
-  );
-  const workers = useFleet(
-    useShallow((s) =>
-      Object.fromEntries(inScope.map((c) => [sessionKeyOf(c), workersOf(s, c)])),
-    ),
-  );
-  /* nesting goes through starters the list leaves out (another node, a
-     narrowed pick) to the nearest one it shows */
-  const listedParents = useFleet(
-    useShallow((s) => {
-      const listed = new Set(inScope.map(sessionKeyOf));
-      return Object.fromEntries(
-        inScope.map((c) => {
-          const seen = new Set([sessionKeyOf(c)]);
-          let parent = parentOfIn(s, c);
-          while (parent && !listed.has(sessionKeyOf(parent))) {
-            if (seen.has(sessionKeyOf(parent))) return [sessionKeyOf(c), null];
-            seen.add(sessionKeyOf(parent));
-            parent = parentOfIn(s, parent);
-          }
-          return [sessionKeyOf(c), parent];
-        }),
-      );
-    }),
-  );
+  const parents = useFleet((s) => s.parentOf);
+  const workers = useFleet((s) => s.workersOf);
   const parentOf = useCallback(
-    (c: SessionSummary) => parents[sessionKeyOf(c)] ?? null,
+    (c: SessionSummary): SessionSummary | null => parents[sessionKeyOf(c)] ?? null,
     [parents],
   );
+  /* a session sits under the nearest starter the list shows, through the
+     ones it leaves out (another node, a narrowed pick) */
+  const listedParents = useMemo(() => {
+    const listed = new Set(inScope.map(sessionKeyOf));
+    const nearest = new Map<string, SessionSummary | null>();
+    for (const c of inScope) {
+      const seen = new Set([sessionKeyOf(c)]);
+      let parent = parentOf(c);
+      while (parent && !listed.has(sessionKeyOf(parent))) {
+        if (seen.has(sessionKeyOf(parent))) {
+          parent = null;
+          break;
+        }
+        seen.add(sessionKeyOf(parent));
+        parent = parentOf(parent);
+      }
+      nearest.set(sessionKeyOf(c), parent);
+    }
+    return nearest;
+  }, [inScope, parentOf]);
   const filtering = hasFilter(filter) || Boolean(query);
-  const { rows, shown } = useMemo(() => {
-    const open = new Set(openSessions);
-    return sessionRows({
-      sessions: inScope,
-      parentOf: (c) => listedParents[sessionKeyOf(c)] ?? null,
-      matches: filtering ? (c) => matchesView(c, filter, query) : null,
-      isOpen: (key) => open.has(key),
-    });
-  }, [inScope, listedParents, filter, query, filtering, openSessions]);
+  const { rows, trail, shown, total } = useMemo(
+    () =>
+      sessionRows({
+        sessions: inScope,
+        parentOf: (c) => listedParents.get(sessionKeyOf(c)) ?? null,
+        under: under ?? null,
+        matches: filtering ? (c) => matchesView(c, filter, query) : null,
+        isOpen: (key) => opened.keys.has(key),
+      }),
+    [inScope, listedParents, under, filter, query, filtering, opened.keys],
+  );
+  const level = trail[trail.length - 1] ?? null;
+  const listed = useMemo(
+    () => new Map(inScope.map((c) => [sessionKeyOf(c), c])),
+    [inScope],
+  );
 
   const narrowed = filtering || Object.values(nodeCounts).some((count) => count > 0);
   const pickedNames = nodesPicked
@@ -140,6 +184,9 @@ export function SessionsScreen({ nodeDid }: { nodeDid?: string }) {
         .filter((n) => nodeIds.includes(nodeDidOf(n)))
         .map((n) => n.node.displayName ?? n.label)
     : [];
+  const leaveNode = () => {
+    if (nodeDid) navigate({ name: "sessions" });
+  };
 
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
   const scrollRoot = useCallback((root: HTMLDivElement | null) => {
@@ -149,183 +196,369 @@ export function SessionsScreen({ nodeDid }: { nodeDid?: string }) {
   }, []);
   return (
     <ScrollArea ref={scrollRoot} className="h-full" data-testid="sessions-screen">
-      <div className="mx-auto max-w-page px-6 py-6">
-        <div className="flex h-10 items-center gap-2">
-          <h1 className="font-heading text-lg font-medium text-heading">Sessions</h1>
-          <div className="ml-auto flex min-w-0 items-center gap-2">
-            <NodeAxis
-              nodes={nodes}
-              homeDid={homeDid}
-              counts={nodeCounts}
-              /* every node is the picker's open state, "All nodes", however
+      {/* measured, so a row's toggle knows whether the margin has room */}
+      <div className="@container">
+        <div className="mx-auto max-w-page px-6 py-6">
+          <div className="flex h-10 items-center gap-2">
+            {trail.length === 0 ? (
+              <h1 className="font-heading text-lg font-medium text-heading">
+                Sessions
+              </h1>
+            ) : (
+              <SessionTrail trail={trail} />
+            )}
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <NodeAxis
+                nodes={nodes}
+                homeDid={homeDid}
+                counts={nodeCounts}
+                /* every node is the picker's open state, "All nodes", however
                  the list came to show them all */
-              value={nodesPicked ? nodeIds : []}
-              onChange={(next) => {
-                listViews.setSessionNodes(next);
-                if (nodeDid) navigate({ name: "sessions" });
-              }}
-            />
-            <SessionFilters
-              sessions={inScope}
-              nodeDids={nodesInScope(scope, placement).map(nodeDidOf)}
-              value={filter}
-              onChange={listViews.setSessionFilter}
-            />
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Search sessions"
-              aria-expanded={query !== null}
-              className={cn("shrink-0", query !== null && "text-foreground")}
-              onClick={() => setQuery(query === null ? "" : null)}
-            >
-              <Search />
-            </Button>
-            <Button
-              variant="brand"
-              size="sm"
-              className="shrink-0"
-              nativeButton={false}
-              render={<a href={href({ name: "session", sessionId: null })} />}
-            >
-              <Plus className="sm:hidden" />
-              <span className="max-sm:sr-only">New</span>
-            </Button>
-          </div>
-        </div>
-        {query !== null && (
-          <div className="relative mt-3">
-            <Input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
-              placeholder="Search sessions"
-              className="h-9 w-full pr-9"
-              aria-label="Search sessions"
-            />
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Clear search"
-              className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
-              onClick={() => setQuery(null)}
-            >
-              <X />
-            </Button>
-          </div>
-        )}
-        {/* a narrowed list says so, whatever narrowed it and whenever, a
-            filter restored from the last visit included; the region stays
-            mounted so a change in it is announced */}
-        <div role="status">
-          {(filtering || nodesPicked) && (
-            <div
-              data-testid="sessions-narrowed"
-              className="mt-2 flex items-center justify-end gap-2 text-xs text-muted-foreground"
-            >
-              <span className="min-w-0 truncate">
-                {filtering
-                  ? `${shown} of ${inScope.length} session${inScope.length === 1 ? "" : "s"}`
-                  : `${inScope.length} session${inScope.length === 1 ? "" : "s"}`}
-                {nodesPicked &&
-                  (pickedNames.length
-                    ? ` on ${pickedNames.join(", ")}`
-                    : ` on ${nodeIds.length} node${nodeIds.length === 1 ? "" : "s"}`)}
-              </span>
-              <Button
-                variant="quiet"
-                size="sm"
-                className="h-6 shrink-0 px-2 text-xs"
-                aria-label="Clear filters"
-                onClick={() => {
-                  listViews.setSessionFilter(emptyFilter);
-                  listViews.setSessionNodes(null);
-                  setQuery(null);
-                  if (nodeDid) navigate({ name: "sessions" });
+                value={nodesPicked ? nodeIds : []}
+                onChange={(next) => {
+                  listViews.setSessionNodes(next);
+                  leaveNode();
                 }}
+              />
+              <SessionFilters
+                sessions={inScope}
+                nodeDids={nodesInScope(scope, placement).map(nodeDidOf)}
+                value={filter}
+                onChange={listViews.setSessionFilter}
+              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Search sessions"
+                aria-expanded={query !== null}
+                className={cn("shrink-0", query !== null && "text-foreground")}
+                onClick={() => setQuery(query === null ? "" : null)}
               >
-                Clear
+                <Search />
+              </Button>
+              <Button
+                variant="brand"
+                size="sm"
+                className="shrink-0"
+                nativeButton={false}
+                render={<a href={href({ name: "session", sessionId: null })} />}
+              >
+                <Plus className="sm:hidden" />
+                <span className="max-sm:sr-only">New</span>
+              </Button>
+            </div>
+          </div>
+          {query !== null && (
+            <div className="relative mt-3">
+              <Input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
+                placeholder={
+                  level ? `Search under ${titleOf(level)}` : "Search sessions"
+                }
+                className="h-9 w-full pr-9"
+                aria-label="Search sessions"
+              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Clear search"
+                className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
+                onClick={() => setQuery(null)}
+              >
+                <X />
               </Button>
             </div>
           )}
+          {/* a narrowed list says so, whatever narrowed it and whenever, a
+            filter restored from the last visit included; the region stays
+            mounted so a change in it is announced */}
+          <div role="status">
+            {(filtering || nodesPicked) && (
+              <div
+                data-testid="sessions-narrowed"
+                className="mt-2 flex items-center justify-end gap-2 text-xs text-muted-foreground"
+              >
+                <span className="min-w-0 truncate">
+                  {filtering
+                    ? `${shown} of ${total} session${total === 1 ? "" : "s"}`
+                    : `${inScope.length} session${inScope.length === 1 ? "" : "s"}`}
+                  {nodesPicked &&
+                    (pickedNames.length
+                      ? ` on ${pickedNames.join(", ")}`
+                      : ` on ${nodeIds.length} node${nodeIds.length === 1 ? "" : "s"}`)}
+                </span>
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  className="h-6 shrink-0 px-2 text-xs"
+                  aria-label="Clear filters"
+                  onClick={() => {
+                    listViews.setSessionFilter(emptyFilter);
+                    listViews.setSessionNodes(null);
+                    setQuery(null);
+                    leaveNode();
+                  }}
+                >
+                  Clear
+                </Button>
+              </div>
+            )}
+          </div>
+          <SessionList
+            rows={rows}
+            level={level}
+            narrowed={narrowed}
+            scroller={scroller}
+            parentOf={parentOf}
+            listed={listed}
+            onToggle={opened.toggle}
+            workers={workers}
+          />
         </div>
-        <SessionList
-          rows={rows}
-          empty={rows.length === 0}
-          narrowed={narrowed}
-          scroller={scroller}
-          parentOf={parentOf}
-          workers={workers}
-          toggleOpen={listViews.toggleOpenSession}
-        />
       </div>
     </ScrollArea>
   );
 }
 
+/* past this many levels the middle folds into a menu, keeping the way
+   home and the session shown */
+const TRAIL_SHOWN = 1;
+
+function SessionTrail({ trail }: { trail: readonly SessionSummary[] }) {
+  const folded = trail.length > TRAIL_SHOWN ? trail.slice(0, -TRAIL_SHOWN) : [];
+  const shown = trail.slice(folded.length);
+  const crumb = "truncate rounded-md px-1.5 py-0.5";
+  const under = (session: SessionSummary) =>
+    href({ name: "sessionsUnder", session: sessionKeyOf(session) });
+  return (
+    <Breadcrumb className="-ml-1.5 min-w-0" data-testid="sessions-trail">
+      <BreadcrumbList className="flex-nowrap gap-0.5 sm:gap-0.5">
+        <BreadcrumbItem className="shrink-0">
+          <BreadcrumbLink
+            className={cn(crumb, "hover:bg-accent")}
+            href={href({ name: "sessions" })}
+          >
+            Sessions
+          </BreadcrumbLink>
+        </BreadcrumbItem>
+        {folded.length > 0 && (
+          <>
+            <BreadcrumbSeparator className="[&>svg]:size-3" />
+            <BreadcrumbItem className="shrink-0">
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label={`${folded.length} more level${folded.length === 1 ? "" : "s"}`}
+                  className="flex h-6 cursor-pointer items-center rounded-md px-1 hover:bg-accent hover:text-foreground"
+                >
+                  <BreadcrumbEllipsis className="size-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuGroup>
+                    {folded.map((session) => (
+                      <DropdownMenuItem
+                        key={sessionKeyOf(session)}
+                        nativeButton={false}
+                        render={<a href={under(session)} />}
+                      >
+                        <span className="max-w-72 truncate">{titleOf(session)}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </BreadcrumbItem>
+          </>
+        )}
+        {shown.map((session, n) => (
+          <Fragment key={sessionKeyOf(session)}>
+            <BreadcrumbSeparator className="[&>svg]:size-3" />
+            <BreadcrumbItem className="min-w-0">
+              {n === shown.length - 1 ? (
+                <BreadcrumbPage className={cn(crumb, "font-medium")}>
+                  <h1 className="truncate">{titleOf(session)}</h1>
+                </BreadcrumbPage>
+              ) : (
+                <BreadcrumbLink
+                  className={cn(crumb, "max-w-48 hover:bg-accent")}
+                  href={under(session)}
+                >
+                  {titleOf(session)}
+                </BreadcrumbLink>
+              )}
+            </BreadcrumbItem>
+          </Fragment>
+        ))}
+      </BreadcrumbList>
+    </Breadcrumb>
+  );
+}
+
 function SessionList({
   rows,
-  empty,
+  level,
   narrowed,
   scroller,
   parentOf,
+  listed,
+  onToggle,
   workers,
-  toggleOpen,
 }: {
   rows: Row[];
-  empty: boolean;
+  level: SessionSummary | null;
   narrowed: boolean;
   scroller: HTMLElement | null;
   parentOf: (session: SessionSummary) => SessionSummary | null;
-  workers: Record<string, readonly SessionSummary[]>;
-  toggleOpen: (key: string) => void;
+  listed: ReadonlyMap<string, SessionSummary>;
+  /** with the rows a close takes along: everything opened under it */
+  onToggle: (key: string, under: readonly string[]) => void;
+  workers: Readonly<Record<string, readonly SessionSummary[]>>;
 }) {
-  const window = useListWindow(rows, scroller, rowKey, rowHeight);
+  const items = useMemo(() => {
+    const out: Item[] = [];
+    const groups: Row[] = [];
+    const close = (depth: number) => {
+      while (groups.length && groups[groups.length - 1]!.depth >= depth) {
+        const group = groups.pop()!;
+        if (group.hidden > 0) out.push({ kind: "more", row: group });
+      }
+    };
+    for (const row of rows) {
+      close(row.depth);
+      out.push({ kind: "session", row });
+      if (row.open) groups.push(row);
+    }
+    close(0);
+    return out;
+  }, [rows]);
+  const window = useListWindow(items, scroller, itemKey, itemHeight);
+
+  /* the rows a toggle just opened come out of their row: briefly, and
+     only then, not when the list first shows or a scroll brings them back */
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(NONE_FRESH);
+  useEffect(() => {
+    if (fresh.size === 0) return;
+    const done = setTimeout(() => setFresh(NONE_FRESH), 400);
+    return () => clearTimeout(done);
+  }, [fresh]);
+  const entering = useMemo(() => {
+    const steps = new Map<string, number>();
+    const line: string[] = [];
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      line.length = row.depth;
+      const from = line[row.depth - 1];
+      if (from && fresh.has(from)) {
+        const n = counts.get(from) ?? 0;
+        counts.set(from, n + 1);
+        steps.set(sessionKeyOf(row.session), Math.min(n, ENTRANCE_STEPS));
+      }
+      line[row.depth] = sessionKeyOf(row.session);
+    }
+    return steps;
+  }, [rows, fresh]);
+  const empty = rows.length === 0;
+
+  const [list, setList] = useState<HTMLUListElement | null>(null);
+  const ownRef = window.listProps.ref;
+  const listRef = useCallback(
+    (el: HTMLUListElement | null) => {
+      setList(el);
+      if (typeof ownRef === "function") ownRef(el);
+      else if (ownRef) (ownRef as { current: HTMLUListElement | null }).current = el;
+    },
+    [ownRef],
+  );
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    const reveal = () => {
+      const found = rows.find((row) => takeReveal(row.session.sessionId));
+      if (!found) return;
+      const id = found.session.sessionId;
+      list
+        ?.querySelector(`[data-testid="session-${CSS.escape(id)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      setFlash(id);
+    };
+    reveal();
+    addEventListener(REVEAL_EVENT, reveal);
+    return () => removeEventListener(REVEAL_EVENT, reveal);
+  }, [rows, list]);
+  useEffect(() => {
+    if (!flash) return;
+    const done = setTimeout(() => setFlash(null), 1600);
+    return () => clearTimeout(done);
+  }, [flash]);
 
   return (
     <ul
       {...window.listProps}
+      ref={listRef}
       aria-label="Sessions"
       data-session-count={rows.length}
-      className={cn("mt-4", !window.enabled && "divide-y divide-border/60")}
+      className={cn(
+        "mt-4",
+        !window.enabled && "divide-y divide-border/60",
+        /* without the margin's room, rows that can open keep a gutter
+           inside their highlight for the toggle */
+        rows.some((row) => row.started > 0 && !row.path) &&
+          "[--gutter:24px] @min-[1000px]:[--gutter:0px]",
+      )}
     >
       {window.items.map(({ index, start }) => {
-        const row = rows[index]!;
+        const item = items[index]!;
+        const { row } = item;
         const attributes = window.attributes(index, start);
         if (attributes && index > 0) attributes.className = "border-t border-border/60";
-        return row.kind === "toggle" ? (
-          <li key={rowKey(row)} {...attributes}>
-            <button
-              type="button"
-              aria-expanded={row.open}
-              className="-mx-3 flex w-[calc(100%+1.5rem)] cursor-pointer items-center gap-1.5 rounded-lg py-2.5 pl-12 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => toggleOpen(row.of)}
-            >
-              <ChevronDown
-                className={cn(
-                  "size-3.5 transition-transform",
-                  row.open && "rotate-180",
-                )}
-              />
-              {`${row.kin} started session${row.kin === 1 ? "" : "s"}`}
-              {row.running > 0 && <span>· {row.running} running</span>}
-            </button>
-          </li>
-        ) : (
+        if (item.kind === "more") {
+          return (
+            <li key={itemKey(item)} {...attributes}>
+              <a
+                href={href({
+                  name: "sessionsUnder",
+                  session: sessionKeyOf(row.session),
+                })}
+                data-testid={`sessions-all-${row.session.sessionId}`}
+                /* in line with the status dots of the group it ends, which sit
+                   centred in their 16px status box */
+                className="-mx-3 flex w-fit items-center gap-0.5 py-2 text-xs text-muted-foreground hover:text-foreground"
+                style={{
+                  paddingLeft: `calc(${12 + (row.depth + 1) * STEP + 4}px + var(--gutter, 0px))`,
+                }}
+              >
+                View all {row.started}
+                <ChevronRight className="size-3" />
+              </a>
+            </li>
+          );
+        }
+        return (
           <SessionRow
-            key={rowKey(row)}
+            key={itemKey(item)}
             attributes={attributes}
-            session={row.session}
-            child={row.child}
-            context={row.context}
-            delay={row.delay ?? null}
-            parent={parentOf(row.session)}
-            workers={
-              row.child
-                ? NO_SESSIONS
-                : (workers[sessionKeyOf(row.session)] ?? NO_SESSIONS)
+            row={row}
+            /* under a level its starter is the trail; a top row names the
+               one the list leaves out */
+            parent={level || row.path || row.depth ? null : parentOf(row.session)}
+            starter={
+              row.starter
+                ? (listed.get(row.starter.key) ?? null)
+                : parentOf(row.session)
             }
+            onToggle={
+              row.path
+                ? null
+                : () => {
+                    const key = sessionKeyOf(row.session);
+                    if (!row.open) setFresh(new Set([key]));
+                    onToggle(key, openedUnder(rows, rows.indexOf(row)));
+                  }
+            }
+            flash={flash === row.session.sessionId}
+            enter={entering.get(sessionKeyOf(row.session)) ?? null}
+            workers={workers[sessionKeyOf(row.session)] ?? NO_SESSIONS}
           />
         );
       })}
@@ -334,7 +567,12 @@ function SessionList({
           No sessions match.
         </li>
       )}
-      {empty && !narrowed && (
+      {empty && !narrowed && level && (
+        <li className="py-8 text-center text-sm text-muted-foreground">
+          No sessions under this one.
+        </li>
+      )}
+      {empty && !narrowed && !level && (
         <li className="grid min-h-[50vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
           <div className="text-center">
             <MessageSquare className="mx-auto size-6 text-muted-foreground" />
@@ -357,104 +595,249 @@ function SessionList({
 }
 
 const SessionRow = memo(function SessionRow({
-  session,
-  child,
-  context,
-  delay,
+  row,
   parent,
+  starter,
+  onToggle,
+  flash,
+  enter,
   workers,
   attributes = {},
 }: {
   attributes?: ComponentProps<"li">;
-  session: SessionSummary;
-  child: boolean;
-  context: boolean;
-  delay: number | null;
+  row: Row;
   parent: SessionSummary | null;
+  starter: SessionSummary | null;
+  onToggle: (() => void) | null;
+  flash: boolean;
+  /** its place in a group just opened, for a short staggered entrance */
+  enter: number | null;
   workers: readonly SessionSummary[];
 }) {
+  const { session, path, depth, started, running, open } = row;
+  const condensed = depth > 0;
+  const count =
+    `${started} started session${started === 1 ? "" : "s"}` +
+    (running > 0 ? ` · ${running} running` : "");
   return (
     <li
       {...attributes}
-      className={cn(
-        attributes.className,
-        !attributes.style &&
-          delay != null &&
-          "animate-in fade-in-0 slide-in-from-top-1 fill-mode-both duration-200 ease-out motion-reduce:animate-none",
-      )}
-      style={
-        attributes.style ??
-        (delay != null ? { animationDelay: `${delay * 40}ms` } : undefined)
-      }
+      data-depth={depth}
+      className={cn(attributes.className, "group/row relative")}
     >
-      <a
-        href={href({
-          name: "session",
-          sessionId: session.sessionId,
-        })}
-        data-testid={`session-${session.sessionId}`}
-        className={cn(
-          "-mx-3 grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 rounded-lg px-3 hover:bg-accent",
-          child ? "py-2 pl-9 text-sm" : "py-3.5",
-          context && "opacity-60",
-        )}
+      <SessionRowMenu
+        row={row}
+        starter={starter}
+        onToggle={onToggle}
+        trigger={
+          /* the title's link covers the row, so the count can be a link of
+             its own; what has its own pointer behaviour sits above it */
+          <div
+            className={cn(
+              "relative -mx-3 grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 rounded-lg px-3 transition-colors duration-500 hover:bg-accent data-popup-open:bg-accent",
+              condensed ? "py-2" : "py-3.5",
+              /* without hover the actions stay, in a column of their own
+                 after the time */
+              "[@media(hover:none)]:pr-11",
+              flash && "bg-accent",
+              enter !== null &&
+                "animate-in fade-in-0 slide-in-from-top-1 fill-mode-both duration-150 ease-out motion-reduce:animate-none",
+            )}
+            style={{
+              paddingLeft: `calc(${12 + depth * STEP}px + var(--gutter, 0px))`,
+              animationDelay: enter ? `${enter * 15}ms` : undefined,
+            }}
+          />
+        }
       >
         <SessionStatus turnState={session.turnState} />
-        <p className="flex min-w-0 items-center gap-1.5 text-sm">
-          {!parent && session.taskId && (
-            <Play
-              className="size-3.5 shrink-0 text-muted-foreground"
-              role="img"
-              aria-label={`Started by ${session.taskName ?? "a task"}`}
-            >
-              <title>
-                Started by {session.taskName ?? "a task"}
-                {session.triggerKind ? ` · ${session.triggerKind}` : ""}
-              </title>
-            </Play>
-          )}
-          {parent && (
-            <CornerDownRight
-              className="size-3.5 shrink-0 text-muted-foreground"
-              role="img"
-              aria-label={`Started by ${parent?.title ?? "another session"}`}
-            >
-              <title>Started by {parent?.title ?? "another session"}</title>
-            </CornerDownRight>
-          )}
-          {session.unreadableReason && (
-            <Lock
-              className="size-3.5 shrink-0 text-muted-foreground"
-              role="img"
-              aria-label={session.unreadableReason}
-            >
-              <title>{session.unreadableReason}</title>
-            </Lock>
-          )}
-          <span
-            className={cn(
-              "truncate",
-              (child || session.unreadableReason) && "text-muted-foreground",
+        <div className="min-w-0">
+          <p className="flex min-w-0 items-center gap-1.5 text-sm">
+            {!parent && session.taskId && (
+              <Play
+                className="relative z-10 size-3.5 shrink-0 text-muted-foreground"
+                role="img"
+                aria-label={`Started by ${session.taskName ?? "a task"}`}
+              >
+                <title>
+                  Started by {session.taskName ?? "a task"}
+                  {session.triggerKind ? ` · ${session.triggerKind}` : ""}
+                </title>
+              </Play>
             )}
-          >
-            {session.title ?? "Untitled"}
-          </span>
-        </p>
-        <NodeAgentStack
-          nodeDid={nodeOfSession(session)}
-          agentId={session.agentId}
-          size={child ? "sm" : "md"}
-          workers={workers}
-        />
+            {parent && (
+              <CornerDownRight
+                className="relative z-10 size-3.5 shrink-0 text-muted-foreground"
+                role="img"
+                aria-label={`Started by ${titleOf(parent)}`}
+              >
+                <title>Started by {titleOf(parent)}</title>
+              </CornerDownRight>
+            )}
+            {session.unreadableReason && (
+              <Lock
+                className="relative z-10 size-3.5 shrink-0 text-muted-foreground"
+                role="img"
+                aria-label={session.unreadableReason}
+              >
+                <title>{session.unreadableReason}</title>
+              </Lock>
+            )}
+            <a
+              href={href({
+                name: "session",
+                sessionId: session.sessionId,
+              })}
+              data-testid={`session-${session.sessionId}`}
+              className={cn(
+                "truncate outline-none after:absolute after:inset-0 after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-ring",
+                (condensed || session.unreadableReason) && "text-muted-foreground",
+              )}
+            >
+              {titleOf(session)}
+            </a>
+          </p>
+          {path && path.length > 0 && (
+            <p className="truncate text-xs text-muted-foreground">
+              in {path.map(titleOf).join(" › ")}
+            </p>
+          )}
+        </div>
+        {/* a column of its own, so counts line up down the list */}
+        <span className="flex w-9 justify-end">
+          {started > 0 && (
+            <Tooltip disableHoverablePopup>
+              <TooltipTrigger
+                render={
+                  <a
+                    href={href({
+                      name: "sessionsUnder",
+                      session: sessionKeyOf(session),
+                    })}
+                    data-testid={`sessions-under-${session.sessionId}`}
+                    aria-label={`Explore ${count}`}
+                    className="relative z-10 -mx-1.5 flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground tabular-nums hover:bg-foreground/6 hover:text-foreground"
+                  />
+                }
+              >
+                <SquareStack className="size-3.5" />
+                {started}
+                {running > 0 && (
+                  <span className="absolute top-0.5 left-4 size-1.5 rounded-full bg-brand" />
+                )}
+              </TooltipTrigger>
+              <TooltipContent side="top" className="pointer-events-none">
+                Explore started sessions
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </span>
+        {/* a slot that fits a resting stack of three, so the counts before it
+            line up down the list */}
+        <span className="relative z-10 flex min-w-18 justify-end">
+          <NodeAgentStack
+            nodeDid={nodeOfSession(session)}
+            agentId={session.agentId}
+            size={condensed ? "sm" : "md"}
+            workers={condensed ? NO_SESSIONS : workers}
+          />
+        </span>
         <span
           className={cn(
-            "w-10 text-right text-muted-foreground sm:w-20",
-            child ? "text-xs" : "text-sm",
+            "w-10 text-right text-muted-foreground sm:w-14",
+            condensed ? "text-xs" : "text-sm",
+            /* gives its place to the actions while the row is pointed at */
+            "group-hover/row:invisible [@media(hover:hover)]:group-has-[[data-popup-open]]/row:invisible",
           )}
         >
           <Age iso={session.updatedAt} />
         </span>
-      </a>
+      </SessionRowMenu>
+      <SessionRowActions
+        row={row}
+        starter={starter}
+        onToggle={onToggle}
+        className="absolute top-1/2 -right-1.5 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100 [@media(hover:none)]:opacity-100"
+      />
+      {/* its tooltip goes as soon as the pointer leaves the toggle, so it
+          never sits over the toggles of the rows around it */}
+      {started > 0 && onToggle && (
+        <Tooltip disableHoverablePopup>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-expanded={open}
+                aria-label={open ? `Hide ${count}` : `Show ${count}`}
+                data-testid={`sessions-toggle-${session.sessionId}`}
+                /* an expand shows while the row is pointed at or the toggle
+                   has focus; a screen without hover always shows it */
+                className={cn(
+                  "absolute top-1/2 grid size-5 -translate-y-1/2 cursor-pointer place-items-center rounded-md text-muted-foreground group-hover/row:opacity-100 hover:bg-background hover:text-foreground focus-visible:opacity-100 [@media(hover:none)]:opacity-100",
+                  open ? "opacity-60" : "opacity-0",
+                  /* in the page margin, clear of the highlight, at every depth,
+                     once the centred page leaves it room (a 976px page with its
+                     24px gutter needs 12px more on each side); before that, in
+                     the row's own gutter before its status */
+                  "left-(--indent) @min-[1000px]:-left-9",
+                )}
+                style={{ "--indent": `${depth * STEP - 4}px` } as CSSProperties}
+                onClick={onToggle}
+              />
+            }
+          >
+            {open ? (
+              <ChevronsDownUp className="size-3.5" />
+            ) : (
+              <ChevronsUpDown className="size-3.5" />
+            )}
+          </TooltipTrigger>
+          <TooltipContent side="top" className="pointer-events-none">
+            {open ? "Collapse" : "Expand"}
+          </TooltipContent>
+        </Tooltip>
+      )}
     </li>
   );
 });
+
+/* rows a person opened out on a level, held by the history entry that
+   shows it: a level opened afresh starts closed, and going back to one
+   finds it as it was left. Nothing outlives the app. */
+const openedByEntry = new WeakMap<object, ReadonlySet<string>>();
+const NONE_OPENED: ReadonlySet<string> = new Set();
+
+function useOpened(entry: object | undefined) {
+  const [own] = useState(() => ({}));
+  const holder = entry ?? own;
+  const [state, setState] = useState(() => ({
+    holder,
+    keys: openedByEntry.get(holder) ?? NONE_OPENED,
+  }));
+  if (state.holder !== holder) {
+    setState({ holder, keys: openedByEntry.get(holder) ?? NONE_OPENED });
+  }
+  const toggle = useCallback(
+    (key: string, under: readonly string[]) =>
+      setState((was) => {
+        const keys = new Set(was.keys);
+        if (!keys.delete(key)) keys.add(key);
+        else for (const opened of under) keys.delete(opened);
+        openedByEntry.set(was.holder, keys);
+        return { ...was, keys };
+      }),
+    [],
+  );
+  return { keys: state.keys, toggle };
+}
+
+/* the rows opened inside the group of `rows[at]`: those after it that sit
+   deeper, up to the next one that doesn't */
+function openedUnder(rows: readonly Row[], at: number): string[] {
+  const depth = rows[at]!.depth;
+  const keys: string[] = [];
+  for (let i = at + 1; i < rows.length && rows[i]!.depth > depth; i++) {
+    if (rows[i]!.open) keys.push(sessionKeyOf(rows[i]!.session));
+  }
+  return keys;
+}

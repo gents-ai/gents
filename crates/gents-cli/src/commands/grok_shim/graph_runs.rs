@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rapidhash::{RapidHashMap, RapidHashSet};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -21,8 +21,8 @@ use super::turn::PromptSender;
 
 #[derive(Default)]
 pub(super) struct GraphRunCursor {
-    scanned: HashSet<String>,
-    replies: HashMap<String, Backoff>,
+    scanned: RapidHashSet<String>,
+    replies: RapidHashMap<String, Backoff>,
     discovery_failures: u32,
     runs: ObservationSet,
 }
@@ -756,7 +756,11 @@ mod tests {
             .to_vec();
         assert_eq!(ticks, expected);
         assert_eq!(
-            ticks.concat().into_iter().collect::<HashSet<_>>().len(),
+            ticks
+                .concat()
+                .into_iter()
+                .collect::<RapidHashSet<_>>()
+                .len(),
             runs.len()
         );
     }

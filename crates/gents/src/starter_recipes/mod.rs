@@ -395,10 +395,10 @@ fn empty_tools(node_did: &str, tools_id: &str, display_name: &str) -> Tools {
     }
 }
 
-fn required_workspace_scope<'a>(
+fn required_workspace_scope(
     id: StarterRecipeId,
-    scope: Option<&'a StarterWorkspaceScope>,
-) -> Result<&'a StarterWorkspaceScope> {
+    scope: Option<&StarterWorkspaceScope>,
+) -> Result<&StarterWorkspaceScope> {
     scope.ok_or_else(|| anyhow!("starter recipe {id} requires workspace_scope"))
 }
 

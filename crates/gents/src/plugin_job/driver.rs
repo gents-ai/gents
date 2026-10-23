@@ -1,7 +1,8 @@
 //! Ends a job row: maps a [`Settlement`] onto the row's terminal state and
 //! canonical tool output.
 
-use std::collections::{BTreeMap, HashMap};
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -918,7 +919,7 @@ struct Dirty(bool);
 #[derive(Default)]
 struct RowFailures {
     count: u32,
-    read: Option<(StepRow, HashMap<String, KillObservation>)>,
+    read: Option<(StepRow, RapidHashMap<String, KillObservation>)>,
 }
 
 /// Runs job steps: one in flight per row, wakes during a step coalesced into
@@ -926,9 +927,9 @@ struct RowFailures {
 pub struct JobDriver {
     runtime: JobRuntime,
     this: Weak<JobDriver>,
-    in_flight: Mutex<HashMap<String, Dirty>>,
+    in_flight: Mutex<RapidHashMap<String, Dirty>>,
     permits: Semaphore,
-    failures: Mutex<HashMap<String, RowFailures>>,
+    failures: Mutex<RapidHashMap<String, RowFailures>>,
     /// Every row ever kicked, for tests that assert a wake reached no row.
     #[cfg(test)]
     pub(crate) kicked: Mutex<Vec<String>>,
@@ -939,9 +940,9 @@ impl JobDriver {
         Arc::new_cyclic(|this| Self {
             runtime,
             this: this.clone(),
-            in_flight: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(RapidHashMap::new()),
             permits: Semaphore::new(4),
-            failures: Mutex::new(HashMap::new()),
+            failures: Mutex::new(RapidHashMap::new()),
             #[cfg(test)]
             kicked: Mutex::new(Vec::new()),
         })
@@ -1856,7 +1857,7 @@ pub(crate) mod tests {
         assert_eq!(step.state, JobState::Running);
         let derived = crate::plugin_job::input::derive_children(
             &job.access,
-            &[row.clone()],
+            std::slice::from_ref(&row),
             pin.ceiling_at_pin.result_bytes,
         )
         .await

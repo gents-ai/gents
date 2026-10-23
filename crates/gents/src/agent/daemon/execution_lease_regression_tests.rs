@@ -95,27 +95,32 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         false,
         &[],
     );
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(model.clone()),
-        prompt.preamble().to_owned(),
-        Arc::new(Vec::new()),
-        prompt,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(model.clone()),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(Vec::new()),
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let doc_id = request.doc_id.clone();
@@ -376,7 +381,8 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         1,
         "exact received part count: {reconstructed:?}"
     );
-    for (part, text) in [(0, "first second")] {
+    {
+        let (part, text) = (0, "first second");
         let content = reconstructed[part]
             .as_ref()
             .expect("closed reasoning stream reconstructs");
@@ -499,29 +505,34 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         false,
         &[],
     );
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(LeaseLossProvider),
-        prompt.preamble().to_owned(),
-        Arc::new(vec![
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(LeaseLossProvider),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(vec![
             Box::new(LeaseBlockingTool { entered: None }) as Box<dyn crate::llm::tool::ToolDyn>
         ]),
-        prompt,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
@@ -695,27 +706,32 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         false,
         &[],
     );
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(model.clone()),
-        prompt.preamble().to_owned(),
-        Arc::new(Vec::new()),
-        prompt,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(model.clone()),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(Vec::new()),
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .expect("construct daemon with valid execution configuration");
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     for _ in 0..8 {
@@ -930,29 +946,34 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         false,
         &[],
     );
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(LeaseLossProvider),
-        prompt.preamble().to_owned(),
-        Arc::new(vec![Box::new(LeaseBlockingTool {
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(LeaseLossProvider),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
         }) as Box<dyn crate::llm::tool::ToolDyn>]),
-        prompt,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
@@ -1133,27 +1154,32 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         false,
         &[],
     );
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(model.clone()),
-        prompt.preamble().to_owned(),
-        Arc::new(Vec::new()),
-        prompt,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(model.clone()),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(Vec::new()),
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let request = create_routed_request(&node, &agent_config, &node_did).await;
@@ -1266,27 +1292,32 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         false,
         &[],
     );
-    let mut daemon = AgentDaemon::new(
-        node.clone(),
-        agent_config.clone(),
-        None,
-        Arc::new(model.clone()),
-        prompt.preamble().to_owned(),
-        Arc::new(Vec::new()),
-        prompt,
-        FailurePolicy::default(),
-        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-        Arc::new(StartupBarrier::ready_for_test()),
-        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
-        1,
-        crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(model.clone()),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(Vec::new()),
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime_status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    )
+    })
     .unwrap();
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let doc_id = request.doc_id.clone();

@@ -193,7 +193,10 @@ impl GraphqlEndpoint {
 
 /// Serialized as its URL: the acting DID is an access decision, not output.
 impl serde::Serialize for GraphqlEndpoint {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         serializer.serialize_str(&self.url)
     }
 }

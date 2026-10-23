@@ -97,7 +97,7 @@ impl Tool for CallToolTool {
         let arguments =
             match normalize_arguments(&args.service_id, &args.tool_name, &args.arguments) {
                 Ok(arguments) => arguments,
-                Err(error) => return Err(MetaToolError::structured(error)),
+                Err(error) => return Err(MetaToolError::structured(*error)),
             };
 
         let Value::Object(argument_object) = &arguments else {
@@ -238,6 +238,7 @@ impl CallToolTool {
             tool.input_schema.as_ref(),
         )
         .err()
+        .map(|error| *error)
     }
 }
 
@@ -245,10 +246,10 @@ fn normalize_arguments(
     service_id: &str,
     tool_name: &str,
     arguments: &Value,
-) -> Result<Value, StructuredToolError> {
+) -> Result<Value, Box<StructuredToolError>> {
     match arguments {
         Value::Object(_) => Ok(arguments.clone()),
-        other => Err(StructuredToolError::invalid_tool_arguments(
+        other => Err(Box::new(StructuredToolError::invalid_tool_arguments(
             service_id,
             tool_name,
             "/arguments",
@@ -256,7 +257,7 @@ fn normalize_arguments(
                 "call_tool.arguments must be a JSON object, got {}",
                 json_type_name(other)
             ),
-        )),
+        ))),
     }
 }
 
@@ -265,19 +266,19 @@ fn validate_arguments_against_schema(
     tool_name: &str,
     arguments: &Map<String, Value>,
     schema: &Map<String, Value>,
-) -> Result<(), StructuredToolError> {
+) -> Result<(), Box<StructuredToolError>> {
     if let Some(required) = schema.get("required").and_then(Value::as_array) {
         for raw_field in required {
             let Some(field) = raw_field.as_str() else {
                 continue;
             };
             if !arguments.contains_key(field) {
-                return Err(StructuredToolError::invalid_tool_arguments(
+                return Err(Box::new(StructuredToolError::invalid_tool_arguments(
                     service_id,
                     tool_name,
                     format!("/arguments/{field}"),
                     format!("missing required argument '{field}'"),
-                ));
+                )));
             }
         }
     }
@@ -289,12 +290,12 @@ fn validate_arguments_against_schema(
     if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
         for field in arguments.keys() {
             if !properties.contains_key(field) {
-                return Err(StructuredToolError::invalid_tool_arguments(
+                return Err(Box::new(StructuredToolError::invalid_tool_arguments(
                     service_id,
                     tool_name,
                     format!("/arguments/{field}"),
                     format!("unknown argument '{field}'"),
-                ));
+                )));
             }
         }
     }
@@ -313,7 +314,7 @@ fn validate_arguments_against_schema(
             continue;
         }
 
-        return Err(StructuredToolError::invalid_tool_arguments(
+        return Err(Box::new(StructuredToolError::invalid_tool_arguments(
             service_id,
             tool_name,
             format!("/arguments/{field}"),
@@ -322,7 +323,7 @@ fn validate_arguments_against_schema(
                 expected_types.join(" or "),
                 json_type_name(value)
             ),
-        ));
+        )));
     }
 
     Ok(())

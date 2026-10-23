@@ -26,7 +26,7 @@ pub fn preview_config(
         &PackInstallOptions {
             node_did: PREVIEW_OWNER.into(),
         },
-        &|path| asset(path).map(Vec::from),
+        &|path| asset(path),
         &|_| None,
     )?;
     let scenario = crate::pack::declared_paths(manifest)

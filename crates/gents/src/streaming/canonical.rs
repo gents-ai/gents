@@ -49,12 +49,13 @@ fn created_tool_call_doc_ids(
     let expected = expected_keys
         .iter()
         .map(String::as_str)
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rapidhash::RapidHashSet<_>>();
     anyhow::ensure!(
         expected.len() == expected_keys.len(),
         "provider publication contains duplicate physical tool-call keys"
     );
-    let mut doc_ids = std::collections::HashMap::with_capacity(rows.len());
+    let mut doc_ids =
+        rapidhash::RapidHashMap::with_capacity_and_hasher(rows.len(), Default::default());
     for row in rows {
         let key = row
             .get("tool_call_key")
@@ -286,24 +287,25 @@ pub(crate) async fn close_provider_attempt_at(
                             existing,
                         )?;
                     }
-                    let matches = match (&existing.segment.close, close) {
-                        (Some(SourceClose::Retracted), ProviderAttemptClose::Retracted) => true,
+                    let matches = matches!(
+                        (&existing.segment.close, close),
                         (
+                            Some(SourceClose::Retracted),
+                            ProviderAttemptClose::Retracted
+                        ) | (
                             Some(SourceClose::Closed {
                                 outcome: OutputOutcome::Partial,
                                 ..
                             }),
                             ProviderAttemptClose::Partial,
-                        ) => true,
-                        (
+                        ) | (
                             Some(SourceClose::Closed {
                                 outcome: OutputOutcome::Complete,
                                 ..
                             }),
                             ProviderAttemptClose::AuxiliaryComplete,
-                        ) => true,
-                        _ => false,
-                    };
+                        )
+                    );
                     anyhow::ensure!(matches, "provider close replay changed outcome");
                     if let Some(candidate) = candidate.as_ref() {
                         validate_closing_shape(prepared, &candidate.closing)?;
@@ -332,14 +334,18 @@ pub(crate) async fn close_provider_attempt_at(
                     }
                     return partial_header_in_txn(
                         txn,
-                        prepared,
-                        generation,
-                        existing,
-                        &records,
-                        close,
-                        candidate.as_ref().and_then(|value| value.header.as_ref()),
-                        now,
-                        true,
+                        PartialHeaderInputs {
+                            prepared,
+                            generation,
+                            closing: existing,
+                            records: &records,
+                            close,
+                            header_factory: candidate
+                                .as_ref()
+                                .and_then(|value| value.header.as_ref()),
+                            now,
+                            replay: true,
+                        },
                     )
                     .await;
                 }
@@ -451,14 +457,16 @@ pub(crate) async fn close_provider_attempt_at(
                 };
                 partial_header_in_txn(
                     txn,
-                    prepared,
-                    generation,
-                    &closing,
-                    &records,
-                    close,
-                    candidate.as_ref().and_then(|value| value.header.as_ref()),
-                    now,
-                    false,
+                    PartialHeaderInputs {
+                        prepared,
+                        generation,
+                        closing: &closing,
+                        records: &records,
+                        close,
+                        header_factory: candidate.as_ref().and_then(|value| value.header.as_ref()),
+                        now,
+                        replay: false,
+                    },
                 )
                 .await
             })
@@ -575,17 +583,31 @@ pub(crate) fn validate_closed_source_extent(
     Ok(())
 }
 
-async fn partial_header_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    prepared: &OutputSegment,
-    generation: &str,
-    closing: &OutputSegmentRow,
-    records: &[OutputSegmentRow],
+struct PartialHeaderInputs<'a> {
+    prepared: &'a OutputSegment,
+    generation: &'a str,
+    closing: &'a OutputSegmentRow,
+    records: &'a [OutputSegmentRow],
     close: ProviderAttemptClose,
-    header_factory: Option<&PartialHeaderFactory>,
+    header_factory: Option<&'a PartialHeaderFactory>,
     now: DateTime<Utc>,
     replay: bool,
+}
+
+async fn partial_header_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    inputs: PartialHeaderInputs<'_>,
 ) -> Result<Option<String>> {
+    let PartialHeaderInputs {
+        prepared,
+        generation,
+        closing,
+        records,
+        close,
+        header_factory,
+        now,
+        replay,
+    } = inputs;
     if !matches!(close, ProviderAttemptClose::Partial) || prepared.source.is_auxiliary_audit() {
         return Ok(None);
     }
@@ -765,7 +787,6 @@ pub(super) async fn publish_provider_turn_with_time(
             let expected = std::sync::Arc::clone(&plan.expected);
             let tool_deadline_at = plan.tool_deadline_at.clone();
             let background_calls = plan.background_calls.clone();
-            let fixture_now = fixture_now.clone();
             Box::pin(async move {
             let exemplar = plan.final_flush.as_ref().context("provider publication has no output")?;
             anyhow::ensure!(
@@ -806,16 +827,7 @@ pub(super) async fn publish_provider_turn_with_time(
                     .iter()
                     .find(|row| row.segment.close.is_some())
                     .map(|row| row.segment.writer.clone());
-                let published = replay_publication_in_txn(
-                    txn,
-                    &mut reader,
-                    exemplar,
-                    generation,
-                    accepted_writer.as_ref(),
-                    &message_key,
-                    expected.as_ref(),
-                    &background_calls,
-                )
+                let published = replay_publication_in_txn(txn, &mut reader, ReplayPublication { exemplar, generation, accepted_writer: accepted_writer.as_ref(), message_key: &message_key, expected: expected.as_ref(), background_calls: &background_calls })
                 .await?;
                 if let Some(consumption) = plan.consumes_folded.as_ref() {
                     crate::lifecycle::queue::ensure_folded_consumed_in_txn(txn, consumption).await?;
@@ -961,16 +973,28 @@ pub(super) async fn publish_provider_turn_with_time(
     ).await
 }
 
+struct ReplayPublication<'a> {
+    exemplar: &'a OutputSegment,
+    generation: &'a str,
+    accepted_writer: Option<&'a OutputWriter>,
+    message_key: &'a str,
+    expected: &'a gents_protocol::message::Message,
+    background_calls: &'a [String],
+}
+
 async fn replay_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
     reader: &mut crate::session::TxnCanonicalReader<'_, '_>,
-    exemplar: &OutputSegment,
-    generation: &str,
-    accepted_writer: Option<&OutputWriter>,
-    message_key: &str,
-    expected: &gents_protocol::message::Message,
-    background_calls: &[String],
+    replay: ReplayPublication<'_>,
 ) -> Result<PublishedProviderTurn> {
+    let ReplayPublication {
+        exemplar,
+        generation,
+        accepted_writer,
+        message_key,
+        expected,
+        background_calls,
+    } = replay;
     let requester = exemplar.requester_did.as_ref().map_or_else(
         || "null".to_owned(),
         |did| format!("\"{}\"", escape_graphql_string(did)),

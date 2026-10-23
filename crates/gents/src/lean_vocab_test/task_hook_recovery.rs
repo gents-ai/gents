@@ -96,7 +96,7 @@ impl Fixture {
                 .and_then(serde_json::Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            Ok(rows.first().and_then(|row| project_request_row(row)))
+            Ok(rows.first().and_then(project_request_row))
         };
         let snapshot = render_snapshot(
             snapshot_started,
@@ -596,9 +596,9 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
 /// Emits ONLY the explicitly selected fields; any other keys present in the
 /// row (identities, secrets, message content, unknown future fields) are
 /// ignored and never rendered.
-fn project_request_row(
-    row: &serde_json::Value,
-) -> Option<(Option<String>, Option<String>, Option<String>, Option<i64>)> {
+type RequestRowProjection = (Option<String>, Option<String>, Option<String>, Option<i64>);
+
+fn project_request_row(row: &serde_json::Value) -> Option<RequestRowProjection> {
     Some((
         row.get("lifecycle_state")
             .and_then(serde_json::Value::as_str)
@@ -621,10 +621,7 @@ fn project_request_row(
 /// outcome. Emits only the explicitly selected fields — never a full row.
 fn render_snapshot(
     snapshot_started: chrono::DateTime<chrono::Utc>,
-    result: Result<
-        Result<Option<(Option<String>, Option<String>, Option<String>, Option<i64>)>, ()>,
-        (),
-    >,
+    result: Result<Result<Option<RequestRowProjection>, ()>, ()>,
 ) -> String {
     match result {
         Ok(Ok(Some((lifecycle_state, generation, expires_at, lease_secs)))) => format!(
@@ -732,10 +729,7 @@ mod render_snapshot_tests {
     fn empty_array_and_absent_key_project_to_missing_row() {
         // Empty array: query succeeded but no row matched.
         let empty: Vec<serde_json::Value> = Vec::new();
-        assert!(empty
-            .first()
-            .and_then(|row| project_request_row(row))
-            .is_none());
+        assert!(empty.first().and_then(project_request_row).is_none());
 
         // Absent key: data object present without AgentRequest.
         let data = serde_json::json!({ "SomethingElse": [] });
@@ -744,10 +738,7 @@ mod render_snapshot_tests {
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
-        assert!(rows
-            .first()
-            .and_then(|row| project_request_row(row))
-            .is_none());
+        assert!(rows.first().and_then(project_request_row).is_none());
     }
 
     #[test]

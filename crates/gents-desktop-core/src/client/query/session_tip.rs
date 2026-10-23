@@ -130,7 +130,7 @@ fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> 
         .as_deref()
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let mut seen_owners = std::collections::HashSet::new();
+    let mut seen_owners = rapidhash::RapidHashSet::default();
     let ids = requests
         .iter()
         .map(|request| {

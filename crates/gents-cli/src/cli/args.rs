@@ -4985,7 +4985,7 @@ pub(crate) enum OptimizationCommand {
                       `capture` list); this command adds none.",
         after_help = OPTIMIZATION_RUN_AFTER_HELP
     )]
-    Run(OptimizationRunArgs),
+    Run(Box<OptimizationRunArgs>),
     #[command(about = "Show a job's journal and every decision recomputed from its runs")]
     Show(OptimizationShowArgs),
     #[command(about = "Promote a ready job's checkpoint into the live configuration")]

@@ -35,7 +35,10 @@ pub struct DomainUpdateEvent {
     pub doc_id: Option<String>,
 }
 
-pub fn init<R: Runtime>(config: DomainConfig) -> TauriPlugin<R> {
+pub fn init<R>(config: DomainConfig) -> TauriPlugin<R>
+where
+    R: Runtime,
+{
     let home = config.home;
     Builder::<R>::new("fixture-domain")
         .setup(move |app, _api| {
@@ -93,12 +96,15 @@ fn domain_doc_get(id: String, state: State<'_, DomainState>) -> Result<Option<Do
 }
 
 #[tauri::command]
-fn domain_doc_put<R: Runtime>(
+fn domain_doc_put<R>(
     app: AppHandle<R>,
     id: String,
     body: String,
     state: State<'_, DomainState>,
-) -> Result<DomainDoc, String> {
+) -> Result<DomainDoc, String>
+where
+    R: Runtime,
+{
     let id = id.trim().to_string();
     if id.is_empty() {
         return Err("id is required".into());

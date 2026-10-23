@@ -123,16 +123,16 @@ async fn probe_account(
         let body = String::from_utf8_lossy(&body);
         if status.as_u16() == 401 {
             let guidance = gents::xai_grok_oauth::classify_xai_auth_error(
-                &node_did,
-                &provider,
+                node_did,
+                provider,
                 &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }
         if status.as_u16() == 403 {
             let guidance = gents::xai_grok_oauth::classify_xai_auth_error(
-                &node_did,
-                &provider,
+                node_did,
+                provider,
                 &gents::oauth_credential::OAuthAuthProblem::NotEntitled,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");

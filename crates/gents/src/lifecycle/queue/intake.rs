@@ -45,7 +45,7 @@ pub(crate) async fn pending_in_txn(
     let mut by_id = rows
         .into_iter()
         .map(|row| (row.doc_id.clone().unwrap(), row))
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<rapidhash::RapidHashMap<_, _>>();
     order
         .into_iter()
         .map(|id| by_id.remove(&id).context("pending queue arrival changed"))

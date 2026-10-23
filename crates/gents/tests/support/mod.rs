@@ -25,6 +25,16 @@ pub mod snapshots;
 pub mod streaming_backend;
 pub mod waits;
 
+/// A test's `#[tokio::test]` runtime is its entry point; constructors take
+/// that runtime's handle from here.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test's #[tokio::test] runtime is its entry-point runtime"
+)]
+pub fn runtime_handle() -> tokio::runtime::Handle {
+    tokio::runtime::Handle::current()
+}
+
 pub const NODE_DID: &str = "did:test:test";
 pub const AGENT_NAME: &str = "test";
 pub const BACKEND_ID: &str = "backend-test";
@@ -328,16 +338,26 @@ pub async fn exact_request_doc_id(node: &EmbeddedNode, request_id: &str) -> Stri
         .to_string()
 }
 
-pub async fn create_retry_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-    session_id: &str,
-    retry_parent_request: &str,
-    retry_root_request: &str,
-    content: &str,
-    created_at: &str,
-    valid_until: Option<&str>,
-) -> String {
+pub struct RetryRequestSpec<'a> {
+    pub request_id: &'a str,
+    pub session_id: &'a str,
+    pub retry_parent_request: &'a str,
+    pub retry_root_request: &'a str,
+    pub content: &'a str,
+    pub created_at: &'a str,
+    pub valid_until: Option<&'a str>,
+}
+
+pub async fn create_retry_request(node: &EmbeddedNode, spec: &RetryRequestSpec<'_>) -> String {
+    let RetryRequestSpec {
+        request_id,
+        session_id,
+        retry_parent_request,
+        retry_root_request,
+        content,
+        created_at,
+        valid_until,
+    } = *spec;
     let request_id_escaped = escape_graphql_string(request_id);
     let session_id_escaped = escape_graphql_string(session_id);
     let retry_parent_escaped = escape_graphql_string(retry_parent_request);

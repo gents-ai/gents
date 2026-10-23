@@ -372,13 +372,11 @@ pub(super) fn terminal_error_message(
         RequestLifecycleState::parse_opt(Some(lifecycle_state)),
         Some(RequestLifecycleState::Failed | RequestLifecycleState::Dead)
     ) {
-        return Some(
-            failure_reason
-                .trim()
-                .is_empty()
-                .then(|| format!("GENTS request ended with lifecycle_state {lifecycle_state}"))
-                .unwrap_or_else(|| failure_reason.trim().to_string()),
-        );
+        return Some(if failure_reason.trim().is_empty() {
+            format!("GENTS request ended with lifecycle_state {lifecycle_state}")
+        } else {
+            failure_reason.trim().to_string()
+        });
     }
     None
 }

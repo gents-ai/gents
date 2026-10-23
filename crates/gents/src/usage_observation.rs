@@ -650,7 +650,7 @@ pub async fn read_node_usage(
             })
         })
         .await?;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = rapidhash::RapidHashSet::default();
     let mut jobs = Vec::new();
     for backend in &backends {
         let (entry, account_enabled) =

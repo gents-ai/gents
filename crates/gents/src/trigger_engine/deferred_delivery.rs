@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::time::{Duration, Instant};
 
 pub(crate) const DEFERRAL_WARN_AFTER: Duration = Duration::from_secs(300);
@@ -10,7 +10,7 @@ struct Deferral {
 
 pub(crate) struct DeferralWatch {
     warn_after: Duration,
-    deferred: HashMap<(String, String), HashMap<String, Deferral>>,
+    deferred: RapidHashMap<(String, String), RapidHashMap<String, Deferral>>,
 }
 
 impl Default for DeferralWatch {
@@ -23,7 +23,7 @@ impl DeferralWatch {
     pub(crate) fn new(warn_after: Duration) -> Self {
         Self {
             warn_after,
-            deferred: HashMap::new(),
+            deferred: RapidHashMap::new(),
         }
     }
 
@@ -76,14 +76,14 @@ impl DeferralWatch {
     pub(crate) fn stuck(&self) -> usize {
         self.deferred
             .values()
-            .flat_map(HashMap::values)
+            .flat_map(RapidHashMap::values)
             .filter(|deferral| deferral.warned)
             .count()
     }
 
     #[cfg(test)]
     pub(crate) fn pending(&self) -> usize {
-        self.deferred.values().map(HashMap::len).sum()
+        self.deferred.values().map(RapidHashMap::len).sum()
     }
 }
 

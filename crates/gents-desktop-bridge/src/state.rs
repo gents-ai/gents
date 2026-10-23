@@ -181,10 +181,10 @@ impl DesktopAppState {
 #[path = "state/window_selection_tests.rs"]
 mod window_selection_tests;
 
-pub fn spawn_client_update_task<R: Runtime>(
-    app: AppHandle<R>,
-    core: Arc<ClientCore>,
-) -> JoinHandle<()> {
+pub fn spawn_client_update_task<R>(app: AppHandle<R>, core: Arc<ClientCore>) -> JoinHandle<()>
+where
+    R: Runtime,
+{
     spawn(async move {
         let mut store_updates = core.store_change_updates();
         let mut sync_updates = core.sync_state_updates();

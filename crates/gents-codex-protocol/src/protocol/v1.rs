@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -102,7 +102,7 @@ pub struct GitDiffToRemoteResponse {
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ThreadId,
     pub call_id: String,
-    pub file_changes: HashMap<PathBuf, FileChange>,
+    pub file_changes: RapidHashMap<PathBuf, FileChange>,
     pub reason: Option<String>,
     pub grant_root: Option<PathBuf>,
 }

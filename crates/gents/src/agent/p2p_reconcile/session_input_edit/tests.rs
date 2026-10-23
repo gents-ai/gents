@@ -12,7 +12,7 @@ use gents_protocol::request_input::{
     QueueDelivery, QueuePolicy, QueueSource, RequestInput, RequestQueue,
 };
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 
 const SESSION: &str = "edit-session";
 
@@ -155,9 +155,9 @@ impl Fixture {
 
 struct ModeledQueue {
     fixture: Fixture,
-    request_ids: HashMap<u64, String>,
-    doc_ids: HashMap<u64, String>,
-    commands: HashMap<(u64, u64), (String, SessionInputEdit)>,
+    request_ids: RapidHashMap<u64, String>,
+    doc_ids: RapidHashMap<u64, String>,
+    commands: RapidHashMap<(u64, u64), (String, SessionInputEdit)>,
     active: Option<crate::lifecycle::RequestLifecycle>,
     anchor: DateTime<Utc>,
     nows: Vec<u64>,
@@ -168,9 +168,9 @@ impl ModeledQueue {
         let fixture = Fixture::empty().await;
         let mut queue = Self {
             fixture,
-            request_ids: HashMap::new(),
-            doc_ids: HashMap::new(),
-            commands: HashMap::new(),
+            request_ids: RapidHashMap::new(),
+            doc_ids: RapidHashMap::new(),
+            commands: RapidHashMap::new(),
             active: None,
             anchor: Utc::now(),
             nows,
@@ -509,7 +509,7 @@ async fn generated_commands_bind_to_atomic_queue_owner() {
             queue.modeled(&case.before.queue),
             "{name}: history reaches the modeled starting queue"
         );
-        let mut prior = HashMap::new();
+        let mut prior = RapidHashMap::new();
         for (doc, _) in queue.commands.values() {
             prior.insert(doc.clone(), queue.receipt_json(doc).await);
         }

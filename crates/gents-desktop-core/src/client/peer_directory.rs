@@ -344,6 +344,10 @@ impl PeerDirectory {
         Ok(record)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "fields of one enrollment authorization"
+    )]
     pub(in crate::client) async fn upsert_enrollment_peer(
         &mut self,
         peer_id: &str,
@@ -803,8 +807,11 @@ mod tests {
             .upsert(failed.clone())
             .await
             .expect_err("injected persistence failure must reject the candidate");
-        assert_eq!(directory.records(), &[original.clone()]);
-        assert_eq!(load_peer_records(&path).await.unwrap(), &[original.clone()]);
+        assert_eq!(directory.records(), std::slice::from_ref(&original));
+        assert_eq!(
+            load_peer_records(&path).await.unwrap(),
+            std::slice::from_ref(&original)
+        );
 
         directory.set_fail_persist(false);
         let later = PeerRecord::new("Later", "iroh://later", "did:test:later");
@@ -1115,7 +1122,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(directory.records(), &[rotated.clone()]);
+        assert_eq!(directory.records(), std::slice::from_ref(&rotated));
         assert_eq!(rotated.peer_id, "new-transport-peer");
         assert!(rotated.is_enrollment());
         assert!(rotated.is_managed_runtime());

@@ -36,7 +36,7 @@ pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSe
 pub(crate) use selection::{AgentToolConfig, BackgroundToolConfig};
 pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
-use std::collections::{HashMap, HashSet};
+use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 
 use crate::llm::tool::ToolDyn;
@@ -198,7 +198,7 @@ impl ToolSurface {
 
     pub(crate) fn job_tools(
         &self,
-    ) -> std::collections::HashMap<String, crate::plugin_job::JobBinding> {
+    ) -> rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding> {
         crate::plugin_job::JobBinding::bind_all(&self.plugin_resolutions)
     }
 
@@ -236,7 +236,7 @@ impl ToolSurface {
     pub(crate) fn retain_agent_targets(
         &mut self,
         own_node_did: &str,
-        active_agent_ids: &HashSet<String>,
+        active_agent_ids: &RapidHashSet<String>,
     ) {
         self.agent_tools.targets.retain(|target| {
             if target.target_node_did == own_node_did {
@@ -426,7 +426,8 @@ impl ToolSurface {
             &self.self_config,
             runtime.plugins.clone(),
         ));
-        let mut registered_names: HashSet<String> = tools.iter().map(|tool| tool.name()).collect();
+        let mut registered_names: RapidHashSet<String> =
+            tools.iter().map(|tool| tool.name()).collect();
         for decl in &self.write_tools {
             crate::mailbox::validate_mailbox_write_decl(decl)?;
             if !decl.is_well_formed() || !decl.output_obligation_is_well_formed() {
@@ -615,7 +616,7 @@ pub fn cli_tool(
         binary_path: binary_path.into(),
         description: description.into(),
         allowed_argv_prefixes: Vec::new(),
-        env_vars: HashMap::new(),
+        env_vars: RapidHashMap::new(),
         working_dir: None,
         timeout_secs: DEFAULT_CLI_TIMEOUT_SECS,
         max_output_chars: crate::toolset::DEFAULT_MAX_COMMAND_CHARS,

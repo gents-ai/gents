@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,9 +39,9 @@ pub use gents_loop::stream_writer::StreamWriter;
 pub struct DefraStreamWriter {
     node: Arc<EmbeddedNode>,
     batch_interval: Duration,
-    buffers: Mutex<HashMap<String, StreamBuffer>>,
-    published: Mutex<HashMap<String, String>>,
-    provider_tails: Mutex<HashMap<String, ProviderTail>>,
+    buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
+    published: Mutex<RapidHashMap<String, String>>,
+    provider_tails: Mutex<RapidHashMap<String, ProviderTail>>,
 }
 
 #[derive(Default)]
@@ -215,7 +215,6 @@ impl DefraStreamWriter {
         let attempt = tail.attempt;
         let capture_scope = tail
             .capture_scope
-            .clone()
             .context("provider attempt omitted capture scope")?;
         let ordinal = tail.next_ordinal;
         let delta = provider_flush_delta(&tail.streams, &encoded)?;
@@ -359,7 +358,6 @@ impl DefraStreamWriter {
         let created_at = chrono::Utc::now().to_rfc3339();
         let capture_scope = tail
             .capture_scope
-            .clone()
             .context("provider acceptance omitted capture scope")?;
         let source = OutputSource::ProviderTurn {
             scope: capture_scope,
@@ -466,9 +464,9 @@ impl DefraStreamWriter {
         Self {
             node,
             batch_interval,
-            buffers: Mutex::new(HashMap::new()),
-            published: Mutex::new(HashMap::new()),
-            provider_tails: Mutex::new(HashMap::new()),
+            buffers: Mutex::new(RapidHashMap::new()),
+            published: Mutex::new(RapidHashMap::new()),
+            provider_tails: Mutex::new(RapidHashMap::new()),
         }
     }
 

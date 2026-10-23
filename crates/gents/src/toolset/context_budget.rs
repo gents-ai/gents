@@ -425,7 +425,10 @@ fn inference_call_query(node_did: &str, agent_id: &str, request_ids: &[String]) 
     )
 }
 
-fn decode<T: serde::de::DeserializeOwned>(data: Option<&Value>, label: &str) -> Result<T> {
+fn decode<T>(data: Option<&Value>, label: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     let data = data
         .filter(|data| data.is_object())
         .cloned()

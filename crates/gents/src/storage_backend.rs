@@ -188,6 +188,29 @@ pub fn classify_store_error(error: anyhow::Error, data_path: &Path) -> anyhow::E
     }
 }
 
+/// Drives a future that opens or holds an embedded node, whose build and
+/// handles are not `Send`, on a blocking-pool thread of the supplied runtime so
+/// no async worker waits on it. That thread owns the future until it
+/// finishes, even if the caller drops the returned future.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the sole owner of block_on on a blocking-pool thread; no async worker is held"
+)]
+pub async fn drive_unsendable<T, F, Fut>(
+    runtime: &tokio::runtime::Handle,
+    operation: F,
+) -> Result<T, tokio::task::JoinError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = T>,
+{
+    let blocking = runtime.clone();
+    runtime
+        .spawn_blocking(move || blocking.block_on(operation()))
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

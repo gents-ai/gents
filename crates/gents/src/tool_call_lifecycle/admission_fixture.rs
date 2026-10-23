@@ -73,7 +73,7 @@ pub(crate) async fn write_fixture_job_pin(
     );
     let variables = serde_json::json!({ "job_pin": fixture_job_pin() });
     crate::config_client::ConfigAccess::transact_local_write(
-        &node,
+        node,
         None,
         "test.admission_fixture.job_pin",
         |txn| {
@@ -85,6 +85,10 @@ pub(crate) async fn write_fixture_job_pin(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared fixture with call sites across many test modules"
+)]
 pub(crate) async fn publish_accepted_on_claimed_request(
     node: Arc<EmbeddedNode>,
     request: &mut RequestLifecycle,

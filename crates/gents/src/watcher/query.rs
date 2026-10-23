@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -217,7 +217,7 @@ impl DefraWatcher {
             .iter()
             .enumerate()
             .map(|(index, doc_id)| (doc_id.as_str(), index))
-            .collect::<std::collections::HashMap<_, _>>();
+            .collect::<rapidhash::RapidHashMap<_, _>>();
         rows.sort_by_key(|row| {
             row.doc_id
                 .as_deref()
@@ -384,7 +384,7 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
         })
         .filter(|row| !is_pending(row))
         .filter_map(|row| row.session_id.clone())
-        .collect::<HashSet<_>>();
+        .collect::<RapidHashSet<_>>();
     let rows = rows
         .into_iter()
         .filter_map(|row| match AgentRequest::try_from(row.clone()) {
@@ -400,7 +400,7 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
             }
         })
         .collect::<Vec<_>>();
-    let mut seen_pending_sessions = HashSet::new();
+    let mut seen_pending_sessions = RapidHashSet::new();
     let mut claimable = Vec::new();
 
     for row in rows {

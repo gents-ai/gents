@@ -15,6 +15,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+rapidhash = { workspace = true }
 tiny_http = "0.12"
 tokio.workspace = true
 tracing.workspace = true

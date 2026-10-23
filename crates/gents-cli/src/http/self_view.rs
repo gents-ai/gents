@@ -217,7 +217,10 @@ fn compaction_query(node_did: &str, session_ids: &[String]) -> String {
     )
 }
 
-fn decode<T: serde::de::DeserializeOwned>(response: Value, label: &str) -> Result<T> {
+fn decode<T>(response: Value, label: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     let data = response
         .get("data")
         .filter(|data| data.is_object())

@@ -40,10 +40,10 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
         }
         serde_json::Value::Array(arr) => arr
             .iter_mut()
-            .fold(false, |any, item| truncate_field_strings(item) || any),
+            .fold(false, |any, item| truncate_field_strings(item) | any),
         serde_json::Value::Object(map) => map
             .values_mut()
-            .fold(false, |any, v| truncate_field_strings(v) || any),
+            .fold(false, |any, v| truncate_field_strings(v) | any),
         _ => false,
     }
 }

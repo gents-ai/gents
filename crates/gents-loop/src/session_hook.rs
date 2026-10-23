@@ -17,7 +17,10 @@ pub enum ForegroundResult {
 }
 
 #[async_trait]
-pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
+pub trait CanonicalSessionHook<Accepted>: SessionHook
+where
+    Accepted: Send,
+{
     async fn adopt_accepted_tool_calls(&self, calls: Vec<(String, Accepted)>)
         -> anyhow::Result<()>;
 }

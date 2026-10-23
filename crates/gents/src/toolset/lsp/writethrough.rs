@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 use std::path::Path;
 
 use serde_json::{json, Value};
@@ -173,7 +173,7 @@ fn merge_notes(left: Option<String>, right: Option<String>) -> Option<String> {
 fn render_writethrough_diagnostics(result: &Value, min_version: i64, dedup: bool) -> String {
     let items = collect_diagnostic_items(result, min_version);
     let mut lines = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = RapidHashSet::new();
     for item in items {
         if dedup && !seen.insert(item.clone()) {
             continue;

@@ -182,7 +182,7 @@ impl ClientHost {
             ClientCommand::ConfigApply { request } => {
                 self.require_configured_runtime(&request.document.node.node_did)
                     .await?;
-                crate::commands::apply_config_components(&self.core, request)
+                crate::commands::apply_config_components(&self.core, *request)
                     .await
                     .map_err(backend_error)?;
                 encode(())
@@ -212,7 +212,7 @@ impl ClientHost {
                     || self.core.operator_graphql(&request.node_did).map(gents::ConfigAccess::Graphql)
                         .ok_or_else(|| anyhow::anyhow!("Connect this local runtime before managing its accounts.")),
                     &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
-                    |url| crate::host_browser::open_url(url).map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
+                    async |url| crate::host_browser::open_url(url).await.map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
                 ).await?;
                 if self.core.refresh_store().await.is_err() {
                     tracing::warn!("Account saved; its client observation is unavailable");
@@ -583,7 +583,7 @@ impl ClientHost {
                     .map_err(BridgeError::untyped)?,
             ),
             ClientCommand::GoalControl { request } => {
-                encode(crate::commands::control_goal(&self.core, request).await?)
+                encode(crate::commands::control_goal(&self.core, *request).await?)
             }
             ClientCommand::SteerPending { request } => encode(
                 crate::commands::steer_pending_message(&self.core, request)

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -529,7 +529,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([(backend_id.clone(), config(&backend_id, 1, 1))]),
+        &RapidHashMap::from_iter([(backend_id.clone(), config(&backend_id, 1, 1))]),
     );
 
     let running_context =
@@ -579,7 +579,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     let bounded_registry = AdmissionRegistry::new(bounded_node.clone());
     bounded_registry.reconcile(
         1,
-        &HashMap::from([(
+        &RapidHashMap::from_iter([(
             backend_id.clone(),
             config(&backend_id, bounded.max_concurrent, 1),
         )]),
@@ -700,7 +700,7 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 0))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 0))]),
     );
     let context = AdmissionCallContext::for_request(&request("req-zero"), "default", "backend-a");
 
@@ -739,14 +739,14 @@ async fn reconstructed_running_rows_never_exceed_max_concurrent_under_contention
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([(
+        &RapidHashMap::from_iter([(
             "backend-a".to_string(),
             config("backend-a", MAX_CONCURRENT, TASKS),
         )]),
     );
 
     let (acquired_tx, mut acquired_rx) = mpsc::unbounded_channel::<usize>();
-    let mut release_senders = HashMap::new();
+    let mut release_senders = RapidHashMap::new();
     let mut handles = Vec::new();
 
     for idx in 0..TASKS {
@@ -828,7 +828,7 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 2))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 2))]),
     );
     let first_context =
         AdmissionCallContext::for_request(&request("req-ordered"), "default", "backend-a");
@@ -881,7 +881,7 @@ async fn cancelling_queued_call_terminalizes_without_holding_slot() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let running_context =
         AdmissionCallContext::for_request(&request("req-running-holder"), "default", "backend-a");
@@ -930,7 +930,7 @@ async fn explicit_failure_releases_reconstructed_slot() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let context =
         AdmissionCallContext::for_request(&request("req-explicit-failure"), "default", "backend-a");
@@ -957,7 +957,7 @@ async fn repeated_inference_scope_calls_persist_per_attempt_rows() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let context =
         AdmissionCallContext::for_request(&request("req-retry-rows"), "default", "backend-a");
@@ -1010,7 +1010,7 @@ async fn scoped_scheduled_calls_are_persisted_with_scheduled_kind() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let context =
         AdmissionCallContext::for_request(&request("req-scheduled"), "default", "backend-a");
@@ -1038,7 +1038,7 @@ async fn compaction_calls_share_backend_capacity_with_inference_calls() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let inference_context =
         AdmissionCallContext::for_request(&request("req-compaction"), "default", "backend-a");
@@ -1091,7 +1091,7 @@ async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let context = AdmissionCallContext::for_request(&request("req-oneoff"), "default", "backend-a");
 
@@ -1118,7 +1118,7 @@ async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let context =
         AdmissionCallContext::for_request(&request("req-cancel-drop"), "default", "backend-a");
@@ -1151,7 +1151,7 @@ async fn dropped_permit_with_terminal_failure_reason_persists_failed_reason() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let context =
         AdmissionCallContext::for_request(&request("req-timeout-drop"), "default", "backend-a");
@@ -1199,7 +1199,7 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
     let registry = AdmissionRegistry::new(node.clone());
     registry.reconcile(
         1,
-        &HashMap::from([("backend-a".to_string(), config("backend-a", 1, 1))]),
+        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
     );
     let context =
         AdmissionCallContext::for_request(&request("req-default-drop"), "default", "backend-a");
@@ -1342,7 +1342,7 @@ async fn backend_rewrite_admits_new_calls_while_in_flight_call_drains() {
     let backend = "backend-rewrite";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 0))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 0))]),
     );
     let mut in_flight = acquire_on(&registry, "req-rewrite-old", backend)
         .await
@@ -1351,7 +1351,7 @@ async fn backend_rewrite_admits_new_calls_while_in_flight_call_drains() {
 
     registry.reconcile(
         2,
-        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 2, 0))]),
     );
     let mut admitted = acquire_on(&registry, "req-rewrite-new", backend)
         .await
@@ -1392,7 +1392,7 @@ async fn queued_call_survives_capacity_only_rewrite() {
     let backend = "backend-rewrite-queued";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 1))]),
     );
     let mut in_flight = acquire_on(&registry, "req-queued-holder", backend)
         .await
@@ -1406,7 +1406,7 @@ async fn queued_call_survives_capacity_only_rewrite() {
 
     registry.reconcile(
         2,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 2))]),
     );
     in_flight.finish_success(None).await.unwrap();
     drop(in_flight);
@@ -1426,7 +1426,7 @@ async fn shrinking_rewrite_admits_queued_call_after_excess_releases() {
     let backend = "backend-shrink-queued";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 2, 2))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 2, 2))]),
     );
     let mut first = acquire_on(&registry, "req-shrink-1", backend)
         .await
@@ -1442,7 +1442,7 @@ async fn shrinking_rewrite_admits_queued_call_after_excess_releases() {
     wait_for_request_call_state(node.as_ref(), "req-shrink-waiter", "queued").await;
     registry.reconcile(
         2,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 2))]),
     );
     let pool = registry.pool_for_test(backend).unwrap();
     assert_eq!((pool.held_for_test(), pool.owed_for_test()), (2, 1));
@@ -1478,7 +1478,7 @@ async fn growing_capacity_repays_owed_permits_first() {
     let backend = "backend-grow-owed";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 3, 0))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 3, 0))]),
     );
     let mut held = Vec::new();
     for index in 0..3 {
@@ -1490,14 +1490,14 @@ async fn growing_capacity_repays_owed_permits_first() {
     }
     registry.reconcile(
         2,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 0))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 0))]),
     );
     let pool = registry.pool_for_test(backend).unwrap();
     assert_eq!((pool.held_for_test(), pool.owed_for_test()), (3, 2));
 
     registry.reconcile(
         3,
-        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 2, 0))]),
     );
     assert_eq!(
         (
@@ -1510,7 +1510,7 @@ async fn growing_capacity_repays_owed_permits_first() {
     );
     registry.reconcile(
         4,
-        &HashMap::from([(backend.to_string(), config(backend, 5, 0))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 5, 0))]),
     );
     assert_eq!(
         (
@@ -1537,7 +1537,7 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
     let backend = "backend-abandoned-waiter";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 2, 2))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 2, 2))]),
     );
     let mut first = acquire_on(&registry, "req-abandon-1", backend)
         .await
@@ -1563,7 +1563,7 @@ async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
 
     registry.reconcile(
         2,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 2))]),
     );
     assert_eq!(pool.owed_for_test(), 1);
     drop(waiting);
@@ -1605,7 +1605,7 @@ async fn backend_removal_fails_queued_and_new_calls_clearly() {
     let backend = "backend-removed";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 1))]),
     );
     let mut in_flight = acquire_on(&registry, "req-removed-holder", backend)
         .await
@@ -1617,7 +1617,7 @@ async fn backend_removal_fails_queued_and_new_calls_clearly() {
         );
     wait_for_request_call_state(node.as_ref(), "req-removed-waiter", "queued").await;
 
-    registry.reconcile(2, &HashMap::new());
+    registry.reconcile(2, &RapidHashMap::new());
     let queued_error = match tokio::time::timeout(Duration::from_secs(30), queued)
         .await
         .expect("closing the pool must wake queued calls")
@@ -1666,21 +1666,24 @@ async fn recovered_backend_admits_within_capacity_left_by_pre_outage_calls() {
     let backend = "backend-recovered";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 2, 0))]),
     );
     let mut pre_outage = acquire_on(&registry, "req-recovered-before", backend)
         .await
         .unwrap();
     let mut unavailable = config(backend, 2, 0);
     unavailable.measured_unhealthy = true;
-    registry.reconcile(2, &HashMap::from([(backend.to_string(), unavailable)]));
+    registry.reconcile(
+        2,
+        &RapidHashMap::from_iter([(backend.to_string(), unavailable)]),
+    );
     assert!(acquire_on(&registry, "req-recovered-down", backend)
         .await
         .is_err());
 
     registry.reconcile(
         3,
-        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 2, 0))]),
     );
     let mut recovered = acquire_on(&registry, "req-recovered-up", backend)
         .await
@@ -1708,12 +1711,12 @@ async fn rollback_re_adding_removed_backend_carries_held_permits() {
     let node = test_node().await;
     let registry = AdmissionRegistry::new(node.clone());
     let backend = "backend-rollback-readd";
-    let prior = HashMap::from([(backend.to_string(), config(backend, 1, 0))]);
+    let prior = RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 0))]);
     registry.reconcile(1, &prior);
     let mut in_flight = acquire_on(&registry, "req-readd-held", backend)
         .await
         .unwrap();
-    registry.reconcile(2, &HashMap::new());
+    registry.reconcile(2, &RapidHashMap::new());
     registry.reconcile(1, &prior);
     let error = match acquire_on(&registry, "req-readd-over", backend).await {
         Ok(_) => panic!("the call admitted before removal must still count"),
@@ -1808,7 +1811,7 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
     let backend = "backend-connection-change";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 2))]),
     );
     let old_connection = format!("{backend}:connection");
     let new_connection = format!("{backend}:rotated-connection");
@@ -1832,7 +1835,7 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
 
     registry.reconcile(
         2,
-        &HashMap::from([(backend.to_string(), rewritten_connection(backend, 1, 2))]),
+        &RapidHashMap::from_iter([(backend.to_string(), rewritten_connection(backend, 1, 2))]),
     );
     let new_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let new_model = super::client::AdmittedCompletionModel::new(
@@ -1925,7 +1928,7 @@ async fn permit_assigned_before_close_is_rejected_after_close() {
     let backend = "backend-close-transit";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 1))]),
     );
     let pool = registry.pool_for_test(backend).unwrap();
     let holder = acquire_on(&registry, "req-close-holder", backend)
@@ -1935,7 +1938,10 @@ async fn permit_assigned_before_close_is_rejected_after_close() {
         park_with_assigned_permit(&node, &registry, backend, "req-close-parked", holder).await;
     let mut unavailable = config(backend, 1, 1);
     unavailable.measured_unhealthy = true;
-    registry.reconcile(2, &HashMap::from([(backend.to_string(), unavailable)]));
+    registry.reconcile(
+        2,
+        &RapidHashMap::from_iter([(backend.to_string(), unavailable)]),
+    );
 
     let error = match tokio::time::timeout(Duration::from_secs(30), parked)
         .await
@@ -1956,7 +1962,7 @@ async fn permit_assigned_before_outage_is_not_admitted_after_reopen() {
     let backend = "backend-retired-transit";
     registry.reconcile(
         1,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 1))]),
     );
     let holder = acquire_on(&registry, "req-retired-holder", backend)
         .await
@@ -1965,10 +1971,13 @@ async fn permit_assigned_before_outage_is_not_admitted_after_reopen() {
         park_with_assigned_permit(&node, &registry, backend, "req-retired-parked", holder).await;
     let mut unavailable = config(backend, 1, 1);
     unavailable.measured_unhealthy = true;
-    registry.reconcile(2, &HashMap::from([(backend.to_string(), unavailable)]));
+    registry.reconcile(
+        2,
+        &RapidHashMap::from_iter([(backend.to_string(), unavailable)]),
+    );
     registry.reconcile(
         3,
-        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+        &RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 1))]),
     );
     let pool = registry.pool_for_test(backend).unwrap();
     let mut current = acquire_on(&registry, "req-retired-current", backend)
@@ -1994,10 +2003,10 @@ async fn registration_rechecks_open_pool_and_current_semaphore() {
     let node = test_node().await;
     let registry = AdmissionRegistry::new(node.clone());
     let backend = "backend-register-linearization";
-    let available = HashMap::from([(backend.to_string(), config(backend, 1, 1))]);
+    let available = RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 1))]);
     let mut down = config(backend, 1, 1);
     down.measured_unhealthy = true;
-    let unavailable = HashMap::from([(backend.to_string(), down)]);
+    let unavailable = RapidHashMap::from_iter([(backend.to_string(), down)]);
 
     registry.reconcile(1, &available);
     let pool = registry.pool_for_test(backend).unwrap();
@@ -2006,7 +2015,7 @@ async fn registration_rechecks_open_pool_and_current_semaphore() {
     assert!(pool.register_for_test(taken).is_err());
     assert_eq!(pool.held_for_test(), 0);
 
-    let available_two = HashMap::from([(backend.to_string(), config(backend, 2, 1))]);
+    let available_two = RapidHashMap::from_iter([(backend.to_string(), config(backend, 2, 1))]);
     registry.reconcile(3, &available_two);
     let pool = registry.pool_for_test(backend).unwrap();
     let mut survivor = acquire_on(&registry, "req-register-survivor", backend)
@@ -2034,7 +2043,7 @@ async fn registration_rechecks_open_pool_and_current_semaphore() {
     drop(current);
 
     let taken = pool.take_unregistered_for_test();
-    registry.reconcile(6, &HashMap::new());
+    registry.reconcile(6, &RapidHashMap::new());
     assert!(registry.pool_for_test(backend).is_none());
     registry.reconcile(7, &available);
     let fresh_pool = registry.pool_for_test(backend).unwrap();
@@ -2048,7 +2057,7 @@ async fn transit_permit_of_pruned_pool_cannot_admit() {
     let node = test_node().await;
     let registry = AdmissionRegistry::new(node.clone());
     let backend = "backend-pruned-transit";
-    let available = HashMap::from([(backend.to_string(), config(backend, 1, 1))]);
+    let available = RapidHashMap::from_iter([(backend.to_string(), config(backend, 1, 1))]);
     registry.reconcile(1, &available);
     let old_pool = registry.pool_for_test(backend).unwrap();
     let holder = acquire_on(&registry, "req-pruned-holder", backend)
@@ -2056,7 +2065,7 @@ async fn transit_permit_of_pruned_pool_cannot_admit() {
         .unwrap();
     let parked =
         park_with_assigned_permit(&node, &registry, backend, "req-pruned-parked", holder).await;
-    registry.reconcile(2, &HashMap::new());
+    registry.reconcile(2, &RapidHashMap::new());
     assert!(
         registry.pool_for_test(backend).is_none(),
         "a closed pool with no held permits is pruned"

@@ -75,10 +75,10 @@ async fn tools_set_persists_canonical_nested_policy() -> Result<()> {
     let row = first_graphql_row(&response, "Tools")?;
     assert_eq!(row["tools_id"], "review-tools");
     assert_eq!(
-        nested_json(&row, "host")?["bash"]["execution_mode"],
+        nested_json(row, "host")?["bash"]["execution_mode"],
         "artifact_write"
     );
-    assert_eq!(nested_json(&row, "built_ins")?["enable_goal_tools"], true);
+    assert_eq!(nested_json(row, "built_ins")?["enable_goal_tools"], true);
     drop(server);
     Ok(())
 }

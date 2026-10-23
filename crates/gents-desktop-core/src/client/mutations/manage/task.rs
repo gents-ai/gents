@@ -292,12 +292,15 @@ pub async fn fire_task_now(
     enqueue_task_now(node, actor, task_row, args).await
 }
 
-async fn execute_config_rows<T: DeserializeOwned>(
+async fn execute_config_rows<T>(
     access: &ConfigAccess,
     root: &str,
     query: &str,
     operation: &str,
-) -> Result<Vec<T>> {
+) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
     let body = access
         .execute(query)
         .await

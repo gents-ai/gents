@@ -336,27 +336,29 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         behavior.model_name = "scripted".into();
         behavior.stream_liveness_timeout = Duration::from_secs(60);
         behavior.deadline_duration = Duration::from_secs(120);
-        let mut selection = ResolvedToolSelection::default();
-        selection.write_tools = vec![WriteToolDecl {
-            notification: None,
-            tool_name: "write_oneshot_result".into(),
-            collection: "OneshotOutput".into(),
-            description: "Persist the required one-shot output.".into(),
-            fields: vec![WriteToolField {
-                name: "message".into(),
-                required: true,
-                fill: None,
+        let selection = ResolvedToolSelection {
+            write_tools: vec![WriteToolDecl {
+                notification: None,
+                tool_name: "write_oneshot_result".into(),
+                collection: "OneshotOutput".into(),
+                description: "Persist the required one-shot output.".into(),
+                fields: vec![WriteToolField {
+                    name: "message".into(),
+                    required: true,
+                    fill: None,
+                }],
+                output_obligation: Some(WriteToolOutputObligation {
+                    scope: if request_scoped {
+                        WriteToolOutputObligationScope::Request
+                    } else {
+                        WriteToolOutputObligationScope::Trigger
+                    },
+                    minimum_writes: 1,
+                    expected_count_field: None,
+                }),
             }],
-            output_obligation: Some(WriteToolOutputObligation {
-                scope: if request_scoped {
-                    WriteToolOutputObligationScope::Request
-                } else {
-                    WriteToolOutputObligationScope::Trigger
-                },
-                minimum_writes: 1,
-                expected_count_field: None,
-            }),
-        }];
+            ..Default::default()
+        };
         behavior.tools = AgentToolSurfaceConfig::from_selection(
             &behavior.agent_id,
             selection,

@@ -59,12 +59,15 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
     }
 }
 
+/// Sequence, lowercased role, content, reasoning and tool call/result flags.
+type MessagePresentationKey = (i64, String, Option<String>, Option<String>, bool, bool);
+
 fn message_presentation_key(
     message: &MessageView,
     role: &str,
     content: &Option<String>,
     reasoning: &Option<String>,
-) -> Option<(i64, String, Option<String>, Option<String>, bool, bool)> {
+) -> Option<MessagePresentationKey> {
     message.sequence.map(|sequence| {
         (
             sequence,
@@ -177,7 +180,7 @@ pub(super) fn build_rendered_timeline(
         let normalized_content = normalize_optional(message.display_content.as_deref());
         let normalized_reasoning = normalize_optional(message.reasoning.as_deref());
         let reconstruction = MessageReconstructionView {
-            state: message.reconstruction_state.clone(),
+            state: message.reconstruction_state,
             error: message.reconstruction_error.clone(),
             denied_dependency_doc_id: message.denied_dependency_doc_id.clone(),
         };

@@ -327,18 +327,17 @@ impl ToolPolicySurface {
             cli_tools.insert(name.trim().to_string(), BTreeSet::new());
         }
 
-        let mcp_services = if !selection.enable_meta_tools {
-            EndpointScope::none()
-        } else if selection.allowed_mcp_service_ids.is_empty() {
-            EndpointScope::none()
-        } else {
-            EndpointScope::<String, ()>::only_units(
-                selection
-                    .allowed_mcp_service_ids
-                    .iter()
-                    .map(|service| service.trim().to_string()),
-            )
-        };
+        let mcp_services =
+            if !selection.enable_meta_tools || selection.allowed_mcp_service_ids.is_empty() {
+                EndpointScope::none()
+            } else {
+                EndpointScope::<String, ()>::only_units(
+                    selection
+                        .allowed_mcp_service_ids
+                        .iter()
+                        .map(|service| service.trim().to_string()),
+                )
+            };
 
         let defra_collections = if !selection.enable_defra_query {
             EndpointScope::none()

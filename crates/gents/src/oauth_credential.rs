@@ -711,7 +711,7 @@ fn ensure_label_free(others: &[&OAuthCredential], label: &str) -> Result<()> {
 
 fn next_free_label(rows: &[OAuthCredential], provider: &str) -> String {
     let name = sign_in_product(provider).map_or(provider, |product| product.name);
-    let taken: std::collections::HashSet<_> = rows.iter().map(effective_account_label).collect();
+    let taken: rapidhash::RapidHashSet<_> = rows.iter().map(effective_account_label).collect();
     std::iter::once(name.to_owned())
         .chain((2..).map(|n| format!("{name} {n}")))
         .find(|label| !taken.contains(label))
@@ -964,7 +964,10 @@ impl AccountState {
 }
 
 impl Serialize for AccountState {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         serializer.serialize_str(self.as_str())
     }
 }
@@ -1429,7 +1432,7 @@ fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) ->
 }
 
 pub(crate) fn get_or_insert_arc<T>(
-    registry: &std::sync::Mutex<std::collections::HashMap<String, Arc<T>>>,
+    registry: &std::sync::Mutex<rapidhash::RapidHashMap<String, Arc<T>>>,
     key: &str,
     make: impl FnOnce() -> T,
 ) -> Arc<T> {
@@ -1440,11 +1443,11 @@ pub(crate) fn get_or_insert_arc<T>(
 }
 
 fn bearer_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<String, Arc<DbCredentialBearer>>> {
+) -> &'static std::sync::Mutex<rapidhash::RapidHashMap<String, Arc<DbCredentialBearer>>> {
     static REGISTRY: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, Arc<DbCredentialBearer>>>,
+        std::sync::Mutex<rapidhash::RapidHashMap<String, Arc<DbCredentialBearer>>>,
     > = std::sync::OnceLock::new();
-    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(rapidhash::RapidHashMap::default()))
 }
 
 pub fn shared_bearer(
@@ -1949,10 +1952,10 @@ mod tests {
 
     #[test]
     fn shared_registry_returns_one_arc_per_key_and_constructs_once() {
-        use std::collections::HashMap;
+        use rapidhash::{HashMapExt, RapidHashMap};
         use std::sync::Mutex as StdMutex;
 
-        let registry: StdMutex<HashMap<String, Arc<u32>>> = StdMutex::new(HashMap::new());
+        let registry: StdMutex<RapidHashMap<String, Arc<u32>>> = StdMutex::new(RapidHashMap::new());
         let calls = AtomicUsize::new(0);
 
         let a = get_or_insert_arc(&registry, "k1", || {

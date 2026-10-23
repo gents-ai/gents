@@ -41,7 +41,10 @@ const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 mod sign_in;
 mod sign_in_platform;
 
-async fn notify_config_changed<R: Runtime>(app: &AppHandle<R>, core: &ClientCore) {
+async fn notify_config_changed<R>(app: &AppHandle<R>, core: &ClientCore)
+where
+    R: Runtime,
+{
     if let Err(error) = core.refresh_store().await {
         tracing::warn!(
             target: LOG_TARGET,
@@ -188,12 +191,15 @@ impl CodexLoginResult {
 }
 
 #[tauri::command]
-pub(crate) async fn desktop_codex_login<R: Runtime>(
+pub(crate) async fn desktop_codex_login<R>(
     app: AppHandle<R>,
     window: tauri::WebviewWindow<R>,
     request: CodexLoginRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<CodexLoginResult, BridgeError> {
+) -> Result<CodexLoginResult, BridgeError>
+where
+    R: Runtime,
+{
     let provider =
         gents::chatgpt_codex::normalize_provider(request.provider.as_deref().unwrap_or_default());
     let signed = sign_in::run(
@@ -216,10 +222,13 @@ pub(crate) struct CodexLoginUrl {
 }
 
 #[tauri::command]
-pub(crate) fn desktop_codex_login_cancel<R: Runtime>(
+pub(crate) fn desktop_codex_login_cancel<R>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     sign_in::cancel(&state, window.label(), InferenceAuthMethod::ChatGptOauth)
 }
 
@@ -288,11 +297,14 @@ pub(crate) async fn desktop_provider_accounts_list(
 }
 
 #[tauri::command]
-pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
+pub(crate) async fn desktop_provider_account_disconnect<R>(
     app: AppHandle<R>,
     request: ProviderAccountDisconnectRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let access = core
@@ -344,11 +356,14 @@ pub(crate) struct UsageWindowView {
 }
 
 #[tauri::command]
-pub(crate) async fn desktop_provider_account_rename<R: Runtime>(
+pub(crate) async fn desktop_provider_account_rename<R>(
     app: AppHandle<R>,
     request: ProviderAccountRenameRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let node_did = request.node_did.trim();
@@ -368,11 +383,14 @@ pub(crate) async fn desktop_provider_account_rename<R: Runtime>(
 }
 
 #[tauri::command]
-pub(crate) async fn desktop_provider_account_remove<R: Runtime>(
+pub(crate) async fn desktop_provider_account_remove<R>(
     app: AppHandle<R>,
     request: ProviderAccountRemoveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let node_did = request.node_did.trim();
@@ -508,11 +526,14 @@ pub(crate) async fn desktop_provider_usage_read(
 }
 
 #[tauri::command]
-pub(crate) async fn desktop_provider_account_retry_save<R: Runtime>(
+pub(crate) async fn desktop_provider_account_retry_save<R>(
     app: AppHandle<R>,
     request: ProviderAccountRetrySaveRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<ProviderAccountView, BridgeError> {
+) -> Result<ProviderAccountView, BridgeError>
+where
+    R: Runtime,
+{
     let core = current_core(&state).ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::ClientNotRunning,
@@ -533,12 +554,15 @@ pub(crate) async fn desktop_provider_account_retry_save<R: Runtime>(
 }
 
 #[tauri::command]
-pub(crate) async fn desktop_grok_login<R: Runtime>(
+pub(crate) async fn desktop_grok_login<R>(
     app: AppHandle<R>,
     window: tauri::WebviewWindow<R>,
     request: GrokLoginRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<GrokLoginResult, BridgeError> {
+) -> Result<GrokLoginResult, BridgeError>
+where
+    R: Runtime,
+{
     let provider =
         gents::xai_grok_oauth::normalize_provider(request.provider.as_deref().unwrap_or_default());
     let signed = sign_in::run(
@@ -1827,10 +1851,13 @@ mod provider_account_tests {
 }
 
 #[tauri::command]
-pub(crate) fn desktop_grok_login_cancel<R: Runtime>(
+pub(crate) fn desktop_grok_login_cancel<R>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     sign_in::cancel(&state, window.label(), InferenceAuthMethod::GrokOauth)
 }
 
@@ -1878,12 +1905,15 @@ pub(crate) struct ClaudeLoginUrl {
 }
 
 #[tauri::command]
-pub(crate) async fn desktop_claude_login<R: Runtime>(
+pub(crate) async fn desktop_claude_login<R>(
     app: AppHandle<R>,
     window: tauri::WebviewWindow<R>,
     request: ClaudeLoginRequest,
     state: State<'_, DesktopAppState>,
-) -> Result<ClaudeLoginResult, BridgeError> {
+) -> Result<ClaudeLoginResult, BridgeError>
+where
+    R: Runtime,
+{
     let provider =
         gents::claude_oauth::normalize_provider(request.provider.as_deref().unwrap_or_default());
     let signed = sign_in::run(
@@ -1900,9 +1930,12 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
 }
 
 #[tauri::command]
-pub(crate) fn desktop_claude_login_cancel<R: Runtime>(
+pub(crate) fn desktop_claude_login_cancel<R>(
     window: tauri::WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     sign_in::cancel(&state, window.label(), InferenceAuthMethod::ClaudeOauth)
 }

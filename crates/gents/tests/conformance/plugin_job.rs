@@ -56,7 +56,10 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A closed Lean spelling decoded by the native enum's own serde names.
-fn spelled<T: DeserializeOwned>(spelling: &str) -> T {
+fn spelled<T>(spelling: &str) -> T
+where
+    T: DeserializeOwned,
+{
     serde_json::from_value(serde_json::Value::String(spelling.to_owned()))
         .unwrap_or_else(|error| panic!("unknown Lean spelling {spelling:?}: {error}"))
 }
@@ -1109,7 +1112,10 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
 
 /// Decodes one wire sample strictly into its protocol type and returns the
 /// re-encoded JSON, which must equal the Lean rendering.
-fn round_trip<T: DeserializeOwned + Serialize>(case: &LeanPluginJobWireCase) -> serde_json::Value {
+fn round_trip<T>(case: &LeanPluginJobWireCase) -> serde_json::Value
+where
+    T: DeserializeOwned + Serialize,
+{
     let decoded: T = serde_json::from_value(case.value.clone())
         .unwrap_or_else(|error| panic!("{}: strict decode: {error}", case.name));
     let encoded = serde_json::to_value(&decoded)

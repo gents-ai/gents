@@ -8,11 +8,11 @@ use super::NetworkApprovalProtocol;
 use super::NetworkPolicyAmendment;
 use super::RequestPermissionProfile;
 use super::UserInput;
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_with::serde_as;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -161,7 +161,7 @@ pub enum ThreadItem {
         prompt: Option<String>,
         model: Option<String>,
         reasoning_effort: Option<ReasoningEffort>,
-        agents_states: HashMap<String, CollabAgentState>,
+        agents_states: RapidHashMap<String, CollabAgentState>,
     },
     #[serde(rename_all = "camelCase")]
     WebSearch {
@@ -741,6 +741,6 @@ pub struct ToolRequestUserInputAnswer {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolRequestUserInputResponse {
-    pub answers: HashMap<String, ToolRequestUserInputAnswer>,
+    pub answers: RapidHashMap<String, ToolRequestUserInputAnswer>,
 }
 use crate::core_types::{AbsolutePathBuf, MessagePhase, ReasoningEffort, ResponseItem};

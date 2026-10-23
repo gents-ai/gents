@@ -2070,7 +2070,7 @@ pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNod
 pub(super) fn node_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdentity> {
     let tempdir = tempfile::tempdir().expect("identity tempdir");
     std::sync::Arc::new(
-        crate::KeyIdentity::load_or_create(&tempdir.path().join(format!("{label}.key")), None)
+        crate::KeyIdentity::load_or_create(tempdir.path().join(format!("{label}.key")), None)
             .expect("test identity"),
     )
 }

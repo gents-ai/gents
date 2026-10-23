@@ -43,11 +43,14 @@ pub(crate) fn agent_slot_fingerprint(agent_config: &ResolvedAgent) -> String {
     )
 }
 
-pub(crate) fn build_admitted_model<C: crate::llm::rig_compat::ProviderClient>(
+pub(crate) fn build_admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
     agent_config: &ResolvedAgent,
-) -> AdmittedCompletionModel<C::CompletionModel> {
+) -> AdmittedCompletionModel<C::CompletionModel>
+where
+    C: crate::llm::rig_compat::ProviderClient,
+{
     crate::llm::rig_compat::admitted_model(
         client,
         admission,

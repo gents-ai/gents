@@ -103,8 +103,8 @@ async fn existing_goal_resume_receipt<'a>(
         .transact_readonly("goal.resume_existing_receipt", move |txn| {
             Box::pin(async move {
                 let (goal, _, parent_row) =
-                    resume_context_in_txn(txn, &node_did, &session_id, &from_request_id).await?;
-                existing_resume_receipt_in_txn(txn, &goal, &parent_row, &from_request_id).await
+                    resume_context_in_txn(txn, node_did, session_id, from_request_id).await?;
+                existing_resume_receipt_in_txn(txn, &goal, &parent_row, from_request_id).await
             })
         })
         .await
@@ -385,6 +385,7 @@ async fn stage_resume_inner(
         &created_at,
         session_hop,
     )?;
+    create.input.goal_assignment = Some(continuation_assignment(&goal, &parent, None)?);
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
     if let Some(binding) = crate::graph_pipeline::graph_binding_for_request_in_txn(
         txn,
@@ -417,6 +418,10 @@ async fn stage_resume_inner(
         .and_then(serde_json::Value::as_str)
         .context("continuation create omitted document ID")?
         .to_owned();
+    if goal.assignment_root_request_doc_id.is_none() {
+        bind_goal_first_request_in_txn(txn, &goal, &doc_id, create.input.goal_assignment.as_ref())
+            .await?;
+    }
     Ok(GoalResumeReceipt {
         goal_status: post.status,
         goal_id: goal.goal_id,

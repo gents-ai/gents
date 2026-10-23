@@ -21,7 +21,10 @@ pub(crate) fn percent(bp: Option<u32>) -> String {
     )
 }
 
-pub(crate) fn wire<T: Serialize>(value: &T) -> String {
+pub(crate) fn wire<T>(value: &T) -> String
+where
+    T: Serialize,
+{
     match serde_json::to_value(value) {
         Ok(serde_json::Value::String(text)) => text,
         Ok(other) => other.to_string(),
@@ -241,7 +244,7 @@ pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()
                 stage
                     .terminal_state
                     .as_ref()
-                    .map_or_else(|| "-".to_owned(), |state| wire(state)),
+                    .map_or_else(|| "-".to_owned(), wire),
                 stage
                     .failure_kind
                     .map_or_else(|| "-".to_owned(), |kind| kind.as_str().to_owned())
@@ -691,7 +694,7 @@ pub(crate) fn finished(view: &RunView, limit: usize, out: &mut dyn Write) -> io:
             short_id(&latest.trial_id)
         )?;
         match record.and_then(|record| record.live.as_ref()) {
-            Some(live) => snapshot_lines(live, &record.map_or(&[][..], |r| &r.goal), out)?,
+            Some(live) => snapshot_lines(live, record.map_or(&[][..], |r| &r.goal), out)?,
             None => writeln!(out, "    tokens {}", tokens(&latest.usage))?,
         }
         for verdict in &slot.verdicts {

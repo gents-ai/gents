@@ -220,6 +220,10 @@ pub(super) fn should_ignore_path(traversal_root: &Path, path: &Path) -> bool {
 /// else sleeps `GENTS_FS_RUNNER_BLOCK_MS`; `GENTS_FS_RUNNER_BLOCK_RELEASED`
 /// is written only when the blocker returns on its own. Marker writes abort
 /// the runner on failure: an unwritten marker must never read as preemption.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test hook in the synchronous fs-runner process; the cross-process gate is a file"
+)]
 fn block_for_test(dir: &Path) {
     let Ok(target) = std::env::var("GENTS_FS_RUNNER_BLOCK_DIR") else {
         return;

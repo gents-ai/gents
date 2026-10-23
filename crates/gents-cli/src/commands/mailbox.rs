@@ -87,9 +87,11 @@ async fn list(args: MailboxListArgs) -> Result<()> {
         )
         .await?
     } else {
-        let status = (!args.all)
-            .then_some(r#", status: { _eq: "open" }"#)
-            .unwrap_or_default();
+        let status = if !args.all {
+            r#", status: { _eq: "open" }"#
+        } else {
+            Default::default()
+        };
         decode_rows(
             access
                 .execute(&format!(

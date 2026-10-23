@@ -404,7 +404,10 @@ pub(crate) struct LeanCanonicalExecutionObservation {
     pub(crate) messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
 }
 
-fn exact_multiset_eq<T: PartialEq>(left: &[T], right: &[T]) -> bool {
+fn exact_multiset_eq<T>(left: &[T], right: &[T]) -> bool
+where
+    T: PartialEq,
+{
     if left.len() != right.len() {
         return false;
     }

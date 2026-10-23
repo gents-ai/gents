@@ -70,13 +70,22 @@ pub fn ensure_event_stream_content_type(headers: &mut HeaderMap) {
     }
 }
 
-pub struct BearerAuthHttpClient<S: BearerSource, P: OAuthHttpPolicy, T = ReqwestClient> {
+pub struct BearerAuthHttpClient<S, P, T = ReqwestClient>
+where
+    S: BearerSource,
+    P: OAuthHttpPolicy,
+{
     inner: T,
     bearer: Option<Arc<S>>,
     policy: P,
 }
 
-impl<S: BearerSource, P: OAuthHttpPolicy, T: Clone> Clone for BearerAuthHttpClient<S, P, T> {
+impl<S, P, T> Clone for BearerAuthHttpClient<S, P, T>
+where
+    S: BearerSource,
+    P: OAuthHttpPolicy,
+    T: Clone,
+{
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -86,8 +95,11 @@ impl<S: BearerSource, P: OAuthHttpPolicy, T: Clone> Clone for BearerAuthHttpClie
     }
 }
 
-impl<S: BearerSource, P: OAuthHttpPolicy, T: fmt::Debug> fmt::Debug
-    for BearerAuthHttpClient<S, P, T>
+impl<S, P, T> fmt::Debug for BearerAuthHttpClient<S, P, T>
+where
+    S: BearerSource,
+    P: OAuthHttpPolicy,
+    T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BearerAuthHttpClient")
@@ -97,7 +109,12 @@ impl<S: BearerSource, P: OAuthHttpPolicy, T: fmt::Debug> fmt::Debug
     }
 }
 
-impl<S: BearerSource, P: OAuthHttpPolicy, T: Default> Default for BearerAuthHttpClient<S, P, T> {
+impl<S, P, T> Default for BearerAuthHttpClient<S, P, T>
+where
+    S: BearerSource,
+    P: OAuthHttpPolicy,
+    T: Default,
+{
     fn default() -> Self {
         Self {
             inner: T::default(),
@@ -107,7 +124,11 @@ impl<S: BearerSource, P: OAuthHttpPolicy, T: Default> Default for BearerAuthHttp
     }
 }
 
-impl<S: BearerSource, P: OAuthHttpPolicy> BearerAuthHttpClient<S, P, ReqwestClient> {
+impl<S, P> BearerAuthHttpClient<S, P, ReqwestClient>
+where
+    S: BearerSource,
+    P: OAuthHttpPolicy,
+{
     pub fn new(bearer: Arc<S>) -> Self {
         Self {
             inner: ReqwestClient::default(),
@@ -117,7 +138,11 @@ impl<S: BearerSource, P: OAuthHttpPolicy> BearerAuthHttpClient<S, P, ReqwestClie
     }
 }
 
-impl<S: BearerSource, P: OAuthHttpPolicy, T> BearerAuthHttpClient<S, P, T> {
+impl<S, P, T> BearerAuthHttpClient<S, P, T>
+where
+    S: BearerSource,
+    P: OAuthHttpPolicy,
+{
     pub fn with_inner(bearer: Arc<S>, inner: T) -> Self {
         Self {
             inner,

@@ -9,7 +9,7 @@ pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
 use crate::document_config::*;
 use crate::oauth_credential::OAuthCredential;
-use std::collections::HashMap;
+use rapidhash::RapidHashMap;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRecord<T> {
@@ -20,34 +20,34 @@ pub(crate) struct DocumentRecord<T> {
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRuntimeView {
     pub(crate) node: DocumentRecord<Node>,
-    pub(crate) agents: HashMap<String, DocumentRecord<Agent>>,
-    pub(crate) contexts: HashMap<String, DocumentRecord<AgentContext>>,
-    pub(crate) compactions: HashMap<String, DocumentRecord<CompactionConfig>>,
-    pub(crate) tools: HashMap<String, DocumentRecord<Tools>>,
-    pub(crate) agent_targets: HashMap<String, DocumentRecord<AgentTargetDocument>>,
-    pub(crate) skills: HashMap<String, DocumentRecord<SkillDocument>>,
+    pub(crate) agents: RapidHashMap<String, DocumentRecord<Agent>>,
+    pub(crate) contexts: RapidHashMap<String, DocumentRecord<AgentContext>>,
+    pub(crate) compactions: RapidHashMap<String, DocumentRecord<CompactionConfig>>,
+    pub(crate) tools: RapidHashMap<String, DocumentRecord<Tools>>,
+    pub(crate) agent_targets: RapidHashMap<String, DocumentRecord<AgentTargetDocument>>,
+    pub(crate) skills: RapidHashMap<String, DocumentRecord<SkillDocument>>,
     pub(crate) datastore_tool_surfaces:
-        HashMap<String, DocumentRecord<DatastoreToolSurfaceDocument>>,
-    pub(crate) eth_tools: HashMap<String, DocumentRecord<EthToolDocument>>,
-    pub(crate) inference_profiles: HashMap<String, DocumentRecord<InferenceProfile>>,
-    pub(crate) inference_sampling: HashMap<String, DocumentRecord<InferenceSampling>>,
-    pub(crate) inference_execution: HashMap<String, DocumentRecord<InferenceExecution>>,
-    pub(crate) inference_retry_policies: HashMap<String, DocumentRecord<InferenceRetryPolicy>>,
-    pub(crate) backends: HashMap<String, DocumentRecord<InferenceBackend>>,
-    pub(crate) tasks: HashMap<String, DocumentRecord<Task>>,
-    pub(crate) schedules: HashMap<String, DocumentRecord<Schedule>>,
-    pub(crate) triggers: HashMap<String, DocumentRecord<Trigger>>,
-    pub(crate) event_sources: HashMap<String, DocumentRecord<EventSource>>,
-    pub(crate) callbacks: HashMap<String, DocumentRecord<Callback>>,
-    pub(crate) callback_bindings: HashMap<String, DocumentRecord<CallbackBinding>>,
-    pub(crate) chain_key_bindings: HashMap<String, DocumentRecord<ChainKeyBindingDocument>>,
-    pub(crate) tool_services: HashMap<String, DocumentRecord<ToolServiceRegistry>>,
-    pub(crate) projection_acp_bindings: HashMap<String, DocumentRecord<ProjectionAcpBinding>>,
-    pub(crate) callback_modules: HashMap<String, DocumentRecord<CallbackModule>>,
-    pub(crate) repository_placements: HashMap<String, DocumentRecord<RepositoryPlacement>>,
-    pub(crate) backend_observations: HashMap<String, InferenceBackendObservation>,
-    pub(crate) unknown_kind_backends: HashMap<String, String>,
-    pub(crate) oauth_credentials: HashMap<String, DocumentRecord<OAuthCredential>>,
+        RapidHashMap<String, DocumentRecord<DatastoreToolSurfaceDocument>>,
+    pub(crate) eth_tools: RapidHashMap<String, DocumentRecord<EthToolDocument>>,
+    pub(crate) inference_profiles: RapidHashMap<String, DocumentRecord<InferenceProfile>>,
+    pub(crate) inference_sampling: RapidHashMap<String, DocumentRecord<InferenceSampling>>,
+    pub(crate) inference_execution: RapidHashMap<String, DocumentRecord<InferenceExecution>>,
+    pub(crate) inference_retry_policies: RapidHashMap<String, DocumentRecord<InferenceRetryPolicy>>,
+    pub(crate) backends: RapidHashMap<String, DocumentRecord<InferenceBackend>>,
+    pub(crate) tasks: RapidHashMap<String, DocumentRecord<Task>>,
+    pub(crate) schedules: RapidHashMap<String, DocumentRecord<Schedule>>,
+    pub(crate) triggers: RapidHashMap<String, DocumentRecord<Trigger>>,
+    pub(crate) event_sources: RapidHashMap<String, DocumentRecord<EventSource>>,
+    pub(crate) callbacks: RapidHashMap<String, DocumentRecord<Callback>>,
+    pub(crate) callback_bindings: RapidHashMap<String, DocumentRecord<CallbackBinding>>,
+    pub(crate) chain_key_bindings: RapidHashMap<String, DocumentRecord<ChainKeyBindingDocument>>,
+    pub(crate) tool_services: RapidHashMap<String, DocumentRecord<ToolServiceRegistry>>,
+    pub(crate) projection_acp_bindings: RapidHashMap<String, DocumentRecord<ProjectionAcpBinding>>,
+    pub(crate) callback_modules: RapidHashMap<String, DocumentRecord<CallbackModule>>,
+    pub(crate) repository_placements: RapidHashMap<String, DocumentRecord<RepositoryPlacement>>,
+    pub(crate) backend_observations: RapidHashMap<String, InferenceBackendObservation>,
+    pub(crate) unknown_kind_backends: RapidHashMap<String, String>,
+    pub(crate) oauth_credentials: RapidHashMap<String, DocumentRecord<OAuthCredential>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,11 +137,11 @@ fn expand_eth_tools_with<'a>(
     lookup: impl Fn(&str) -> Option<&'a crate::document_config::EthToolDocument>,
 ) -> anyhow::Result<ExpandedEthTools> {
     use anyhow::{anyhow, bail};
-    use std::collections::HashSet;
+    use rapidhash::{HashSetExt, RapidHashSet};
 
     let mut out = ExpandedEthTools::default();
-    let mut linked_ids: HashSet<&str> = HashSet::new();
-    let mut tool_names: HashSet<String> = HashSet::new();
+    let mut linked_ids: RapidHashSet<&str> = RapidHashSet::new();
+    let mut tool_names: RapidHashSet<String> = RapidHashSet::new();
     for tool_id in selection
         .integrations
         .as_ref()

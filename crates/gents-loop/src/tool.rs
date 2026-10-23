@@ -120,7 +120,10 @@ fn serialize_tool_output(output: impl Serialize) -> serde_json::Result<String> {
     }
 }
 
-impl<T: Tool> ToolDyn for T {
+impl<T> ToolDyn for T
+where
+    T: Tool,
+{
     fn name(&self) -> String {
         Tool::name(self)
     }

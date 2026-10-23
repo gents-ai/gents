@@ -176,6 +176,11 @@ metadata.
   HTTP GraphQL from feature code, and never add another retry loop or access
   wrapper. `write_owner_structure.rs` is a syntactic ratchet over direct node
   access, not complete enforcement; its allowlist only shrinks.
+- Request context (identity, signing, ACP bypass, transaction handles, the
+  requester or session, trace or request IDs) travels with the task or message
+  as an explicit argument or field, never in `thread_local!` or `task_local!`.
+  `ambient_request_context_only_shrinks` in `write_owner_structure.rs` bans new
+  production sites; its allowlist only shrinks.
 - Preserve DefraDB's execution boundaries when updating its adapter or dependency.
   Autocommit prepares remote inputs on the caller and routes only prepared database
   attempts; do not replace that sequence with a call that moves the whole request
@@ -188,10 +193,38 @@ metadata.
   [WorkerIo](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/storage/src/backends/regolith/worker_io/mod.rs),
   and [Regolith commit tickets](https://github.com/sourcenetwork/regolith/blob/main/src/transaction/nowait.rs).
 - Use `tracing`, never `println!`.
+- One Tokio runtime per process, built at its entry point (`main`, the Tauri
+  runtime install, `#[tokio::test]`); the speech worker's silent runtime is the
+  one documented exception. Code that needs a `tokio::runtime::Handle` takes it
+  from its caller; `tokio::spawn` inside a running task is fine. Never call
+  `Handle::current`/`try_current`: a guard whose `Drop` owes async cleanup
+  binds its runtime with `gents::drop_cleanup::DropCleanup::current`, and tests
+  take theirs from their crate's test-support helper.
+- Never block a runtime thread: every wait is an `.await` (`tokio::time::sleep`,
+  the owner's notification, never a polling loop) and synchronous work runs on
+  `spawn_blocking`. Clippy bans `std::thread::sleep`, `Handle::block_on`,
+  `block_in_place` and the futures and tauri `block_on`; each remaining use
+  carries a reasoned `expect` and sits off the runtime workers (a synchronous
+  process or test, a dedicated OS thread, a `spawn_blocking` closure) or is a
+  test future that deliberately overruns a deadline within one poll.
+  `Runtime::block_on` is for process and test entry points and dedicated
+  threads. Drive a non-`Send` embedded-node future through
+  `storage_backend::drive_unsendable`.
+- Every hash map and set is `rapidhash::RapidHashMap`/`RapidHashSet` (the fast
+  hasher, built with `new`, `default` or `with_capacity` via `HashMapExt`/
+  `HashSetExt`), and hashers are `rapidhash::fast::RapidHasher`, as in DefraDB.
+  Use std's map only where a third-party signature fixes it;
+  `hash_maps_use_rapidhash` ratchets this and its allowlist only shrinks.
+- Trait bounds live in where clauses, never inline in generic parameter lists;
+  `trait_bounds_live_in_where_clauses` ratchets this.
 - Treat flaky tests as defects: reproduce, file, and fix them.
 - Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are
-  cloned efficiently.
+  cloned efficiently. In agent worktrees build and test with
+  `PROFILE=fast-dev`; the default dev profile keeps full dependency debug info
+  and fills the disk across concurrent worktrees. Run `make sweep` to delete
+  stale artifacts, and remove a worktree (`git worktree remove`) once its
+  branch merges.
 
-Before pushing, run `cargo test -p gents` and
-`cargo check --workspace --all-targets`. Run `lake build` for proof changes and
+Before pushing, run `cargo test -p gents`, `cargo check --workspace --all-targets`
+and `make lint` (clippy, `-D warnings`). Run `lake build` for proof changes and
 the relevant CLI or desktop suites for affected consumers.

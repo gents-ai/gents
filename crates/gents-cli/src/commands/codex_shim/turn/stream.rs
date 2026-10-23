@@ -1159,7 +1159,7 @@ fn string_len_marker(row: Option<&Value>, field: &str) -> Option<usize> {
 
 fn string_fingerprint_marker(row: Option<&Value>, field: &str) -> Option<(usize, u64)> {
     let value = row?.get(field)?.as_str()?;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = rapidhash::fast::RapidHasher::default();
     value.hash(&mut hasher);
     Some((value.len(), hasher.finish()))
 }

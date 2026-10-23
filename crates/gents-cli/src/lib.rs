@@ -41,6 +41,10 @@ pub mod server_host;
 mod shared;
 mod telemetry;
 
+#[cfg(test)]
+#[path = "../../gents/src/lean_vocab_test/support.rs"]
+pub(crate) mod lean_vocab_test;
+
 use cli::*;
 
 use config_bundle::*;
@@ -390,15 +394,15 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 
 pub fn run_cli() -> Result<()> {
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_WORKER_STACK_SIZE)
         .build()
-        .context("building tokio runtime")?
-        .block_on(async_main())
+        .context("building tokio runtime")?;
+    runtime.block_on(async_main(runtime.handle().clone()))
 }
 
-async fn async_main() -> Result<()> {
+async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
         Command::NativeFsRunner(args) => {
@@ -428,8 +432,12 @@ async fn async_main() -> Result<()> {
         Command::Provision(args) => commands::provision::provision(args).await,
         Command::Desktop { command } => commands::desktop::run(command).await,
         Command::Reset(args) => commands::reset::reset(args).await,
-        Command::Server(args) => commands::serve::serve(args).await,
-        Command::Service { command } => service_command(command),
+        Command::Server(args) => commands::serve::serve(args, runtime).await,
+        Command::Service { command } => {
+            tokio::task::spawn_blocking(move || service_command(command))
+                .await
+                .context("running the service command")?
+        }
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
@@ -464,8 +472,10 @@ async fn async_main() -> Result<()> {
         Command::Job { command } => commands::job::dispatch(command).await,
         Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
-        Command::Eval { command } => commands::eval::dispatch(command).await,
-        Command::Optimization { command } => commands::optimization::dispatch(command).await,
+        Command::Eval { command } => commands::eval::dispatch(command, runtime).await,
+        Command::Optimization { command } => {
+            commands::optimization::dispatch(command, runtime).await
+        }
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();
@@ -530,9 +540,10 @@ pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Resu
     Ok(values.into_iter().collect())
 }
 
-pub(crate) async fn http_get_json<T: DeserializeOwned>(
-    request: reqwest::RequestBuilder,
-) -> Result<T> {
+pub(crate) async fn http_get_json<T>(request: reqwest::RequestBuilder) -> Result<T>
+where
+    T: DeserializeOwned,
+{
     let (url, body) = http_send_bytes(request).await?;
     serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
 }

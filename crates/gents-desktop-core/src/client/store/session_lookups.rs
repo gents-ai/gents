@@ -198,7 +198,7 @@ impl ClientStore {
             return Some(newest);
         };
         Some(
-            turns::session_turn_request(requests, newest_row)
+            turns::session_display_request(requests, newest_row)
                 .request_id
                 .clone(),
         )

@@ -578,7 +578,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
         let manifest = documents
             .iter()
             .map(|document| SessionHydrationDocumentKey {
-                collection: document.collection.clone(),
+                collection: document.collection,
                 doc_id: document.doc_id.clone(),
             })
             .collect::<Vec<_>>();

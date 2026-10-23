@@ -52,7 +52,10 @@ fn contract() -> serde_json::Value {
         .clone()
 }
 
-fn decode<T: serde::de::DeserializeOwned>(value: &serde_json::Value) -> T {
+fn decode<T>(value: &serde_json::Value) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
     serde_json::from_value(value.clone()).unwrap()
 }
 
@@ -267,7 +270,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
             schedule.concurrency = ConcurrencyMode::LatestOnly;
             let snapshot = snapshot_with_agent_and_schedules(
                 behavior,
-                HashMap::from([(next.identity.trigger_id.clone(), schedule)]),
+                RapidHashMap::from_iter([(next.identity.trigger_id.clone(), schedule)]),
             );
             let (_tx, rx) = watch::channel(snapshot);
             let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
@@ -791,7 +794,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     let receipt = &receipt;
                     let mutation = &mutation;
                     Box::pin(async move {
-                        durable::stage_fire_request(txn, &receipt, &mutation).await?;
+                        durable::stage_fire_request(txn, receipt, mutation).await?;
                         Ok(())
                     })
                 })
@@ -806,7 +809,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     let receipt = &receipt;
                     let mutation = &mutation;
                     Box::pin(async move {
-                        durable::stage_fire_request(txn, &receipt, &mutation).await?;
+                        durable::stage_fire_request(txn, receipt, mutation).await?;
                         anyhow::ensure!(commit, "injected crash before receipt/request commit");
                         Ok(())
                     })

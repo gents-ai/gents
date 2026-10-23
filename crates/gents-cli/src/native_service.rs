@@ -429,7 +429,10 @@ impl NativeServiceManager<ProcessCommandRunner> {
     }
 }
 
-impl<R: CommandRunner> NativeServiceManager<R> {
+impl<R> NativeServiceManager<R>
+where
+    R: CommandRunner,
+{
     pub fn with_runner(
         config: NativeServiceConfig,
         platform: NativeServicePlatform,
@@ -886,6 +889,10 @@ impl<R: CommandRunner> NativeServiceManager<R> {
     /// Confirm the service-manager transition: launchd no longer has the job
     /// label loaded, or systemd reports the unit inactive. This does not claim
     /// an independent observation of the former child PID.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "synchronous service-manager probe run off the runtime; launchd and systemd offer no unload notification"
+    )]
     fn wait_unloaded_or_inactive(&self) -> Result<()> {
         for _ in 0..20 {
             match self.platform {

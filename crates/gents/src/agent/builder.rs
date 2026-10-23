@@ -1,10 +1,13 @@
-use std::collections::HashSet;
+use rapidhash::{HashSetExt, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
+
+pub(crate) type AgentFactory =
+    Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
 
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
 use crate::admission::BackendAdmissionConfig;
@@ -185,12 +188,7 @@ impl GentsBuilder {
             );
         }
 
-        let mut agent_factories: Vec<
-            Box<
-                dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
-                    + Send,
-            >,
-        > = Vec::with_capacity(self.agents.len());
+        let mut agent_factories: Vec<AgentFactory> = Vec::with_capacity(self.agents.len());
         for agent_config in self.agents {
             let factory = agent_config
                 .into_factory(
@@ -467,9 +465,9 @@ impl AgentBuilder {
     }
 }
 
-fn find_duplicates(values: &[String]) -> HashSet<String> {
-    let mut seen = HashSet::new();
-    let mut duplicates = HashSet::new();
+fn find_duplicates(values: &[String]) -> RapidHashSet<String> {
+    let mut seen = RapidHashSet::new();
+    let mut duplicates = RapidHashSet::new();
     for value in values {
         if !seen.insert(value.clone()) {
             duplicates.insert(value.clone());
@@ -534,12 +532,7 @@ impl PendingAgent {
         node_did: &str,
         tool_ceiling: &ToolCeiling,
         backend_health: &crate::backend_health::BackendHealthMap,
-    ) -> Result<
-        Box<
-            dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
-                + Send,
-        >,
-    > {
+    ) -> Result<AgentFactory> {
         let backend_id = self
             .backend_id
             .as_deref()

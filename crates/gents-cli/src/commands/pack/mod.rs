@@ -510,7 +510,7 @@ async fn install_documents_pack(
     let (mut authored, mut report) = crate::desired_state::load_manifest_root(temp.path());
     if authored.is_none() {
         (authored, report) =
-            crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(&owner));
+            crate::desired_state::load_manifest_root_for_owner(temp.path(), Some(owner));
     }
     anyhow::ensure!(
         authored.is_some(),
@@ -520,12 +520,12 @@ async fn install_documents_pack(
     let mut authored = authored.expect("checked pack configuration");
     super::config::binding::rebind_manifest_to_node(
         &mut authored,
-        &owner,
+        owner,
         args.force_rebind_concrete_did,
     )?;
     let prepared = gents::pack::prepare_document_pack_install(
-        &access,
-        &owner,
+        access,
+        owner,
         pack.manifest(),
         &authored,
         &requested,
@@ -619,8 +619,8 @@ async fn install_documents_pack(
         match dependency.manifest().metadata.kind {
             PackKind::Graph => {
                 super::graph::install_with_access(
-                    &access,
-                    &owner,
+                    access,
+                    owner,
                     dependency,
                     dependency_args,
                     false,
@@ -631,8 +631,8 @@ async fn install_documents_pack(
             // would; the boxed future breaks the async recursion.
             PackKind::Documents => {
                 Box::pin(install_documents_pack(
-                    &access,
-                    &owner,
+                    access,
+                    owner,
                     dependency,
                     &dependency_args,
                     false,
@@ -645,7 +645,7 @@ async fn install_documents_pack(
             }
         }
     }
-    let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
+    let schemas = super::schema::apply_pack_schemas_if_present(access, temp.path())
         .await
         .context("pack install schemas")?;
     let plugins = if pack.manifest().metadata.plugins.is_empty() {
@@ -663,7 +663,7 @@ async fn install_documents_pack(
             pack.digest(),
             |path| pack.asset(path),
             args.grant_authority,
-            Some(&owner),
+            Some(owner),
             &inference.bindings,
             |_| Ok(()),
         )
@@ -686,8 +686,8 @@ async fn install_documents_pack(
     // A later transaction failure leaves those files installed for
     // the next explicit reconciliation attempt.
     let apply = gents::pack::install_pack_documents(
-        &access,
-        &owner,
+        access,
+        owner,
         &identity,
         &desired,
         args.drift.policy(),
@@ -961,6 +961,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "synchronous test retrying a file lock that has no release notification"
+    )]
     fn scenario_cache_lease_excludes_pruning() {
         let home = tempfile::tempdir().unwrap();
         let pack = test_support::fixture_pack_source("documents_fixture", home.path());

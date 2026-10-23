@@ -484,7 +484,7 @@ mod turn_assignment_tests {
         assert_eq!(row["status"], "completed");
 
         let notifications =
-            session_message_notifications(node, did, &admission.tool.session_id()).await;
+            session_message_notifications(node, did, admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_active</reason>"),
@@ -548,7 +548,7 @@ mod turn_assignment_tests {
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
         let notifications =
-            session_message_notifications(node, did, &admission.tool.session_id()).await;
+            session_message_notifications(node, did, admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             notifications[0].contains("<reason>assignment_absent</reason>"),
@@ -606,7 +606,7 @@ mod turn_assignment_tests {
         let row = tool_call_row(node, &tool_doc_id).await;
         assert_eq!(row["status"], "completed");
         let notifications =
-            session_message_notifications(node, did, &admission.tool.session_id()).await;
+            session_message_notifications(node, did, admission.tool.session_id()).await;
         assert_eq!(notifications.len(), 1);
         assert!(
             !notifications[0].contains("<reason>"),

@@ -78,9 +78,10 @@ tokio::task_local! {
 }
 
 #[cfg(test)]
-pub(crate) async fn count_field_commit_statements<F: std::future::Future>(
-    future: F,
-) -> (F::Output, usize) {
+pub(crate) async fn count_field_commit_statements<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
     let statements = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = FIELD_COMMIT_STATEMENTS
         .scope(statements.clone(), future)

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -83,7 +83,7 @@ where
         result
     });
     let mut calls = JoinSet::new();
-    let mut pending = HashMap::<u32, CancellationToken>::new();
+    let mut pending = RapidHashMap::<u32, CancellationToken>::new();
     let mut sequence = 0_u64;
     let approvals = Arc::new(super::approvals::AttachmentApprovals::default());
     let mut approval_changes = approvals.changes();
@@ -138,7 +138,7 @@ where
                 changed = store.changed() => {
                     if changed.is_err() { break; }
                     sequence = sequence.checked_add(1).context("client notification sequence exhausted")?;
-                    let payload = ClientUpdateEvent::store(store.borrow_and_update().clone());
+                    let payload = ClientUpdateEvent::store(*store.borrow_and_update());
                     publish(&out, &local_stop, HostMessage::Updated { sequence, payload }).await?;
                 }
                 changed = health.changed() => {

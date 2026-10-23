@@ -233,7 +233,7 @@ async fn stock_codex_remote_tmux_multiturn_uses_existing_client_codex_home_with_
         if !literal_status.success() {
             bail!("tmux send-keys second prompt failed");
         }
-        std::thread::sleep(Duration::from_millis(1500));
+        tokio::time::sleep(Duration::from_millis(1500)).await;
         let enter_status = Command::new("tmux")
             .args(["send-keys", "-t", &session, "Enter"])
             .status()

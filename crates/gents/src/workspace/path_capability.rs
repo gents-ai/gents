@@ -16,9 +16,10 @@ pub enum WorkspacePathCapability {
 }
 
 impl<'de> Deserialize<'de> for WorkspacePathCapability {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
         #[derive(Deserialize)]
         #[serde(tag = "mode", deny_unknown_fields)]
         enum Wire {

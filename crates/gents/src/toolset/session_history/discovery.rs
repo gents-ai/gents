@@ -187,10 +187,10 @@ pub(super) const OUTPUT_ORDER: &[&str] = &[
 pub(super) struct AnswerFirst<'a>(pub &'a Value);
 
 impl Serialize for AnswerFirst<'_> {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         use serde::ser::{SerializeMap, SerializeSeq};
         match self.0 {
             Value::Object(fields) => {

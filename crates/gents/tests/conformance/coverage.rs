@@ -214,7 +214,7 @@ async fn agent_tool_call_carries_only_generic_background_fields() {
         "introspection errors: {:?}",
         response.errors
     );
-    let names: HashSet<String> = response
+    let names: RapidHashSet<String> = response
         .data
         .as_ref()
         .and_then(|d| d.get("__type"))
@@ -315,7 +315,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
             boundary
                 .accepted_failure_mode
                 .as_deref()
-                .map_or(true, |text| !text.trim().is_empty()),
+                .is_none_or(|text| !text.trim().is_empty()),
             "boundary accepted_failure_mode must be omitted or non-empty: {:?}",
             boundary
         );
@@ -323,7 +323,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
             boundary
                 .accepted_follow_up
                 .as_deref()
-                .map_or(true, |text| !text.trim().is_empty()),
+                .is_none_or(|text| !text.trim().is_empty()),
             "boundary accepted_follow_up must be omitted or non-empty: {:?}",
             boundary
         );
@@ -788,6 +788,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "goal_first_request_binding_cases".to_string(),
             "GoalFirstRequestBindingCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_continuation_assignment_cases.is_empty() {
+        emitted.insert((
+            "goal_continuation_assignment_cases".to_string(),
+            "GoalContinuationAssignmentCases".to_string(),
         ));
     }
     if !snapshot.goal_input_binding_cases.is_empty() {

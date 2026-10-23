@@ -986,6 +986,10 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             .map(str::to_owned)
             .with_context(|| format!("{content} is not pending: {snapshot}"))
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "synchronous harness bounding a std child process exit in real time"
+    )]
     fn wait_child(mut child: Child, what: &str) -> Result<Value> {
         let deadline = std::time::Instant::now() + Duration::from_secs(600);
         while child.try_wait()?.is_none() {

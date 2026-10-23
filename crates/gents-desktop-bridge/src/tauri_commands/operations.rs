@@ -88,7 +88,7 @@ async fn fetch_background_tool_calls(
 ) -> Result<Vec<ToolCallRow>, BridgeError> {
     let query = background_tool_calls_query(node_did);
 
-    let response = graphql_with_transaction_retry(&core.node(), &query, "background tool calls")
+    let response = graphql_with_transaction_retry(core.node(), &query, "background tool calls")
         .await
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
 
@@ -384,7 +384,7 @@ async fn fetch_recent_calls(
         limit = RECENT_CALLS_PER_BACKEND,
     );
 
-    let resp = graphql_with_transaction_retry(&node, &query, "list InferenceCall by backend")
+    let resp = graphql_with_transaction_retry(node, &query, "list InferenceCall by backend")
         .await
         .with_context(|| format!("list InferenceCall for backend {backend_id}"))?;
 
@@ -482,13 +482,7 @@ pub async fn desktop_background_tool(
 ) -> Result<bool, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
-    gents::background_tools::request_foreground_backgrounding(
-        &gents::config_client::ConfigAccess::local(core.node_arc()),
-        &request.node_did,
-        &request.session_id,
-        &request.request_id,
-        &request.tool_call_id,
-    )
-    .await
-    .map_err(|error| BridgeError::untyped(error.to_string()))
+    crate::commands::background_tool(core.as_ref(), request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }

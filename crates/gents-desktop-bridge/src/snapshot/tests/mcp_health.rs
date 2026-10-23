@@ -1,8 +1,5 @@
-#[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
-
+use super::lean_vocab_test::lean_mcp_health_cases;
 use gents_protocol::row::ToolServiceHealthStateRow;
-use lean_vocab_test::lean_mcp_health_cases;
 
 use crate::commands::mcp_health::view_from_row;
 

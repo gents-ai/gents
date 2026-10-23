@@ -296,7 +296,7 @@ pub async fn fetch_doc_patch(
         .collect();
     let request_count = rows.requests.len();
     let missing_doc_ids = (collection_name == AGENT_REQUEST_NAME).then(|| {
-        let found_doc_ids: std::collections::HashSet<&str> = rows
+        let found_doc_ids: rapidhash::RapidHashSet<&str> = rows
             .requests
             .iter()
             .filter_map(|row| row.doc_id.as_deref())

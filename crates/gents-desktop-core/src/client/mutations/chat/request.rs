@@ -46,6 +46,10 @@ fn normalize_authored_content<'a>(input: &RequestInput, content: &'a str) -> Res
     Ok(content.trim())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "admission inputs from separate owners (store, access, identity, admission record)"
+)]
 pub async fn submit_request(
     node: &Arc<EmbeddedNode>,
     store: &ClientStore,
@@ -421,6 +425,10 @@ async fn retry_request_with_request_id(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "admission inputs from separate owners (store, identity, admission record)"
+)]
 async fn retry_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     store: &ClientStore,

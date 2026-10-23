@@ -2,8 +2,8 @@ use super::*;
 use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::queue::prepare_goal_continuation;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use rapidhash::{HashMapExt, RapidHashMap};
 use serde::Deserialize;
-use std::collections::HashMap;
 
 #[derive(Deserialize)]
 struct Snapshot {
@@ -17,7 +17,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         goal_wake_ancestry_cases: Vec<serde_json::Value>,
     }
     let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_wake_ancestry_cases.len(), 16);
+    assert_eq!(contracts.goal_wake_ancestry_cases.len(), 19);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
@@ -41,7 +41,7 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         let mut fixture = Fixture {
             case: &case,
             identities: &identities,
-            built: HashMap::new(),
+            built: RapidHashMap::new(),
         };
         let mut built = Vec::new();
         for (model, facts) in case.rows.iter().zip(rows) {
@@ -214,7 +214,7 @@ async fn generated_goal_ancestry_cases_keep_one_signed_goal() {
         let mut fixture = Fixture {
             case: &case,
             identities: &identities,
-            built: HashMap::new(),
+            built: RapidHashMap::new(),
         };
         let mut rows = Vec::new();
         for row in &case.rows {
@@ -322,7 +322,7 @@ fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
 struct Fixture<'a> {
     case: &'a Case,
     identities: &'a [KeyIdentity],
-    built: HashMap<u64, AgentRequestRow>,
+    built: RapidHashMap<u64, AgentRequestRow>,
 }
 impl Fixture<'_> {
     fn identity(&self, owner: u64) -> &KeyIdentity {
@@ -469,7 +469,7 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
         let mut fixture = Fixture {
             case: &case,
             identities: &identities,
-            built: HashMap::new(),
+            built: RapidHashMap::new(),
         };
         let mut rows = Vec::new();
         for model in &case.rows {

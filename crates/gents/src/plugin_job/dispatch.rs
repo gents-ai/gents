@@ -656,7 +656,7 @@ pub async fn adopt_step0(
                         let taken = taken_handles(
                             txn,
                             &caller.session_id,
-                            &lifecycle.tool_name(),
+                            lifecycle.tool_name(),
                             row_doc_id,
                         )
                         .await?;
@@ -681,7 +681,7 @@ pub async fn adopt_step0(
                         .context("an adopted row has a pin")?;
                     // (b) the flip, with the job's wall deadline
                     let deadline_at = chrono::DateTime::from_timestamp_millis(i64::try_from(
-                        pin.adopted_at + u64::from(pin.ceiling_at_pin.max_wall_secs) * 1000,
+                        pin.adopted_at + pin.ceiling_at_pin.max_wall_secs * 1000,
                     )?)
                     .context("the job deadline is out of range")?;
                     let flipped = lifecycle

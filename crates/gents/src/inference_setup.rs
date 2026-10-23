@@ -564,13 +564,13 @@ pub fn recommendation_for_model(
 
     let supports_sampling = !is_claude && !is_codex && !is_reasoning;
     let fixture = advertised.model_name == "GLM-5.3-Flash-NVFP4";
-    let temperature = (supports_sampling || fixture).then(|| RecommendedNumberControl {
+    let temperature = (supports_sampling || fixture).then_some(RecommendedNumberControl {
         recommended: if fixture { 1.0 } else { 0.7 },
         min: 0.0,
         max: Some(2.0),
         step: 0.05,
     });
-    let top_p = (supports_sampling || fixture).then(|| RecommendedNumberControl {
+    let top_p = (supports_sampling || fixture).then_some(RecommendedNumberControl {
         recommended: if fixture || is_grok { 0.95 } else { 1.0 },
         min: 0.0,
         max: Some(1.0),

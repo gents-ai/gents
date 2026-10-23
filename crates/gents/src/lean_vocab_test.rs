@@ -73,26 +73,6 @@ pub(crate) async fn native_queue_image(
 }
 
 #[cfg(test)]
-#[path = "lean_vocab_test/tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "lean_vocab_test/request_execution_lease_policy.rs"]
-mod request_execution_lease_policy;
-
-#[cfg(test)]
-#[path = "lean_vocab_test/task_hooks_policy.rs"]
-mod task_hooks_policy;
-
-#[cfg(test)]
-#[path = "lean_vocab_test/task_hook_executor.rs"]
-mod task_hook_executor;
-
-#[cfg(test)]
-#[path = "lean_vocab_test/task_hook_recovery.rs"]
-mod task_hook_recovery;
-
-#[cfg(test)]
 mod task_hook_vocab {
     use super::{LeanCommandResult, LeanTaskHook};
     pub(crate) fn lean_hook_phase(name: &str) -> crate::document_config::TaskHookPhase {
@@ -131,3 +111,23 @@ mod task_hook_vocab {
 }
 #[cfg(test)]
 pub(crate) use task_hook_vocab::lean_hook_phase;
+
+#[cfg(test)]
+#[path = "lean_vocab_test/tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "lean_vocab_test/request_execution_lease_policy.rs"]
+mod request_execution_lease_policy;
+
+#[cfg(test)]
+#[path = "lean_vocab_test/task_hooks_policy.rs"]
+mod task_hooks_policy;
+
+#[cfg(test)]
+#[path = "lean_vocab_test/task_hook_executor.rs"]
+mod task_hook_executor;
+
+#[cfg(test)]
+#[path = "lean_vocab_test/task_hook_recovery.rs"]
+mod task_hook_recovery;

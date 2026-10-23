@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -237,11 +237,11 @@ pub(crate) struct NativeCanonicalExecution {
     messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
     tool_state: Option<String>,
     physical_tool_request: Option<u64>,
-    segment_ids: HashMap<String, u64>,
-    message_ids: HashMap<String, u64>,
-    modeled_message_keys: HashMap<String, String>,
-    canonical_message_keys: HashMap<String, String>,
-    tool_ids: HashMap<String, u64>,
+    segment_ids: RapidHashMap<String, u64>,
+    message_ids: RapidHashMap<String, u64>,
+    modeled_message_keys: RapidHashMap<String, String>,
+    canonical_message_keys: RapidHashMap<String, String>,
+    tool_ids: RapidHashMap<String, u64>,
 }
 
 impl NativeCanonicalExecution {
@@ -1603,11 +1603,11 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 messages: Vec::new(),
                 tool_state: None,
                 physical_tool_request: None,
-                segment_ids: HashMap::new(),
-                message_ids: HashMap::new(),
-                modeled_message_keys: HashMap::new(),
-                canonical_message_keys: HashMap::new(),
-                tool_ids: HashMap::new(),
+                segment_ids: RapidHashMap::new(),
+                message_ids: RapidHashMap::new(),
+                modeled_message_keys: RapidHashMap::new(),
+                canonical_message_keys: RapidHashMap::new(),
+                tool_ids: RapidHashMap::new(),
             })
         })
     }
@@ -1743,7 +1743,6 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             let prepared = prepared.clone();
                             let generation = generation.clone();
                             let node = Arc::clone(&nested_node);
-                            let now = now.clone();
                             Box::pin(async move {
                                 crate::streaming::canonical::append_provider_segment_at(
                                     &node,

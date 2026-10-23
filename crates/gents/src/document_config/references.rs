@@ -581,7 +581,10 @@ impl ConfigReferences {
     }
 }
 
-fn decode<T: DeserializeOwned>(value: &Value) -> Result<T> {
+fn decode<T>(value: &Value) -> Result<T>
+where
+    T: DeserializeOwned,
+{
     Ok(serde_json::from_value(value.clone())?)
 }
 

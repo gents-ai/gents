@@ -736,27 +736,24 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 assert!(!result.has_errors(), "{:?}", result.errors);
             }
 
-            match writer {
-                "coalesce_pending" => {
-                    let survivor_id = uuid::Uuid::new_v4().to_string();
-                    let survivor_created_at =
-                        (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
-                    let survivor_input = coalesce_input("conformance-key");
-                    let survivor_doc_id = create_request_with_signed_fields(
-                        &db.node,
-                        &survivor_id,
-                        &session_id,
-                        "pending",
-                        &survivor_created_at,
-                        None,
-                        Some(&survivor_input),
-                        None,
-                        None,
-                    )
-                    .await;
-                    let _ = survivor_doc_id;
-                }
-                _ => {}
+            if writer == "coalesce_pending" {
+                let survivor_id = uuid::Uuid::new_v4().to_string();
+                let survivor_created_at =
+                    (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+                let survivor_input = coalesce_input("conformance-key");
+                let survivor_doc_id = create_request_with_signed_fields(
+                    &db.node,
+                    &survivor_id,
+                    &session_id,
+                    "pending",
+                    &survivor_created_at,
+                    None,
+                    Some(&survivor_input),
+                    None,
+                    None,
+                )
+                .await;
+                let _ = survivor_doc_id;
             }
 
             force_persisted_lifecycle_state(&db.node, &doc_id, start).await;
