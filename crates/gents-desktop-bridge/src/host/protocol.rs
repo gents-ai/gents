@@ -222,6 +222,10 @@ pub enum ClientCommand {
     SessionLiveDelta(SessionLiveDeltaArgs),
     #[serde(rename = "desktop_session_goal")]
     SessionGoal(SessionGoalArgs),
+    #[serde(rename = "desktop_session_provenance")]
+    SessionProvenance {
+        request: crate::types::DesktopSessionProvenanceRequest,
+    },
     #[serde(rename = "desktop_goal_control")]
     GoalControl {
         request: Box<crate::types::GoalControlRequest>,
@@ -290,6 +294,7 @@ impl ClientCommand {
         "desktop_session_snapshot",
         "desktop_session_live_delta",
         "desktop_session_goal",
+        "desktop_session_provenance",
         "desktop_goal_control",
         "desktop_chat_send",
         "desktop_request_retry",
@@ -325,6 +330,7 @@ impl ClientCommand {
                 | Self::SessionSnapshot(_)
                 | Self::SessionLiveDelta(_)
                 | Self::SessionGoal(_)
+                | Self::SessionProvenance { .. }
         )
     }
 }
