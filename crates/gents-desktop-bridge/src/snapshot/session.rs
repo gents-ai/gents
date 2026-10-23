@@ -86,6 +86,11 @@ pub(super) fn request_origin_view(
                     .find(|row| row.doc_id.as_deref() == Some(doc_id))
             });
             RequestOriginView::SessionMessage {
+                display_body: parent
+                    .and_then(|parent| {
+                        gents::lifecycle::session_message_display_body(request, parent)
+                    })
+                    .map(str::to_owned),
                 sender_node_did: parent
                     .and_then(|row| normalize_optional(row.node_did.as_deref()))
                     .or_else(|| normalize_optional(request.requester_did.as_deref())),

@@ -20,35 +20,52 @@ const assistant = (state: Assistant["reconstruction"]["state"]): Assistant => ({
 
 describe("canonical message availability", () => {
   it("keeps an unresolved assistant header visible without inventing output", () => {
-    const html = renderToStaticMarkup(createElement(AssistantMessageItem, {
-      item: assistant("loading"),
-    }));
+    const html = renderToStaticMarkup(
+      createElement(AssistantMessageItem, {
+        item: assistant("loading"),
+      }),
+    );
     expect(html).toContain('data-testid="message-output-loading"');
     expect(html).toContain('role="status"');
     expect(html).not.toContain("message-copy");
   });
 
-  it.each(["denied", "invalid"] as const)("renders %s distinctly and hides stale content", (state) => {
-    const html = renderToStaticMarkup(createElement(AssistantMessageItem, {
-      item: { ...assistant(state), content: "stale payload", reasoning: "stale reasoning" },
-    }));
-    expect(html).toContain(`data-testid="message-output-${state}"`);
-    expect(html).toContain('role="alert"');
-    expect(html).not.toContain("stale payload");
-    expect(html).not.toContain("stale reasoning");
-    expect(html).not.toContain("message-copy");
-  });
+  it.each(["denied", "invalid"] as const)(
+    "renders %s distinctly and hides stale content",
+    (state) => {
+      const html = renderToStaticMarkup(
+        createElement(AssistantMessageItem, {
+          item: {
+            ...assistant(state),
+            content: "stale payload",
+            reasoning: "stale reasoning",
+          },
+        }),
+      );
+      expect(html).toContain(`data-testid="message-output-${state}"`);
+      expect(html).toContain('role="alert"');
+      expect(html).not.toContain("stale payload");
+      expect(html).not.toContain("stale reasoning");
+      expect(html).not.toContain("message-copy");
+    },
+  );
 
   it("does not mistake a deliberately empty ready message for missing dependencies", () => {
-    expect(renderToStaticMarkup(createElement(AssistantMessageItem, {
-      item: assistant("ready"),
-    }))).toBe("");
+    expect(
+      renderToStaticMarkup(
+        createElement(AssistantMessageItem, {
+          item: assistant("ready"),
+        }),
+      ),
+    ).toBe("");
   });
 
   it("renders ready canonical content without a loading or integrity warning", () => {
-    const html = renderToStaticMarkup(createElement(AssistantMessageItem, {
-      item: { ...assistant("ready"), content: "Canonical answer" },
-    }));
+    const html = renderToStaticMarkup(
+      createElement(AssistantMessageItem, {
+        item: { ...assistant("ready"), content: "Canonical answer" },
+      }),
+    );
     expect(html).toContain("Canonical answer");
     expect(html).not.toContain("message-output-loading");
     expect(html).not.toContain("message-output-invalid");
@@ -104,4 +121,88 @@ it("offers editing only for readable authored user messages", () => {
       }),
     ),
   ).not.toContain('aria-label="Edit message"');
+});
+
+describe("received session-message presentation", () => {
+  const original =
+    "[message agent:engineer session:parent node:sender · at:time · cause:cause]\n\nReview the layout.";
+  const received = {
+    kind: "automatedInput",
+    itemKey: "received",
+    requestId: "received-request",
+    sequence: 1,
+    timestamp: null,
+    content: original,
+    reconstruction: { state: "ready" },
+    origin: {
+      kind: "sessionMessage",
+      senderNodeDid: "sender",
+      senderSessionId: "parent",
+      senderRequestId: "cause",
+      displayBody: "Review the layout.",
+    },
+  } satisfies Extract<RenderedTimelineItem, { kind: "automatedInput" }>;
+  it("keeps the native task body prominent and the original input in an explicit disclosure", () => {
+    const html = renderToStaticMarkup(
+      createElement(UserMessageItem, { item: received }),
+    );
+    expect(html).toContain('class="message-card received-card"');
+    expect(html).not.toContain('class="message-card user-card"');
+    expect(html).toContain('class="received-message-heading"');
+    expect(html).toContain("Agent message");
+    expect(html).toContain("<p>Review the layout.</p>");
+    expect(html).toContain("<summary>Message details</summary>");
+    expect(html.indexOf("[message agent:")).toBeGreaterThan(
+      html.indexOf("<details"),
+    );
+    expect(html).not.toContain("<details open");
+    expect(received.content).toBe(original);
+  });
+  it("does not guess the body from a routing-looking prefix without native display metadata", () => {
+    const html = renderToStaticMarkup(
+      createElement(UserMessageItem, {
+        item: {
+          ...received,
+          origin: { ...received.origin, displayBody: undefined },
+        },
+      }),
+    );
+    expect(html).toContain("Task text unavailable");
+    expect(html.indexOf("[message agent:")).toBeGreaterThan(
+      html.indexOf("<details"),
+    );
+  });
+  it.each(["loading", "denied", "invalid"] as const)(
+    "keeps %s received content unavailable even when stale body metadata exists",
+    (state) => {
+      const html = renderToStaticMarkup(
+        createElement(UserMessageItem, {
+          item: { ...received, reconstruction: { state } },
+        }),
+      );
+      expect(html).toContain(`data-testid="message-output-${state}"`);
+      expect(html).not.toContain("Review the layout.");
+      expect(html).not.toContain("[message agent:");
+      expect(html).not.toContain("<details");
+      expect(html).not.toContain("received-message-copy");
+    },
+  );
+  it("leaves a person's literal routing-looking text in its authored bubble", () => {
+    const html = renderToStaticMarkup(
+      createElement(UserMessageItem, {
+        item: {
+          kind: "userMessage",
+          itemKey: "literal",
+          content: original,
+          sequence: 1,
+          timestamp: null,
+          reconstruction: { state: "ready" },
+        },
+      }),
+    );
+    expect(html).toContain('class="message-card user-card"');
+    expect(html).not.toContain("received-card");
+    expect(html).toContain("[message agent:");
+    expect(html).not.toContain("Message details");
+  });
 });
