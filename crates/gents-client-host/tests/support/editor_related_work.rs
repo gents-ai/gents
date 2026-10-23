@@ -152,7 +152,7 @@ pub async fn verify(
         children.len() == 2,
         "two tool calls must admit exactly two related requests: {children:?}"
     );
-    let mut sessions = rapidhash::RapidHashSet::default();
+    let mut sessions = std::collections::BTreeSet::new();
     for child in &children {
         gents::verify_request_receipt_signature(child)?;
         ensure!(
