@@ -22,6 +22,7 @@ fn shared_template(template: PackTemplate) -> gents::pack::authoring::Template {
         PackTemplate::Graph => Template::Graph,
         PackTemplate::PluginTool => Template::PluginTool,
         PackTemplate::Assets => Template::Assets,
+        PackTemplate::Workflow => Template::Workflow,
     }
 }
 
@@ -78,6 +79,7 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
         "graph" => PackTemplate::Graph,
         "plugin-tool" => PackTemplate::PluginTool,
         "assets" => PackTemplate::Assets,
+        "workflow" => PackTemplate::Workflow,
         other => anyhow::bail!("shared scaffold returned unknown template {other:?}"),
     };
     Ok(ScaffoldReport {
