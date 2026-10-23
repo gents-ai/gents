@@ -70,6 +70,15 @@ pub enum MessagesParseError {
         message: String,
         request_id: String,
     },
+    /// The model declined the request: Anthropic closes the turn with
+    /// `message_delta.stop_reason == "refusal"` and no usable content block.
+    /// Resending the identical body earns the identical refusal, so this is a
+    /// permanent, non-retryable failure (see `provider_message_is_model_refusal`
+    /// in gents-loop). Surfacing it here keeps the owned loop from mistaking a
+    /// content-free refusal for a transient "no visible output" turn and
+    /// resampling it until the transport budget is exhausted.
+    #[error("the model declined to respond (stop_reason: refusal) (request-id {request_id})")]
+    ProviderRefusal { request_id: String },
 }
 
 impl From<MessagesParseError> for CompletionError {
@@ -584,6 +593,20 @@ impl MessagesSseState {
                     .push(ClaudeAuditEvent::BlockStop { index: audit_index });
             }
             "message_delta" => {
+                // A `refusal` stop_reason is the model declining the request.
+                // The turn carries no usable content, so without this the owned
+                // loop would retract an empty turn and resample until its
+                // transport budget ran out, reporting an opaque "no visible
+                // output" failure. Surface it as a distinct, permanent error.
+                if payload
+                    .get("delta")
+                    .and_then(|delta| delta.get("stop_reason"))
+                    .and_then(Value::as_str)
+                    == Some("refusal")
+                {
+                    let request_id = self.request_id.as_deref().unwrap_or("-").to_owned();
+                    return Err(MessagesParseError::ProviderRefusal { request_id });
+                }
                 if let Some(value) = payload.get("usage") {
                     self.usage = Some(usage_from_sse(value));
                 }
