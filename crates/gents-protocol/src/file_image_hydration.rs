@@ -7,6 +7,7 @@ use crate::session_hydration::HydrationRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct FileImageScope {
     pub requester_did: String,
     pub node_did: String,

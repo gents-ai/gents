@@ -134,6 +134,16 @@ pub enum ClientCommand {
         #[serde(rename = "scheduleId")]
         schedule_id: String,
     },
+    #[serde(rename = "desktop_session_file_inventory")]
+    SessionFileInventory {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(default)]
+        #[ts(optional)]
+        action: Option<gents_protocol::file_inventory::FileInventoryReadAction>,
+    },
     #[serde(rename = "desktop_tool_file_changes")]
     ToolFileChanges {
         #[serde(rename = "nodeDid")]
@@ -280,6 +290,7 @@ impl ClientCommand {
         "client_run_schedule",
         "desktop_request_output",
         "desktop_tool_file_changes",
+        "desktop_session_file_inventory",
         "client_speech_services",
         "client_speech_tools",
         "client_speech_recognize",
@@ -324,6 +335,7 @@ impl ClientCommand {
                 | Self::ActionCatalog { .. }
                 | Self::RequestOutput { .. }
                 | Self::ToolFileChanges { .. }
+                | Self::SessionFileInventory { .. }
                 | Self::SpeechServices { .. }
                 | Self::SpeechTools { .. }
                 | Self::SpeechRecognize { .. }

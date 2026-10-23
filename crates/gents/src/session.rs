@@ -86,7 +86,7 @@ pub use request_output::{
 };
 pub use rows::SessionOwnerRow;
 pub use sessions::close_session;
-pub(crate) use sessions::load_agent_session_owner_in_txn;
+pub use sessions::load_agent_session_owner_in_txn;
 pub use sessions::load_agent_session_row_in_txn;
 #[cfg(test)]
 pub(crate) use sessions::{

@@ -189,7 +189,7 @@ fn document(value: &Value) -> String {
 
 fn metadata(value: &Value) -> FileImageMetadata {
     match value["kind"].as_str().unwrap() {
-        "missing" => FileImageMetadata::Missing,
+        "missing" => FileImageMetadata::Missing {},
         "file" => FileImageMetadata::File {
             content_hash: text(&value["content_hash"]),
         },
@@ -1124,7 +1124,7 @@ async fn generated_client_progress_survives_reload_and_rollback() {
         .await
         .unwrap();
         let admission = names.admission(&case["admission"]);
-        let mut state = begin_client_progress(
+        let mut state = resume_client_progress(
             &fixture.node,
             &admission,
             text(&case["attempt"]).as_str(),
@@ -1162,7 +1162,9 @@ async fn generated_client_progress_survives_reload_and_rollback() {
             let mut delivered = None;
             let expected_accept = step["accepted"] == true;
             let committed = step["committed"] == true;
-            if action["kind"] == "restart" {
+            if action["kind"] == "resume" {
+                candidate = Some(Ok(state.clone()));
+            } else if action["kind"] == "restart" {
                 candidate = Some(state.restart(&attempt, &names.source).await);
             } else {
                 let mut demand = state
@@ -1275,6 +1277,11 @@ async fn generated_client_progress_survives_reload_and_rollback() {
                         case["name"]
                     );
                 }
+                None if action["kind"] == "resume" && expected_accept && committed => {
+                    resume_client_progress(&fixture.node, &admission, &attempt, &names.source)
+                        .await
+                        .unwrap();
+                }
                 None if expected_accept && committed => {
                     begin_client_progress(&fixture.node, &admission, &attempt, &names.source)
                         .await
@@ -1298,10 +1305,34 @@ async fn generated_client_progress_survives_reload_and_rollback() {
                 .pending_demand(&names.source)
                 .await
                 .unwrap();
+            let view = decoded.observation(None, &names.source).await.unwrap();
+            let last_page_entries = if let Some(page) = decoded.active().receiver().pages.last() {
+                let cursor = gents_protocol::file_inventory::FileInventoryViewCursor {
+                    attempt_id: decoded.active().attempt_id().into(),
+                    snapshot_digest: page.receipt.page.binding.digest.clone(),
+                    offset: page.receipt.page.offset,
+                };
+                let selected = decoded
+                    .observation(Some(&cursor), &names.source)
+                    .await
+                    .unwrap();
+                let mut wrong = cursor.clone();
+                wrong.snapshot_digest.push_str("-different");
+                assert!(decoded
+                    .observation(Some(&wrong), &names.source)
+                    .await
+                    .is_err());
+                Some(selected.current.unwrap().entries.len())
+            } else {
+                None
+            };
             let summary = serde_json::json!({
                 "attempt": decoded.active().attempt_id(),
                 "retired": serde_json::to_value(&decoded).unwrap()["retired_attempts"],
                 "pages": decoded.active().receiver().pages.len(),
+                "visible_entries": view.current.as_ref().map(|view| view.entries.len()),
+                "next_received_offset": view.current.as_ref().and_then(|view| view.next.as_ref().map(|next| next.offset)),
+                "last_page_entries": last_page_entries,
                 "complete": prefix.as_ref().is_some_and(FileInventoryPrefix::complete),
                 "known": prefix.as_ref().is_some_and(FileInventoryPrefix::known_inventory),
                 "refusal": decoded.active().refusal().map(|receipt| receipt.reason),

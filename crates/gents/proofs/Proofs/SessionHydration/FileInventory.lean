@@ -713,6 +713,15 @@ structure ClientProgress where
 def beginClient (admission : Request) (attempt : String) : ClientProgress :=
   ⟨⟨attempt, ⟨admission, []⟩, none⟩, none, []⟩
 
+/-- An ordinary read resumes the persisted attempt. The candidate identity is
+used only when the local transaction observes no prior progress. -/
+def resumeClient (prior : Option ClientProgress) (admission : Request)
+    (candidate : String) : ClientProgress :=
+  prior.getD (beginClient admission candidate)
+
+theorem resume_keeps_active_attempt (prior : ClientProgress) (admission : Request)
+    (candidate : String) : resumeClient (some prior) admission candidate = prior := rfl
+
 /-- Repeating the same explicit attempt is a retry. Starting a distinct one
 retains the last complete signed view while new enumeration remains pending. -/
 def restartClient (state : ClientProgress) (attempt : String) : Option ClientProgress :=

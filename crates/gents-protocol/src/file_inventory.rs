@@ -16,9 +16,11 @@ const RECEIPT_DOMAIN: &str = "gents-file-inventory-page-v2";
 /// or grants a retained-image reader relation. Capture validation stays with
 /// the native file-image owner before projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub enum FileImageMetadata {
-    Missing,
+    Missing {},
     File { content_hash: String },
     Unavailable { reason: ImageFailure },
 }
@@ -26,7 +28,7 @@ pub enum FileImageMetadata {
 impl From<&FileImage> for FileImageMetadata {
     fn from(image: &FileImage) -> Self {
         match image {
-            FileImage::Missing => Self::Missing,
+            FileImage::Missing => Self::Missing {},
             FileImage::File { content_hash, .. } => Self::File {
                 content_hash: content_hash.clone(),
             },
@@ -38,6 +40,7 @@ impl From<&FileImage> for FileImageMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileChangeMetadata {
     pub root: String,
@@ -58,6 +61,7 @@ impl From<&FileChangeImages> for FileChangeMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileInventoryAdmission {
     pub request: HydrationRequest,
@@ -65,14 +69,19 @@ pub struct FileInventoryAdmission {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileInventoryCoverage {
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub entries: u64,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub pending: u64,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub unknown: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileInventoryBinding {
     pub admission: FileInventoryAdmission,
@@ -81,6 +90,7 @@ pub struct FileInventoryBinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileInventoryEntry {
     pub tool_call_doc_id: String,
@@ -92,9 +102,11 @@ pub struct FileInventoryEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct FileInventoryCursor {
     pub binding: FileInventoryBinding,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub offset: u64,
 }
 
@@ -282,6 +294,7 @@ impl FileInventoryPageReceipt {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum FileInventoryRefusalReason {
     Rejected,
@@ -374,4 +387,66 @@ impl FileInventoryPageGrant {
 pub enum FileInventoryResponse {
     Page(FileInventoryPageGrant),
     Refused(FileInventoryRefusalReceipt),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct FileInventoryViewCursor {
+    pub attempt_id: String,
+    pub snapshot_digest: String,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub offset: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub enum FileInventoryReadAction {
+    Read {
+        #[serde(default)]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        cursor: Option<FileInventoryViewCursor>,
+    },
+    Advance {},
+    Refresh {
+        #[serde(rename = "attemptId")]
+        attempt_id: String,
+    },
+}
+
+impl Default for FileInventoryReadAction {
+    fn default() -> Self {
+        Self::Read { cursor: None }
+    }
+}
+
+/// One retained source page, with completeness derived from the full verified
+/// prefix. `next` addresses only pages already received by this client.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct FileInventorySnapshotView {
+    pub attempt_id: String,
+    pub binding: FileInventoryBinding,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub received_entries: u64,
+    pub complete: bool,
+    pub known_inventory: bool,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub offset: u64,
+    pub entries: Vec<FileInventoryEntry>,
+    pub next: Option<FileInventoryViewCursor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct FileInventoryObservation {
+    pub admission: FileInventoryAdmission,
+    pub attempt_id: String,
+    pub current: Option<FileInventorySnapshotView>,
+    pub previous: Option<FileInventorySnapshotView>,
+    pub refusal: Option<FileInventoryRefusalReason>,
 }

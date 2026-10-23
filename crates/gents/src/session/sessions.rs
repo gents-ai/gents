@@ -322,7 +322,7 @@ pub async fn load_agent_session_row_in_txn(
         .filter(|row| row.session.requester_did.as_deref() == requester_did))
 }
 
-pub(crate) async fn load_agent_session_owner_in_txn(
+pub async fn load_agent_session_owner_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,

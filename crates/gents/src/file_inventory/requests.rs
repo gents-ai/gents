@@ -138,3 +138,29 @@ pub(crate) async fn publish_response_in_txn(
     );
     Ok(())
 }
+
+pub async fn verified_client_response(
+    node: &Arc<EmbeddedNode>,
+    demand: &FileInventoryPageDemand,
+    verifier: &dyn crate::NodeIdentity,
+) -> Result<Option<super::VerifiedInventoryResponse>> {
+    demand.validate_reference()?;
+    ensure!(
+        node.node_identity_did() == Some(demand.admission.request.requester_did.as_str()),
+        "file inventory response requires the requesting client"
+    );
+    ConfigAccess::transact_local_readonly(node, None, "file_inventory.client_response", |txn| {
+        Box::pin(async move {
+            let Some(response) = load_request_in_txn(txn, demand)
+                .await?
+                .and_then(|row| row.response)
+            else {
+                return Ok(None);
+            };
+            super::VerifiedInventoryResponse::verify(response, demand, verifier)
+                .await
+                .map(Some)
+        })
+    })
+    .await
+}

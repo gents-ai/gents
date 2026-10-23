@@ -147,6 +147,42 @@ fn file_change_reads_require_complete_scope_and_are_cancellable() {
 }
 
 #[test]
+fn inventory_reads_keep_scope_actions_and_cancellation() {
+    for action in [
+        json!({"kind":"read"}),
+        json!({"kind":"advance"}),
+        json!({"kind":"refresh", "attemptId":"attempt"}),
+    ] {
+        let args = json!({"nodeDid":"node", "sessionId":"session", "action":action});
+        let command: protocol::ClientCommand = serde_json::from_value(json!({
+            "name":"desktop_session_file_inventory", "args":args,
+        }))
+        .unwrap();
+        assert!(command.is_cancellable());
+        for field in ["nodeDid", "sessionId"] {
+            let mut missing = args.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+                "name":"desktop_session_file_inventory", "args":missing,
+            }))
+            .is_err());
+        }
+    }
+    for action in [
+        json!({"kind":"execute", "query":"mutation {}"}),
+        json!({"kind":"advance", "requesterDid":"another"}),
+    ] {
+        assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name":"desktop_session_file_inventory", "args":{
+                "nodeDid":"node", "sessionId":"session", "action":action,
+            },
+        }))
+        .is_err());
+    }
+    assert!(protocol::ClientCommand::NAMES.contains(&"desktop_session_file_inventory"));
+}
+
+#[test]
 fn request_retry_is_scoped_and_not_cancellable() {
     let command: protocol::ClientCommand = serde_json::from_value(json!({
         "name":"desktop_request_retry", "args":{"requestId":"request", "nodeDid":"node"}

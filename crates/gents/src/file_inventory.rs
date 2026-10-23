@@ -290,14 +290,14 @@ pub use operator::{read_operator_inventory, OperatorInventoryDenied};
 
 mod client;
 pub use client::{
-    begin_client_progress, load_client_progress, receive_client_reply, ClientInventoryAttempt,
-    ClientInventoryProgress,
+    begin_client_progress, load_client_progress, receive_client_reply, resume_client_progress,
+    ClientInventoryAttempt, ClientInventoryProgress,
 };
 
 pub(crate) mod delivery;
 pub(crate) mod requests;
 pub use delivery::VerifiedInventoryResponse;
-pub use requests::admit_demand;
+pub use requests::{admit_demand, verified_client_response};
 
 pub(crate) mod journal;
 pub use journal::{load_recorded_reply, record_reply};

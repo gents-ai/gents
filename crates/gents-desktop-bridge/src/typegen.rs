@@ -186,6 +186,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         gents_desktop_core::client::ConfigEditorDocument,
         RequestOutputView,
         gents_protocol::file_changes::ToolFileChanges,
+        gents_protocol::file_inventory::FileInventoryObservation,
+        gents_protocol::file_inventory::FileInventoryReadAction,
         gents_protocol::client_media::MediaCall,
         gents_protocol::client_media::MediaOperation,
         gents_protocol::client_media::MediaPcmClip,
@@ -557,6 +559,56 @@ fn bigint_normalization_only_rewrites_typescript_identifier_tokens() {
         replace_typescript_identifier(source, "bigint", "number"),
         "type Wire = number | Array<number>; type bigintCounter = string;\n"
     );
+}
+
+#[test]
+fn inventory_wire_tags_survive_type_generation() {
+    use gents_protocol::file_inventory::{FileImageMetadata, FileInventoryReadAction};
+    use ts_rs::TS;
+    let declarations = [
+        (
+            FileInventoryReadAction::decl(),
+            vec![
+                serde_json::to_value(FileInventoryReadAction::default()).unwrap(),
+                serde_json::to_value(FileInventoryReadAction::Advance {}).unwrap(),
+                serde_json::to_value(FileInventoryReadAction::Refresh {
+                    attempt_id: "attempt".into(),
+                })
+                .unwrap(),
+            ],
+        ),
+        (
+            FileImageMetadata::decl(),
+            vec![
+                serde_json::to_value(FileImageMetadata::Missing {}).unwrap(),
+                serde_json::to_value(FileImageMetadata::File {
+                    content_hash: "hash".into(),
+                })
+                .unwrap(),
+                serde_json::to_value(FileImageMetadata::Unavailable {
+                    reason: gents_protocol::file_changes::ImageFailure::TooLarge,
+                })
+                .unwrap(),
+            ],
+        ),
+    ];
+    for metadata in [
+        serde_json::json!({"kind":"missing", "data":"unexpected image bytes"}),
+        serde_json::json!({"kind":"file", "content_hash":"hash", "data":"unexpected image bytes"}),
+    ] {
+        assert!(serde_json::from_value::<FileImageMetadata>(metadata).is_err());
+    }
+    for (declaration, variants) in declarations {
+        for variant in variants {
+            let kind = variant["kind"]
+                .as_str()
+                .expect("native internally tagged wire value");
+            assert!(
+                declaration.contains(&format!("\"kind\": \"{kind}\"")),
+                "generated declaration lost native tag {kind}: {declaration}"
+            );
+        }
+    }
 }
 
 #[test]

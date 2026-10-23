@@ -4,6 +4,16 @@ use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
+pub async fn session_file_inventory(
+    core: &ClientCore,
+    node_did: String,
+    session_id: String,
+    action: gents_protocol::file_inventory::FileInventoryReadAction,
+) -> Result<Option<gents_protocol::file_inventory::FileInventoryObservation>> {
+    core.session_file_inventory(&node_did, &session_id, action)
+        .await
+}
+
 pub async fn tool_file_changes(
     core: &ClientCore,
     node_did: String,

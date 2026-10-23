@@ -324,6 +324,25 @@ pub async fn begin_client_progress(
     attempt_id: &str,
     verifier: &dyn NodeIdentity,
 ) -> Result<ClientInventoryProgress> {
+    start_client_progress(node, admission, attempt_id, true, verifier).await
+}
+
+pub async fn resume_client_progress(
+    node: &Arc<EmbeddedNode>,
+    admission: &FileInventoryAdmission,
+    initial_attempt: &str,
+    verifier: &dyn NodeIdentity,
+) -> Result<ClientInventoryProgress> {
+    start_client_progress(node, admission, initial_attempt, false, verifier).await
+}
+
+async fn start_client_progress(
+    node: &Arc<EmbeddedNode>,
+    admission: &FileInventoryAdmission,
+    attempt_id: &str,
+    refresh: bool,
+    verifier: &dyn NodeIdentity,
+) -> Result<ClientInventoryProgress> {
     let key = progress_key(node, admission)?;
     let owner = node
         .node_identity_did()
@@ -333,6 +352,7 @@ pub async fn begin_client_progress(
         Box::pin(async move {
             let prior = load_in_txn(txn, key, owner, admission, verifier).await?;
             let next = match &prior {
+                Some(row) if !refresh => row.progress.clone(),
                 Some(row) => row.progress.restart(attempt_id, verifier).await?,
                 None => ClientInventoryProgress::new(admission.clone(), attempt_id.to_owned())?,
             };
@@ -410,4 +430,91 @@ async fn save_in_txn(
         "file inventory client progress was not saved"
     );
     Ok(())
+}
+
+impl ClientInventoryProgress {
+    pub async fn observation(
+        &self,
+        cursor: Option<&gents_protocol::file_inventory::FileInventoryViewCursor>,
+        verifier: &dyn NodeIdentity,
+    ) -> Result<gents_protocol::file_inventory::FileInventoryObservation> {
+        let current = self.validated(verifier).await?;
+        if let Some(cursor) = cursor {
+            ensure!(
+                cursor.attempt_id == self.active.attempt_id
+                    || self
+                        .previous
+                        .as_ref()
+                        .is_some_and(|prior| prior.attempt_id == cursor.attempt_id),
+                "file inventory view belongs to a superseded attempt"
+            );
+        }
+        let previous = match &self.previous {
+            Some(previous) => previous.validated(verifier).await?,
+            None => None,
+        };
+        Ok(gents_protocol::file_inventory::FileInventoryObservation {
+            admission: self.admission().clone(),
+            attempt_id: self.active.attempt_id.clone(),
+            current: retained_view(&self.active, current.as_ref(), cursor)?,
+            previous: match &self.previous {
+                Some(attempt) => retained_view(attempt, previous.as_ref(), cursor)?,
+                None => None,
+            },
+            refusal: self.active.refusal.as_ref().map(|receipt| receipt.reason),
+        })
+    }
+}
+
+fn retained_view(
+    attempt: &ClientInventoryAttempt,
+    prefix: Option<&FileInventoryPrefix>,
+    cursor: Option<&gents_protocol::file_inventory::FileInventoryViewCursor>,
+) -> Result<Option<gents_protocol::file_inventory::FileInventorySnapshotView>> {
+    use gents_protocol::file_inventory::{FileInventorySnapshotView, FileInventoryViewCursor};
+    let selected = cursor.filter(|cursor| cursor.attempt_id == attempt.attempt_id);
+    let Some(prefix) = prefix else {
+        ensure!(
+            selected.is_none(),
+            "file inventory page has not been received"
+        );
+        return Ok(None);
+    };
+    if let Some(cursor) = selected {
+        ensure!(
+            cursor.snapshot_digest == prefix.binding().digest,
+            "file inventory view snapshot changed"
+        );
+    }
+    let offset = selected.map_or(0, |cursor| cursor.offset);
+    let index = attempt
+        .receiver
+        .pages
+        .iter()
+        .position(|page| page.receipt.page.offset == offset)
+        .context("file inventory page has not been received")?;
+    let page = &attempt.receiver.pages[index].receipt.page;
+    let next = attempt
+        .receiver
+        .pages
+        .get(index + 1)
+        .map(|following| FileInventoryViewCursor {
+            attempt_id: attempt.attempt_id.clone(),
+            snapshot_digest: prefix.binding().digest.clone(),
+            offset: following.receipt.page.offset,
+        });
+    Ok(Some(FileInventorySnapshotView {
+        attempt_id: attempt.attempt_id.clone(),
+        binding: prefix.binding().clone(),
+        received_entries: prefix
+            .entries()
+            .len()
+            .try_into()
+            .context("file inventory count exceeds the wire range")?,
+        complete: prefix.complete(),
+        known_inventory: prefix.known_inventory(),
+        offset,
+        entries: page.entries.clone(),
+        next,
+    }))
 }

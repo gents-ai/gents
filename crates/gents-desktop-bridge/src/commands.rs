@@ -28,7 +28,7 @@ mod util;
 
 pub use chat::{
     edit_pending_queue, fork_session_before_message, rename_session, request_output, retry_request,
-    send_chat_message, steer_pending_message, tool_file_changes,
+    send_chat_message, session_file_inventory, steer_pending_message, tool_file_changes,
 };
 #[cfg_attr(test, allow(unused_imports))]
 pub use config::{

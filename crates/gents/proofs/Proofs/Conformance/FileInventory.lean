@@ -405,11 +405,13 @@ def preparationCasesJson : String := jsonArray (preparationInputs.map fun value 
       (.metadata largeSnapshot) (some ⟨largeSnapshot, 64⟩)))])
 
 private inductive ClientAction where
+  | resume (candidate : String)
   | restart (attempt : String)
   | page (attempt : String) (envelope : PageEnvelope) (nonceMatches : Bool := true)
   | refused (attempt : String) (reason : RefusalReason) (verified : Bool := true)
 
 private def clientAction (state : FileInventory.ClientProgress) : ClientAction → Option FileInventory.ClientProgress
+  | .resume candidate => some (resumeClient (some state) state.active.receiver.admission candidate)
   | .restart attempt => restartClient state attempt
   | .page attempt envelope nonce =>
       let key := attempt ++ "/" ++ toString envelope.page.offset
@@ -417,6 +419,7 @@ private def clientAction (state : FileInventory.ClientProgress) : ClientAction �
   | .refused attempt reason verified => clientRefusal state attempt reason verified
 
 private def clientActionJson : ClientAction → String
+  | .resume candidate => tagged "resume" [("attempt", jsonString candidate)]
   | .restart attempt => tagged "restart" [("attempt", jsonString attempt)]
   | .page attempt envelope nonce => tagged "page"
       [("attempt", jsonString attempt), ("page", wirePageJson envelope.page),
@@ -428,6 +431,12 @@ private def clientActionJson : ClientAction → String
 private def clientSummaryJson (state : FileInventory.ClientProgress) : String := object
   [("attempt", jsonString state.active.id),
    ("pages", toString state.active.receiver.pages.length),
+   ("visible_entries", optional (fun page => toString page.envelope.page.entries.length)
+      state.active.receiver.pages.head?),
+   ("next_received_offset", optional (fun page => toString page.envelope.page.offset)
+      (state.active.receiver.pages.drop 1).head?),
+   ("last_page_entries", optional (fun page => toString page.envelope.page.entries.length)
+      state.active.receiver.pages.getLast?),
    ("retired", jsonArray (state.retired.map jsonString)),
    ("complete", boolString state.active.receiver.complete),
    ("known", boolString (knownInventory state.active.receiver)),
@@ -448,12 +457,14 @@ private def clientStepsJson (state : FileInventory.ClientProgress) : List (Clien
 def clientProgressCasesJson : String :=
   let scripts : List (String × List (ClientAction × TerminalWriteResult)) :=
     [("reload_retry_refresh_and_late_reply", [
+        (.resume "unused-candidate", .committed),
         (.page "attempt-1" firstEnvelope, .committed),
         (.page "attempt-1" firstEnvelope false, .committed),
         (.page "attempt-1" firstEnvelope, .committed),
         (.page "attempt-1" secondEnvelope, .committed),
         (.page "attempt-1" secondEnvelope, .committed),
         (.restart "attempt-2", .committed),
+        (.resume "attempt-1", .committed),
         (.restart "attempt-2", .committed),
         (.page "attempt-1" firstEnvelope, .committed),
         (.refused "attempt-2" .stale, .committed),

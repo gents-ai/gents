@@ -1,5 +1,6 @@
 mod bootstrap;
 mod enrollment;
+mod file_inventory;
 mod file_review;
 mod goal;
 mod observation_scope;
