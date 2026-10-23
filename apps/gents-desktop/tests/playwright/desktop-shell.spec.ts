@@ -519,6 +519,8 @@ test.describe("kit shell", () => {
       const menu = page.getByRole("button", { name: "Menu" });
       if (await menu.isVisible()) await menu.click();
       await page.getByRole("link", { name: "Sessions" }).first().click();
+      /* the rail's hover flyout stays over the list until the pointer leaves */
+      await page.mouse.move(page.viewportSize()!.width - 30, 100);
     };
     await toSessions();
     await page
