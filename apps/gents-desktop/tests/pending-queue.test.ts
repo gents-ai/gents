@@ -10,6 +10,8 @@ import {
   removeEdit,
   rewriteEdit,
   separatedBySettings,
+  steerEdit,
+  steerRun,
 } from "@source-inc/gents-desktop-client";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
@@ -124,5 +126,29 @@ describe("separatedBySettings", () => {
     const queue = [entry("a"), entry("b", "other"), entry("c", null)];
     expect(separatedBySettings(queue, 0, 1)).toBe(true);
     expect(separatedBySettings(queue, 1, 2)).toBe(false);
+  });
+});
+
+describe("steerRun", () => {
+  it("takes every message queued before it, all steerable and under its settings", () => {
+    const queue = [entry("a"), entry("b"), entry("c")];
+    expect(steerRun(queue, 0)).toEqual([queue[0]]);
+    expect(steerRun(queue, 2)).toEqual(queue);
+  });
+
+  it("refuses a message behind another group or an entry it may not steer", () => {
+    const queue = [entry("a", "other"), entry("b"), entry("c", null), entry("d")];
+    expect(steerRun(queue, 1)).toBeNull();
+    expect(steerRun(queue, 2)).toBeNull();
+    expect(steerRun(queue, 3)).toBeNull();
+    expect(steerRun(queue, 4)).toBeNull();
+  });
+
+  it("names the message, fenced on the whole queue", () => {
+    const queue = [entry("a"), entry("b")];
+    expect(steerEdit(queue, queue[1]!)).toEqual({
+      expectedRequestDocIds: ["doc-a", "doc-b"],
+      requestDocId: "doc-b",
+    });
   });
 });

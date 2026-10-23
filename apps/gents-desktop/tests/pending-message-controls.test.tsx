@@ -158,4 +158,56 @@ describe("pending message controls", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  it("steers a message with what is queued before it, and offers no steer past other settings", async () => {
+    const queue = [entry("a"), entry("b"), entry("c", "other")];
+    const onSteer = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PendingTray
+        queued={queue.map((row, index) => turn(row, `2026-10-10T00:00:0${index}Z`))}
+        queue={queue}
+        onEdit={vi.fn()}
+        onSteer={onSteer}
+      />,
+    );
+    const steer = screen.getAllByRole("button", { name: "Steer" });
+    expect(steer).toHaveLength(2);
+    fireEvent.click(steer[1]!);
+    await waitFor(() =>
+      expect(onSteer).toHaveBeenCalledWith({
+        expectedRequestDocIds: ["doc-a", "doc-b", "doc-c"],
+        requestDocId: "doc-b",
+      }),
+    );
+  });
+
+  it("says on hover how each queued message will be sent", () => {
+    setup([{ ...entry("b"), steerable: false }, entry("a")]);
+    expect(screen.getByText("message a")).toHaveAttribute(
+      "title",
+      "Sends after the running turn finishes",
+    );
+    expect(screen.getByText("message b")).toHaveAttribute(
+      "title",
+      "Steers in at the next step",
+    );
+  });
+
+  it("says a steer behind a queued message waits for it", () => {
+    const steer = (id: string) => ({ ...entry(id), steerable: false });
+    setup([steer("a"), entry("b"), steer("c")]);
+    expect(screen.getByText("message a")).toHaveAttribute(
+      "title",
+      "Steers in at the next step",
+    );
+    expect(screen.getByText("message c")).toHaveAttribute(
+      "title",
+      "Waits for the queued message before it",
+    );
+  });
+
+  it("offers no steer without a running session to steer into", () => {
+    setup([entry("a")]);
+    expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
+  });
 });
