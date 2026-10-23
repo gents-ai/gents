@@ -35,39 +35,16 @@ async fn seed_codex_account(
     row
 }
 
-async fn usage_keys_until(node: &Arc<EmbeddedNode>, node_did: &str, key: &str) -> Vec<String> {
-    let access = crate::config_client::ConfigAccess::local(node.clone());
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let response = access
-            .execute(&format!(
-                r#"{{ ProviderAccountUsage(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ usage_key }} }}"#
-            ))
-            .await
-            .unwrap();
-        let mut keys: Vec<String> = response["data"]["ProviderAccountUsage"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|row| row["usage_key"].as_str().map(str::to_string))
-            .collect();
-        keys.sort();
-        if keys.iter().any(|stored| stored == key) || tokio::time::Instant::now() >= deadline {
-            return keys;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-}
-
 #[tokio::test]
 async fn usage_wiring_codex_client_records_under_its_account_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
     let did = "did:key:z6MkUsageWireCodexA";
+    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
     let node = crate::oauth_credential::test_support::test_node().await;
-    seed_codex_account(&node, did, Some("acct-key-a")).await;
+    let row = seed_codex_account(&node, did, Some("acct-key-a")).await;
     let url = crate::provider_http::tests::one_shot_server("200 OK", CODEX_USAGE_HEADERS, "").await;
-    let client = build_responses_client(node.clone(), did, None, &url, None)
+    let client = build_responses_client(cache.clone(), node.clone(), did, None, &url, None)
         .await
         .expect("client");
     let model = client.completion_model("gpt-5-codex");
@@ -76,10 +53,14 @@ async fn usage_wiring_codex_client_records_under_its_account_key() {
         let _ = futures::StreamExt::next(&mut stream).await;
     }
 
-    assert_eq!(
-        usage_keys_until(&node, did, "acct-key-a").await,
-        vec!["acct-key-a"]
-    );
+    let stored = crate::provider_http::tests::stored_usage_eventually(
+        &cache,
+        &node,
+        &crate::usage_observation::UsageAccount::for_credential(&row),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
 
 #[tokio::test]
@@ -87,10 +68,11 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
     let did = "did:key:z6MkUsageWireCodexKey";
+    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
     let node = crate::oauth_credential::test_support::test_node().await;
     let mut row = seed_codex_account(&node, did, None).await;
     let url = crate::provider_http::tests::server_for(2, "200 OK", CODEX_USAGE_HEADERS, "").await;
-    let client = build_responses_client(node.clone(), did, None, &url, None)
+    let client = build_responses_client(cache.clone(), node.clone(), did, None, &url, None)
         .await
         .expect("client");
     let model = client.completion_model("gpt-5-codex");
@@ -98,12 +80,6 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     if let Ok(mut stream) = model.stream(model.completion_request("hi").build()).await {
         let _ = futures::StreamExt::next(&mut stream).await;
     }
-    let reference = format!("ref:original:{}", row.doc_id.as_deref().unwrap());
-    assert_eq!(
-        usage_keys_until(&node, did, &reference).await,
-        vec![reference.clone()]
-    );
-
     row.provider_account_key = Some("acct-key-a".into());
     crate::oauth_credential::upsert_oauth_credential(&node, &row)
         .await
@@ -111,11 +87,6 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     if let Ok(mut stream) = model.stream(model.completion_request("hi").build()).await {
         let _ = futures::StreamExt::next(&mut stream).await;
     }
-    assert_eq!(
-        usage_keys_until(&node, did, "acct-key-a").await,
-        vec!["acct-key-a".to_string(), reference]
-    );
-
     let backend: crate::document_config::InferenceBackend =
         serde_json::from_value(serde_json::json!({
             "node_did": did,
@@ -127,6 +98,7 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
         }))
         .unwrap();
     let stored = crate::usage_observation::usage_for_backend(
+        &cache,
         &crate::config_client::ConfigAccess::local(node.clone()),
         did,
         &backend,

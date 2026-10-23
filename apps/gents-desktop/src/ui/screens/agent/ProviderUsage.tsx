@@ -57,18 +57,36 @@ export function UsageBar({ view }: { view?: BackendUsageView }) {
   );
 }
 
+export function usageWindowGroup(window: UsageWindowView) {
+  if (window.label.includes("tokens")) return "Token limits";
+  if (window.label === "requests") return "Request limits";
+  if (["daily", "weekly", "monthly", "credits"].includes(window.label))
+    return "Spending limits";
+  return "Quota windows";
+}
+
 export function UsageRows({ view }: { view?: BackendUsageView }) {
   const now = Date.now();
   const read = view?.read?.startsWith("unavailable: ")
     ? `Not read: ${view.read.slice("unavailable: ".length)}`
     : view?.readError;
+  const groups = new Map<string, UsageWindowView[]>();
+  for (const window of view?.windows ?? []) {
+    const label = usageWindowGroup(window);
+    groups.set(label, [...(groups.get(label) ?? []), window]);
+  }
   return (
     <>
       {view?.windows.length ? (
-        view.windows.map((w) => (
-          <FactRow key={w.label} label={w.label}>
-            {windowText(w, now)}
-          </FactRow>
+        Array.from(groups, ([label, windows]) => (
+          <section key={label} aria-label={label}>
+            <p className="text-xs font-medium text-muted-foreground">{label}</p>
+            {windows.map((w) => (
+              <FactRow key={w.label} label={w.label}>
+                {windowText(w, now)}
+              </FactRow>
+            ))}
+          </section>
         ))
       ) : (
         <FactRow label="Reported">{view?.note ?? "unknown"}</FactRow>

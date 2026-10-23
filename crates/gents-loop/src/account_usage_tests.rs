@@ -518,3 +518,42 @@ fn numeric_zero_or_malformed_openrouter_limit_is_not_uncapped() {
         );
     }
 }
+
+#[test]
+fn api_key_limit_headers_preserve_separate_buckets_and_reset_units() {
+    let now = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+    let claude = usage_from_headers(
+        [
+            ("anthropic-ratelimit-requests-limit", "100"),
+            ("anthropic-ratelimit-requests-remaining", "25"),
+            ("anthropic-ratelimit-input-tokens-limit", "1000"),
+            ("anthropic-ratelimit-input-tokens-remaining", "0"),
+            (
+                "anthropic-ratelimit-input-tokens-reset",
+                "2027-01-15T08:00:00Z",
+            ),
+        ],
+        UsageSource::Header,
+        now,
+    );
+    assert_eq!(claude.windows.len(), 2);
+    assert_eq!(claude.windows[0].used_pct, 75.0);
+    assert_eq!(claude.windows[1].label, "input-tokens");
+    assert_eq!(claude.windows[1].used_pct, 100.0);
+    assert_eq!(claude.windows[1].resets_at, Some(now));
+    let router = usage_from_headers(
+        [
+            ("X-RateLimit-Limit", "20"),
+            ("X-RateLimit-Remaining", "0"),
+            ("X-RateLimit-Reset", "1800000060000"),
+        ],
+        UsageSource::Error,
+        now,
+    );
+    assert_eq!(
+        router.windows[0].resets_at,
+        Some(now + chrono::Duration::minutes(1))
+    );
+    assert_eq!(router.windows[0].source, UsageSource::Error);
+    assert_eq!(router.windows[0].used_pct, 100.0);
+}

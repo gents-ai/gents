@@ -41,6 +41,7 @@ fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {
 }
 
 struct Fixture {
+    cache: crate::usage_observation::UsageCache,
     node: Arc<EmbeddedNode>,
     access: ConfigAccess,
     did: String,
@@ -88,6 +89,7 @@ impl Fixture {
                 .unwrap();
         }
         let fixture = Self {
+            cache: Default::default(),
             node,
             access,
             did: did.to_owned(),
@@ -227,7 +229,17 @@ impl Fixture {
     }
 
     async fn plan(&self) -> Result<SwitchPlan> {
-        switch_candidates(&self.access, &self.did, "p", &[], Utc::now()).await
+        let observations = crate::usage_observation::read_node_usage(
+            &self.cache,
+            self.node.clone(),
+            &self.did,
+            crate::usage_observation::UsageTrigger::Cached,
+            None,
+            &Default::default(),
+            Utc::now(),
+        )
+        .await?;
+        switch_candidates(&self.access, &self.did, "p", &[], Utc::now(), &observations).await
     }
 
     async fn switch(&self, profile: &str, to: &str, companions: bool) -> Result<SwitchReceipt> {
@@ -248,6 +260,7 @@ async fn candidates_list_other_enabled_accounts_with_usage() {
     let fixture = Fixture::new(DID).await;
     let observed_at = Utc::now() - chrono::Duration::minutes(5);
     record_usage(
+        &fixture.cache,
         &fixture.node,
         &UsageAccount::for_credential(&fixture.credentials["b"]),
         UsageReport {
@@ -296,7 +309,7 @@ async fn candidates_list_other_enabled_accounts_with_usage() {
     assert_eq!(exhausted[0].used_pct, 100.0);
     assert_eq!(exhausted[0].source, UsageSource::Header);
     assert!(exhausted[0].age_secs >= 300, "{}", exhausted[0].age_secs);
-    assert_eq!(plan.candidates[1].usage.note, Some("unknown"));
+    assert_eq!(plan.candidates[1].usage.note.as_deref(), Some("unknown"));
 }
 
 #[tokio::test]
@@ -390,6 +403,7 @@ async fn next_turns_use_the_target_credentials() {
         behavior.backend_endpoint = fields.backend_endpoint;
         behavior.backend_auth = fields.backend_auth;
         crate::llm::backend_client::build_backend_client(
+            std::sync::Arc::default(),
             fixture.node.clone(),
             &behavior,
             "key",
@@ -457,7 +471,7 @@ async fn companions_are_the_other_profiles_of_the_same_behaviors_on_one_account(
     let plan = fixture.plan().await.unwrap();
     assert_eq!(plan.agents, ["x", "y", "z"]);
     assert_eq!(plan.companions, ["m", "summ"], "o is on another account");
-    let summ = switch_candidates(&fixture.access, did, "summ", &[], Utc::now())
+    let summ = switch_candidates(&fixture.access, did, "summ", &[], Utc::now(), &[])
         .await
         .unwrap();
     assert_eq!(
@@ -574,6 +588,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::ensure_node(&node, did).await.unwrap();
     let fixture = Fixture {
+        cache: Default::default(),
         node: node.clone(),
         access: ConfigAccess::local(node),
         did: did.to_owned(),
@@ -627,7 +642,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
 
     let slots = store::bound_to_profile(home.path(), did, "k").unwrap();
     assert_eq!(slots, ["team/ocr"]);
-    let plan = switch_candidates(&fixture.access, did, "k", &slots, Utc::now())
+    let plan = switch_candidates(&fixture.access, did, "k", &slots, Utc::now(), &[])
         .await
         .unwrap();
     assert_eq!(plan.plugin_slots, ["team/ocr"]);

@@ -655,11 +655,6 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::PACK_INSTALLATION,
         "bafyreid74trtjvnquhtehlqi2on37cdd7q77jvpwxadbudn6t3k2bx7ety"
     ),
-    baseline_entry!(
-        gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE_NAME,
-        gents_protocol::schemas::PROVIDER_ACCOUNT_USAGE,
-        "bafyreihlwf4r2path7v4yufdnxmqrpe5e2f2g4m2vh5ghn2s6oh3xonc2e"
-    ),
 ];
 
 pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[];

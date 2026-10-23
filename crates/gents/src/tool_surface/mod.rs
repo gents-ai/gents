@@ -249,6 +249,7 @@ impl ToolSurface {
 
     pub fn tool_names(&self) -> Vec<String> {
         let mut names = self.host_tools.tool_names();
+        names.push("provider_limits".into());
         if self.include_meta_tools {
             names.extend(crate::meta_tools::presented_tool_names(
                 self.remote_tools.as_ref().unwrap_or(&Default::default()),
@@ -328,6 +329,11 @@ impl ToolSurface {
         let mut tools = self
             .host_tools
             .build_native_tools_with_writethrough(writethrough)?;
+        tools.push(Box::new(crate::usage_observation::ProviderLimitsTool {
+            node: runtime.node.clone(),
+            node_did: runtime.node_did.clone(),
+            cache: runtime.usage_cache.clone(),
+        }));
         if self.include_meta_tools {
             tools.extend(
                 build_meta_tools(
@@ -420,6 +426,7 @@ impl ToolSurface {
             tools.extend(build_goal_tools(self.include_goal_creation));
         }
         tools.extend(crate::self_config::build_self_config_tools(
+            runtime.usage_cache.clone(),
             runtime.node.clone(),
             runtime.node_did.clone(),
             runtime.identity.clone(),
