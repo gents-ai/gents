@@ -577,6 +577,11 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::SessionProvenance { request } => encode(
+                crate::provenance::session_provenance_request(&self.core, request)
+                    .await
+                    .map_err(BridgeError::untyped)?,
+            ),
             ClientCommand::GoalControl { request } => {
                 encode(crate::commands::control_goal(&self.core, request).await?)
             }
