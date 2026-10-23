@@ -96,6 +96,7 @@ const FILE_COLLECTION_POLICIES: &[(&str, bool)] = &[
     (gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, true),
     (gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME, true),
     (gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME, false),
+    (gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME, true),
 ];
 
 fn manages_file_images(registry: &Registry<'_>) -> bool {

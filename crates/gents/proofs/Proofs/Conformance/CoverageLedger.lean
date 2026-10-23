@@ -1385,6 +1385,18 @@ def caseCoverage : List CoverageEntry :=
       "Drives signed terminal replies and source-local immutable storage. Durable demands, delivery and installed client acceptance remain obligations.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_completion_cases"
+      "FileInventoryCompletionCases"
+      "file_inventory::tests::generated_completion_requires_confirmed_authorized_delivery"
+      "Drives delivery settlement and signed metadata document references. Live enrollment/pairing revocation and installed consumption remain obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_inventory_page_grant_cases"
+      "FileInventoryPageGrantCases"
+      "file_inventory::tests::generated_page_grants_bind_only_the_exact_metadata_document"
+      "Drives delivery settlement and signed metadata document references. Live enrollment/pairing revocation and installed consumption remain obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_demand_cases"
       "FileInventoryDemandCases"
       "file_inventory::tests::generated_demands_preserve_attempt_and_cursor_identity"

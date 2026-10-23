@@ -510,6 +510,34 @@ theorem failed_reply_is_not_retained (candidate : Reply) :
 theorem stale_reply_is_not_upgraded (candidate : Reply) :
     recordReply (some (.refused .stale)) candidate .committed = some (.refused .stale) := rfl
 
+/-- A page is prepared locally before explicit delivery. Only a confirmed
+transfer with both current authority observations may settle a page; a lost
+acknowledgment keeps the attempt pending. Refusals carry no file metadata. -/
+def completeReply (candidate : Reply) (before after : Bool) (delivery : DeliveryResult)
+    (write : TerminalWriteResult) : Option Reply :=
+  if write != .committed then none
+  else match candidate with
+  | .refused reason => some (.refused reason)
+  | .page value =>
+      if !before || !after then some (.refused .rejected)
+      else if delivery == .indeterminate then none else some (.page value)
+
+theorem unacknowledged_page_stays_pending (value : WirePage) :
+    completeReply (.page value) true true .indeterminate .committed = none := rfl
+
+theorem revoked_page_cannot_settle_as_page (value : WirePage) (before : Bool)
+    (delivery : DeliveryResult) :
+    completeReply (.page value) before false delivery .committed = some (.refused .rejected) := by
+  cases before <;> rfl
+
+/-- The pointer has a separate signed purpose and contains only a demand and
+one physical page document ID. A successful native verification authorizes a
+local replica read of that exact metadata document, never any image document. -/
+def acceptsPageGrant (expected actual : PageDemand) (version : Bool)
+    (document signer : String) (signatureVerified : Bool) : Bool :=
+  expected.wellFormed && expected == actual && version && !document.isEmpty &&
+    signer == expected.admission.node && signatureVerified
+
 /-- All authorization remains with the existing source/identity owners. This
 receiver checks their signed metadata representation, not another access
 policy. Fork entries retain the attested actual scope, including origins. -/

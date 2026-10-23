@@ -367,6 +367,25 @@ def replyJournalCasesJson : String := jsonArray (replyJournalInputs.map fun valu
    ("committed", boolString (value.write == .committed)),
    ("expected", optional replyJson (recordReply value.prior value.candidate value.write))])
 
+def completionCasesJson : String :=
+  let candidates := [Reply.page firstEnvelope.page, .refused .stale,
+    .refused .rejected, .refused .unavailable]
+  jsonArray (candidates.flatMap fun candidate =>
+    [true, false].flatMap fun before => [true, false].flatMap fun after =>
+    [DeliveryResult.confirmed, .indeterminate].flatMap fun delivery =>
+    [TerminalWriteResult.committed, .failed].map fun write => object
+      [("candidate", replyJson candidate), ("before", boolString before), ("after", boolString after),
+       ("confirmed", boolString (delivery == .confirmed)), ("committed", boolString (write == .committed)),
+       ("expected", optional replyJson (completeReply candidate before after delivery write))])
+
+def pageGrantCasesJson : String := jsonArray (refusalInputs.map fun value => object
+  [("name", jsonString (if value.nonceMatches then value.name else "empty_document")), ("expected_demand", demandJson initialDemand),
+   ("actual_demand", demandJson value.actual), ("version", boolString value.version),
+   ("document", jsonString (if value.nonceMatches then "page-document" else "")),
+   ("signer", jsonString value.signer), ("verified", boolString value.verified),
+   ("expected", boolString (acceptsPageGrant initialDemand value.actual value.version
+      (if value.nonceMatches then "page-document" else "") value.signer value.verified))])
+
 private def receivedJson (value : ReceivedPage) : String := object
   [("request_key", jsonString value.requestKey), ("envelope", envelopeJson value.envelope)]
 

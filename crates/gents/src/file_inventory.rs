@@ -249,7 +249,48 @@ pub async fn sign_refusal(
     Ok(receipt)
 }
 
-mod journal;
+pub(crate) struct InventoryDeliveryObservation {
+    pub before: bool,
+    pub after: bool,
+    pub delivery: crate::agent::p2p_reconcile::session_hydration::HydrationDeliveryResult,
+    pub write: crate::agent::p2p_reconcile::session_hydration::HydrationTerminalWriteResult,
+}
+
+pub(crate) async fn settle_reply(
+    identity: &dyn NodeIdentity,
+    demand: &gents_protocol::file_inventory::FileInventoryPageDemand,
+    candidate: &gents_protocol::file_inventory::FileInventoryReply,
+    observation: InventoryDeliveryObservation,
+) -> Result<Option<gents_protocol::file_inventory::FileInventoryReply>> {
+    use crate::agent::p2p_reconcile::session_hydration::{
+        HydrationDeliveryResult, HydrationTerminalWriteResult,
+    };
+    use gents_protocol::file_inventory::{FileInventoryRefusalReason, FileInventoryReply};
+    if observation.write != HydrationTerminalWriteResult::Committed {
+        return Ok(None);
+    }
+    match candidate {
+        FileInventoryReply::Refused(_) => Ok(Some(candidate.clone())),
+        FileInventoryReply::Page(_) if !observation.before || !observation.after => {
+            Ok(Some(FileInventoryReply::Refused(
+                sign_refusal(identity, demand, FileInventoryRefusalReason::Rejected).await?,
+            )))
+        }
+        FileInventoryReply::Page(_)
+            if observation.delivery == HydrationDeliveryResult::Indeterminate =>
+        {
+            Ok(None)
+        }
+        FileInventoryReply::Page(_) => Ok(Some(candidate.clone())),
+    }
+}
+
+pub(crate) mod delivery;
+pub(crate) mod requests;
+pub use delivery::VerifiedInventoryResponse;
+pub use requests::admit_demand;
+
+pub(crate) mod journal;
 pub use journal::{load_recorded_reply, record_reply};
 
 #[cfg(test)]

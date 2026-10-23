@@ -94,7 +94,7 @@ async fn load_in_txn(
     Ok(Some(reply))
 }
 
-pub(super) async fn record_in_txn(
+pub(crate) async fn record_in_txn(
     txn: &ConfigApplyTxn<'_>,
     demand: &FileInventoryPageDemand,
     candidate: &FileInventoryReply,

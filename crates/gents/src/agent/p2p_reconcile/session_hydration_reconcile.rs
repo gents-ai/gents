@@ -33,6 +33,7 @@ use crate::session::canonical_rows::{
 
 mod file_images;
 mod inventory;
+mod inventory_requests;
 pub use inventory::{FileInventoryPageError, FileInventorySnapshot};
 mod selection;
 use selection::load_hydration_selection;
@@ -41,6 +42,7 @@ use selection::load_hydration_selection;
 enum DeliveryTarget<'a> {
     Transcript(&'a BTreeSet<HydrationDocument>),
     FileImage(&'a str),
+    FileInventory(&'a str),
 }
 
 #[cfg(test)]
@@ -48,7 +50,9 @@ impl DeliveryTarget<'_> {
     fn transcript(self) -> BTreeSet<HydrationDocument> {
         match self {
             Self::Transcript(documents) => documents.clone(),
-            Self::FileImage(_) => panic!("transcript delivery received file images"),
+            Self::FileImage(_) | Self::FileInventory(_) => {
+                panic!("transcript delivery received file images")
+            }
         }
     }
 }
@@ -353,7 +357,11 @@ pub async fn run_session_hydration_reconciler(
         Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
     let mut subscription = crate::subscribe_collections(
         &node,
-        ["SessionHydrationRequest", "FileImageHydrationRequest"],
+        [
+            "SessionHydrationRequest",
+            "FileImageHydrationRequest",
+            "FileInventoryRequest",
+        ],
     )?;
     let sweep_interval = super::intervals::sweep_interval();
     let mut interval =
@@ -410,6 +418,9 @@ async fn sweep_hydration_requests_until_cancelled(
 
 async fn sweep_hydration_requests(store: &GraphqlHydrationStore, delivery: &dyn HydrationDelivery) {
     sweep_transcript_requests(store, delivery).await;
+    if let Err(error) = inventory_requests::reconcile_inventory_requests(store, delivery).await {
+        tracing::warn!(%error, "file inventory sweep failed");
+    }
     if let Err(error) = file_images::reconcile_file_images(store, delivery).await {
         tracing::warn!(%error, "file-image hydration sweep failed");
     }
@@ -456,7 +467,7 @@ pub async fn sign_file_inventory_page(
         enrollment,
         identity,
     };
-    let loaded = store.load_admission(&admission.request).await?;
+    let loaded = store.inventory_admission(demand).await?;
     anyhow::ensure!(
         matches!(
             decide_hydration(&admission.request, &loaded.catalog),
@@ -474,7 +485,7 @@ pub async fn sign_file_inventory_page(
         &request_key,
         page,
         || async {
-            let current = store.load_admission(&admission.request).await?;
+            let current = store.inventory_admission(demand).await?;
             Ok(current.authorization.as_ref() == Some(&fence)
                 && matches!(
                     decide_hydration(&admission.request, &current.catalog),
@@ -504,19 +515,30 @@ impl HydrationDelivery for EmbeddedHydrationDelivery {
                     doc_id: document.doc_id.clone(),
                 })
                 .collect(),
+            DeliveryTarget::FileInventory(document) => {
+                vec![defra_p2p_adapter::P2pDocumentRequest {
+                    collection: gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME.to_owned(),
+                    doc_id: document.to_owned(),
+                }]
+            }
             DeliveryTarget::FileImage(document) => vec![defra_p2p_adapter::P2pDocumentRequest {
                 collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.to_owned(),
                 doc_id: document.to_owned(),
             }],
         };
         super::embedded_impl::push_documents_to_peer(&self.node, peer_id, documents).await?;
-        if let DeliveryTarget::FileImage(document) = target {
+        let explicit = match target {
+            DeliveryTarget::FileImage(document) => {
+                Some((gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, document))
+            }
+            DeliveryTarget::FileInventory(document) => {
+                Some((gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME, document))
+            }
+            DeliveryTarget::Transcript(_) => None,
+        };
+        if let Some((collection, document)) = explicit {
             let acknowledged = super::embedded_impl::EmbeddedRemoteP2pAdmin::new(self.node.clone())
-                .document_heads_acknowledged(
-                    peer_id,
-                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-                    &[document.to_owned()],
-                )
+                .document_heads_acknowledged(peer_id, collection, &[document.to_owned()])
                 .await?;
             anyhow::ensure!(
                 acknowledged == [true],

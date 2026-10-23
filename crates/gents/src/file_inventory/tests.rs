@@ -731,3 +731,262 @@ async fn generated_reply_journals_preserve_immutable_outcomes() {
     drop(names);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }
+
+#[tokio::test]
+async fn generated_completion_requires_confirmed_authorized_delivery() {
+    use crate::agent::p2p_reconcile::session_hydration::{
+        HydrationDeliveryResult, HydrationTerminalWriteResult,
+    };
+    let (directory, names) = tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let names = Names {
+            source: KeyIdentity::load_or_create(directory.path().join("source.key"), None).unwrap(),
+            other: KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap(),
+        };
+        (directory, names)
+    })
+    .await
+    .unwrap();
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let demand = names.demand(&contracts["file_inventory_demand_cases"][0]["demand"]);
+    let cases = contracts["file_inventory_completion_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let candidate = names.reply(&case["candidate"], &demand).await;
+        let actual = settle_reply(
+            &names.source,
+            &demand,
+            &candidate,
+            InventoryDeliveryObservation {
+                before: case["before"].as_bool().unwrap(),
+                after: case["after"].as_bool().unwrap(),
+                delivery: if case["confirmed"] == true {
+                    HydrationDeliveryResult::Confirmed
+                } else {
+                    HydrationDeliveryResult::Indeterminate
+                },
+                write: if case["committed"] == true {
+                    HydrationTerminalWriteResult::Committed
+                } else {
+                    HydrationTerminalWriteResult::Failed
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(actual.is_some(), !case["expected"].is_null(), "{case}");
+        if let Some(actual) = actual {
+            verify_reply(&demand, &actual, &names.source).await.unwrap();
+            assert_eq!(
+                actual,
+                names.reply(&case["expected"], &demand).await,
+                "{case}"
+            );
+        }
+    }
+    drop(names);
+    tokio::fs::remove_dir_all(directory.path()).await.unwrap();
+}
+
+#[tokio::test]
+async fn generated_page_grants_bind_only_the_exact_metadata_document() {
+    use gents_protocol::file_inventory::{
+        FileInventoryPageGrant, FileInventoryResponse, FILE_INVENTORY_PAGE_GRANT_VERSION,
+    };
+    let (directory, names) = tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let names = Names {
+            source: KeyIdentity::load_or_create(directory.path().join("source.key"), None).unwrap(),
+            other: KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap(),
+        };
+        (directory, names)
+    })
+    .await
+    .unwrap();
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let cases = contracts["file_inventory_page_grant_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let expected = names.demand(&case["expected_demand"]);
+        let mut grant = FileInventoryPageGrant {
+            version: if case["version"] == true {
+                FILE_INVENTORY_PAGE_GRANT_VERSION
+            } else {
+                0
+            },
+            demand: names.demand(&case["actual_demand"]),
+            document_id: text(&case["document"]),
+            signer_did: names.actor(&case["signer"]),
+            signature: vec![],
+        };
+        let signer = if case["signer"] == "node-1" {
+            &names.source
+        } else {
+            &names.other
+        };
+        grant.signature = signer
+            .sign(&grant.signing_payload().unwrap())
+            .await
+            .unwrap();
+        if case["verified"] == false {
+            grant.signature[0] ^= 1;
+        }
+        let serialized = serde_json::to_vec(&FileInventoryResponse::Page(grant.clone())).unwrap();
+        let restored = serde_json::from_slice(&serialized).unwrap();
+        let result = VerifiedInventoryResponse::verify(restored, &expected, &names.source).await;
+        assert_eq!(
+            result.is_ok(),
+            case["expected"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+        if result.is_ok() {
+            grant.document_id.push_str("-other");
+            assert!(VerifiedInventoryResponse::verify(
+                FileInventoryResponse::Page(grant),
+                &expected,
+                &names.source
+            )
+            .await
+            .is_err());
+        }
+    }
+    drop(names);
+    tokio::fs::remove_dir_all(directory.path()).await.unwrap();
+}
+
+#[tokio::test]
+async fn native_inventory_admission_and_response_commit_preserve_attempts_and_rollback() {
+    use crate::config_client::ConfigAccess;
+    use crate::tool_call_lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
+    use gents_protocol::file_inventory::{FileInventoryReply, FileInventoryResponse};
+    let contracts: Value =
+        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
+            .await
+            .unwrap()
+            .unwrap();
+    let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
+        name: "inventory-transport-storage".into(),
+        real_identity: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let path = fixture.path.clone();
+    let names = tokio::task::spawn_blocking(move || Names {
+        source: KeyIdentity::load_or_create(path.join("test-agent.key"), None).unwrap(),
+        other: KeyIdentity::load_or_create(path.join("other.key"), None).unwrap(),
+    })
+    .await
+    .unwrap();
+    let mut demand = names.demand(&contracts["file_inventory_demand_cases"][0]["demand"]);
+    demand.admission.request.requester_did = names.source.did().into();
+    let document = admit_demand(&fixture.node, &demand).await.unwrap();
+    assert_eq!(
+        admit_demand(&fixture.node, &demand).await.unwrap(),
+        document
+    );
+    let mut fresh = demand.clone();
+    fresh.attempt_id.push_str("-new");
+    assert_ne!(admit_demand(&fixture.node, &fresh).await.unwrap(), document);
+    let mut page = names.page(&contracts["file_inventory_demand_cases"][0]["initial_page"]);
+    page.binding.admission = demand.admission.clone();
+    page.next.as_mut().unwrap().binding.admission = demand.admission.clone();
+    let receipt = sign_current_page(
+        &names.source,
+        &demand.derive_request_key().unwrap(),
+        page,
+        || std::future::ready(Ok(true)),
+    )
+    .await
+    .unwrap();
+    let prepared = delivery::prepare_page(&fixture.node, &demand, &receipt, &names.source)
+        .await
+        .unwrap();
+    let mut changed = receipt.clone();
+    changed.page.binding.digest.push_str("-new");
+    let retained = delivery::prepare_page(&fixture.node, &demand, &changed, &names.source)
+        .await
+        .unwrap();
+    assert_eq!(retained.document_id, prepared.document_id);
+    assert_eq!(retained.receipt, receipt);
+    for commit in [false, true] {
+        let result = ConfigAccess::transact_local_write(
+            &fixture.node,
+            None,
+            "test.inventory.atomic_response",
+            |txn| {
+                let (demand, prepared, verifier) = (&demand, &prepared, &names.source);
+                Box::pin(async move {
+                    let row = requests::load_request_in_txn(txn, demand).await?.unwrap();
+                    let selected = journal::record_in_txn(
+                        txn,
+                        demand,
+                        &FileInventoryReply::Page(prepared.receipt.clone()),
+                        verifier,
+                    )
+                    .await?;
+                    assert_eq!(selected, FileInventoryReply::Page(prepared.receipt.clone()));
+                    let response = FileInventoryResponse::Page(
+                        delivery::sign_page_grant(verifier, demand, prepared).await?,
+                    );
+                    requests::publish_response_in_txn(txn, &row, &response).await?;
+                    anyhow::ensure!(commit, "rollback after journal and response writes");
+                    Ok(response)
+                })
+            },
+        )
+        .await;
+        assert_eq!(result.is_ok(), commit);
+        let recorded = load_recorded_reply(&fixture.node, &demand, &names.source)
+            .await
+            .unwrap();
+        let row = ConfigAccess::transact_local_readonly(
+            &fixture.node,
+            None,
+            "test.inventory.reload_request",
+            |txn| Box::pin(requests::load_request_in_txn(txn, &demand)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(recorded.is_some(), commit);
+        assert_eq!(row.status, if commit { "served" } else { "pending" });
+        if let Ok(response) = result {
+            assert_eq!(
+                serde_json::to_value(row.response.unwrap()).unwrap(),
+                serde_json::to_value(&response).unwrap()
+            );
+            let verified = VerifiedInventoryResponse::verify(response, &demand, &names.source)
+                .await
+                .unwrap();
+            let delivered = verified
+                .read_page(fixture.node.clone(), &names.source)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(delivered, receipt);
+            assert!(load_recorded_reply(&fixture.node, &fresh, &names.source)
+                .await
+                .unwrap()
+                .is_none());
+        }
+    }
+    fixture.node.shutdown().await;
+    drop(names);
+    tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+}

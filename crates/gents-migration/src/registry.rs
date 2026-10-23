@@ -586,6 +586,16 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreihbcklqo55343lt7spcif4xftwqbsfe6flznvpge3sfcre3sakdgu"
     ),
     baseline_entry!(
+        gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_REQUEST,
+        "bafyreie5fnoj47pu4shae63v7gx4mnxcovmrs5kttnries67sb2ftgk6rm"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_PAGE,
+        "bafyreiaf5sdqtuiursuwu5djfotcmqcx6zlhkrsmrj3kyea6pntrzabbsu"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME,
         gents_protocol::schemas::FILE_INVENTORY_REPLY,
         "bafyreicj5rsouhjk2j36qigmwamnlyh6xqzwttvdhvvcxkkdsmzgwnnsei"

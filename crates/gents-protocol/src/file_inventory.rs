@@ -332,3 +332,45 @@ pub enum FileInventoryReply {
     Page(FileInventoryPageReceipt),
     Refused(FileInventoryRefusalReceipt),
 }
+
+pub const FILE_INVENTORY_PAGE_GRANT_VERSION: u8 = 1;
+
+/// A control-plane receipt binds one metadata document. The metadata itself
+/// travels only through explicit document delivery, separate from this pointer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileInventoryPageGrant {
+    pub version: u8,
+    pub demand: FileInventoryPageDemand,
+    pub document_id: String,
+    pub signer_did: String,
+    pub signature: Vec<u8>,
+}
+
+impl FileInventoryPageGrant {
+    pub fn signing_payload(&self) -> Result<Vec<u8>> {
+        let version = self.version.to_string();
+        let demand = serde_json::to_string(&self.demand)?;
+        Ok(canonical_domain_payload(
+            "gents-file-inventory-page-grant-v1",
+            [
+                version.as_str(),
+                &demand,
+                &self.document_id,
+                &self.signer_did,
+            ],
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "receipt",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
+pub enum FileInventoryResponse {
+    Page(FileInventoryPageGrant),
+    Refused(FileInventoryRefusalReceipt),
+}

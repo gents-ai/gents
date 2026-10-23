@@ -31,6 +31,7 @@ async fn inventory_metadata_collection_fallback_stays_owned_by_its_node() {
     for name in [
         TOOL_FILE_INVENTORY_NAME,
         gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
     ] {
         let collection = node.get_collection(name).unwrap().unwrap();
         let owner = node
@@ -55,6 +56,10 @@ async fn inventory_metadata_refuses_an_unprotected_collection() {
         (
             gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME,
             gents_protocol::schemas::FILE_INVENTORY_REPLY,
+        ),
+        (
+            gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
+            gents_protocol::schemas::FILE_INVENTORY_PAGE,
         ),
     ] {
         let node = common::fresh_node().await;
@@ -97,5 +102,32 @@ async fn inventory_reply_has_its_pinned_protected_local_schema() {
     assert!(gents_protocol::schemas::is_local_only_collection(
         FILE_INVENTORY_REPLY_NAME
     ));
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn inventory_transport_has_its_pinned_fresh_schemas() {
+    use gents_protocol::schemas::*;
+    let node = common::fresh_node().await;
+    let mut observed = Vec::new();
+    for (name, sdl) in [
+        (FILE_INVENTORY_REQUEST_NAME, FILE_INVENTORY_REQUEST),
+        (FILE_INVENTORY_PAGE_NAME, FILE_INVENTORY_PAGE),
+    ] {
+        node.add_schema(sdl).await.unwrap();
+        let collection = node.get_collection(name).unwrap().unwrap();
+        let entry = gents_migration::DEFAULT_BASELINE
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap();
+        observed.push((name, collection.version_id, entry.expected_version.unwrap()));
+        assert!(requires_explicit_delivery(name));
+    }
+    assert!(
+        observed
+            .iter()
+            .all(|(_, actual, expected)| actual == expected),
+        "{observed:?}"
+    );
     node.shutdown().await;
 }
