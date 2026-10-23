@@ -1242,7 +1242,7 @@ fn refusal_stop_reason_surfaces_as_a_distinct_error() {
         "data: {\"type\":\"message_stop\"}\n\n",
     );
 
-    let parsed = parse_messages_sse_typed(sse, &HashSet::new());
+    let parsed = parse_messages_sse_typed(sse, &RapidHashSet::new());
     match parsed {
         Err(MessagesParseError::ProviderRefusal { request_id }) => {
             assert_eq!(request_id, "-", "no request-id header in this fixture");
