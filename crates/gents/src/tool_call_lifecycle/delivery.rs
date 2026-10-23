@@ -1538,23 +1538,15 @@ async fn terminalize_transaction(
                 ),
             };
             let result_output = &result_payload.output;
-            let replay_rows = txn
-                .execute(&format!(
-                    r#"{{ AgentOutputSegment(filter: {{
-            {}, request_doc_id: {{ _eq: "{request}" }}
-        }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-                    crate::session::session_scope_filter(node_did, session_id, requester_did)
-                ))
-                .await?;
-            let replay_rows = replay_rows["data"]["AgentOutputSegment"]
-                .as_array()
-                .context("tool delivery replay source query omitted segments")?
-                .iter()
-                .map(decode_output_segment_row)
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .filter(|row| row.segment.source == source)
-                .collect::<Vec<_>>();
+            let replay_rows = crate::session::load_source_rows_in_txn(
+                txn,
+                request_doc_id,
+                &source,
+                node_did,
+                session_id,
+                requester_did,
+            )
+            .await?;
             anyhow::ensure!(
                 replay_rows
                     .iter()
@@ -1607,23 +1599,15 @@ async fn terminalize_transaction(
         }
     }
 
-    let source_rows = txn
-        .execute(&format!(
-            r#"{{ AgentOutputSegment(filter: {{
-        {}, request_doc_id: {{ _eq: "{request}" }}
-    }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-            crate::session::session_scope_filter(node_did, session_id, requester_did)
-        ))
-        .await?;
-    let source_rows = source_rows["data"]["AgentOutputSegment"]
-        .as_array()
-        .context("tool terminal source query omitted segments")?
-        .iter()
-        .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|row| row.segment.source == source)
-        .collect::<Vec<_>>();
+    let source_rows = crate::session::load_source_rows_in_txn(
+        txn,
+        request_doc_id,
+        &source,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await?;
     if source_rows.iter().any(|row| row.segment.close.is_some()) {
         anyhow::ensure!(
             adopt_competing_terminal || plugin_effect.is_some(),
@@ -2114,11 +2098,6 @@ async fn append_tool_output_with_time(
                         )
                     })
                     .unwrap_or_else(|| "requester_did: { _eq: null }".to_owned());
-                let scope = crate::session::session_scope_filter(
-                    &binding.node_did,
-                    &binding.session_id,
-                    binding.requester_did.as_deref(),
-                );
                 let row = txn
                     .execute(&format!(
                         r#"{{ AgentToolCall(filter: {{
@@ -2142,29 +2121,21 @@ async fn append_tool_output_with_time(
                 if state != ToolCallState::Running {
                     return Err(ToolOutputAppendRejection::NotRunning.into());
                 }
-                let response = txn
-                    .execute(&format!(
-                        r#"{{ AgentOutputSegment(filter: {{
-                {scope}, request_doc_id: {{ _eq: "{request}" }}
-            }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
-                    ))
-                    .await?;
-                let rows = response["data"]["AgentOutputSegment"]
-                    .as_array()
-                    .context("tool output segment query omitted rows")?
-                    .iter()
-                    .map(decode_output_segment_row)
-                    .collect::<Result<Vec<_>>>()?;
                 let source = OutputSource::ToolCall {
                     tool_call_doc_id: binding.tool_call_doc_id.clone(),
                 };
                 let writer = OutputWriter::ToolExecution {
                     tool_call_doc_id: binding.tool_call_doc_id.clone(),
                 };
-                let rows = rows
-                    .into_iter()
-                    .filter(|row| row.segment.source == source)
-                    .collect::<Vec<_>>();
+                let rows = crate::session::load_source_rows_in_txn(
+                    txn,
+                    &binding.request_doc_id,
+                    &source,
+                    &binding.node_did,
+                    &binding.session_id,
+                    binding.requester_did.as_deref(),
+                )
+                .await?;
                 let same_attempt = rows
                     .iter()
                     .filter(|row| row.segment.created_at == created_at)
