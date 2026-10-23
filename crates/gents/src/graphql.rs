@@ -116,6 +116,21 @@ where
     Vec::<T>::deserialize(value).with_context(|| format!("decode {field} rows"))
 }
 
+/// DefraDB can return successful `data: {}` for a node-read denial. An absent
+/// root cannot certify an empty authorized inventory; only an explicit array
+/// supplies that observation.
+pub fn required_rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let value = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(field))
+        .with_context(|| format!("query omitted required {field} rows"))?;
+    Vec::<T>::deserialize(value).with_context(|| format!("decode required {field} rows"))
+}
+
 pub fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
 where
     T: DeserializeOwned,
