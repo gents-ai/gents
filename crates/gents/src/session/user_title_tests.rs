@@ -196,7 +196,7 @@ fn model_time(value: &serde_json::Value) -> serde_json::Value {
 fn model_session(value: &serde_json::Value) -> gents_protocol::session::AgentSession {
     let mut provenance = value["provenance"].clone();
     if let Some(object) = provenance.as_object_mut() {
-        for name in ["task_id", "graph_run_id", "parent_request_doc_id"] {
+        for name in ["task_id", "parent_request_doc_id"] {
             object.insert(name.into(), model_id(&value["provenance"][name]));
         }
         if let Some(fork) = object

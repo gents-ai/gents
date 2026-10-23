@@ -54,7 +54,7 @@ pub(crate) use request_assignment::{
 pub(crate) use request_head::assignment_allows;
 pub(crate) use request_head::{
     assignment_request_id_in_txn, authenticated_goal_request_members, goal_session_is_idle,
-    latest_authenticated_session_request, latest_goal_request, verify_goal_continuation_edge,
+    latest_goal_request, verify_goal_continuation_edge,
 };
 pub use reset_resume::resume_at_reset;
 pub(crate) use tool_context::load_goal_tool_context;
@@ -353,13 +353,6 @@ pub struct GoalState {
 }
 
 impl GoalState {
-    pub(crate) fn has_continuation_obligation(self) -> bool {
-        self.status == GoalStatus::Active
-            || (self.status == GoalStatus::BudgetLimited
-                && self.wrapup_requested
-                && !self.wrapup_completed)
-    }
-
     pub fn step(self, action: GoalAction) -> Option<Self> {
         match action {
             GoalAction::Pause

@@ -49,8 +49,6 @@ pub(crate) use principal_assembly::AgentBuildError;
 pub(crate) use builder::PendingAgent;
 pub use builder::{AgentBuilder, GentsBuilder};
 #[cfg(test)]
-pub(crate) use document_view::load_document_runtime_view;
-
 #[cfg(test)]
 pub(crate) async fn process_owned_request_with_model_for_test<M>(
     node: Arc<EmbeddedNode>,

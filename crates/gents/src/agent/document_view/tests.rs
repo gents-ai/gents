@@ -657,34 +657,6 @@ async fn create_event_trigger(
 }
 
 #[tokio::test]
-async fn apply_control_update_full_reloads_reserved_graph_triggers() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-graph-trigger"));
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
-        &crate::default_agent_id_for_node(identity.did()),
-    )
-    .await;
-    let mut view = load_document_runtime_view(&node, identity.did())
-        .await
-        .expect("initial document view");
-
-    let outcome = apply_control_update(
-        identity.did(),
-        "GraphRevision",
-        "opaque-graph-revision-doc-id",
-        &mut view,
-    )
-    .await
-    .unwrap();
-    assert_eq!(outcome, ControlUpdateOutcome::FullReload);
-
-    node.shutdown().await;
-}
-
-#[tokio::test]
 async fn usage_collection_write_never_reloads_the_runtime_view() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

@@ -831,7 +831,7 @@ async fn guard_agent_profile_choice(
     ops::guard_compaction_choice_in_txn(txn, SelfConfigTarget::Agent, &anchor, &own, &cloned).await
 }
 
-/// Install document, graph and plugins-only packs from the home's pack store or the registry through the
+/// Install document and plugins-only packs from the home's pack store or the registry through the
 /// canonical resolver, package publication, and activation owners. The running
 /// node is always the install owner; callers cannot select another DID,
 /// filesystem distribution, registry endpoint, or control-plane endpoint.
@@ -1194,17 +1194,14 @@ impl PackInstaller {
         )
         .await?;
         // Inference slot bindings pick provider accounts exactly like the
-        // graph lifecycle: every selected profile must be account-free or on
+        // install lifecycle: every selected profile must be account-free or on
         // its provider's default account. Fence before the preview return or
         // any installation side effect so a documents pack cannot publish
-        // records or plugins through a binding the graph path would refuse.
+        // records or plugins through a binding an install would refuse.
         self.fence_bindings(&prepared.inference.bindings).await?;
         for dependency in &prepared.dependencies {
-            let bindings = match dependency {
-                crate::pack::PreparedDependency::Graph(_, bindings) => &bindings.inference_slots,
-                crate::pack::PreparedDependency::Documents { inference, .. } => &inference.bindings,
-            };
-            self.fence_bindings(bindings).await?;
+            let crate::pack::PreparedDependency::Documents { inference, .. } = dependency;
+            self.fence_bindings(&inference.bindings).await?;
         }
         let mut schemas = Vec::new();
         for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {
@@ -1263,7 +1260,7 @@ impl PackInstaller {
             "registry_artifact_digest": distribution.registry_artifact_digest(), "install": receipt,
             "inference": prepared.inference, "dependency_inference": prepared.dependency_inference,
             "dependencies": dependency_receipts, "effective": effective,
-            "effect": "The document pack is installed. Installation did not start a graph run.",
+            "effect": "The document pack is installed.",
         }))?)
     }
 
@@ -1368,7 +1365,7 @@ impl PackInstaller {
         ordered! {
             "items": items,
             "next_call": if has_more { page.checked_add(1).map(|next| json!({"argv":["pack","search"],"options":{"query":query,"page":next}})) } else { None },
-            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document, graph and plugins-only packs; search includes other kinds too.",
+            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document and plugins-only packs; search includes other kinds too.",
             "registry": registry,
             "page": page,
             "has_more": has_more,
@@ -1494,7 +1491,7 @@ impl PackInstaller {
     /// Installs the plugins `distribution` ships into the home's plugin store,
     /// sealed: a plugin that asks for authority is refused, because granting
     /// it is the operator's call. Local plugin records are the publication
-    /// boundary; later graph failures do not roll them back.
+    /// boundary; later failures do not roll them back.
     /// Pack slots have no current backend: each bound profile must be
     /// account-free or on its provider's default account.
     async fn fence_bindings(

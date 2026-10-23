@@ -24,8 +24,7 @@ pub use documents::reject_secret_bearing_callback_fields;
 pub(crate) use documents::strip_secret_fields;
 #[cfg(test)]
 pub(crate) use documents::{
-    create_callback_result, create_pending_invocation, update_invocation, CallbackInvocationDoc,
-    CallbackResultDoc,
+    create_callback_result, create_pending_invocation, CallbackInvocationDoc, CallbackResultDoc,
 };
 pub(crate) use documents::{idempotency_key, load_invocation};
 pub(crate) use run::recover_local_invocations;
@@ -162,16 +161,4 @@ pub async fn run_callback_engine(
         .drain()
         .await;
     result
-}
-
-#[cfg(test)]
-pub(crate) async fn scan_callbacks(
-    node: Arc<EmbeddedNode>,
-    node_did: String,
-    plugins: Arc<crate::plugin::executor::PluginExecutor>,
-) {
-    let mut engine = CallbackEngine::new(node, node_did, None, CancellationToken::new());
-    engine.plugins = plugins;
-    engine.reconcile_bindings().await;
-    engine.rescan_created_docs().await;
 }

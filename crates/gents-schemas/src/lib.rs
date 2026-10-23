@@ -111,8 +111,6 @@ pub const SCHEDULE_NAME: &str = "Schedule";
 pub const SCHEDULE: &str = include_str!("../schemas/agent/schedule.graphql");
 pub const EVENT_GROUP_STATE_NAME: &str = "EventGroupState";
 pub const EVENT_GROUP_STATE: &str = include_str!("../schemas/agent/event_group_state.graphql");
-pub const GRAPH_DEFINITION_NAME: &str = "GraphDefinition";
-pub const GRAPH_DEFINITION: &str = include_str!("../schemas/agent/graph_definition.graphql");
 pub const EVAL_DEFINITION_NAME: &str = "EvalDefinition";
 pub const EVAL_DEFINITION: &str = include_str!("../schemas/agent/eval_definition.graphql");
 pub const EVAL_RUN_NAME: &str = "EvalRun";
@@ -123,10 +121,6 @@ pub const EVAL_VERDICT_NAME: &str = "EvalVerdict";
 pub const EVAL_VERDICT: &str = include_str!("../schemas/agent/eval_verdict.graphql");
 pub const OPTIMIZATION_JOB_NAME: &str = "OptimizationJob";
 pub const OPTIMIZATION_JOB: &str = include_str!("../schemas/agent/optimization_job.graphql");
-pub const GRAPH_REVISION_NAME: &str = "GraphRevision";
-pub const GRAPH_REVISION: &str = include_str!("../schemas/agent/graph_revision.graphql");
-pub const GRAPH_RUN_NAME: &str = "GraphRun";
-pub const GRAPH_RUN: &str = include_str!("../schemas/agent/graph_run.graphql");
 pub const PEER_PAIRING_DESIRED_NAME: &str = "PeerPairingDesired";
 pub const PEER_PAIRING_DESIRED: &str =
     include_str!("../schemas/agent/peer_pairing_desired.graphql");
@@ -229,9 +223,6 @@ pub const ALL: &[&str] = &[
     TASK,
     SCHEDULE,
     EVENT_GROUP_STATE,
-    GRAPH_DEFINITION,
-    GRAPH_REVISION,
-    GRAPH_RUN,
     PEER_PAIRING_DESIRED,
     DATA_PLANE_PAIRING_DESIRED,
     PEER_PAIRING_APPLIED,
@@ -308,9 +299,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     TASK_NAME,
     SCHEDULE_NAME,
     EVENT_GROUP_STATE_NAME,
-    GRAPH_DEFINITION_NAME,
-    GRAPH_REVISION_NAME,
-    GRAPH_RUN_NAME,
     PEER_PAIRING_DESIRED_NAME,
     DATA_PLANE_PAIRING_DESIRED_NAME,
     PEER_PAIRING_APPLIED_NAME,
@@ -352,9 +340,6 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     TASK_NAME,
     SCHEDULE_NAME,
     EVENT_GROUP_STATE_NAME,
-    GRAPH_DEFINITION_NAME,
-    GRAPH_REVISION_NAME,
-    GRAPH_RUN_NAME,
     ISOLATED_WORKSPACE_NAME,
     WORKSPACE_BINDING_NAME,
     WORKSPACE_RECEIPT_NAME,

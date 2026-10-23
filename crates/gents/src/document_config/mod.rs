@@ -8,7 +8,6 @@ mod datastore_tool_surface;
 mod eth_tool;
 mod eval_definition;
 mod event_trigger;
-mod graph_definition;
 mod inference_backend;
 mod inference_execution;
 mod inference_profile;
@@ -46,7 +45,6 @@ pub use eval_definition::{
     EvalFixtureFile, EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind,
     EvalTier, LLM_JUDGE_CHECK,
 };
-pub use graph_definition::{GraphDefinition, GraphDefinitionObservation};
 pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
 };

@@ -14,7 +14,6 @@ type MailboxItem @branchable {
     source_id: String @index @immutable
     session_id: String @index @immutable
     request_id: String @index @immutable
-    graph_run_id: String @index @immutable
     cause_doc_id: String @index @immutable
 
     target_node_did: String @index @immutable

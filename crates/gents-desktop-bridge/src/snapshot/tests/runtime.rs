@@ -12,7 +12,7 @@ fn canonical_session(requester: Option<&str>) -> AgentSession {
         "session_id":"session", "node_did":"did:test:owner", "requester_did":requester,
         "agent_id":"agent", "created_at":"2026-09-01T00:00:00Z",
         "title":{"text":"Saved title","source":"user"}, "tags":["review"],
-        "provenance":{"task_id":"task","graph_run_id":"graph","fork":{"source_session_id":"parent","at_user_turn":2}}
+        "provenance":{"task_id":"task","fork":{"source_session_id":"parent","at_user_turn":2}}
     }))
     .expect("canonical session")
 }

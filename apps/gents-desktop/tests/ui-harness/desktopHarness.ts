@@ -739,7 +739,6 @@ export function createDesktopUiHarness(
         const provenance: SessionProvenance | null = lineage?.taskId
           ? {
               task_id: lineage.taskId,
-              graph_run_id: null,
               parent_request_doc_id: null,
               fork: null,
             }

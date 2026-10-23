@@ -74,9 +74,9 @@ pub enum SessionTitleSource {
     User,
 }
 
-/// These origins can coexist: a graph stage invokes a task, and that work can
-/// start another session with `agent_new`. References record actual creation facts; they
-/// neither select configuration nor confer graph membership or authorization.
+/// These origins can coexist: a task runs, and that work can start another
+/// session with `agent_new`. References record actual creation facts; they
+/// neither select configuration nor confer authorization.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -85,10 +85,6 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub task_id: Option<String>,
-    /// Existing graph execution, not a second graph definition or stage config.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub graph_run_id: Option<String>,
     /// Exact causal request document for a session started by `agent_new`,
     /// copied from its first request's `caused_by_parent_request_doc_id`. It is
     /// provenance only: no hierarchy, cascade or authority follows from it.
@@ -121,7 +117,6 @@ pub struct SessionFork {
 fn provenance_is_empty(value: &Option<SessionProvenance>) -> bool {
     value.as_ref().is_none_or(|value| {
         value.task_id.is_none()
-            && value.graph_run_id.is_none()
             && value.parent_request_doc_id.is_none()
             && value.opening_request_doc_id.is_none()
             && value.fork.is_none()

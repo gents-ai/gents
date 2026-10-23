@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- The graph system is removed: `gents graph`, graph packs (`kind: graph`,
+  `graphs`, `graph_intents`, `graph_capabilities`, `compiler_version`), the
+  native graph tools and the `enable_graph_tools` grant, the MCP graph reads
+  (`--mcp-graph-tools`), the Grok graph-run pager and the graph fences in
+  goals, triggers, callbacks and lifecycle. Workflows are job plugins. The
+  `GraphDefinition`, `GraphRevision` and `GraphRun` collections are no longer
+  registered; an existing home keeps its orphaned rows and nothing reads them.
+  `MailboxItem.graph_run_id`, the `graph` mailbox source kind and session
+  provenance `graph_run_id` are gone.
 - `gents init --workflows` is removed and `gents init` no longer suggests
   installing `gents/rhai_workflows`: a workflow is an ordinary job plugin a
   content pack ships (`gents pack install <pack> --grant-authority`, then

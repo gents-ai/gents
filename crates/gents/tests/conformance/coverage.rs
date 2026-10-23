@@ -277,7 +277,6 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.prompt-assembly.provider-input-sanitization",
         "boundary.model.nat-typed-ids-time",
         "boundary.p2p-backpressure.obligation-model",
-        "boundary.graph-pipeline.foundation",
         "boundary.rendered-capture.assembled-request-artifact",
         "boundary.rendered-capture.key-encoding-injectivity",
         "boundary.plugin-job.guest-determinism",
@@ -655,21 +654,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.artifact_spawn_cases,
         ),
         (
-            "graph_session_continuation_cases",
-            "GraphPipeline.WorkspaceLineage.SessionContinuation",
-            &snapshot.graph_session_continuation_cases,
-        ),
-        (
-            "graph_assignment_head_cases",
-            "GraphPipeline.LogicalInvocation.AssignmentHead",
-            &snapshot.graph_assignment_head_cases,
-        ),
-        (
-            "graph_workspace_lineage_cases",
-            "GraphWorkspaceLineageCases",
-            &snapshot.graph_workspace_lineage_cases,
-        ),
-        (
             "operator_base_freeze_cases",
             "OperatorBaseFreezeCases",
             &snapshot.operator_base_freeze_cases,
@@ -753,18 +737,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         if !cases.is_empty() {
             emitted.insert((category.to_owned(), domain.to_owned()));
         }
-    }
-    if !snapshot.graph_logical_invocation_cases.is_empty() {
-        emitted.insert((
-            "graph_logical_invocation_cases".to_string(),
-            "GraphLogicalInvocationCases".to_string(),
-        ));
-    }
-    if !snapshot.graph_invocation_publication_cases.is_empty() {
-        emitted.insert((
-            "graph_invocation_publication_cases".to_string(),
-            "GraphInvocationPublicationCases".to_string(),
-        ));
     }
     if !snapshot.goal_objective_whitespace_codepoints.is_empty() {
         emitted.insert((
@@ -878,36 +850,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "goal_reset_resume_cases".to_string(),
             "GoalResetResumeCases".to_string(),
-        ));
-    }
-    if !snapshot.graph_failure_attribution_traces.is_empty() {
-        emitted.insert((
-            "graph_failure_attribution_traces".to_string(),
-            "GraphFailureAttributionTraces".to_string(),
-        ));
-    }
-    if !snapshot.graph_pipeline_validation_cases.is_empty() {
-        emitted.insert((
-            "graph_pipeline_validation_cases".to_string(),
-            "GraphPipelineValidationCases".to_string(),
-        ));
-    }
-    if !snapshot.graph_pipeline_revision_gate_cases.is_empty() {
-        emitted.insert((
-            "graph_pipeline_revision_gate_cases".to_string(),
-            "GraphPipelineRevisionGateCases".to_string(),
-        ));
-    }
-    if !snapshot.graph_pipeline_run_terminal_cases.is_empty() {
-        emitted.insert((
-            "graph_pipeline_run_terminal_cases".to_string(),
-            "GraphPipelineRunTerminalCases".to_string(),
-        ));
-    }
-    if !snapshot.graph_pipeline_edge_delivery_cases.is_empty() {
-        emitted.insert((
-            "graph_pipeline_edge_delivery_cases".to_string(),
-            "GraphPipelineEdgeDeliveryCases".to_string(),
         ));
     }
     assert_eq!(

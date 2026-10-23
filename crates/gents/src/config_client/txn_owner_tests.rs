@@ -16,9 +16,7 @@ use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
-use super::{
-    ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry, TransactionOutcome, TxnBackend,
-};
+use super::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry, TxnBackend};
 use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 use crate::identity::NodeIdentity;
 
@@ -2147,35 +2145,6 @@ async fn idempotent_transaction_does_not_replay_domain_rejection() {
     assert_eq!(callbacks.load(Ordering::SeqCst), 1);
     assert_eq!(&*lock(&state.discarded_ids), &["0"]);
     assert!(lock(&state.committed_ids).is_empty());
-    assert!(lock(&state.active_ids).is_empty());
-    server.abort();
-}
-
-#[tokio::test]
-async fn observing_transaction_reports_conflict_without_replay() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Conflict).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let callbacks = Arc::new(AtomicUsize::new(0));
-    let callbacks_for_attempt = Arc::clone(&callbacks);
-
-    let outcome = access
-        .transact_observing_conflict("test.http_observe_conflict", move |txn| {
-            callbacks_for_attempt.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                txn.execute(
-                    r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
-                )
-                .await?;
-                Ok(())
-            })
-        })
-        .await
-        .unwrap();
-
-    assert!(matches!(outcome, TransactionOutcome::ConflictObserved));
-    assert_eq!(callbacks.load(Ordering::SeqCst), 1);
-    assert_eq!(&*lock(&state.committed_ids), &["0"]);
-    assert!(lock(&state.discarded_ids).is_empty());
     assert!(lock(&state.active_ids).is_empty());
     server.abort();
 }

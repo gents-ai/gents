@@ -331,9 +331,7 @@ pub struct EventSource {
 
 /// Completion conditions for documents sharing an event correlation.
 /// Existing group deduplication, bounds, and durable ownership remain
-/// authoritative. Graph compilation additionally requires expected_count >= 2
-/// and refuses latest_only concurrency on every graph edge (Lean
-/// `GraphPipeline.graphEdgeValid`); shared types do not widen graph semantics.
+/// authoritative.
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -41,7 +41,6 @@ const child = session({
   provenance: {
     parent_request_doc_id: "physical-parent-1",
     task_id: null,
-    graph_run_id: null,
     fork: null,
   },
   startedBy: {

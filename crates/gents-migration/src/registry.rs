@@ -428,7 +428,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::MAILBOX_ITEM_NAME,
         gents_protocol::schemas::MAILBOX_ITEM,
-        "bafyreifsmnmr74fhl2otyeapkuddraoq5z5nrqg4xdr7jb37ey7is77esu"
+        "bafyreidqvhw5pbumtp3vc6sfivozcqjrgdofnholeuut7gtj4muek7wfnu"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
@@ -484,21 +484,6 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::EVENT_GROUP_STATE_NAME,
         gents_protocol::schemas::EVENT_GROUP_STATE,
         "bafyreids6vkxatjttmedkypqlibwbyyebyapq5p5vrn7dlfyh5iqbzrq6y"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::GRAPH_DEFINITION_NAME,
-        gents_protocol::schemas::GRAPH_DEFINITION,
-        "bafyreigxzdxynnf2s5wlpsbyjboo7a6wie5cdmfbpuix5q6o4zsq5jvpdy"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::GRAPH_REVISION_NAME,
-        gents_protocol::schemas::GRAPH_REVISION,
-        "bafyreidnpse724dsdau3zqcqihx5vesnldll3ky2u3p6w4hjkd34r6bhgq"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::GRAPH_RUN_NAME,
-        gents_protocol::schemas::GRAPH_RUN,
-        "bafyreigxtaqm3t34jy5yislq4m3ihnwxqzti35dhfwbxhhrqqp7rpn7qki"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SERVICE_REGISTRY_NAME,

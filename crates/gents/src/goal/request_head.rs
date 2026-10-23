@@ -153,14 +153,6 @@ pub(crate) fn latest_goal_request<'a>(
     )
 }
 
-pub(crate) fn latest_authenticated_session_request<'a>(
-    node_did: &str,
-    session_id: &str,
-    rows: &'a [AgentRequestRow],
-) -> Option<&'a AgentRequestRow> {
-    latest_scoped_request(node_did, session_id, None, rows, None)
-}
-
 fn latest_scoped_request<'a>(
     node_did: &str,
     session_id: &str,
@@ -200,7 +192,6 @@ fn latest_scoped_request<'a>(
 pub(crate) struct AuthenticatedGoalRequestMembers<'a> {
     pub(crate) entry: &'a AgentRequestRow,
     pub(crate) member_doc_ids: Vec<String>,
-    pub(crate) parents: std::collections::BTreeMap<String, String>,
 }
 
 pub(crate) fn authenticated_goal_request_members<'a>(
@@ -228,21 +219,18 @@ pub(crate) fn authenticated_goal_request_members<'a>(
         })
         .collect::<Vec<_>>();
     member_doc_ids.sort_unstable();
-    let mut parents = std::collections::BTreeMap::new();
     for doc in &member_doc_ids {
         if doc == entry_doc {
             continue;
         }
-        let parent = by_doc[doc.as_str()]
+        by_doc[doc.as_str()]
             .caused_by_parent_request_doc_id
             .as_deref()
             .context("authenticated Goal member has no physical parent")?;
-        parents.insert(doc.clone(), parent.to_owned());
     }
     Ok(AuthenticatedGoalRequestMembers {
         entry,
         member_doc_ids,
-        parents,
     })
 }
 

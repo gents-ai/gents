@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::document_config::PackConfig;
 use crate::graphql::escape_graphql_string;
@@ -20,10 +19,6 @@ pub use documents::{
     document_pack_schema_paths, install_prepared_document_pack, plugin_data_unique_keys,
     prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,
 };
-mod graph;
-
-pub(crate) use graph::{observe_graph_install_in_txn, record_graph_install_in_txn};
-
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 
@@ -182,18 +177,6 @@ fn decode_record_field<T: serde::de::DeserializeOwned + Default>(
                 "installation record {coordinate:?} for {owner:?} has a malformed {field} field"
             )
         }),
-    }
-}
-
-async fn live_digest(
-    txn: &ConfigApplyTxn<'_>,
-    collection: Collection,
-    owner: &str,
-    id: &str,
-) -> Result<Option<String>> {
-    match read_desired_state_record_in_txn(txn, collection, owner, id).await? {
-        Some((_, live)) => Ok(Some(super::pack_artifact_document_digest(&live)?)),
-        None => Ok(None),
     }
 }
 
@@ -587,16 +570,6 @@ async fn remove_record_in_txn(
         .clone()
         .with_context(|| format!("{coordinate} is not installed for {owner}"))?;
 
-    let graph_ids: BTreeSet<String> = record
-        .documents
-        .values()
-        .filter(|document| document.collection == "GraphDefinition")
-        .map(|document| document.id.clone())
-        .collect();
-    if !graph_ids.is_empty() {
-        graph::ensure_no_unfinished_runs_in_txn(txn, owner, &graph_ids).await?;
-    }
-
     let mut report = RemoveReport {
         pack: coordinate.to_owned(),
         documents: InstallReport {
@@ -612,12 +585,11 @@ async fn remove_record_in_txn(
     };
     let mut edited = Vec::new();
     let mut removals = Vec::new();
-    let mut revision_digests = Vec::new();
 
     let checked: Vec<(Collection, &str)> = record
         .documents
         .values()
-        .filter(|document| document.created && document.collection != "GraphRevision")
+        .filter(|document| document.created)
         .map(|document| {
             Ok((
                 collection_named(&document.collection)?,
@@ -628,22 +600,6 @@ async fn remove_record_in_txn(
     let live = live_digests(txn, owner, checked).await?;
 
     for (name, document) in &record.documents {
-        if graph::is_graph_owned(document) {
-            if !document.created {
-                report.documents.adopted.push(name.clone());
-                continue;
-            }
-            if document.collection == "GraphRevision" {
-                revision_digests.push(document.id.clone());
-                continue;
-            }
-            let collection = collection_named(&document.collection)?;
-            if live.contains_key(&(collection, document.id.clone())) {
-                report.documents.removed.push(name.clone());
-                removals.push((collection, owner.to_owned(), document.id.clone()));
-            }
-            continue;
-        }
         if !document.created {
             report.documents.adopted.push(name.clone());
             continue;
@@ -674,13 +630,6 @@ async fn remove_record_in_txn(
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
     crate::config_client::validate_desired_state_plan(txn, &plan).await?;
     report.documents.applied = crate::config_client::apply_desired_state_plan(txn, &plan).await?;
-
-    if !revision_digests.is_empty() {
-        let (removed, retained) =
-            graph::delete_revisions_in_txn(txn, owner, &revision_digests).await?;
-        report.documents.removed.extend(removed);
-        report.retained.extend(retained);
-    }
 
     txn.execute(&format!(
         r#"mutation {{ delete_{RECORD}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,

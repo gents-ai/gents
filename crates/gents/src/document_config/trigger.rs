@@ -31,7 +31,7 @@ pub struct Trigger {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
-    /// Absent defaults to Parallel, matching the graph-edge default.
+    /// Absent defaults to Parallel.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub concurrency: Option<ConcurrencyMode>,

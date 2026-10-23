@@ -156,10 +156,6 @@ fn config_components_plan(
         serde_json::to_value(&document.node)? == serde_json::to_value(&scope)?,
         "component apply requires scope-only node; use node save for node settings"
     );
-    anyhow::ensure!(
-        document.graph_intents.is_empty() && document.graph_capabilities.is_empty(),
-        "component apply does not compile graph inputs; use the graph installer"
-    );
     let plan = DesiredStateApplyPlan::from_pack_config(document)?;
     anyhow::ensure!(
         plan.documents().iter().all(|entry| entry
@@ -456,13 +452,6 @@ mod tests {
                 "must reject meaningful node setting {key}"
             );
         }
-        let mut graph = input.clone();
-        graph["graph_capabilities"] = json!([{"node_did":owner,"capability_id":"cap","revision":"r","target":{"kind":"task","task_id":"task"}}]);
-        assert!(
-            apply_config_components(&node, &serde_json::from_value(graph)?)
-                .await
-                .is_err()
-        );
         let absent = serde_json::from_value(json!({"node":{"node_did":"did:test:missing"}}))?;
         assert!(apply_config_components(&node, &absent).await.is_err());
         ConfigAccess::transact_local_write(&node, None, "desktop.component.verify", |txn| {

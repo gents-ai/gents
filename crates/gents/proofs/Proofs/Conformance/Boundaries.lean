@@ -71,9 +71,6 @@ def boundaryModelNatTypedIdsTimeId : String :=
 def boundaryP2pBackpressureObligationModelId : String :=
   "boundary.p2p-backpressure.obligation-model"
 
-def boundaryGraphPipelineFoundationId : String :=
-  "boundary.graph-pipeline.foundation"
-
 def boundaryRenderedCaptureAssembledRequestArtifactId : String :=
   "boundary.rendered-capture.assembled-request-artifact"
 
@@ -243,14 +240,6 @@ def boundaries : List Boundary :=
         some "A future queue-admission, durable-retry, store-before-ack, or restart-recovery regression can pass this one-wave model; the separate pinned-struct observability and P2P end-to-end tests are implementation fences, not proofs of those properties."
     , acceptedFollowUp :=
         some "Extend the distributed model to bounded multi-wave queue admission plus durable retry and pending-DAG restart recovery, bind its witness rows to the pinned DefraDB adapter, and TLC-check MCP2PBackpressure*. Tracked under #630."
-    }
-  , { id := boundaryGraphPipelineFoundationId
-    , domain := "GraphPipeline"
-    , subject := "compiler and existing-runtime publication adapter"
-    , statement :=
-        "Proofs.GraphPipeline establishes that only wholly valid proposals may cross the publication boundary. The next conformance layer must exercise the shared configuration resolver and atomic publication owner for tasks and triggers. DefraDB transaction serializability and runtime reconciliation readiness remain assumed platform boundaries rather than theorems of this repository."
-    , acceptedFollowUp :=
-        some "Before graduation, add a live model evaluation that waits for normal reconciliation, writes an entry document through an existing bounded write tool, and observes the existing task/trigger runtime end to end."
     }
   , { id := boundaryRenderedCaptureAssembledRequestArtifactId
     , domain := "RenderedCapture"

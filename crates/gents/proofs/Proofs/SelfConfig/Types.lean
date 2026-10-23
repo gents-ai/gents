@@ -3,7 +3,7 @@ import Proofs.ConfigDocuments
 namespace SelfConfig
 
 abbrev Target := ConfigDocuments.Collection
-/-- Pack-owned callback modules, keys, graph definitions, and placements do not
+/-- Pack-owned callback modules, keys, and placements do not
 become writable merely because the shared catalog knows about them. `AgentTarget`
 is a `tools` document (#2058). -/
 def allTargets : List Target :=

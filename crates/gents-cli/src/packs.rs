@@ -71,7 +71,6 @@ pub async fn install(
 ) -> Result<Value> {
     capture_report(command::install(PackInstallArgs {
         package,
-        bindings: None,
         inference_slots,
         preview,
         scope: scope(home),
@@ -185,7 +184,6 @@ pub async fn update(
 ) -> Result<Value> {
     capture_report(command::update::update(PackUpdateArgs {
         package,
-        bindings: None,
         inference_slots: Vec::new(),
         scope: scope(home),
         registry,

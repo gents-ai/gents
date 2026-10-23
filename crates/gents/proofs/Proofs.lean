@@ -91,9 +91,6 @@ import Proofs.EventDelivery
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.RequestExecutionLease
-import Proofs.GraphPipeline
-import Proofs.GraphPipeline.FailureAttribution
-import Proofs.GraphPipeline.LogicalInvocation
 import Proofs.EthSubmission
 import Proofs.PeerRegistryDiscovery.DirectoryProjection
 import Proofs.PeerRegistryDiscovery.RootAdmission
@@ -107,12 +104,10 @@ import Proofs.Conformance.TaskHooks
 
 import Proofs.Conformance.OperatorBaseFreeze
 
-import Proofs.GraphPipeline.WorkspaceLineage
 
 import Proofs.Configuration
 import Proofs.ToolPolicy.Configuration
 import Proofs.SelfConfig.Auth
-import Proofs.GraphPipeline.Configuration
 
 import Proofs.TaskHooks
 

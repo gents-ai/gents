@@ -388,8 +388,7 @@ pub struct EventSourceDeleteRequest {
 }
 
 /// Atomic edits for an existing node, not pack installation; node settings
-/// use NodeConfigSaveRequest. Omitted documents stay untouched;
-/// graph_intents/graph_capabilities are rejected.
+/// use NodeConfigSaveRequest. Omitted documents stay untouched.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]

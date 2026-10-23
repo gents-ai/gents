@@ -8,9 +8,7 @@ use gents::{
 };
 
 pub fn fixture_pack_names() -> Vec<String> {
-    const KNOWN: [&str; 10] = [
-        "review_graph",
-        "prepared_graph",
+    const KNOWN: [&str; 8] = [
         "assets_fixture",
         "documents_fixture",
         "slot_fixture",

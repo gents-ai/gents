@@ -97,43 +97,6 @@ fn storage_identity_is_unwrapped_before_strict_config_deserialization() {
 }
 
 #[test]
-fn graph_delivery_uses_the_same_grouping_and_concurrency_types() {
-    let expected: crate::graph_pipeline::GroupCount = EventGroupCount::Fixed(2);
-    let group = EventGroup {
-        expected_count: Some(expected),
-        timeout_secs: Some(30),
-        min_count: None,
-    };
-    let delivery: crate::graph_pipeline::DeliveryMode = Some(group);
-    let concurrency: crate::graph_pipeline::DeliveryConcurrency = ConcurrencyMode::Serial;
-    assert_eq!(
-        serde_json::to_value(delivery).unwrap(),
-        json!({"expected_count":2,"timeout_secs":30})
-    );
-    assert_eq!(serde_json::to_value(concurrency).unwrap(), json!("serial"));
-    for (wire, expected) in [
-        ("parallel", ConcurrencyMode::Parallel),
-        ("serial", ConcurrencyMode::Serial),
-        ("latest_only", ConcurrencyMode::LatestOnly),
-    ] {
-        assert_eq!(
-            serde_json::from_value::<ConcurrencyMode>(json!(wire)).unwrap(),
-            expected
-        );
-    }
-    for rejected in [
-        "Parallel",
-        "SERIAL",
-        "latest-only",
-        "latestOnly",
-        " parallel ",
-        "",
-    ] {
-        assert!(serde_json::from_value::<ConcurrencyMode>(json!(rejected)).is_err());
-    }
-}
-
-#[test]
 fn context_skill_selection_is_compact_and_system_instructions_stay_literal() {
     let minimal = json!({"context_id":"coding", "node_did":"did:key:test"});
     for skill_ids in [Value::Null, json!([])] {
