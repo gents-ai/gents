@@ -188,6 +188,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         gents_protocol::file_changes::ToolFileChanges,
         gents_protocol::file_inventory::FileInventoryObservation,
         gents_protocol::file_inventory::FileInventoryReadAction,
+        gents_protocol::file_inventory::FileInventoryImage,
+        gents_protocol::file_inventory::FileInventoryImageReference,
         gents_protocol::client_media::MediaCall,
         gents_protocol::client_media::MediaOperation,
         gents_protocol::client_media::MediaPcmClip,

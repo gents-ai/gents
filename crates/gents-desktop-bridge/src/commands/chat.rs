@@ -32,6 +32,17 @@ pub async fn tool_file_changes(
     .await
 }
 
+pub async fn inventory_file_change(
+    core: &ClientCore,
+    node_did: String,
+    session_id: String,
+    reference: gents_protocol::file_inventory::FileInventoryImageReference,
+    retry_id: Option<String>,
+) -> Result<Option<gents_protocol::file_inventory::FileInventoryImage>> {
+    core.inventory_file_change(&node_did, &session_id, &reference, retry_id.as_deref())
+        .await
+}
+
 pub async fn request_output(
     core: &ClientCore,
     node_did: String,

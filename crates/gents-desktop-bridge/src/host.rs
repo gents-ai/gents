@@ -410,6 +410,18 @@ impl ClientHost {
                 .await
                 .map_err(backend_error)?,
             ),
+            ClientCommand::InventoryFileChange {
+                node_did,
+                session_id,
+                reference,
+                retry_id,
+            } => encode(
+                crate::commands::inventory_file_change(
+                    &self.core, node_did, session_id, reference, retry_id,
+                )
+                .await
+                .map_err(backend_error)?,
+            ),
             ClientCommand::ToolFileChanges {
                 node_did,
                 session_id,

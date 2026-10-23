@@ -50,12 +50,29 @@ async fn attach(
 }
 
 async fn call(client: &mut Connection, node: &str, id: u64, action: Value) -> Result<Value> {
+    call_command(
+        client,
+        node,
+        id,
+        "desktop_session_file_inventory",
+        json!({"action":action}),
+    )
+    .await
+}
+
+async fn call_command(
+    client: &mut Connection,
+    node: &str,
+    id: u64,
+    name: &str,
+    mut args: Value,
+) -> Result<Value> {
+    args["nodeDid"] = json!(node);
+    args["sessionId"] = json!("inventory-bridge");
     client
         .send(Bytes::from(serde_json::to_vec(&json!({
             "kind":"call", "id":id,
-            "command":{"name":"desktop_session_file_inventory", "args":{
-                "nodeDid":node, "sessionId":"inventory-bridge", "action":action,
-            }},
+            "command":{"name":name, "args":args},
         }))?))
         .await?;
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -236,6 +253,11 @@ async fn inventory_pages_refresh_and_reload_through_the_live_bridge() -> Result<
     assert_eq!(page.received_entries, 65);
     assert!(page.complete && page.known_inventory);
     let cursor = page.next.as_ref().unwrap().clone();
+    let outside = call_command(&mut client, source.did(), 20, "desktop_inventory_file_change", json!({
+        "reference":{"cursor":{"attempt_id":page.attempt_id, "snapshot_digest":page.binding.digest, "offset":0}, "entry_index":64},
+    })).await?;
+    assert!(!outside["error"].is_null());
+    assert_eq!(metadata_requests(&server).await, 2);
     let last = observation(
         call(
             &mut client,

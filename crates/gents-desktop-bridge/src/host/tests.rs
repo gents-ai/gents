@@ -184,6 +184,36 @@ fn inventory_reads_keep_scope_actions_and_cancellation() {
 }
 
 #[test]
+fn inventory_image_reads_accept_only_received_coordinates() {
+    let reference = json!({"cursor":{"attempt_id":"attempt", "snapshot_digest":"snapshot", "offset":64}, "entry_index":0});
+    let args = json!({"nodeDid":"node", "sessionId":"session", "reference":reference});
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"desktop_inventory_file_change", "args":args,
+    }))
+    .unwrap();
+    assert!(command.is_cancellable());
+    assert!(protocol::ClientCommand::NAMES.contains(&"desktop_inventory_file_change"));
+    for field in ["nodeDid", "sessionId", "reference"] {
+        let mut missing = args.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name":"desktop_inventory_file_change", "args":missing,
+        }))
+        .is_err());
+    }
+    for reference in [
+        json!({"cursor":{"attempt_id":"attempt", "snapshot_digest":"snapshot"}, "entry_index":0}),
+        json!({"cursor":{"attempt_id":"attempt", "snapshot_digest":"snapshot", "offset":0}, "entry_index":-1}),
+        json!({"cursor":{"attempt_id":"attempt", "snapshot_digest":"snapshot", "offset":0}, "entry_index":256}),
+        json!({"cursor":{"attempt_id":"attempt", "snapshot_digest":"snapshot", "offset":0}, "entry_index":0, "scope":{"node":"other"}}),
+    ] {
+        assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+            "name":"desktop_inventory_file_change", "args":{"nodeDid":"node", "sessionId":"session", "reference":reference},
+        })).is_err());
+    }
+}
+
+#[test]
 fn request_retry_is_scoped_and_not_cancellable() {
     let command: protocol::ClientCommand = serde_json::from_value(json!({
         "name":"desktop_request_retry", "args":{"requestId":"request", "nodeDid":"node"}

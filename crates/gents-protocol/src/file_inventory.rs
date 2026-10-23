@@ -401,6 +401,23 @@ pub struct FileInventoryViewCursor {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct FileInventoryImageReference {
+    pub cursor: FileInventoryViewCursor,
+    pub entry_index: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct FileInventoryImage {
+    pub reference: FileInventoryImageReference,
+    pub entry: FileInventoryEntry,
+    pub change: crate::file_changes::FileChangeImages,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub enum FileInventoryReadAction {
