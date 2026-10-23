@@ -80,6 +80,8 @@ enum Journey {
     EditorWorkspace,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRelatedWork,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorRelatedWorkFailure,
     Goal,
 }
 
@@ -97,6 +99,7 @@ impl Journey {
             Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorWorkspace => Some("workspace"),
             Self::EditorRelatedWork => Some("related-work"),
+            Self::EditorRelatedWorkFailure => Some("related-work-failure"),
             _ => None,
         }
     }
@@ -396,6 +399,31 @@ async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
 
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_observes_related_worker_failure_without_losing_completed_work_or_the_parent_draft(
+) -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorRelatedWorkFailure)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
+}
+
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
@@ -425,7 +453,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let history_provider_gate = editor_history_gate.clone();
     let history_provider_hold = root.join("hold-history-provider");
-    let related_provider = Arc::new(editor_related_work::Provider::new());
+    let related_provider = Arc::new(editor_related_work::Provider::new(matches!(
+        journey,
+        Journey::EditorRelatedWorkFailure
+    )));
     let provider_related = Arc::clone(&related_provider);
     let provider = FakeLlm::start_with_models(
         if journey.editor_scenario().is_some() {
@@ -435,7 +466,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
-            if matches!(journey, Journey::EditorRelatedWork) {
+            if matches!(
+                journey,
+                Journey::EditorRelatedWork | Journey::EditorRelatedWorkFailure
+            ) {
                 if let Some(action) = provider_related.reply(request) {
                     return action;
                 }
@@ -1386,7 +1420,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             copy_editor_evidence(root, "editor-history-profile-canonical.json")?;
         }
     }
-    if matches!(journey, Journey::EditorRelatedWork) {
+    if matches!(
+        journey,
+        Journey::EditorRelatedWork | Journey::EditorRelatedWorkFailure
+    ) {
         editor_related_work::configure(&access, node_did, agent_id).await?;
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
@@ -1399,7 +1436,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 &host_binary,
                 session,
                 provider.endpoint(),
-                "related-work"
+                journey
+                    .editor_scenario()
+                    .expect("related-work editor scenario")
             ),
             related_provider.release_when_requested(root),
         );
@@ -1408,8 +1447,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             let provenance = client.call(id + 1, "desktop_session_provenance", json!({"request":{"nodeDid":node_did,"sessionId":session,"requesterDid":client_did}})).await;
             anyhow::bail!("{error:#}; related-work snapshot: {snapshot}; provenance: {provenance}");
         }
-        let evidence =
-            editor_related_work::verify(&access, node_did, session, &client_did, root).await?;
+        let evidence = editor_related_work::verify(
+            &access,
+            node_did,
+            session,
+            &client_did,
+            root,
+            matches!(journey, Journey::EditorRelatedWorkFailure),
+        )
+        .await?;
         std::fs::write(
             root.join("editor-related-work-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,

@@ -78,11 +78,28 @@ export function UserMessageItem({
   onEdit?: (item: UserMessage) => void;
 }) {
   const content = normalizeTranscriptText(item.content);
+  const received =
+    item.kind === "automatedInput" && item.origin.kind === "sessionMessage"
+      ? item.origin
+      : undefined;
+  const displayContent = received
+    ? normalizeTranscriptText(received.displayBody)
+    : content;
   return (
     <div className="turn-block">
-      <article className="message-card user-card">
-        <div className="message-role">
-          {item.kind === "automatedInput" ? originLabel(item.origin) : "user"}
+      <article
+        className={
+          received ? "message-card received-card" : "message-card user-card"
+        }
+      >
+        <div className={received ? "received-message-heading" : "message-role"}>
+          {received ? (
+            <span>Agent message</span>
+          ) : item.kind === "automatedInput" ? (
+            originLabel(item.origin)
+          ) : (
+            "user"
+          )}
           <MessageTime value={item.timestamp} />
           {item.kind === "userMessage" &&
           item.reconstruction.state === "ready" &&
@@ -108,15 +125,40 @@ export function UserMessageItem({
               </svg>
             </button>
           ) : null}
-          {item.reconstruction.state === "ready" && content ? (
-            <CopyButton className="message-copy" getText={() => content} />
+          {item.reconstruction.state === "ready" && displayContent ? (
+            <CopyButton
+              label={received ? "Copy task" : "Copy"}
+              className={received ? "received-message-copy" : "message-copy"}
+              getText={() =>
+                received ? (received.displayBody ?? "") : content
+              }
+            />
           ) : null}
         </div>
         <div className="message-content">
           <MessageAvailability reconstruction={item.reconstruction} />
           {item.reconstruction.state === "ready" ? (
             <>
-              {content && <MarkdownContent value={content} />}
+              {displayContent ? (
+                <MarkdownContent value={displayContent} />
+              ) : received ? (
+                <p className="received-message-unavailable">
+                  {received.displayBody == null
+                    ? "Task text unavailable"
+                    : "Empty message"}
+                </p>
+              ) : null}
+              {received && item.content && (
+                <details className="received-message-details">
+                  <summary>Message details</summary>
+                  <pre>{item.content}</pre>
+                  <CopyButton
+                    label="Copy original message"
+                    className="received-message-copy"
+                    getText={() => item.content ?? ""}
+                  />
+                </details>
+              )}
               {item.kind === "userMessage" && (
                 <CapturedContextItems contexts={item.capturedContext ?? []} />
               )}

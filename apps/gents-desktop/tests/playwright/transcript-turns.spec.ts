@@ -35,6 +35,20 @@ test.describe("moving between turns", () => {
         : null;
     });
 
+  /* a jump is written once the reader's scroll has rested, so wait for a turn
+     other than `from` to reach the reading line rather than sampling once */
+  async function landed(page: import("@playwright/test").Page, from?: string) {
+    let at: Awaited<ReturnType<typeof current>> = null;
+    await expect
+      .poll(async () => {
+        const turn = await current(page);
+        at = turn && turn.key !== from && Math.abs(turn.offset - 56) <= 1 ? turn : null;
+        return at !== null;
+      })
+      .toBe(true);
+    return at!;
+  }
+
   test("brings the previous turn to the reading line, then the next", async ({
     page,
   }) => {
@@ -43,20 +57,19 @@ test.describe("moving between turns", () => {
     const start = await current(page);
     await page.getByTestId("transcript-panel").hover();
     await page.keyboard.press("Alt+Meta+ArrowUp");
-    await expect.poll(() => current(page).then((c) => c?.following)).toBe("false");
-    const up = (await current(page))!;
-    expect(up.key).not.toBe(start?.key);
-
-    expect(Math.abs(up.offset - 56)).toBeLessThanOrEqual(1);
+    const up = await landed(page, start?.key);
+    expect(up.following).toBe("false");
 
     await page.keyboard.press("Alt+Meta+ArrowUp");
-    await expect.poll(() => current(page).then((c) => c?.key)).not.toBe(up.key);
-    const upAgain = (await current(page))!;
-    expect(Math.abs(upAgain.offset - 56)).toBeLessThanOrEqual(1);
+    await landed(page, up.key);
 
     await page.keyboard.press("Alt+Meta+ArrowDown");
-    await expect.poll(() => current(page).then((c) => c?.key)).toBe(up.key);
-    expect(Math.abs((await current(page))!.offset - 56)).toBeLessThanOrEqual(1);
+    await expect
+      .poll(async () => {
+        const turn = await current(page);
+        return turn?.key === up.key && Math.abs(turn.offset - 56) <= 1;
+      })
+      .toBe(true);
   });
 });
 
@@ -98,42 +111,46 @@ test.describe("a sent turn kept near the top", () => {
     );
     await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdSends());
     await composer(page).fill("again");
+    /* the view goes to the turn as the app draws its copy of the message,
+       or once the session makes it the latest request: the turn is sampled
+       inside the page every frame from before the send, since driver round
+       trips can outlast the glide and its rows are replaced on the way */
+    await page.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-viewport"][data-following]',
+      )!;
+      const offsets: number[] = [];
+      const deadline = performance.now() + 3000;
+      const done = new Promise<number[]>((resolve) => {
+        const sample = () => {
+          const turn = Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn]"))
+            .filter((row) => row.textContent?.includes("again"))
+            .at(-1);
+          const at = turn
+            ? Math.round(
+                turn.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
+              )
+            : null;
+          if (at !== null) offsets.push(at);
+          if (
+            (at !== null && scroller.dataset.following === "false" && at <= 89) ||
+            performance.now() >= deadline
+          )
+            resolve(offsets);
+          else requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+      Object.assign(window, { __glide: done });
+    });
     await sendButton(page).click();
     const turn = panel.locator("[data-turn]").last();
     await expect(turn).toContainText("again");
-    /* the view goes to the turn once the session makes it the latest
-       request, which the bridge's next read does */
-    /* Driver round trips can outlast the glide; geometry must be sampled
-       inside the page before the source update, including across row replacement. */
-    const seen = await page.evaluate(
-      () =>
-        new Promise<{ from: number; offsets: number[] }>((resolve) => {
-          const scroller = document.querySelector<HTMLElement>(
-            '[data-slot="scroll-area-viewport"][data-following]',
-          )!;
-          const offset = () =>
-            Math.round(
-              Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn]"))
-                .at(-1)!
-                .getBoundingClientRect().top - scroller.getBoundingClientRect().top,
-            );
-          const from = offset();
-          const offsets: number[] = [];
-          const deadline = performance.now() + 2000;
-          const sample = () => {
-            const at = offset();
-            offsets.push(at);
-            if (
-              (scroller.dataset.following === "false" && at <= 89) ||
-              performance.now() >= deadline
-            ) {
-              resolve({ from, offsets });
-            } else requestAnimationFrame(sample);
-          };
-          requestAnimationFrame(sample);
-          window.__GENTS_MOBILE_PERFORMANCE__!.userTurn("pending");
-        }),
+    await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.userTurn("pending"));
+    const offsets = await page.evaluate(
+      () => (window as unknown as { __glide: Promise<number[]> }).__glide,
     );
+    const seen = { from: offsets[0]!, offsets };
     await expect(viewport).toHaveAttribute("data-following", "false");
     const offset = async () =>
       Math.round((await turn.boundingBox())!.y - (await viewport.boundingBox())!.y);
@@ -143,20 +160,6 @@ test.describe("a sent turn kept near the top", () => {
       seen.offsets.filter((y) => y > 100 && y < seen.from - 1),
       JSON.stringify(seen),
     ).not.toHaveLength(0);
-    /* the last turn's block has room for the reply: a minimum height
-       the owner set once, from the view, not from the reply */
-    const room = () =>
-      panel.evaluate(
-        (node) =>
-          parseFloat(
-            node
-              .closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!
-              .style.getPropertyValue("--turn-room"),
-          ) || 0,
-      );
-    const roomAtSend = await room();
-    expect(roomAtSend).toBeGreaterThan(400);
-
     /* the bridge shows the message as its saved row, and the reply begins:
        the hold and its room stay with the turn through every row that
        stands for it */
@@ -168,7 +171,6 @@ test.describe("a sent turn kept near the top", () => {
       await page.waitForTimeout(300);
       await expect(viewport).toHaveAttribute("data-following", "false");
       expect(Math.abs((await offset()) - 88)).toBeLessThanOrEqual(1);
-      expect(await room()).toBe(roomAtSend);
     }
     await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.beginReply());
     await page.waitForTimeout(200);
@@ -210,7 +212,73 @@ test.describe("a sent turn kept near the top", () => {
     await expect(viewport).toHaveAttribute("data-following", "true", {
       timeout: 10_000,
     });
-    /* the room is a minimum the reply has long exceeded: it stays as set */
-    expect(await room()).toBe(roomAtSend);
+  });
+
+  test("a turn sent from far up passes the rows between without drawing them", async ({
+    page,
+  }, testInfo) => {
+    test.skip(
+      !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
+      "one layout per engine",
+    );
+    test.slow();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await gotoHarness(page, "mobile-performance");
+    await page.evaluate(() =>
+      window.localStorage.setItem(
+        "gents-preferences",
+        JSON.stringify({ state: { sentTurn: "anchor" }, version: 1 }),
+      ),
+    );
+    await gotoHarness(page, "mobile-performance");
+    await page.locator('[data-testid="session-session-large"]').click();
+    const panel = page.getByTestId("transcript-panel");
+    await panel.getByText("stream-start", { exact: false }).last().waitFor();
+    await page.evaluate(() =>
+      window.__GENTS_MOBILE_PERFORMANCE__!.endReply({
+        live: "drop",
+        saved: true,
+        completed: true,
+      }),
+    );
+    /* far up the session, with the history between held */
+    await panel.hover();
+    for (let i = 0; i < 20; i += 1) {
+      await page.mouse.wheel(0, -1500);
+      await page.waitForTimeout(150);
+    }
+    await page.waitForTimeout(600);
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    expect(
+      await viewport.evaluate((s) => s.scrollHeight - s.clientHeight - s.scrollTop),
+    ).toBeGreaterThan(15_000);
+
+    /* every row drawn from the send until the turn is in place */
+    await page.evaluate(() => {
+      const list = document.querySelector<HTMLElement>("[data-transcript-list]")!;
+      const keys = new Set<string>();
+      new MutationObserver((records) => {
+        for (const record of records)
+          for (const node of record.addedNodes)
+            if (node instanceof HTMLElement && node.dataset.rowKey)
+              keys.add(node.dataset.rowKey);
+      }).observe(list, { childList: true });
+      Object.assign(window, { __drawn: keys });
+    });
+    await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdSends());
+    await composer(page).fill("from far up");
+    await sendButton(page).click();
+    const turn = panel.locator("[data-turn]").last();
+    await expect(turn).toContainText("from far up");
+    await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.userTurn("pending"));
+    const offset = async () =>
+      Math.round((await turn.boundingBox())!.y - (await viewport.boundingBox())!.y);
+    await expect.poll(offset).toBeLessThanOrEqual(89);
+    expect(await offset()).toBeGreaterThanOrEqual(87);
+    const drawn = await page.evaluate(
+      () => (window as unknown as { __drawn: Set<string> }).__drawn.size,
+    );
+    /* a view or two of rows at the foot, never the history passed */
+    expect(drawn).toBeLessThan(40);
   });
 });

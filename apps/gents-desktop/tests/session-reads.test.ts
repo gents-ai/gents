@@ -4,6 +4,7 @@ import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
   SessionLiveDeltaView,
+  SessionRowsView,
 } from "@source-inc/gents-desktop-client";
 import { projectSessionLoadingStatus } from "../src/lib/loadingStatus";
 import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
@@ -58,6 +59,21 @@ function session(
       reconstruction: { state: "ready" as const },
     })),
     timelinePage: page,
+  };
+}
+
+function rowsRead(sessionId: string): SessionRowsView {
+  return {
+    sessionId,
+    nodeDid: "did:key:test",
+    rows: [],
+    coveredFrom: 0,
+    coveredThrough: null,
+    hasOlder: false,
+    hasNewer: false,
+    complete: true,
+    unreadable: null,
+    queryCount: 1,
   };
 }
 
@@ -125,7 +141,7 @@ describe("createSessionReads", () => {
     expect(reads.sessionStore.getState().load.error).toBeNull();
   });
 
-  it("keeps older pages and hydration failures across routine tip refreshes", async () => {
+  it("keeps a hydration failure across routine tip refreshes", async () => {
     const tip = session(["k1"], {
       totalItems: 2,
       pageItems: 1,
@@ -134,13 +150,11 @@ describe("createSessionReads", () => {
       oldestItemKey: "k1",
       newestItemKey: "k1",
     });
-    let finishPage!: (value: DesktopSessionSnapshot) => void;
     let failHydration!: (error: Error) => void;
-    const fetchSessionSnapshot = vi.fn().mockResolvedValue(tip);
     const setError = vi.fn();
     const reads = readsFor(
       {
-        fetchSessionSnapshot,
+        fetchSessionSnapshot: vi.fn().mockResolvedValue(tip),
         retrySessionHydration: () =>
           new Promise<void>((_, reject) => {
             failHydration = reject;
@@ -150,18 +164,6 @@ describe("createSessionReads", () => {
       setError,
     );
     await reads.refreshSession("session-1");
-    fetchSessionSnapshot.mockReturnValueOnce(
-      new Promise<DesktopSessionSnapshot>((resolve) => {
-        finishPage = resolve;
-      }),
-    );
-    const page = reads.loadOlderSessionTimeline();
-    await reads.refreshSession("session-1");
-    finishPage(session(["k0"], { ...tip.timelinePage!, hasOlder: false }));
-    expect(await page).toBe(true);
-    expect(
-      readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
-    ).toEqual(["k0", "k1"]);
     const hydration = reads.retrySessionHydration("session-1");
     await reads.refreshSession("session-1");
     failHydration(new Error("hydration failed"));
@@ -169,7 +171,7 @@ describe("createSessionReads", () => {
     expect(setError).toHaveBeenLastCalledWith("Error: hydration failed");
   });
 
-  it("revokes pending page and hydration reads when observation stops", async () => {
+  it("revokes pending rows and hydration reads when observation stops", async () => {
     const tip = session(["k1"], {
       totalItems: 2,
       pageItems: 1,
@@ -178,34 +180,30 @@ describe("createSessionReads", () => {
       oldestItemKey: "k1",
       newestItemKey: "k1",
     });
-    let finishPage!: (value: DesktopSessionSnapshot) => void;
+    let finishRows!: (value: SessionRowsView) => void;
     let finishHydration!: () => void;
-    const fetchSessionSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(tip)
-      .mockReturnValueOnce(
-        new Promise<DesktopSessionSnapshot>((resolve) => {
-          finishPage = resolve;
-        }),
-      );
+    const fetchSessionSnapshot = vi.fn().mockResolvedValueOnce(tip);
     const reads = readsFor({
       fetchSessionSnapshot,
+      fetchSessionRows: () =>
+        new Promise<SessionRowsView>((resolve) => {
+          finishRows = resolve;
+        }),
       retrySessionHydration: () =>
         new Promise<void>((resolve) => {
           finishHydration = resolve;
         }),
     } as unknown as DesktopApiAdapter);
     await reads.refreshSession("session-1");
-    const page = reads.loadOlderSessionTimeline();
+    const rows = reads.loadSessionRows({ kind: "before", sequence: 1 });
     reads.invalidateSessionReads();
-    finishPage(session(["k0"], { ...tip.timelinePage!, hasOlder: false }));
-    expect(await page).toBe(false);
-    expect(readSession(reads.sessionStore)?.timelineItems).toEqual(tip.timelineItems);
+    finishRows(rowsRead("session-1"));
+    expect(await rows).toBeNull();
     const hydration = reads.retrySessionHydration("session-1");
     reads.invalidateSessionReads();
     finishHydration();
     expect(await hydration).toBeNull();
-    expect(fetchSessionSnapshot).toHaveBeenCalledTimes(2);
+    expect(fetchSessionSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("recovers a failed live read through a snapshot without a sticky global error", async () => {
@@ -349,131 +347,6 @@ describe("createSessionReads", () => {
     expect(reads.sessionStore.getState().load.phase).toBe("loaded");
   });
 
-  it("crosses a hidden-only durable page to the next visible rows", async () => {
-    const tip = session(["k8", "k9"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 2,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k8",
-      newestItemKey: "k9",
-    });
-    const hidden = session([], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 0,
-      hasOlder: true,
-      hasNewer: true,
-      oldestItemKey: "tools-7",
-      newestItemKey: "tools-7",
-    });
-    const visible = session(["k1", "k2"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 2,
-      hasOlder: false,
-      hasNewer: true,
-      oldestItemKey: "k1",
-      newestItemKey: "k2",
-    });
-    const fetchSessionSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(tip)
-      .mockResolvedValueOnce(hidden)
-      .mockResolvedValueOnce(visible);
-    const reads = readsFor({
-      fetchSessionSnapshot,
-    } as unknown as DesktopApiAdapter);
-
-    await reads.refreshSession("session-1");
-    const loaded = await reads.loadOlderSessionTimeline();
-
-    expect(loaded).toBe(true);
-    expect(fetchSessionSnapshot).toHaveBeenCalledTimes(3);
-    expect(fetchSessionSnapshot.mock.calls[1]?.[3]).toMatchObject({
-      beforeItemKey: "k8",
-    });
-    expect(fetchSessionSnapshot.mock.calls[2]?.[3]).toMatchObject({
-      beforeItemKey: "tools-7",
-    });
-    expect(
-      readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
-    ).toEqual(["k1", "k2", "k8", "k9"]);
-  });
-
-  it("applies a delayed live delta to the page loaded while it was in flight", async () => {
-    const tip = session(["k8"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 1,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k8",
-      newestItemKey: "k8",
-    });
-    tip.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
-    tip.timelineItems.push({
-      kind: "liveAssistant",
-      itemKey: "live-assistant",
-      content: "hello",
-      reasoning: null,
-    });
-    const older = session(["k1"], {
-      totalItems: -1,
-      totalItemsExact: false,
-      pageItems: 1,
-      hasOlder: false,
-      hasNewer: true,
-      oldestItemKey: "k1",
-      newestItemKey: "k1",
-    });
-    let resolveDelta!: (delta: SessionLiveDeltaView) => void;
-    const deltaResponse = new Promise<SessionLiveDeltaView>((resolve) => {
-      resolveDelta = resolve;
-    });
-    const fetchSessionSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(tip)
-      .mockResolvedValueOnce(older);
-    const reads = readsFor({
-      fetchSessionSnapshot,
-      fetchSessionLiveDelta: vi.fn(() => deltaResponse),
-    } as unknown as DesktopApiAdapter);
-
-    await reads.refreshSession("session-1");
-    const pendingDelta = reads.refreshSessionLiveDelta();
-    await reads.loadOlderSessionTimeline();
-    resolveDelta({
-      outcome: "delta",
-      liveCursor: "cursor",
-      revision: { storeVersion: 8, provenanceVersion: 1 },
-      requestId: "request-1",
-      turnState: "running",
-      status: null,
-      content: {
-        mode: "append",
-        value: " world",
-        byteLen: 11,
-        hash: "d58b3fa7",
-      },
-      reasoning: {
-        mode: "unchanged",
-        value: "",
-        byteLen: 0,
-        hash: "811c9dc5",
-      },
-    });
-    await pendingDelta;
-
-    expect(
-      readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
-    ).toEqual(["k1", "k8", "live-assistant"]);
-    expect(readSession(reads.sessionStore)?.timelineItems.at(-1)).toMatchObject({
-      content: "hello world",
-    });
-  });
-
   it("rejects old live reads after a full refresh and after observation stops", async () => {
     const tip = session([], {
       totalItems: 0,
@@ -605,6 +478,38 @@ describe("createSessionReads", () => {
     }
   });
 
+  it("drops a rows read that lands after the reader opened another session", async () => {
+    let finishRows!: (value: SessionRowsView) => void;
+    const store = createSelectionStore({
+      nodeDid: "did:key:test",
+      sessionId: "session-1",
+    });
+    const reads = readsFor(
+      {
+        fetchSessionSnapshot: vi.fn().mockResolvedValue(
+          session(["k1"], {
+            totalItems: 1,
+            pageItems: 1,
+            hasOlder: false,
+            hasNewer: false,
+            oldestItemKey: "k1",
+            newestItemKey: "k1",
+          }),
+        ),
+        fetchSessionRows: () =>
+          new Promise<SessionRowsView>((resolve) => {
+            finishRows = resolve;
+          }),
+      } as unknown as DesktopApiAdapter,
+      store,
+    );
+    await reads.refreshSession("session-1");
+    const rows = reads.loadSessionRows({ kind: "around", sequence: 40 });
+    store.setState({ sessionId: "session-2" });
+    finishRows(rowsRead("session-1"));
+    expect(await rows).toBeNull();
+  });
+
   it("drops a delayed snapshot after the selected session changes", async () => {
     let release!: (value: DesktopSessionSnapshot) => void;
     const delayed = new Promise<DesktopSessionSnapshot>((resolve) => {
@@ -654,40 +559,5 @@ describe("createSessionReads", () => {
     expect(
       readSession(reads.sessionStore)?.timelineItems.map((item) => item.itemKey),
     ).toEqual(["other"]);
-  });
-});
-
-describe("history refresh observations", () => {
-  it("does not turn a pending older-page projection into a global error", async () => {
-    const tip = session(["k8"], {
-      totalItems: 2,
-      pageItems: 1,
-      hasOlder: true,
-      hasNewer: false,
-      oldestItemKey: "k8",
-      newestItemKey: "k8",
-    });
-    const setError = vi.fn();
-    const reads = readsFor(
-      {
-        fetchSessionSnapshot: vi
-          .fn()
-          .mockResolvedValueOnce(tip)
-          .mockRejectedValueOnce(
-            new BridgeInvokeError({
-              code: "projectionPending",
-              retryable: true,
-              message: "refresh is pending",
-              endpoint: null,
-            }),
-          ),
-      } as unknown as DesktopApiAdapter,
-      undefined,
-      setError,
-    );
-    await reads.refreshSession("session-1");
-    expect(await reads.loadOlderSessionTimeline()).toBe(false);
-    expect(readSession(reads.sessionStore)?.timelineItems).toEqual(tip.timelineItems);
-    expect(setError).not.toHaveBeenCalled();
   });
 });

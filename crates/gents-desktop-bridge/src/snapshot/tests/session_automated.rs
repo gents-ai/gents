@@ -208,6 +208,7 @@ fn external_inputs_keep_their_sender_while_internal_controls_stay_hidden() {
         automated[0],
         (
             RequestOriginView::SessionMessage {
+                display_body: None,
                 sender_node_did: Some("did:test:amy".into()),
                 sender_session_id: Some("sess-other".into()),
                 sender_request_id: Some("sender".into()),
@@ -244,6 +245,7 @@ fn a_session_message_from_an_unreplicated_session_names_its_sending_agent() {
         item,
         RenderedTimelineItem::AutomatedInput {
             origin: RequestOriginView::SessionMessage {
+                display_body: None,
                 sender_node_did,
                 sender_session_id: None,
                 sender_request_id,
@@ -305,4 +307,27 @@ fn visible_automated_inputs_keep_request_identity_and_hidden_controls_remain_dur
         control_identities,
         [None, Some("wake".to_owned()), Some("goal".to_owned())]
     );
+}
+
+#[test]
+fn received_message_body_uses_readable_parent_identity_without_changing_signed_input() {
+    let mut rows = automated_store().to_rows();
+    let message = rows
+        .requests
+        .iter_mut()
+        .find(|row| row.request_id == "message")
+        .unwrap();
+    message.requester_did = Some("did:test:amy".into());
+    message.content = Some("[message agent:default session:sess-other node:did:test:amy · at:2026-04-21T12:00:02Z · cause:sender]\n\nReview the layout.".into());
+    let message = message.clone();
+    let store = ClientStore::from_rows(rows);
+    let origin = crate::snapshot::session::request_origin_view(&store, &message).unwrap();
+    assert!(
+        matches!(origin, RequestOriginView::SessionMessage { display_body: Some(body), .. } if body == "Review the layout.")
+    );
+    assert!(message
+        .content
+        .as_deref()
+        .unwrap()
+        .starts_with("[message agent:"));
 }

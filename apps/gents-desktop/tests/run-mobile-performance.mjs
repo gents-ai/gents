@@ -12,7 +12,15 @@ const APP_ROOT = resolve(TESTS_ROOT, "..");
 const REPOSITORY_ROOT = resolve(APP_ROOT, "..", "..");
 const DEFAULT_RUNS = 5;
 const DEFAULT_PORT = 1427;
-const TRANSCRIPT_ROWS = '[data-testid="transcript-panel"] [data-window-row]';
+/* the rows the transcript holds; only those near the view are drawn */
+const loadedTranscriptRows = (page) =>
+  page.evaluate(() =>
+    Number(
+      document
+        .querySelector('[data-testid="transcript-panel"] [data-transcript-list]')
+        ?.getAttribute("data-rows") ?? 0,
+    ),
+  );
 const VIEWPORT = { width: 390, height: 844 };
 const TYPING_NEXT_PAINT_BUDGET_MS = 50;
 const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
@@ -230,19 +238,34 @@ async function runSample(browserInstance, sampleIndex) {
     }),
   );
 
-  const rowsBeforeOlderPage = await page.locator(TRANSCRIPT_ROWS).count();
-  await page.evaluate((selector) => {
-    document.querySelector(selector)?.setAttribute("data-perf-retained", "");
-  }, TRANSCRIPT_ROWS);
+  const rowsBeforeOlderPage = await loadedTranscriptRows(page);
   scenarios.push(
     await measureScenario(
       page,
       cdp,
       "page_older_transcript_rows",
       async () => {
+        /* the page lands a little after the top is reached, under the row
+           the reader is on */
+        await page.evaluate(() =>
+          window.__GENTS_MOBILE_PERFORMANCE__.setOlderPageDelay(150),
+        );
         await loadOlderTranscriptPage(
           page,
           rowsBeforeOlderPage + fixture.transcriptPageSize,
+          () =>
+            page.evaluate(() => {
+              const panel = document.querySelector('[data-testid="transcript-panel"]');
+              const viewport = panel?.closest('[data-slot="scroll-area-viewport"]');
+              const top = viewport?.getBoundingClientRect().top ?? 0;
+              const row = [...(panel?.querySelectorAll("[data-row-key]") ?? [])].find(
+                (row) => row.getBoundingClientRect().bottom > top + 72,
+              );
+              row?.setAttribute("data-perf-retained", "");
+            }),
+        );
+        await page.evaluate(() =>
+          window.__GENTS_MOBILE_PERFORMANCE__.setOlderPageDelay(0),
         );
       },
       async () => ({
@@ -253,7 +276,7 @@ async function runSample(browserInstance, sampleIndex) {
     ),
   );
 
-  const typingStartingRows = await page.locator(TRANSCRIPT_ROWS).count();
+  const typingStartingRows = await loadedTranscriptRows(page);
   scenarios.push(
     await measureScenario(
       page,
@@ -286,6 +309,12 @@ async function runSample(browserInstance, sampleIndex) {
     ),
   );
 
+  /* a reply is read as it streams in, at the foot of the transcript */
+  await page.getByRole("button", { name: "Back to bottom" }).click();
+  await page
+    .locator('[data-slot="scroll-area-viewport"][data-following="true"]')
+    .waitFor();
+  await settleRender(page);
   scenarios.push(
     await measureScenario(page, cdp, "sustained_streamed_response", async () => {
       const count = fixture.streamUpdateCount;
@@ -585,9 +614,11 @@ async function domSnapshot(page) {
     transcriptTurnBlocks: document.querySelectorAll(
       '[data-testid="transcript-panel"] [data-slot="assistant-message"], [data-testid="transcript-panel"] [data-slot="user-message"], [data-testid="transcript-panel"] [data-slot="tool-steps"]',
     ).length,
-    transcriptRows: document.querySelectorAll(
-      '[data-testid="transcript-panel"] [data-window-row]',
-    ).length,
+    transcriptRows: Number(
+      document
+        .querySelector('[data-testid="transcript-panel"] [data-transcript-list]')
+        ?.getAttribute("data-rows") ?? 0,
+    ),
     serializedBodyBytes: new TextEncoder().encode(document.body.innerHTML).byteLength,
   }));
 }
@@ -873,15 +904,19 @@ function evaluateStructuralAssertions(samples) {
       policy: "hard",
       limit: 16 * 1024,
       observedMax: Math.max(
-        ...[...tip, ...pageOlder, ...burst].map(
-          (scenario) =>
+        ...[...tip, ...pageOlder, ...burst].map((scenario) =>
+          Math.max(
             scenario.bridge.byCommand.fetchSessionSnapshot?.maxResponseBytes ?? 0,
+            scenario.bridge.byCommand.fetchSessionRows?.maxResponseBytes ?? 0,
+          ),
         ),
       ),
       passed: [...tip, ...pageOlder, ...burst].every(
         (scenario) =>
           (scenario.bridge.byCommand.fetchSessionSnapshot?.maxResponseBytes ?? 0) <=
-          16 * 1024,
+            16 * 1024 &&
+          (scenario.bridge.byCommand.fetchSessionRows?.maxResponseBytes ?? 0) <=
+            16 * 1024,
       ),
     },
   ];
@@ -953,25 +988,36 @@ async function settleRender(page) {
   );
 }
 
-async function loadOlderTranscriptPage(page, expectedRows) {
+async function loadOlderTranscriptPage(page, expectedRows, atTop = async () => {}) {
   const panel = page.getByTestId("transcript-panel");
   await panel.evaluate((panel) => {
     const viewport = panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
     viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true }));
     viewport.scrollTop = 0;
   });
-  await page.waitForFunction(
-    ([selector, count]) => document.querySelectorAll(selector).length === count,
-    [TRANSCRIPT_ROWS, expectedRows],
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
   );
-  /* Rows commit before their momentum offset settles. Wait for its removal
-     so the next synthetic jump reaches the older-page threshold. */
+  await atTop();
+  await page.waitForFunction(
+    (count) =>
+      Number(
+        document
+          .querySelector('[data-testid="transcript-panel"] [data-transcript-list]')
+          ?.getAttribute("data-rows") ?? 0,
+      ) >= count,
+    expectedRows,
+  );
+  /* rows land before a difference carried during momentum is written; wait
+     for it, so the next jump to the top starts from where the reader is */
   await page.waitForFunction(() => {
-    const viewport = document
+    const content = document
       .querySelector('[data-testid="transcript-panel"]')
-      ?.closest('[data-slot="scroll-area-viewport"]');
-    const content = viewport?.firstElementChild;
-    return content != null && getComputedStyle(content).marginTop === "0px";
+      ?.closest("[data-transcript-content]");
+    return content == null || content.style.marginTop === "";
   });
 }
 

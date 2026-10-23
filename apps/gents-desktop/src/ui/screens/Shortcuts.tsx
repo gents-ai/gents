@@ -8,7 +8,6 @@ import {
 } from "@gents/ui/components/dialog";
 import { Kbd } from "@gents/ui/components/kbd";
 import { navigate } from "@/lib/router";
-import { jumpToRow, turnFrom } from "@/lib/scroll";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import { useSelectedNodeDid } from "@/hooks/useClient";
 
@@ -41,7 +40,9 @@ export function Shortcuts() {
         const scroller = transcriptScroller();
         if (!scroller) return;
         e.preventDefault();
-        jumpToRow(turnFrom(scroller, e.key === "ArrowUp" ? -1 : 1));
+        scroller.dispatchEvent(
+          new CustomEvent("transcript:step", { detail: e.key === "ArrowUp" ? -1 : 1 }),
+        );
         return;
       }
       if (e.altKey || e.shiftKey) return;

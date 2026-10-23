@@ -105,6 +105,8 @@ import type { SessionGoalView } from "./SessionGoalView.js";
 import type { SessionLiveDeltaView } from "./SessionLiveDeltaView.js";
 import type { SessionProvenanceView } from "./SessionProvenanceView.js";
 import type { SessionRenameRequest } from "./SessionRenameRequest.js";
+import type { SessionRowsView } from "./SessionRowsView.js";
+import type { SessionRowsWindow } from "./SessionRowsWindow.js";
 import type { SkillDeleteRequest } from "./SkillDeleteRequest.js";
 import type { SkillSaveRequest } from "./SkillSaveRequest.js";
 import type { TaskDeleteRequest } from "./TaskDeleteRequest.js";
@@ -227,6 +229,7 @@ export type DesktopCommands = {
   desktop_session_live_delta: { args: { sessionId: string; nodeDid?: string | null; requestId: string; baseLiveCursor: string; baseContentByteLen: number; baseContentHash: string; baseReasoningByteLen: number; baseReasoningHash: string }; result: SessionLiveDeltaView | null };
   desktop_session_provenance: { args: { request: DesktopSessionProvenanceRequest }; result: SessionProvenanceView };
   desktop_session_rename: { args: { request: SessionRenameRequest }; result: void };
+  desktop_session_rows: { args: { sessionId: string; nodeDid?: string | null; window: SessionRowsWindow; limit?: number | null }; result: SessionRowsView | null };
   desktop_session_snapshot: { args: { sessionId: string; nodeDid?: string | null; requestId?: string | null; timelineLimit?: number | null; timelineBeforeItemKey?: string | null }; result: DesktopSessionSnapshot | null };
   desktop_set_selected_node: { args: { nodeDid?: string | null }; result: void };
   desktop_skill_delete: { args: { request: SkillDeleteRequest }; result: DesktopClientSnapshot };

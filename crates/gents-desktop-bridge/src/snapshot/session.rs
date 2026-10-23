@@ -49,6 +49,7 @@ pub use live_delta::build_session_live_delta;
 pub(crate) use live_delta::build_session_live_delta_from_store;
 use pending_turn::{build_pending_turn, project_retry_eligibility};
 use projection::build_session_snapshot_from_store_for_node_with_transcript;
+pub(crate) use projection::render_transcript_rows;
 #[cfg(test)]
 use request_context::decode_latest_request_context;
 use request_context::load_latest_session_request_context;
@@ -83,6 +84,11 @@ pub(super) fn request_origin_view(
                     .find(|row| row.doc_id.as_deref() == Some(doc_id))
             });
             RequestOriginView::SessionMessage {
+                display_body: parent
+                    .and_then(|parent| {
+                        gents::lifecycle::session_message_display_body(request, parent)
+                    })
+                    .map(str::to_owned),
                 sender_node_did: parent
                     .and_then(|row| normalize_optional(row.node_did.as_deref()))
                     .or_else(|| normalize_optional(request.requester_did.as_deref())),
@@ -380,73 +386,33 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             )
         }
         if let (Some(node_did), Some(requester_did)) = (node_did, session_requester) {
-            let page_sequences = transcript_store
-                .unwrap_or(store.as_ref())
-                .transcript_messages
-                .iter()
-                .map(|row| i64::from(row.message.sequence))
-                .collect::<rapidhash::RapidHashSet<_>>();
-            match gents_desktop_core::client::load_session_compaction_entries_on(
+            let history = attach_context_history_rows(
                 access,
                 session_id,
                 node_did,
                 requester_did,
+                &transcript_store
+                    .unwrap_or(store.as_ref())
+                    .transcript_messages,
+                &mut snapshot.timeline_items,
             )
-            .await
-            {
-                Ok(entries) => {
-                    snapshot.context.session_compaction_count =
-                        Some(i64::try_from(entries.len()).unwrap_or(i64::MAX));
-                    snapshot.context.compactions = entries
-                        .iter()
-                        .map(|entry| SessionCompactionView {
-                            compaction_key: entry.compaction_key.clone(),
-                            sequence: entry.sequence,
-                            messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
-                            original_tokens: entry.original_tokens,
-                            compacted_tokens: entry.compacted_tokens,
-                            created_at: entry.created_at.clone(),
-                        })
-                        .collect();
-                    attach_session_compaction_timeline_events(snapshot, &entries, &page_sequences);
-                }
-                Err(error) => tracing::warn!(
-                    target: "gents_desktop::chat",
-                    session_id,
-                    node_did,
-                    error = %error,
-                    "loading session compaction history failed"
-                ),
+            .await;
+            if let Some(entries) = history.compactions {
+                snapshot.context.session_compaction_count =
+                    Some(i64::try_from(entries.len()).unwrap_or(i64::MAX));
+                snapshot.context.compactions = entries
+                    .iter()
+                    .map(|entry| SessionCompactionView {
+                        compaction_key: entry.compaction_key.clone(),
+                        sequence: entry.sequence,
+                        messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
+                        original_tokens: entry.original_tokens,
+                        compacted_tokens: entry.compacted_tokens,
+                        created_at: entry.created_at.clone(),
+                    })
+                    .collect();
             }
-            let request_doc_ids = transcript_store
-                .unwrap_or(store.as_ref())
-                .transcript_messages
-                .iter()
-                .filter_map(|row| row.message.request_doc_id.clone())
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            match request_context::load_session_request_context_history(
-                access,
-                node_did,
-                session_id,
-                requester_did,
-                &request_doc_ids,
-            )
-            .await
-            {
-                Ok(history) => {
-                    snapshot.context.request_reduction_history_loaded = true;
-                    attach_context_reduction_timeline_events(snapshot, history, &page_sequences);
-                }
-                Err(error) => tracing::warn!(
-                    target: "gents_desktop::chat",
-                    session_id,
-                    node_did,
-                    error = %error,
-                    "loading page context reduction history failed"
-                ),
-            }
+            snapshot.context.request_reduction_history_loaded = history.reductions_loaded;
         }
         snapshot.projection_revision = Some(SessionProjectionRevisionView {
             store_version: projection_revision.store_version,
@@ -461,10 +427,91 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     snapshot
 }
 
+/// What a read's context history found: the session's compactions when they
+/// loaded, and whether the reductions of the read's requests did.
+pub(crate) struct ContextHistory {
+    pub(crate) compactions: Option<Vec<gents_protocol::row::CompactionEntryRow>>,
+    pub(crate) reductions_loaded: bool,
+}
+
+/// Compaction and context-reduction rows for the messages a read holds,
+/// placed among `items` by the message each is anchored to. A failed load
+/// leaves its rows out; the read itself still stands.
+pub(crate) async fn attach_context_history_rows(
+    access: &ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    messages: &[TranscriptMessageRow],
+    items: &mut Vec<RenderedTimelineItem>,
+) -> ContextHistory {
+    let page_sequences = messages
+        .iter()
+        .map(|row| i64::from(row.message.sequence))
+        .collect::<RapidHashSet<_>>();
+    let compactions = match gents_desktop_core::client::load_session_compaction_entries_on(
+        access,
+        session_id,
+        node_did,
+        requester_did,
+    )
+    .await
+    {
+        Ok(entries) => {
+            attach_session_compaction_timeline_events(items, &entries, &page_sequences);
+            Some(entries)
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                session_id,
+                node_did,
+                error = %error,
+                "loading session compaction history failed"
+            );
+            None
+        }
+    };
+    let request_doc_ids = messages
+        .iter()
+        .filter_map(|row| row.message.request_doc_id.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let reductions_loaded = match request_context::load_session_request_context_history(
+        access,
+        node_did,
+        session_id,
+        requester_did,
+        &request_doc_ids,
+    )
+    .await
+    {
+        Ok(history) => {
+            attach_context_reduction_timeline_events(items, history, &page_sequences);
+            true
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                session_id,
+                node_did,
+                error = %error,
+                "loading page context reduction history failed"
+            );
+            false
+        }
+    };
+    ContextHistory {
+        compactions,
+        reductions_loaded,
+    }
+}
+
 fn attach_context_reduction_timeline_events(
-    snapshot: &mut DesktopSessionSnapshot,
+    items: &mut Vec<RenderedTimelineItem>,
     history: Vec<LoadedRequestContext>,
-    page_sequences: &rapidhash::RapidHashSet<i64>,
+    page_sequences: &RapidHashSet<i64>,
 ) {
     struct RequestSummary {
         sequence: i64,
@@ -531,7 +578,7 @@ fn attach_context_reduction_timeline_events(
             latest_estimated_input_tokens: Some(summary.latest_estimate),
             latest_timestamp: summary.latest_timestamp,
         };
-        insert_timeline_item_by_sequence(&mut snapshot.timeline_items, item, summary.sequence);
+        insert_timeline_item_by_sequence(items, item, summary.sequence);
     }
 }
 
@@ -614,9 +661,9 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
 }
 
 fn attach_session_compaction_timeline_events(
-    snapshot: &mut DesktopSessionSnapshot,
+    items: &mut Vec<RenderedTimelineItem>,
     entries: &[gents_protocol::row::CompactionEntryRow],
-    page_sequences: &rapidhash::RapidHashSet<i64>,
+    page_sequences: &RapidHashSet<i64>,
 ) {
     for entry in entries {
         let Some(sequence) = entry
@@ -633,7 +680,7 @@ fn attach_session_compaction_timeline_events(
             compacted_tokens: entry.compacted_tokens,
             timestamp: entry.created_at.clone(),
         };
-        insert_timeline_item_by_sequence(&mut snapshot.timeline_items, item, sequence);
+        insert_timeline_item_by_sequence(items, item, sequence);
     }
 }
 
@@ -818,7 +865,7 @@ mod paging_coverage_tests {
             })
             .collect();
         attach_context_reduction_timeline_events(
-            &mut snapshot,
+            &mut snapshot.timeline_items,
             history,
             &rapidhash::RapidHashSet::from_iter([1]),
         );

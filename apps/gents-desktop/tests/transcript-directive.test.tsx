@@ -179,7 +179,6 @@ describe("where a directive may render", () => {
         inFlight={false}
         stopping={false}
         scroller={null}
-        content={null}
         session={sessionSnapshot({ timelineItems: items })}
         workers={NO_WORKERS}
         parentWork={NO_PARENT}

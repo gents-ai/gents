@@ -210,6 +210,9 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
         tool_call_query_limit: 321,
         source_exhausted: false,
         has_newer: true,
+        covered: Default::default(),
+        requests: Vec::new(),
+        result_messages: Vec::new(),
     };
     apply_session_timeline_page_with_query(
         &mut snapshot,
@@ -1024,6 +1027,9 @@ fn timeline_page(
         tool_call_query_limit: 321,
         source_exhausted,
         has_newer,
+        covered: Default::default(),
+        requests: Vec::new(),
+        result_messages: Vec::new(),
     }
 }
 
@@ -1286,4 +1292,79 @@ fn rendered_request_turns_preserve_physical_owners_and_unknown_lifecycle() {
         assert_eq!(turn.settled, settled);
     }
     assert!(turns[3].is_none());
+}
+
+#[test]
+fn a_rows_read_draws_the_rows_the_session_snapshot_draws() {
+    let request = AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        doc_id: Some("bae-doc-1".into()),
+        request_id: "req-1".into(),
+        node_did: Some("did:test:amy".into()),
+        session_id: Some("sess-1".into()),
+        lifecycle_state: Some(RequestLifecycleState::Completed),
+        content: Some("inspect the repository".into()),
+        ..Default::default()
+    };
+    let mut transcript = ClientStoreRows::default();
+    for (key, sequence, role, text) in [
+        (
+            "authored:bae-doc-1:context",
+            1,
+            MessageRole::User,
+            "<context>\nworkspace instructions\n</context>",
+        ),
+        (
+            "authored:bae-doc-1:prompt",
+            2,
+            MessageRole::User,
+            "inspect the repository",
+        ),
+        (
+            "reply",
+            3,
+            MessageRole::Assistant,
+            "I found the canonical owner.",
+        ),
+    ] {
+        push_canonical_text_message(
+            &mut transcript,
+            key,
+            "sess-1",
+            Some("bae-doc-1"),
+            sequence,
+            role,
+            text,
+        );
+    }
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![timeline_session()],
+            requests: vec![request.clone()],
+            transcript_messages: transcript.transcript_messages.clone(),
+            output_segments: transcript.output_segments.clone(),
+            ..ClientStoreRows::default()
+        }),
+        "sess-1",
+        Some("req-1"),
+    )
+    .expect("snapshot");
+
+    /* the rows read brings only its page and the requests the page names */
+    let mut page = timeline_page(3, true, false);
+    page.store = ClientStore::from_rows(transcript);
+    page.requests = vec![request];
+    let rows = crate::snapshot::render_transcript_rows(&ClientStore::default(), &page, "sess-1");
+
+    assert_eq!(
+        serde_json::to_value(&rows).expect("rows"),
+        serde_json::to_value(&snapshot.timeline_items).expect("snapshot rows"),
+    );
+    assert!(matches!(
+        &rows[..],
+        [
+            RenderedTimelineItem::UserMessage { owns_turn: true, request_id: Some(prompt), .. },
+            RenderedTimelineItem::AssistantMessage { .. },
+        ] if prompt == "req-1"
+    ));
 }

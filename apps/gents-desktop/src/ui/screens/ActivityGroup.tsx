@@ -10,7 +10,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@gents/ui/components/collapsible";
-import { KEEP_DRAWN } from "@/lib/transcriptWindow";
 
 import { BackgroundToolButton } from "./BackgroundToolButton";
 import { ToolIcon } from "./tool-icon";
@@ -74,31 +73,40 @@ function Step({
   );
 }
 
+type ReasoningState = { open: boolean; all: boolean };
+/* what the reader opened in a transcript, kept by row: a row the list stops
+   drawing comes back as the reader left it */
 type GroupState = {
   folded: Record<string, boolean>;
   openStep: Record<string, string | null>;
+  reasoning: Record<string, ReasoningState>;
   setFolded: (groupKey: string, folded: boolean) => void;
   setOpenStep: (groupKey: string, stepKey: string | null) => void;
+  setReasoning: (key: string, state: ReasoningState) => void;
 };
 export const GroupStateContext = createContext<GroupState | null>(null);
 
 export function useGroupState(sessionKey: string | null): GroupState {
   const [folded, setFoldedMap] = useState<Record<string, boolean>>({});
   const [openStep, setOpenStepMap] = useState<Record<string, string | null>>({});
+  const [reasoning, setReasoningMap] = useState<Record<string, ReasoningState>>({});
   const [session, setSession] = useState(sessionKey);
   if (session !== sessionKey) {
     setSession(sessionKey);
     setFoldedMap({});
     setOpenStepMap({});
+    setReasoningMap({});
   }
   return useMemo(
     () => ({
       folded,
       openStep,
+      reasoning,
       setFolded: (key, value) => setFoldedMap((m) => ({ ...m, [key]: value })),
       setOpenStep: (key, value) => setOpenStepMap((m) => ({ ...m, [key]: value })),
+      setReasoning: (key, value) => setReasoningMap((m) => ({ ...m, [key]: value })),
     }),
-    [folded, openStep],
+    [folded, openStep, reasoning],
   );
 }
 
@@ -252,7 +260,7 @@ export function ActivityGroup({
                   <WorkerRunStep key={m.key} tools={m.tools} workers={workers} />
                 ) : (
                   <div key={m.key} className="py-1">
-                    <Reasoning text={m.text} />
+                    <Reasoning text={m.text} stateKey={m.key} />
                   </div>
                 ),
               )}
@@ -278,9 +286,18 @@ export function ActivityGroup({
   );
 }
 
-export function Reasoning({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const [all, setAll] = useState(false);
+export function Reasoning({ text, stateKey }: { text: string; stateKey?: string }) {
+  const group = useContext(GroupStateContext);
+  const [local, setLocal] = useState<ReasoningState>({ open: false, all: false });
+  const kept = group && stateKey ? group.reasoning[stateKey] : undefined;
+  const { open, all } = kept ?? local;
+  const update = (next: Partial<ReasoningState>) => {
+    const state = { open, all, ...next };
+    if (group && stateKey) group.setReasoning(stateKey, state);
+    else setLocal(state);
+  };
+  const setOpen = (value: boolean) => update({ open: value });
+  const setAll = (value: boolean) => update({ all: value });
   const [clipped, setClipped] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -302,7 +319,6 @@ export function Reasoning({ text }: { text: string }) {
     <Collapsible
       ref={root}
       open={open}
-      {...(open ? { [KEEP_DRAWN]: "" } : {})}
       onOpenChange={(next) => (next ? setOpen(true) : fold(() => setOpen(false)))}
       className="mb-5"
     >
