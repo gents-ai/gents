@@ -17,6 +17,7 @@ use tokio::sync::{oneshot, Notify};
 #[derive(Clone, Debug)]
 pub enum StreamChunk {
     Text(String),
+    Reasoning(String),
     ToolCall {
         id: String,
         name: String,
@@ -27,6 +28,10 @@ pub enum StreamChunk {
 impl StreamChunk {
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text(text.into())
+    }
+
+    pub fn reasoning(reasoning: impl Into<String>) -> Self {
+        Self::Reasoning(reasoning.into())
     }
 
     pub fn tool_call(
@@ -762,6 +767,18 @@ fn chunk_payload(index: usize, chunk: &StreamChunk) -> String {
             "choices": [{
                 "delta": {
                     "content": content,
+                    "tool_calls": []
+                },
+                "finish_reason": null
+            }],
+            "usage": null
+        })
+        .to_string(),
+        StreamChunk::Reasoning(reasoning) => json!({
+            "choices": [{
+                "delta": {
+                    "content": null,
+                    "reasoning_content": reasoning,
                     "tool_calls": []
                 },
                 "finish_reason": null
