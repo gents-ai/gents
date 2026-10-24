@@ -150,13 +150,21 @@ def forkInput (includeDelivery : Bool) : Snapshot × ClosureInput :=
   ({ snapshot selected with admission := request },
     { input (first :: last :: selected) with request })
 
+def wrongStreamInput (headers : List MessageEnvelope) : ClosureInput :=
+  { input headers with segments := (terminalRecords tool).map fun segment =>
+      { segment with flush := segment.flush.map fun flush =>
+          { flush with runs := flush.runs.map fun run =>
+              { run with declaration := run.declaration.map fun declaration =>
+                  { declaration with kind := .text } } } } }
+
 def windowCases : List (String × Snapshot × ClosureInput × Tool) :=
   let valid := [call 10 3, delivered 11 5]
   let wrong := delivered 11 5
   let wrong := { wrong with header := { wrong.header with request := some 701 } }
   let completeFork := forkInput true
   let cutFork := forkInput false
-  [ ("authored_background_receipt", snapshot valid,
+  [ ("wrong_terminal_stream_kind", snapshot valid, wrongStreamInput valid, tool)
+  , ("authored_background_receipt", snapshot valid,
       { input valid with segments := (terminalRecords tool).map fun segment =>
         { segment with coordinate := ⟨tool.request, .authored 11⟩ } }, tool)
   , ("missing_terminal_output", snapshot valid, { input valid with segments := [] }, tool)
@@ -216,6 +224,11 @@ theorem authored_background_receipt_cannot_order_a_terminal_tool :
 theorem missing_terminal_output_cannot_order_a_terminal_tool :
     let headers := [call 10 3, delivered 11 5]
     window (snapshot headers) { input headers with segments := [] } tool = none := by
+  native_decide
+
+theorem non_tool_stream_cannot_supply_a_terminal_window :
+    let headers := [call 10 3, delivered 11 5]
+    window (snapshot headers) (wrongStreamInput headers) tool = none := by
   native_decide
 
 end SessionHydration.FileInventory.Order.Examples

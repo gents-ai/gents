@@ -167,9 +167,9 @@ fn segment(value: &Value, selected: &Value) -> crate::session::canonical_rows::O
     let flush = &value["flush"];
     let runs = flush["runs"].as_array().map(|runs| runs.iter().map(|run| {
         let declaration = &run["declaration"];
-        assert_eq!(declaration["kind"], "tool_output");
+        assert!(matches!(declaration["kind"].as_str(), Some("tool_output" | "text")));
         json!({"stream":run["stream"],"bytes":run["bytes"],"declaration":{
-            "block_index":declaration["block"],"part_index":declaration["part"],"payload":{"kind":"tool_output"}}})
+            "block_index":declaration["block"],"part_index":declaration["part"],"payload":{"kind":declaration["kind"]}}})
     }).collect::<Vec<_>>()).unwrap_or_default();
     crate::session::canonical_rows::OutputSegmentRow {
         doc_id: document(&value["id"]),
@@ -423,7 +423,7 @@ fn generated_orders_use_canonical_publication_observations() {
             .as_array()
             .unwrap()
             .len(),
-        12
+        13
     );
     assert_eq!(
         contracts["file_inventory_order_resolution_cases"]
