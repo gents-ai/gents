@@ -134,6 +134,26 @@ export function UserMessageItem({
               }
             />
           ) : null}
+          {item.kind === "userMessage" &&
+          item.startedGoalId &&
+          item.reconstruction.state === "ready" ? (
+            <span className="message-goal-attribution">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="8" />
+                <circle cx="12" cy="12" r="4" />
+                <path d="m12 12 7-7m-4 0h4v4" />
+              </svg>
+              <span>Sent as goal</span>
+            </span>
+          ) : null}
         </div>
         <div className="message-content">
           <MessageAvailability reconstruction={item.reconstruction} />

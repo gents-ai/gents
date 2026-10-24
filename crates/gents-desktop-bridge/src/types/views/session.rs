@@ -17,6 +17,9 @@ pub struct RequestTurnView {
 pub struct MessageView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
+    pub started_goal_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub request_turn: Option<RequestTurnView>,
     pub message_key: String,
     pub request_id: Option<String>,
@@ -391,6 +394,9 @@ pub struct RequestOutcomeView {
 pub enum RenderedTimelineItem {
     #[serde(rename_all = "camelCase")]
     UserMessage {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        started_goal_id: Option<String>,
         item_key: String,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
