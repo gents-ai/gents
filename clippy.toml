@@ -14,4 +14,8 @@ disallowed-methods = [
     { path = "tokio::task::block_in_place", reason = "run synchronous work on spawn_blocking" },
     { path = "futures::executor::block_on", reason = "await the future" },
     { path = "tauri::async_runtime::block_on", reason = "await the future" },
+    # One runtime per process: take its handle from the caller. A drop guard
+    # binds its runtime with `gents::drop_cleanup::DropCleanup::current`.
+    { path = "tokio::runtime::Handle::current", reason = "take the runtime handle from the caller, or DropCleanup::current in a drop guard" },
+    { path = "tokio::runtime::Handle::try_current", reason = "take the runtime handle from the caller, or DropCleanup::current in a drop guard" },
 ]
