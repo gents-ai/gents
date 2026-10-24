@@ -16,7 +16,7 @@ structure Case where
   actions : List Action
 
 def callerJson (caller : Caller) : Json := Json.mkObj
-  [("requester", toJson caller.requester), ("token", toJson caller.token)]
+  [("requester", toJson caller.requester), ("request", toJson caller.request)]
 def intentJson (intent : Intent) : Json := Json.mkObj
   [("caller", callerJson intent.caller), ("node", toJson intent.node),
    ("envelope", toJson intent.envelope)]
@@ -69,7 +69,7 @@ def traces (journal : Journal) : List Action → List Json
       traces next actions
 
 def cases : List Case :=
-  let caller : Caller := ⟨1, 10⟩
+  let caller : Caller := ⟨1, 30⟩
   let intent : Intent := ⟨caller, 2, 100⟩
   let prepared : Prepared := ⟨20, 30, 300⟩
   let fresh : Prepared := ⟨21, 31, 301⟩
@@ -85,15 +85,15 @@ def cases : List Case :=
       [start, .observe caller prepared .notDelivered, ack, .reconnect, retry]⟩
   , ⟨"unresolved_cannot_be_acknowledged", [], [start, ack, .reconnect, retry]⟩
   , ⟨"distinct_authored_operations", [], [start,
-      .prepare { intent with caller := ⟨1, 11⟩ } fresh true]⟩
+      .prepare { intent with caller := ⟨1, 31⟩ } fresh true]⟩
   , ⟨"different_envelope_refused", [], [start,
       .prepare { intent with envelope := 101 } fresh true]⟩
   , ⟨"different_runtime_refused", [], [start,
       .prepare { intent with node := 3 } fresh true]⟩
   , ⟨"different_signer_is_distinct", [], [start,
-      .prepare { intent with caller := ⟨2, 10⟩ } fresh true]⟩
+      .prepare { intent with caller := ⟨2, 31⟩ } fresh true]⟩
   , ⟨"failed_durable_prepare_has_no_effect", [],
-      [.prepare intent prepared false, .reconnect, retry]⟩
+      [.prepare intent prepared false, .reconnect, start]⟩
   , ⟨"same_preparation_does_not_depend_on_new_write", [],
       [start, .reconnect, .prepare intent fresh false]⟩
   , ⟨"foreign_receipt_refused", [],
@@ -103,7 +103,12 @@ def cases : List Case :=
   , ⟨"confirmed_outcome_is_monotonic", [],
       [start, accepted, .observe caller prepared .notDelivered, retry]⟩
   , ⟨"independent_caller_cannot_reuse_request", [],
-      [start, .prepare { intent with caller := ⟨1, 11⟩ } prepared true]⟩
+      [start, .prepare { intent with caller := ⟨1, 31⟩ } prepared true]⟩
+  , ⟨"proposal_cannot_replace_caller_identity", [], [.prepare intent fresh true]⟩
+  , ⟨"request_identity_is_unique_across_signers_and_nodes", [], [start,
+      .prepare { intent with caller := ⟨2, 30⟩, node := 3 } prepared true]⟩
+  , ⟨"malformed_request_binding_refused", [⟨intent, fresh, .unresolved, true, false⟩], [retry]⟩
+  , ⟨"premature_byte_retirement_refused", [⟨intent, prepared, .unresolved, false, false⟩], [retry]⟩
   , ⟨"ambiguous_caller_records_refused",
       [⟨intent, prepared, .unresolved, true, false⟩, ⟨intent, fresh, .unresolved, true, false⟩],
       [.observe caller prepared .accepted, ack, retry]⟩
@@ -113,7 +118,7 @@ def casesJson : String := (toJson (cases.map fun c => Json.mkObj
   [("name", toJson c.name), ("initial", journalJson c.initial),
    ("trace", toJson (traces c.initial c.actions))])).compress
 
-example : cases.length = 17 := by decide
+example : cases.length = 21 := by decide
 end Conformance.ClientSubmissionReceiptContracts
 
 def main : IO Unit := IO.println Conformance.ClientSubmissionReceiptContracts.casesJson

@@ -1,8 +1,10 @@
 namespace ClientSubmissionReceipt
 
+/-- The caller retains the canonical request identity before transmission. The
+existing local journal's unique request index is the preparation reservation. -/
 structure Caller where
   requester : Nat
-  token : Nat
+  request : Nat
   deriving DecidableEq, Repr
 
 /-- The envelope denotes the exact authored input, captures, requested session
@@ -45,10 +47,15 @@ inductive Result where
 def lookup (journal : Journal) (caller : Caller) : Option Record :=
   journal.find? fun record => record.intent.caller == caller
 
+def bound (record : Record) : Bool :=
+  record.prepared.request == record.intent.caller.request &&
+    record.retainedBytes != record.acknowledged
+
 def result (record : Record) : Result :=
-  match record.outcome with
-  | .unresolved => if record.retainedBytes then .reconcile record.prepared else .refused
-  | outcome => .settled record.prepared outcome
+  if !bound record then .refused else
+    match record.outcome with
+    | .unresolved => if record.retainedBytes then .reconcile record.prepared else .refused
+    | outcome => .settled record.prepared outcome
 
 /-- `durable` is the existing journal owner's successful durable preparation,
 not an RPC reply or database admission receipt. A failed or ambiguous local
@@ -64,8 +71,8 @@ def prepare (journal : Journal) (intent : Intent) (proposal : Prepared)
   | some record =>
     if record.intent == intent then (journal, result record) else (journal, .refused)
   | none =>
-    if durable && !(journal.any fun record =>
-        record.intent.node == intent.node && record.prepared.request == proposal.request) then
+    if durable && proposal.request == intent.caller.request &&
+        !(journal.any fun record => record.prepared.request == proposal.request) then
       let record : Record := ⟨intent, proposal, .unresolved, true, false⟩
       (journal ++ [record], result record)
     else (journal, .refused)
@@ -76,7 +83,7 @@ def observe (journal : Journal) (caller : Caller) (prepared : Prepared)
     (outcome : Outcome) : Journal :=
   if (journal.filter fun record => record.intent.caller == caller).length != 1 then journal
   else journal.map fun record =>
-    if record.intent.caller == caller && record.prepared == prepared &&
+    if bound record && record.intent.caller == caller && record.prepared == prepared &&
         record.outcome == .unresolved && outcome != .unresolved then
       { record with outcome := outcome }
     else record
@@ -88,7 +95,7 @@ reply. Unresolved work cannot be acknowledged away. -/
 def acknowledge (journal : Journal) (caller : Caller) (prepared : Prepared) : Journal :=
   if (journal.filter fun record => record.intent.caller == caller).length != 1 then journal
   else journal.map fun record =>
-    if record.intent.caller == caller && record.prepared == prepared &&
+    if bound record && record.intent.caller == caller && record.prepared == prepared &&
         record.outcome != .unresolved then
       { record with retainedBytes := false, acknowledged := true }
     else record
@@ -134,8 +141,9 @@ theorem unknown_cannot_be_retired (intent : Intent) (prepared : Prepared) :
   simp [acknowledge]
 
 theorem acknowledged_outcome_never_replays (intent : Intent) (prepared : Prepared)
-    (outcome : Outcome) (confirmed : outcome ≠ .unresolved) :
+    (outcome : Outcome) (confirmed : outcome ≠ .unresolved)
+    (identity : prepared.request = intent.caller.request) :
     result ⟨intent, prepared, outcome, false, true⟩ = .settled prepared outcome := by
-  cases outcome <;> simp_all [result]
+  cases outcome <;> simp_all [result, bound]
 
 end ClientSubmissionReceipt
