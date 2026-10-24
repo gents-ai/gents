@@ -38,14 +38,12 @@ impl ClientCore {
         let mut routes = records
             .iter()
             .filter(|record| record.node_did == entry.scope.node_did);
-        let route = routes
-            .next()
-            .context("Connect the runtime that owns these recorded file versions.")?;
+        let route = routes.next();
         ensure!(
             routes.next().is_none(),
             "multiple runtime routes own this file version"
         );
-        let retained = if route.is_enrollment() {
+        let retained = if route.is_none_or(|route| route.is_enrollment()) {
             ensure!(
                 entry.scope.requester_did == self.node_identity.did(),
                 "These recorded file versions require their original conversation's authorization."
@@ -78,7 +76,9 @@ impl ClientCore {
             }
             self.remote_file_observation(demand).await?
         } else {
-            let route = route.clone();
+            let route = route
+                .context("Connect the runtime that owns these recorded file versions.")?
+                .clone();
             let endpoint = tokio::task::spawn_blocking(move || {
                 crate::local_runtime::cached_operator_endpoint(&route)
                     .filter(|endpoint| !endpoint.is_anonymous())

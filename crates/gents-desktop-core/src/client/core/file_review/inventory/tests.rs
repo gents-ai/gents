@@ -184,7 +184,8 @@ async fn insert(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_recorded_origin_file_opens_without_loading_its_transcript() -> Result<()> {
+async fn recorded_origin_review_retains_metadata_without_a_route_but_does_not_grant_images(
+) -> Result<()> {
     use gents::defra_node::{EmbeddedNode, HttpConfig};
     use gents_protocol::file_inventory::{
         FileInventoryPage, FileInventoryPageDemand, FileInventoryPageReceipt, FileInventoryReply,
@@ -350,6 +351,15 @@ async fn a_recorded_origin_file_opens_without_loading_its_transcript() -> Result
         observation_doc_id: image,
         change: FileChangeMetadata::from(&expected),
     };
+    let target_session = insert(
+        &node,
+        "AgentSession",
+        json!({
+            "node_did":source.did(), "requester_did":source.did(), "session_id":"target-chat",
+            "agent_id":"fixture", "created_at":now,
+        }),
+    )
+    .await?;
     let admission = FileInventoryAdmission {
         request: HydrationRequest {
             request_key: format!("{}:target-chat", core.local_peer_id()),
@@ -358,7 +368,7 @@ async fn a_recorded_origin_file_opens_without_loading_its_transcript() -> Result
             node_did: source.did().into(),
             session_id: "target-chat".into(),
         },
-        session_doc_id: "target-session-physical".into(),
+        session_doc_id: target_session,
     };
     let attempt = uuid::Uuid::new_v4().to_string();
     let demand = FileInventoryPageDemand {
@@ -409,6 +419,22 @@ async fn a_recorded_origin_file_opens_without_loading_its_transcript() -> Result
         },
         entry_index: 0,
     };
+    let refresh = uuid::Uuid::new_v4().to_string();
+    let pending = core
+        .session_file_inventory(
+            source.did(),
+            "target-chat",
+            FileInventoryReadAction::Refresh {
+                attempt_id: refresh.clone(),
+            },
+        )
+        .await?
+        .unwrap();
+    assert_eq!(pending.attempt_id, refresh);
+    assert_eq!(
+        pending.previous.as_ref().unwrap().entries,
+        vec![entry.clone()]
+    );
     let observed = core
         .inventory_file_change(source.did(), "target-chat", &reference, None)
         .await?
@@ -416,6 +442,88 @@ async fn a_recorded_origin_file_opens_without_loading_its_transcript() -> Result
     assert_eq!(observed.entry, entry);
     assert_eq!(observed.change, expected);
     assert_eq!(observed.reference, reference);
+    let mut record = core
+        .sync_state
+        .records()
+        .iter()
+        .find(|record| record.node_did == source.did())
+        .unwrap()
+        .clone();
+    record.local_node_home = None;
+    core.sync_state.upsert_for_test(record.clone()).await?;
+    core.remove_peer(&record.peer_id).await?;
+    assert!(core.sync_state.records().is_empty());
+    let retained = core
+        .session_file_inventory(
+            source.did(),
+            "target-chat",
+            FileInventoryReadAction::Read {
+                cursor: Some(reference.cursor.clone()),
+            },
+        )
+        .await?
+        .unwrap();
+    assert_eq!(
+        retained.previous.as_ref().unwrap().entries,
+        vec![entry.clone()]
+    );
+    let offline_refresh = uuid::Uuid::new_v4().to_string();
+    let pending = core
+        .session_file_inventory(
+            source.did(),
+            "target-chat",
+            FileInventoryReadAction::Refresh {
+                attempt_id: offline_refresh.clone(),
+            },
+        )
+        .await?
+        .unwrap();
+    assert_eq!(pending.attempt_id, offline_refresh);
+    assert_eq!(
+        pending.previous.as_ref().unwrap().entries,
+        vec![entry.clone()]
+    );
+    assert!(core
+        .session_file_inventory(
+            source.did(),
+            "target-chat",
+            FileInventoryReadAction::Advance {}
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("Reconnect"));
+    assert!(core
+        .inventory_file_change(source.did(), "target-chat", &reference, None)
+        .await
+        .is_err());
+    assert!(core
+        .session_file_inventory(
+            source.did(),
+            "another-chat",
+            FileInventoryReadAction::default()
+        )
+        .await
+        .is_err());
+    insert(
+        &core.node_arc(),
+        "AgentSession",
+        json!({
+            "node_did":source.did(), "requester_did":source.did(), "session_id":"target-chat",
+            "agent_id":"fixture", "created_at":now,
+        }),
+    )
+    .await?;
+    assert!(core
+        .session_file_inventory(
+            source.did(),
+            "target-chat",
+            FileInventoryReadAction::default()
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("different physical session"));
     let local = ConfigAccess::local(core.node_arc()).execute(
         "{ AgentRequest { _docID } AgentMessage { _docID } FileImageHydrationRequest { _docID } }",
     ).await?;

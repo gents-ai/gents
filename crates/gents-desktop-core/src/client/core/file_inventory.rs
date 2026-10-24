@@ -29,14 +29,14 @@ impl ClientCore {
         let session_id = normalize_required("session_id", session_id)?;
         let records = self.sync_state.records();
         let mut matching = records.iter().filter(|record| record.node_did == node_did);
-        let record = matching.next().context("no saved runtime owns this node")?;
+        let record = matching.next();
         ensure!(
             matching.next().is_none(),
             "multiple runtime routes own this node"
         );
         let local = ConfigAccess::local(self.node_arc());
         let mut session = load_inventory_session(&local, node_did, session_id).await?;
-        if session.is_none() && !matches!(action, FileInventoryReadAction::Refresh { .. }) {
+        if session.is_none() || record.is_none() {
             if let Some(retained) = load_client_progress_for_scope(
                 &self.node,
                 self.local_peer_id(),
@@ -46,16 +46,38 @@ impl ClientCore {
             )
             .await?
             {
+                if let Some(session) = &session {
+                    ensure!(
+                        session.doc_id == retained.admission().session_doc_id
+                            && session.session.requester_did.as_deref()
+                                == Some(retained.admission().request.requester_did.as_str()),
+                        "Retained file changes belong to a different physical session."
+                    );
+                }
+                if let (None, FileInventoryReadAction::Refresh { attempt_id }) = (record, &action) {
+                    let id = uuid::Uuid::parse_str(attempt_id)?.to_string();
+                    return begin_client_progress(
+                        &self.node,
+                        retained.admission(),
+                        &id,
+                        &self.node_identity,
+                    )
+                    .await?
+                    .observation(None, &self.node_identity)
+                    .await
+                    .map(Some);
+                }
                 let cursor = match &action {
                     FileInventoryReadAction::Read { cursor } => cursor.as_ref(),
                     _ => None,
                 };
                 if matches!(action, FileInventoryReadAction::Read { .. })
-                    || retained
-                        .active()
-                        .pending_demand(&self.node_identity)
-                        .await?
-                        .is_none()
+                    || (matches!(action, FileInventoryReadAction::Advance {})
+                        && retained
+                            .active()
+                            .pending_demand(&self.node_identity)
+                            .await?
+                            .is_none())
                 {
                     return retained
                         .observation(cursor, &self.node_identity)
@@ -64,6 +86,8 @@ impl ClientCore {
                 }
             }
         }
+        let record = record
+            .context("Runtime authorization is unavailable. Reconnect to load new file changes.")?;
         let operator_record = record.clone();
         let operator = tokio::task::spawn_blocking(move || {
             crate::local_runtime::cached_operator_endpoint(&operator_record)
