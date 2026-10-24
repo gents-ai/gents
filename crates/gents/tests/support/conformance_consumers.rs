@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "client_installation::tests::generated_installation_traces_preserve_draining_and_replacement_guards",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/client_installation.rs",
+            module_path: "client_installation::tests",
+            function: "generated_installation_traces_preserve_draining_and_replacement_guards",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_request_coverage_uses_only_selected_physical_scope",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests.rs",

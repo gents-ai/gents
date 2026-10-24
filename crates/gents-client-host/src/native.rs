@@ -130,7 +130,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
         }
         if let Installation::Outdated { build: previous, control } = observed {
             if control != u64::from(gents_desktop_bridge::host::protocol::INSTALLATION_CONTROL_VERSION) {
-                let message = "The application serving this history predates safe updates. Close its clients, allow up to three minutes for the shared process to stop, then reconnect. Your history is unchanged.";
+                let message = "The application serving this history does not support automatic updates. Close its clients, allow up to three minutes for the shared process to stop, then reconnect. Your history is unchanged.";
                 if let Some(bootstrap) = &mut bootstrap {
                     crate::editor_store::send(bootstrap, &crate::editor_store::Message::Error {
                         error: gents_desktop_bridge::BridgeError::new(
@@ -261,15 +261,16 @@ where
             "kind":"hello", "version":PROTOCOL_VERSION
         }))?))
         .await?;
-    let Some(frame) = frames.next().await else {
-        return Ok(Installation::Outdated {
-            build: String::new(),
-            control: 0,
-        });
-    };
-    let hello: serde_json::Value = serde_json::from_slice(&frame?)?;
-    let current = hello["kind"] == "hello"
-        && hello["version"] == PROTOCOL_VERSION
+    let frame = frames.next().await.context("the shared client closed before initialization; reconnect and inspect its output if this repeats")??;
+    let hello: serde_json::Value = serde_json::from_slice(&frame)?;
+    anyhow::ensure!(
+        hello["kind"] == "hello"
+            && hello["version"].as_u64().is_some_and(|version| u32::try_from(version).is_ok())
+            && hello["maxFrameBytes"].as_u64().is_some()
+            && hello["commands"].as_array().is_some_and(|commands| commands.iter().all(serde_json::Value::is_string)),
+        "the shared client returned invalid initialization metadata; reconnect and inspect its output if this repeats"
+    );
+    let current = hello["version"] == PROTOCOL_VERSION
         && (hello["installationBuild"] == build
             || (hello["installationBuild"].is_null() && hello["installationControlVersion"] == 0))
         && hello["maxFrameBytes"] == MAX_FRAME_BYTES
@@ -406,6 +407,30 @@ mod tests {
                 matches!(observed.unwrap(), Installation::Current),
                 usable,
                 "{hello}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_or_invalid_initialization_does_not_claim_a_known_outdated_host() {
+        for reply in [None, Some(json!({ "kind": "updated", "sequence": 1 }))] {
+            let (client, server) = tokio::io::duplex(64 * 1024);
+            let serve = async {
+                let mut server = LengthDelimitedCodec::builder()
+                    .max_frame_length(MAX_FRAME_BYTES)
+                    .new_framed(server);
+                server.next().await.unwrap().unwrap();
+                if let Some(reply) = reply {
+                    server
+                        .send(Bytes::from(serde_json::to_vec(&reply).unwrap()))
+                        .await
+                        .unwrap();
+                }
+            };
+            let (observed, ()) = tokio::join!(inspect_connection(client, "expected"), serve);
+            assert!(
+                observed.is_err(),
+                "an unidentified host must not be selected for retirement"
             );
         }
     }
