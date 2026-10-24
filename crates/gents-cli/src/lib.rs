@@ -393,6 +393,13 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 ];
 pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
 
+/// Embedded editor launches must never trigger a system authentication dialog.
+/// Explicit credential access remains with the existing browser or store-unlock owner.
+pub fn run_cli_without_keychain_prompts() -> Result<()> {
+    let _interaction = process_resources::prevent_keychain_prompts(true)?;
+    run_cli()
+}
+
 pub fn run_cli() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

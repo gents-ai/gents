@@ -47,6 +47,7 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
     let core = match ClientCore::start_with_paths_and_options(paths, options).await {
         Ok(core) => Arc::new(core),
         Err(error) => {
+            tracing::error!(error = %format!("{error:#}"), "native client startup failed");
             if let Some(provider) = &provider {
                 let _ = provider.failed(&error).await;
             }
