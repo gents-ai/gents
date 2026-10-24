@@ -1,13 +1,14 @@
 use super::*;
+use crate::support::TestResult;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the configured real OpenAI-compatible backend"]
-async fn codex_shim_live_protocol_uses_real_backend() -> Result<()> {
+async fn codex_shim_live_protocol_uses_real_backend() -> TestResult<()> {
     let prompt_token = "PONGLIVE";
     let smoke = start_live_codex_shim().await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .context("connecting to live codex-shim websocket")?;
+        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
@@ -33,13 +34,13 @@ async fn codex_shim_live_protocol_uses_real_backend() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the configured real OpenAI-compatible backend"]
-async fn codex_shim_live_gents_filesystem_tools_project_to_codex_items() -> Result<()> {
+async fn codex_shim_live_gents_filesystem_tools_project_to_codex_items() -> TestResult<()> {
     let suffix = Uuid::new_v4().simple().to_string();
     let token = format!("FSLIVE-{}", &suffix[..8]);
     let smoke = start_live_codex_shim_with_write_tools(true, None).await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .context("connecting to live codex-shim websocket")?;
+        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
@@ -84,7 +85,7 @@ async fn codex_shim_live_gents_filesystem_tools_project_to_codex_items() -> Resu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the configured real OpenAI-compatible backend"]
-async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Result<()> {
+async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> TestResult<()> {
     let prompt_token = "PROJLIVE";
     let second_prompt_token = "GOALLIVE";
     let thread_name = format!("GENTS live projection {}", Uuid::new_v4().simple());
@@ -93,7 +94,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
     let smoke = start_live_codex_shim().await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .context("connecting to live codex-shim websocket")?;
+        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
@@ -306,7 +307,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         .iter()
         .find(|turn| turn.id == completed_turn.id)
         .ok_or_else(|| {
-            anyhow!(
+            format!(
                 "live thread/read did not include turn {}: {:?}",
                 completed_turn.id,
                 thread_read
@@ -345,7 +346,7 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         .data
         .iter()
         .find(|thread| thread.id == thread_id)
-        .ok_or_else(|| anyhow!("live GENTS-backed thread list did not include {thread_id}"))?;
+        .ok_or_else(|| format!("live GENTS-backed thread list did not include {thread_id}"))?;
     assert_eq!(listed.name.as_deref(), Some(thread_name.as_str()));
 
     send_client_request(
@@ -390,12 +391,12 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the configured real OpenAI-compatible backend"]
-async fn codex_shim_live_protocol_supports_multiturn_memory() -> Result<()> {
+async fn codex_shim_live_protocol_supports_multiturn_memory() -> TestResult<()> {
     let memory_token = "LIME7";
     let smoke = start_live_codex_shim().await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .context("connecting to live codex-shim websocket")?;
+        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &smoke.home_dir).await?;
@@ -431,7 +432,7 @@ async fn codex_shim_live_protocol_supports_multiturn_memory() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires authenticated gh and the configured real OpenAI-compatible backend"]
-async fn codex_shim_live_three_prompt_regression_writes_codex_home_trace() -> Result<()> {
+async fn codex_shim_live_three_prompt_regression_writes_codex_home_trace() -> TestResult<()> {
     require_command("gh")?;
     if !gh_is_authenticated() {
         eprintln!("skipping three-prompt live regression: gh is not authenticated");
@@ -446,7 +447,7 @@ async fn codex_shim_live_three_prompt_regression_writes_codex_home_trace() -> Re
     let smoke = start_live_codex_shim_with_write_tools(true, Some(broad_tool_root)).await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{}/", smoke.shim_port))
         .await
-        .context("connecting to live codex-shim websocket")?;
+        .map_err(|error| format!("connecting to live codex-shim websocket: {error:#}"))?;
 
     initialize_config_and_thread(&mut ws, &smoke.home_dir).await?;
     let thread_id = start_thread(&mut ws, &repo_root).await?;

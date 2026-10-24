@@ -222,16 +222,24 @@ async fn request_rows(access: &ConfigAccess, query: &str) -> Result<Vec<AgentReq
         .collect()
 }
 
-fn row_scope(row: &AgentRequestRow) -> Result<SessionScope> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CausedSessionError {
+    #[error("AgentRequest row omitted node_did")]
+    RowOmittedNodeDid,
+    #[error("AgentRequest row omitted session_id")]
+    RowOmittedSessionId,
+}
+
+fn row_scope(row: &AgentRequestRow) -> Result<SessionScope, CausedSessionError> {
     Ok(SessionScope {
         node_did: row
             .node_did
             .clone()
-            .context("AgentRequest row omitted node_did")?,
+            .ok_or(CausedSessionError::RowOmittedNodeDid)?,
         session_id: row
             .session_id
             .clone()
-            .context("AgentRequest row omitted session_id")?,
+            .ok_or(CausedSessionError::RowOmittedSessionId)?,
         requester_did: row.requester_did.clone(),
     })
 }

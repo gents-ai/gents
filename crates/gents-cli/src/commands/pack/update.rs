@@ -63,7 +63,10 @@ fn is_newer(latest: &str, installed: &str) -> Option<bool> {
     Some(latest.cmp_precedence(&installed).is_gt())
 }
 
-fn select_packs<'a>(packs: &'a [Value], package: Option<&str>) -> Result<Vec<&'a Value>> {
+fn select_packs<'a>(
+    packs: &'a [Value],
+    package: Option<&str>,
+) -> Result<Vec<&'a Value>, super::error::PackCommandError> {
     let selected: Vec<&Value> = packs
         .iter()
         .filter(|pack| {
@@ -73,8 +76,10 @@ fn select_packs<'a>(packs: &'a [Value], package: Option<&str>) -> Result<Vec<&'a
             })
         })
         .collect();
-    if let Some(package) = package {
-        anyhow::ensure!(!selected.is_empty(), "{package} is not installed");
+    if let Some(package) = package.filter(|_| selected.is_empty()) {
+        return Err(super::error::PackCommandError::NotInstalled {
+            package: package.to_owned(),
+        });
     }
     Ok(selected)
 }

@@ -15,7 +15,7 @@ use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
-use super::SubmittedRequest;
+use super::{ChatMutationError, SubmittedRequest};
 
 pub(crate) mod journal;
 
@@ -49,24 +49,13 @@ impl std::fmt::Debug for UnresolvedSubmission {
 ///
 /// The request may already be durable, so callers must reconcile rather than
 /// resend: resending a freshly signed request would duplicate the turn.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("submission outcome unknown for request {request_id} in session {session_id}: it may have been delivered; check the session before resending")]
 pub struct SubmissionOutcomeUnknown {
     pub request_id: String,
     pub session_id: String,
     pub pending: UnresolvedSubmission,
 }
-
-impl std::fmt::Display for SubmissionOutcomeUnknown {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "submission outcome unknown for request {} in session {}: it may have been delivered; check the session before resending",
-            self.request_id, self.session_id
-        )
-    }
-}
-
-impl std::error::Error for SubmissionOutcomeUnknown {}
 
 /// An earlier send whose delivery cannot be decided without its signed
 /// payload (for example after a restart).
@@ -74,24 +63,13 @@ impl std::error::Error for SubmissionOutcomeUnknown {}
 /// Carries identity only. An absent owner receipt does not prove the original
 /// will never commit, because that write may still be in flight, so callers
 /// must keep this identity unresolved instead of allowing a fresh send.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("delivery of request {request_id} in session {session_id} is unconfirmed: it may still be delivered; check the session before resending")]
 pub struct DeliveryUnconfirmed {
     pub request_id: String,
     pub session_id: String,
     pub node_did: String,
 }
-
-impl std::fmt::Display for DeliveryUnconfirmed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "delivery of request {} in session {} is unconfirmed: it may still be delivered; check the session before resending",
-            self.request_id, self.session_id
-        )
-    }
-}
-
-impl std::error::Error for DeliveryUnconfirmed {}
 
 /// Error context attached to every receipt read, so an unreadable receipt is
 /// recognisable after `write_with_receipt` wraps it.
@@ -109,8 +87,13 @@ impl UnresolvedSubmission {
     }
 
     /// Retain a prepared signed create and the identity it will produce.
-    pub(crate) fn new(create: AgentRequestCreate, result: SubmittedRequest) -> Result<Self> {
-        let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+    pub(crate) fn new(
+        create: AgentRequestCreate,
+        result: SubmittedRequest,
+    ) -> Result<Self, ChatMutationError> {
+        let mutation = create
+            .graphql_mutation()
+            .map_err(|reason| ChatMutationError::CreateMutation { reason })?;
         Ok(Self {
             request_id: create.request_id.clone(),
             session_id: create.session_id.clone(),

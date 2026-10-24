@@ -8,6 +8,16 @@ use serde_json::{json, Value};
 
 use super::projection_state::ProjectionStatus;
 
+#[derive(Debug, thiserror::Error)]
+enum ProgressError {
+    #[error("decoding exact AgentToolCall progress row")]
+    DecodeRow,
+    #[error("Codex tool projection crossed exact request/session scope")]
+    CrossedScope,
+    #[error("AgentToolCall omitted _docID")]
+    MissingDocId,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct GentsToolCallProgress {
     pub(super) doc_id: Option<String>,
@@ -173,19 +183,15 @@ pub(super) async fn hydrate_gents_tool_call_progress(
     requester_did: Option<&str>,
     request_doc_id: &str,
 ) -> Result<Option<GentsToolCallProgress>> {
-    let mut tool = decode_gents_tool_call_progress(row)
-        .context("decoding exact AgentToolCall progress row")?;
-    anyhow::ensure!(
-        tool.node_did.as_deref() == Some(node_did)
-            && tool.requester_did.as_deref() == requester_did
-            && row.get("session_id").and_then(Value::as_str) == Some(session_id)
-            && row.get("request_doc_id").and_then(Value::as_str) == Some(request_doc_id),
-        "Codex tool projection crossed exact request/session scope"
-    );
-    let doc_id = tool
-        .doc_id
-        .as_deref()
-        .context("AgentToolCall omitted _docID")?;
+    let mut tool = decode_gents_tool_call_progress(row).ok_or(ProgressError::DecodeRow)?;
+    if !(tool.node_did.as_deref() == Some(node_did)
+        && tool.requester_did.as_deref() == requester_did
+        && row.get("session_id").and_then(Value::as_str) == Some(session_id)
+        && row.get("request_doc_id").and_then(Value::as_str) == Some(request_doc_id))
+    {
+        return Err(ProgressError::CrossedScope.into());
+    }
+    let doc_id = tool.doc_id.as_deref().ok_or(ProgressError::MissingDocId)?;
     let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
         access,
         doc_id,

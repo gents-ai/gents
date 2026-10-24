@@ -64,7 +64,9 @@ pub(super) async fn handle_turn_request(
                     gents::session_message::interrupt_refusal(&state.node, &caller, &thread.scope())
                         .await?
                 {
-                    return send_error(outbound, request_id, JSONRPC_INVALID_PARAMS, refusal).await;
+                    return Ok(
+                        send_error(outbound, request_id, JSONRPC_INVALID_PARAMS, refusal).await?,
+                    );
                 }
             }
             match caused {
@@ -93,7 +95,7 @@ pub(super) async fn handle_turn_request(
                     "ok": result.is_ok(),
                 }),
             );
-            result
+            Ok(result?)
         }
         other => unreachable!(
             "non-turn Codex request routed to turn handler: {}",

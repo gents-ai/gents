@@ -3,13 +3,13 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -280,15 +280,15 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "external fixture: set HERMES_SKILLS_DIR and pass --ignored"]
 async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
-    let hermes_dir = std::env::var("HERMES_SKILLS_DIR").context(
-        "set HERMES_SKILLS_DIR to the NousResearch/hermes-agent skills directory and pass --ignored",
-    )?;
-    anyhow::ensure!(
+    let hermes_dir = std::env::var("HERMES_SKILLS_DIR").map_err(|error| {
+        format!("set HERMES_SKILLS_DIR to the NousResearch/hermes-agent skills directory and pass --ignored: {error}")
+    })?;
+    assert!(
         std::path::Path::new(&hermes_dir).is_dir(),
         "HERMES_SKILLS_DIR must point to an existing Hermes skills directory: {hermes_dir}"
     );
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-skill-import-{}", Uuid::new_v4().simple());

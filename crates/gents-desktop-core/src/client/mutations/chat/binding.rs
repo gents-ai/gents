@@ -1,8 +1,9 @@
-use anyhow::{bail, Result};
-
 use crate::client::store::ClientStore;
 
 use super::super::graphql::normalize_optional_string;
+use super::request::ChatMutationError;
+
+type Result<T, E = ChatMutationError> = std::result::Result<T, E>;
 
 pub(super) struct ResolvedAgentBinding {
     pub(super) agent_id: Option<String>,
@@ -52,7 +53,10 @@ fn resolve_agent_id(
 
     if let (Some(existing), Some(requested)) = (session_agent, requested) {
         if existing != requested {
-            bail!("AgentSession session agent mismatch: existing={existing} requested={requested}");
+            return Err(ChatMutationError::AgentMismatch {
+                existing: existing.to_owned(),
+                requested: requested.to_owned(),
+            });
         }
     }
 
@@ -65,10 +69,8 @@ fn resolve_agent_id(
                 .find(|row| row.node_did == node_did)
                 .and_then(|row| normalize_optional_string(row.default_agent_id.as_deref()))
         })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no agent is bound to this session and Node {node_did} has no default_agent_id"
-            )
+        .ok_or_else(|| ChatMutationError::NoAgentBound {
+            node_did: node_did.to_owned(),
         })?
         .to_owned();
 

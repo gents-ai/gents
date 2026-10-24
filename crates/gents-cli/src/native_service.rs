@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use std::io;
 
+use gents_protocol::error_chain::ErrorChain;
 #[cfg(not(all(feature = "native-e2e", debug_assertions)))]
 pub const SERVICE_LABEL: &str = "ai.gents.runtime";
 #[cfg(all(feature = "native-e2e", debug_assertions))]
@@ -53,6 +54,230 @@ impl std::fmt::Display for BackgroundApprovalPending {
 
 impl std::error::Error for BackgroundApprovalPending {}
 
+#[derive(Debug, thiserror::Error)]
+pub enum NativeServiceError {
+    #[error(transparent)]
+    ApprovalPending(#[from] BackgroundApprovalPending),
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error("native Gents services are supported only on macOS and Linux")]
+    UnsupportedPlatform,
+    #[error("HOME is required to manage a per-user native service")]
+    HomeRequired,
+    #[error("native service executable must be an absolute path")]
+    ExecutableNotAbsolute,
+    #[error("resolving Gents executable {}", path.display())]
+    ResolveExecutable {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("the Gents executable at {} is inside a temporary AppImage mount and cannot be recorded as a service executable. Open the desktop app so it can install a durable runtime, or pass --executable pointing at a .deb or extracted install.", path.display())]
+    ExecutableInTemporaryPackage { path: PathBuf },
+    #[error("creating native command stdout capture")]
+    CaptureStdout(#[source] io::Error),
+    #[error("creating native command stderr capture")]
+    CaptureStderr(#[source] io::Error),
+    #[error("executing {}", program.display())]
+    Spawn {
+        program: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("waiting for native service command")]
+    Wait(#[source] io::Error),
+    #[error("native service command timed out after {seconds} seconds{cleanup}")]
+    CommandTimedOut { seconds: u64, cleanup: String },
+    #[error("this version of macOS cannot open Login Items settings directly")]
+    LoginItemsUnavailable,
+    #[error("background item approval exists only on macOS")]
+    BackgroundApprovalUnsupported,
+    #[error("native service definition has no parent")]
+    DefinitionHasNoParent,
+    #[error("creating service directory {}", path.display())]
+    CreateServiceDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("reading installed native service {}", path.display())]
+    ReadInstalledDefinition {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("reading native service definition {}", path.display())]
+    ReadDefinition {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("native service definition is not UTF-8")]
+    DefinitionNotUtf8(#[source] std::str::Utf8Error),
+    #[error("native service is running or transitioning; stop it before updating its executable or environment")]
+    ServiceActiveDuringUpdate,
+    #[error("updating native service definition {}", path.display())]
+    UpdateDefinition {
+        path: PathBuf,
+        #[source]
+        source: AtomicWriteError,
+    },
+    #[error("writing native service definition {}", path.display())]
+    WriteDefinition {
+        path: PathBuf,
+        #[source]
+        source: AtomicWriteError,
+    },
+    #[error(
+        "Gents started, but restoring disabled-at-login state failed; enablement is uncertain"
+    )]
+    StartedButEnablementUncertain {
+        #[source]
+        source: Box<NativeServiceError>,
+    },
+    #[error("launchctl could not start Gents: {kick} (bootstrap: {bootstrap})")]
+    LaunchctlStart { kick: String, bootstrap: String },
+    #[error("Gents failed to start: {start}; restoring disabled-at-login state also failed, so enablement is uncertain: {restore}")]
+    StartAndRestoreFailed { start: String, restore: String },
+    #[error("launchctl could not determine whether Gents is enabled: {detail}")]
+    LaunchctlEnabledUnknown { detail: String },
+    #[error("launchctl returned an unknown Gents disabled override: {value}")]
+    LaunchctlUnknownOverride { value: String },
+    #[error("systemctl could not determine whether Gents is running: {detail}")]
+    SystemctlRunningUnknown { detail: String },
+    #[error("systemctl could not determine whether Gents is enabled: {detail}")]
+    SystemctlEnabledUnknown { detail: String },
+    #[error("systemctl could not report why Gents stopped: {detail}")]
+    SystemctlExitUnknown { detail: String },
+    #[error("removing {}", path.display())]
+    RemoveDefinition {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("service log path has no parent")]
+    LogHasNoParent,
+    #[error("creating service log directory {}", path.display())]
+    CreateLogDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("creating service log {}", path.display())]
+    CreateLog {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("restricting service log directory {}", path.display())]
+    RestrictLogDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("restricting service log {}", path.display())]
+    RestrictLog {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("native service is not installed at {}; run `gents service install` first", path.display())]
+    NotInstalled { path: PathBuf },
+    #[error("native service belongs to Gents home {}, not {}; refusing to control it", installed.display(), requested.display())]
+    HomeMismatch {
+        installed: PathBuf,
+        requested: PathBuf,
+    },
+    #[error("systemctl could not confirm that the Gents unit became inactive: {detail}")]
+    SystemctlNotInactive { detail: String },
+    #[error("native supervisor did not confirm that the Gents job unloaded or became inactive")]
+    UnloadNotConfirmed,
+    #[error("{program} failed: {detail}")]
+    CommandFailed { program: String, detail: String },
+    #[error("could not resolve current user id: {detail}")]
+    CurrentUidUnavailable { detail: String },
+    #[error("parsing current user id")]
+    ParseUid(#[source] std::num::ParseIntError),
+    #[error("{message}")]
+    ServiceManagerUnavailable {
+        message: &'static str,
+        #[source]
+        source: Box<NativeServiceError>,
+    },
+    #[error("native service paths must be absolute")]
+    PathNotAbsolute,
+    #[error("Gents service home must be an absolute path")]
+    HomeNotAbsolute,
+    #[error("Gents service home does not exist at {}", path.display())]
+    HomeMissing { path: PathBuf },
+    #[error("Gents executable does not exist at {}", path.display())]
+    ExecutableMissing { path: PathBuf },
+    #[error("Gents executable is not executable at {}", path.display())]
+    ExecutableNotExecutable { path: PathBuf },
+    #[error("absolute path has no existing ancestor")]
+    NoExistingAncestor,
+    #[error("canonicalizing path ancestor {}", path.display())]
+    CanonicalizeAncestor {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("native service path contains unresolved traversal")]
+    UnresolvedTraversal,
+    #[error("PATH is not valid UTF-8")]
+    SearchPathNotUtf8,
+    #[error("{name} path is not valid UTF-8")]
+    PathNotUtf8 { name: &'static str },
+    #[error("value contains a character forbidden by XML 1.0")]
+    XmlForbiddenCharacter,
+    #[error("executable path is not valid UTF-8")]
+    ExecutablePathNotUtf8,
+    #[error("home path is not valid UTF-8")]
+    HomePathNotUtf8,
+    #[error("stderr log path is not valid UTF-8")]
+    StderrLogPathNotUtf8,
+    #[error("stderr log path contains an unsupported control character")]
+    StderrLogControlCharacter,
+    #[error("service argument contains an unsupported control character")]
+    ServiceArgumentControlCharacter,
+    #[error("parsing launchd property list")]
+    ParseLaunchdPlist(#[source] plist::Error),
+    #[error("launchd definition root is not a dictionary")]
+    LaunchdRootNotDictionary,
+    #[error("launchd definition does not have the Gents service label")]
+    LaunchdLabelMismatch,
+    #[error("launchd definition has no ProgramArguments array")]
+    LaunchdNoProgramArguments,
+    #[error("launchd argument is not a string")]
+    LaunchdArgumentNotString,
+    #[error("launchd definition is not a Gents foreground server invocation")]
+    LaunchdNotForegroundServer,
+    #[error("systemd definition has no ExecStart")]
+    SystemdNoExecStart,
+    #[error("systemd definition is not a Gents foreground server invocation")]
+    SystemdNotForegroundServer,
+    #[error("systemd home argument is not quoted")]
+    SystemdArgumentNotQuoted,
+    #[error("trailing systemd escape")]
+    SystemdTrailingEscape,
+    #[error("unsupported escape in systemd home argument")]
+    SystemdUnsupportedEscape,
+    #[error("unescaped character in systemd home argument")]
+    SystemdUnescapedCharacter,
+    #[error("launchctl could not inspect Gents: {detail}")]
+    LaunchctlInspectFailed { detail: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AtomicWriteError {
+    #[error("path has no parent")]
+    NoParent,
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+type Result<T, E = NativeServiceError> = std::result::Result<T, E>;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum BackgroundItemStatus {
     #[default]
@@ -76,7 +301,7 @@ impl NativeServicePlatform {
         } else if cfg!(target_os = "linux") {
             Ok(Self::Linux)
         } else {
-            bail!("native Gents services are supported only on macOS and Linux")
+            Err(NativeServiceError::UnsupportedPlatform)
         }
     }
 }
@@ -100,14 +325,18 @@ impl NativeServiceConfig {
         let user_home = std::env::var_os("HOME")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .context("HOME is required to manage a per-user native service")?;
+            .ok_or(NativeServiceError::HomeRequired)?;
         let home = normalize_absolute(&home)?;
         if !executable.is_absolute() {
-            bail!("native service executable must be an absolute path");
+            return Err(NativeServiceError::ExecutableNotAbsolute);
         }
         let executable = if executable.exists() {
-            fs::canonicalize(&executable)
-                .with_context(|| format!("resolving Gents executable {}", executable.display()))?
+            fs::canonicalize(&executable).map_err(|source| {
+                NativeServiceError::ResolveExecutable {
+                    path: executable.clone(),
+                    source,
+                }
+            })?
         } else {
             executable
         };
@@ -190,10 +419,9 @@ pub fn ensure_durable_service_executable(
     app_image: Option<&Path>,
 ) -> Result<()> {
     if inside_temporary_package(executable, app_dir, app_image) {
-        bail!(
-            "the Gents executable at {} is inside a temporary AppImage mount and cannot be recorded as a service executable. Open the desktop app so it can install a durable runtime, or pass --executable pointing at a .deb or extracted install.",
-            executable.display()
-        );
+        return Err(NativeServiceError::ExecutableInTemporaryPackage {
+            path: executable.to_path_buf(),
+        });
     }
     Ok(())
 }
@@ -270,8 +498,8 @@ impl CommandRunner for ProcessCommandRunner {
         use std::io::{Read as _, Seek as _, SeekFrom};
         use wait_timeout::ChildExt as _;
 
-        let mut stdout = tempfile::tempfile().context("creating native command stdout capture")?;
-        let mut stderr = tempfile::tempfile().context("creating native command stderr capture")?;
+        let mut stdout = tempfile::tempfile().map_err(NativeServiceError::CaptureStdout)?;
+        let mut stderr = tempfile::tempfile().map_err(NativeServiceError::CaptureStderr)?;
         let mut command = Command::new(program);
         if program == OsStr::new("systemctl") {
             command.arg("--no-pager");
@@ -282,14 +510,17 @@ impl CommandRunner for ProcessCommandRunner {
             .stdout(stdout.try_clone()?)
             .stderr(stderr.try_clone()?)
             .spawn()
-            .with_context(|| format!("executing {}", Path::new(program).display()))?;
+            .map_err(|source| NativeServiceError::Spawn {
+                program: PathBuf::from(program),
+                source,
+            })?;
         let timeout = command_timeout(program, args);
         let waited = match child.wait_timeout(timeout) {
             Ok(waited) => waited,
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(error).context("waiting for native service command");
+                return Err(NativeServiceError::Wait(error));
             }
         };
         let status = match waited {
@@ -297,16 +528,16 @@ impl CommandRunner for ProcessCommandRunner {
             None => {
                 let kill_error = child.kill().err();
                 let wait_error = child.wait().err();
-                bail!(
-                    "native service command timed out after {} seconds{}{}",
-                    timeout.as_secs(),
-                    kill_error
-                        .map(|error| format!("; kill failed: {error}"))
-                        .unwrap_or_default(),
-                    wait_error
-                        .map(|error| format!("; reap failed: {error}"))
-                        .unwrap_or_default()
-                );
+                return Err(NativeServiceError::CommandTimedOut {
+                    seconds: timeout.as_secs(),
+                    cleanup: [
+                        kill_error.map(|error| format!("; kill failed: {error}")),
+                        wait_error.map(|error| format!("; reap failed: {error}")),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+                });
             }
         };
         fn read_capture(file: &mut fs::File) -> Result<String> {
@@ -335,10 +566,12 @@ pub fn open_background_approval_settings() -> Result<()> {
         if macos_background::open_login_items() {
             return Ok(());
         }
-        bail!("this version of macOS cannot open Login Items settings directly")
+        Err(NativeServiceError::LoginItemsUnavailable)
     }
     #[cfg(not(target_os = "macos"))]
-    bail!("background item approval exists only on macOS")
+    {
+        Err(NativeServiceError::BackgroundApprovalUnsupported)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -455,14 +688,21 @@ where
         let path = self.config.definition_path(self.platform);
         let parent = path
             .parent()
-            .context("native service definition has no parent")?;
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating service directory {}", parent.display()))?;
+            .ok_or(NativeServiceError::DefinitionHasNoParent)?;
+        fs::create_dir_all(parent).map_err(|source| {
+            NativeServiceError::CreateServiceDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
+        })?;
         self.prepare_stderr_log()?;
         let contents = self.render_definition()?;
         if path.exists() {
-            let installed = fs::read(&path)
-                .with_context(|| format!("reading installed native service {}", path.display()))?;
+            let installed =
+                fs::read(&path).map_err(|source| NativeServiceError::ReadInstalledDefinition {
+                    path: path.clone(),
+                    source,
+                })?;
             self.ensure_owned_definition(&installed)?;
             if installed != contents.as_bytes() {
                 let status = self.status()?;
@@ -470,7 +710,7 @@ where
                     || (self.platform == NativeServicePlatform::Linux
                         && status.is_active_or_transitioning())
                 {
-                    bail!("native service is running or transitioning; stop it before updating its executable or environment");
+                    return Err(NativeServiceError::ServiceActiveDuringUpdate);
                 }
                 if self.platform == NativeServicePlatform::Macos {
                     let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
@@ -481,8 +721,11 @@ where
                         self.stop(false)?;
                     }
                 }
-                atomic_write(&path, contents.as_bytes()).with_context(|| {
-                    format!("updating native service definition {}", path.display())
+                atomic_write(&path, contents.as_bytes()).map_err(|source| {
+                    NativeServiceError::UpdateDefinition {
+                        path: path.clone(),
+                        source,
+                    }
                 })?;
                 if self.platform == NativeServicePlatform::Linux {
                     self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
@@ -496,8 +739,12 @@ where
         if self.platform == NativeServicePlatform::Macos {
             self.set_macos_enabled(false)?;
         }
-        atomic_write(&path, contents.as_bytes())
-            .with_context(|| format!("writing native service definition {}", path.display()))?;
+        atomic_write(&path, contents.as_bytes()).map_err(|source| {
+            NativeServiceError::WriteDefinition {
+                path: path.clone(),
+                source,
+            }
+        })?;
         // Enablement remains OS-native state rather than a second Gents
         // preference file.
         if self.platform == NativeServicePlatform::Linux {
@@ -515,10 +762,11 @@ where
         if self.platform == NativeServicePlatform::Macos
             && self.background_item() == BackgroundItemStatus::RequiresApproval
         {
-            return Err(BackgroundApprovalPending {
-                detail: "Background Task Management requires approval".to_string(),
-            }
-            .into());
+            return Err(NativeServiceError::ApprovalPending(
+                BackgroundApprovalPending {
+                    detail: "Background Task Management requires approval".to_string(),
+                },
+            ));
         }
         let was_enabled = self.status()?.enabled;
         if enable_at_login {
@@ -554,16 +802,16 @@ where
                                     | BackgroundItemStatus::NotFound
                             )
                         {
-                            return Err(BackgroundApprovalPending {
-                                detail: output_detail(&bootstrap),
-                            }
-                            .into());
+                            return Err(NativeServiceError::ApprovalPending(
+                                BackgroundApprovalPending {
+                                    detail: output_detail(&bootstrap),
+                                },
+                            ));
                         }
-                        bail!(
-                            "launchctl could not start Gents: {} (bootstrap: {})",
-                            output_detail(&kick),
-                            output_detail(&bootstrap)
-                        );
+                        return Err(NativeServiceError::LaunchctlStart {
+                            kick: output_detail(&kick),
+                            bootstrap: output_detail(&bootstrap),
+                        });
                     }
                     Ok(())
                 })();
@@ -575,12 +823,15 @@ where
                 match (start_result, restore_result) {
                     (Ok(()), Ok(())) => Ok(()),
                     (Err(start), Ok(())) => Err(start),
-                    (Ok(()), Err(restore)) => Err(restore).context(
-                        "Gents started, but restoring disabled-at-login state failed; enablement is uncertain",
-                    ),
-                    (Err(start), Err(restore)) => bail!(
-                        "Gents failed to start: {start:#}; restoring disabled-at-login state also failed, so enablement is uncertain: {restore:#}"
-                    ),
+                    (Ok(()), Err(restore)) => {
+                        Err(NativeServiceError::StartedButEnablementUncertain {
+                            source: Box::new(restore),
+                        })
+                    }
+                    (Err(start), Err(restore)) => Err(NativeServiceError::StartAndRestoreFailed {
+                        start: ErrorChain(&start).to_string(),
+                        restore: ErrorChain(&restore).to_string(),
+                    }),
                 }
             }
             NativeServicePlatform::Linux => {
@@ -684,10 +935,9 @@ where
                     ],
                 )?;
                 if !disabled.success {
-                    bail!(
-                        "launchctl could not determine whether Gents is enabled: {}",
-                        output_detail(&disabled)
-                    );
+                    return Err(NativeServiceError::LaunchctlEnabledUnknown {
+                        detail: output_detail(&disabled),
+                    });
                 }
                 let explicitly_disabled = launchd_is_disabled(&disabled.stdout)?;
                 let background_item = self.background_item();
@@ -721,10 +971,9 @@ where
                         | "deactivating"
                         | "reloading"
                 ) {
-                    bail!(
-                        "systemctl could not determine whether Gents is running: {}",
-                        output_detail(&active)
-                    );
+                    return Err(NativeServiceError::SystemctlRunningUnknown {
+                        detail: output_detail(&active),
+                    });
                 }
                 if !enabled.success
                     && !matches!(
@@ -732,10 +981,9 @@ where
                         "disabled" | "masked" | "static" | "indirect" | "generated"
                     )
                 {
-                    bail!(
-                        "systemctl could not determine whether Gents is enabled: {}",
-                        output_detail(&enabled)
-                    );
+                    return Err(NativeServiceError::SystemctlEnabledUnknown {
+                        detail: output_detail(&enabled),
+                    });
                 }
                 Ok(NativeServiceStatus {
                     installed,
@@ -781,10 +1029,9 @@ where
                     ],
                 )?;
                 if !show.success {
-                    bail!(
-                        "systemctl could not report why Gents stopped: {}",
-                        output_detail(&show)
-                    );
+                    return Err(NativeServiceError::SystemctlExitUnknown {
+                        detail: output_detail(&show),
+                    });
                 }
                 Ok(systemd_exit_failure(&show.stdout))
             }
@@ -796,11 +1043,13 @@ where
         if !path.is_file() {
             return Ok(false);
         }
-        let definition = fs::read(&path)
-            .with_context(|| format!("reading native service definition {}", path.display()))?;
+        let definition = fs::read(&path).map_err(|source| NativeServiceError::ReadDefinition {
+            path: path.clone(),
+            source,
+        })?;
         self.ensure_owned_definition(&definition)?;
         let text =
-            std::str::from_utf8(&definition).context("native service definition is not UTF-8")?;
+            std::str::from_utf8(&definition).map_err(NativeServiceError::DefinitionNotUtf8)?;
         let installed = match self.platform {
             NativeServicePlatform::Macos => launchd_executable(text)?,
             NativeServicePlatform::Linux => systemd_executable(text)?,
@@ -815,7 +1064,10 @@ where
         }
         self.stop(true)?;
         if path.exists() {
-            fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+            fs::remove_file(&path).map_err(|source| NativeServiceError::RemoveDefinition {
+                path: path.clone(),
+                source,
+            })?;
         }
         if self.platform == NativeServicePlatform::Linux {
             self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
@@ -830,22 +1082,33 @@ where
         let Some(path) = self.config.stderr_path.as_deref() else {
             return Ok(());
         };
-        let directory = path.parent().context("service log path has no parent")?;
-        fs::create_dir_all(directory)
-            .with_context(|| format!("creating service log directory {}", directory.display()))?;
+        let directory = path.parent().ok_or(NativeServiceError::LogHasNoParent)?;
+        fs::create_dir_all(directory).map_err(|source| NativeServiceError::CreateLogDirectory {
+            path: directory.to_path_buf(),
+            source,
+        })?;
         let file = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
-            .with_context(|| format!("creating service log {}", path.display()))?;
+            .map_err(|source| NativeServiceError::CreateLog {
+                path: path.to_path_buf(),
+                source,
+            })?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).with_context(
-                || format!("restricting service log directory {}", directory.display()),
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).map_err(
+                |source| NativeServiceError::RestrictLogDirectory {
+                    path: directory.to_path_buf(),
+                    source,
+                },
             )?;
             file.set_permissions(fs::Permissions::from_mode(0o600))
-                .with_context(|| format!("restricting service log {}", path.display()))?;
+                .map_err(|source| NativeServiceError::RestrictLog {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
         }
         #[cfg(not(unix))]
         drop(file);
@@ -855,13 +1118,12 @@ where
     fn require_installed(&self) -> Result<()> {
         let path = self.config.definition_path(self.platform);
         if !path.is_file() {
-            bail!(
-                "native service is not installed at {}; run `gents service install` first",
-                path.display()
-            );
+            return Err(NativeServiceError::NotInstalled { path });
         }
-        let installed = fs::read(&path)
-            .with_context(|| format!("reading native service definition {}", path.display()))?;
+        let installed = fs::read(&path).map_err(|source| NativeServiceError::ReadDefinition {
+            path: path.clone(),
+            source,
+        })?;
         self.ensure_owned_definition(&installed)?;
         Ok(())
     }
@@ -870,11 +1132,10 @@ where
         let installed_home = normalize_absolute(&installed_home(self.platform, definition)?)?;
         let requested_home = normalize_absolute(&self.config.home)?;
         if installed_home != requested_home {
-            bail!(
-                "native service belongs to Gents home {}, not {}; refusing to control it",
-                installed_home.display(),
-                requested_home.display()
-            );
+            return Err(NativeServiceError::HomeMismatch {
+                installed: installed_home,
+                requested: requested_home,
+            });
         }
         Ok(())
     }
@@ -913,22 +1174,26 @@ where
                     match output.stdout.as_str() {
                         "inactive" | "failed" | "unknown" => return Ok(()),
                         "active" | "activating" | "deactivating" | "reloading" => {}
-                        _ => bail!(
-                            "systemctl could not confirm that the Gents unit became inactive: {}",
-                            output_detail(&output)
-                        ),
+                        _ => {
+                            return Err(NativeServiceError::SystemctlNotInactive {
+                                detail: output_detail(&output),
+                            })
+                        }
                     }
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        bail!("native supervisor did not confirm that the Gents job unloaded or became inactive")
+        Err(NativeServiceError::UnloadNotConfirmed)
     }
 
     fn run_checked(&self, program: &str, args: &[OsString]) -> Result<()> {
         let output = self.runner.run(OsStr::new(program), args)?;
         if !output.success {
-            bail!("{program} failed: {}", output_detail(&output));
+            return Err(NativeServiceError::CommandFailed {
+                program: program.to_owned(),
+                detail: output_detail(&output),
+            });
         }
         Ok(())
     }
@@ -936,16 +1201,15 @@ where
     fn current_uid(&self) -> Result<u32> {
         let output = self.runner.run(OsStr::new("/usr/bin/id"), &["-u".into()])?;
         if !output.success {
-            bail!(
-                "could not resolve current user id: {}",
-                output_detail(&output)
-            );
+            return Err(NativeServiceError::CurrentUidUnavailable {
+                detail: output_detail(&output),
+            });
         }
         output
             .stdout
             .trim()
             .parse()
-            .context("parsing current user id")
+            .map_err(NativeServiceError::ParseUid)
     }
 
     fn background_item(&self) -> BackgroundItemStatus {
@@ -960,43 +1224,43 @@ where
     }
 
     fn run_allow_failure(&self, program: &str, args: &[OsString]) -> Result<CommandOutput> {
-        self.runner.run(OsStr::new(program), args).with_context(|| {
-            if self.platform == NativeServicePlatform::Linux {
-                "systemd user services are unavailable; a user systemd session is required (Gents does not change linger or root settings)"
-            } else {
-                "launchd user services are unavailable"
-            }
-        })
+        self.runner
+            .run(OsStr::new(program), args)
+            .map_err(|source| NativeServiceError::ServiceManagerUnavailable {
+                message: if self.platform == NativeServicePlatform::Linux {
+                    "systemd user services are unavailable; a user systemd session is required (Gents does not change linger or root settings)"
+                } else {
+                    "launchd user services are unavailable"
+                },
+                source: Box::new(source),
+            })
     }
 }
 
 fn validate_config(config: &NativeServiceConfig) -> Result<()> {
     if !config.executable.is_absolute() {
-        bail!("native service executable must be an absolute path");
+        return Err(NativeServiceError::ExecutableNotAbsolute);
     }
     if !config.home.is_absolute() {
-        bail!("Gents service home must be an absolute path");
+        return Err(NativeServiceError::HomeNotAbsolute);
     }
     if !config.home.is_dir() {
-        bail!(
-            "Gents service home does not exist at {}",
-            config.home.display()
-        );
+        return Err(NativeServiceError::HomeMissing {
+            path: config.home.clone(),
+        });
     }
     if !config.executable.is_file() {
-        bail!(
-            "Gents executable does not exist at {}",
-            config.executable.display()
-        );
+        return Err(NativeServiceError::ExecutableMissing {
+            path: config.executable.clone(),
+        });
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         if fs::metadata(&config.executable)?.permissions().mode() & 0o111 == 0 {
-            bail!(
-                "Gents executable is not executable at {}",
-                config.executable.display()
-            );
+            return Err(NativeServiceError::ExecutableNotExecutable {
+                path: config.executable.clone(),
+            });
         }
     }
     Ok(())
@@ -1004,32 +1268,35 @@ fn validate_config(config: &NativeServiceConfig) -> Result<()> {
 
 fn normalize_absolute(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute() {
-        bail!("native service paths must be absolute");
+        return Err(NativeServiceError::PathNotAbsolute);
     }
     let mut existing = path;
     let mut missing = Vec::new();
     while !existing.exists() {
         let name = existing
             .file_name()
-            .context("absolute path has no existing ancestor")?;
+            .ok_or(NativeServiceError::NoExistingAncestor)?;
         missing.push(name.to_owned());
         existing = existing
             .parent()
-            .context("absolute path has no existing ancestor")?;
+            .ok_or(NativeServiceError::NoExistingAncestor)?;
     }
-    let mut normalized = fs::canonicalize(existing)
-        .with_context(|| format!("canonicalizing path ancestor {}", existing.display()))?;
+    let mut normalized =
+        fs::canonicalize(existing).map_err(|source| NativeServiceError::CanonicalizeAncestor {
+            path: existing.to_path_buf(),
+            source,
+        })?;
     for component in missing.into_iter().rev() {
         if component == OsStr::new(".") || component == OsStr::new("..") {
-            bail!("native service path contains unresolved traversal");
+            return Err(NativeServiceError::UnresolvedTraversal);
         }
         normalized.push(component);
     }
     Ok(normalized)
 }
 
-pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
-    let parent = path.parent().context("path has no parent")?;
+pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), AtomicWriteError> {
+    let parent = path.parent().ok_or(AtomicWriteError::NoParent)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     use std::io::Write as _;
     temporary.write_all(contents)?;
@@ -1049,7 +1316,9 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
         .search_path
         .as_ref()
         .map(|value| -> Result<String> {
-            let value = value.to_str().context("PATH is not valid UTF-8")?;
+            let value = value
+                .to_str()
+                .ok_or(NativeServiceError::SearchPathNotUtf8)?;
             Ok(format!(
                 "<key>PATH</key><string>{}</string>",
                 xml_escape(value)?
@@ -1101,13 +1370,13 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
         config
             .executable
             .to_str()
-            .context("executable path is not valid UTF-8")?,
+            .ok_or(NativeServiceError::ExecutablePathNotUtf8)?,
     )?;
     let home = systemd_arg(
         config
             .home
             .to_str()
-            .context("home path is not valid UTF-8")?,
+            .ok_or(NativeServiceError::HomePathNotUtf8)?,
     )?;
     let search_path = config
         .search_path
@@ -1129,20 +1398,20 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
 fn systemd_append_target(path: &Path) -> Result<String> {
     let path = path
         .to_str()
-        .context("stderr log path is not valid UTF-8")?;
+        .ok_or(NativeServiceError::StderrLogPathNotUtf8)?;
     if path
         .chars()
         .any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
     {
-        bail!("stderr log path contains an unsupported control character");
+        return Err(NativeServiceError::StderrLogControlCharacter);
     }
     Ok(format!("append:{}", path.replace('%', "%%")))
 }
 
-fn xml_path(path: &Path, name: &str) -> Result<String> {
+fn xml_path(path: &Path, name: &'static str) -> Result<String> {
     let value = path
         .to_str()
-        .with_context(|| format!("{name} path is not valid UTF-8"))?;
+        .ok_or(NativeServiceError::PathNotUtf8 { name })?;
     xml_escape(value)
 }
 
@@ -1151,7 +1420,7 @@ fn xml_escape(value: &str) -> Result<String> {
         .chars()
         .any(|ch| matches!(ch, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}'))
     {
-        bail!("value contains a character forbidden by XML 1.0");
+        return Err(NativeServiceError::XmlForbiddenCharacter);
     }
     Ok(value
         .replace('&', "&amp;")
@@ -1170,7 +1439,7 @@ fn systemd_quote(value: &str, escape_dollar: bool) -> Result<String> {
         .chars()
         .any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
     {
-        bail!("service argument contains an unsupported control character");
+        return Err(NativeServiceError::ServiceArgumentControlCharacter);
     }
     let value = value
         .replace('%', "%%")
@@ -1189,7 +1458,7 @@ fn systemd_environment(name: &str, value: &str) -> Result<String> {
 }
 
 fn installed_home(platform: NativeServicePlatform, definition: &[u8]) -> Result<PathBuf> {
-    let text = std::str::from_utf8(definition).context("native service definition is not UTF-8")?;
+    let text = std::str::from_utf8(definition).map_err(NativeServiceError::DefinitionNotUtf8)?;
     let home = match platform {
         NativeServicePlatform::Macos => launchd_home(text)?,
         NativeServicePlatform::Linux => systemd_home(text)?,
@@ -1207,30 +1476,30 @@ fn launchd_executable(plist: &str) -> Result<String> {
 
 fn launchd_arguments(plist: &str) -> Result<Vec<String>> {
     let value = plist::Value::from_reader_xml(std::io::Cursor::new(plist.as_bytes()))
-        .context("parsing launchd property list")?;
+        .map_err(NativeServiceError::ParseLaunchdPlist)?;
     let dictionary = value
         .as_dictionary()
-        .context("launchd definition root is not a dictionary")?;
+        .ok_or(NativeServiceError::LaunchdRootNotDictionary)?;
     if dictionary.get("Label").and_then(plist::Value::as_string) != Some(SERVICE_LABEL) {
-        bail!("launchd definition does not have the Gents service label");
+        return Err(NativeServiceError::LaunchdLabelMismatch);
     }
     let arguments = dictionary
         .get("ProgramArguments")
         .and_then(plist::Value::as_array)
-        .context("launchd definition has no ProgramArguments array")?;
+        .ok_or(NativeServiceError::LaunchdNoProgramArguments)?;
     let values = arguments
         .iter()
         .map(|value| {
             value
                 .as_string()
-                .context("launchd argument is not a string")
+                .ok_or(NativeServiceError::LaunchdArgumentNotString)
         })
         .collect::<Result<Vec<_>>>()?;
     if values.get(1).copied() != Some("server")
         || values.get(2).copied() != Some("--home")
         || values.len() != 4
     {
-        bail!("launchd definition is not a Gents foreground server invocation");
+        return Err(NativeServiceError::LaunchdNotForegroundServer);
     }
     Ok(values.into_iter().map(str::to_owned).collect())
 }
@@ -1239,11 +1508,11 @@ fn systemd_home(unit: &str) -> Result<String> {
     let exec = unit
         .lines()
         .find_map(|line| line.strip_prefix("ExecStart="))
-        .context("systemd definition has no ExecStart")?;
+        .ok_or(NativeServiceError::SystemdNoExecStart)?;
     let marker = " \"server\" \"--home\" ";
     let (_, home) = exec
         .split_once(marker)
-        .context("systemd definition is not a Gents foreground server invocation")?;
+        .ok_or(NativeServiceError::SystemdNotForegroundServer)?;
     parse_systemd_quoted(home)
 }
 
@@ -1251,10 +1520,10 @@ fn systemd_executable(unit: &str) -> Result<String> {
     let exec = unit
         .lines()
         .find_map(|line| line.strip_prefix("ExecStart="))
-        .context("systemd definition has no ExecStart")?;
+        .ok_or(NativeServiceError::SystemdNoExecStart)?;
     let (executable, _) = exec
         .split_once(" \"server\" \"--home\" ")
-        .context("systemd definition is not a Gents foreground server invocation")?;
+        .ok_or(NativeServiceError::SystemdNotForegroundServer)?;
     parse_systemd_quoted(executable)
 }
 
@@ -1262,15 +1531,18 @@ fn parse_systemd_quoted(value: &str) -> Result<String> {
     let value = value
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
-        .context("systemd home argument is not quoted")?;
+        .ok_or(NativeServiceError::SystemdArgumentNotQuoted)?;
     let mut decoded = String::new();
     let mut chars = value.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
-            '\\' => match chars.next().context("trailing systemd escape")? {
+            '\\' => match chars
+                .next()
+                .ok_or(NativeServiceError::SystemdTrailingEscape)?
+            {
                 '\\' => decoded.push('\\'),
                 '"' => decoded.push('"'),
-                _ => bail!("unsupported escape in systemd home argument"),
+                _ => return Err(NativeServiceError::SystemdUnsupportedEscape),
             },
             '%' if chars.peek() == Some(&'%') => {
                 chars.next();
@@ -1281,7 +1553,7 @@ fn parse_systemd_quoted(value: &str) -> Result<String> {
                 decoded.push('$');
             }
             '%' | '$' | '"' | '\n' | '\r' => {
-                bail!("unescaped character in systemd home argument")
+                return Err(NativeServiceError::SystemdUnescapedCharacter)
             }
             _ => decoded.push(ch),
         }
@@ -1430,7 +1702,11 @@ fn launchd_is_disabled(output: &str) -> Result<bool> {
         return match value.trim() {
             "true" | "disabled" => Ok(true),
             "false" | "enabled" => Ok(false),
-            value => bail!("launchctl returned an unknown Gents disabled override: {value}"),
+            value => {
+                return Err(NativeServiceError::LaunchctlUnknownOverride {
+                    value: value.to_owned(),
+                })
+            }
         };
     }
     Ok(false)
@@ -1443,9 +1719,8 @@ fn ensure_launchd_print_result(output: &CommandOutput) -> Result<()> {
     {
         Ok(())
     } else {
-        bail!(
-            "launchctl could not inspect Gents: {}",
-            output_detail(output)
-        )
+        Err(NativeServiceError::LaunchctlInspectFailed {
+            detail: output_detail(output),
+        })
     }
 }

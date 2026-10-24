@@ -1,17 +1,17 @@
 use std::io::Write;
 
-use anyhow::{Context, Result};
 use gents::document_config::EvalCase;
 use gents::eval::checks::CheckRegistry;
 
 use super::init::validate::case_catalog_conformance;
+use super::EvalCommandError;
 use crate::cli::EvalChecksArgs;
 
 pub(super) fn checks(
     registry: &CheckRegistry,
     args: &EvalChecksArgs,
     out: &mut dyn Write,
-) -> Result<()> {
+) -> Result<(), EvalCommandError> {
     if let Some(source) = &args.validate_case {
         return validate_case(registry, &read_case(source)?, out);
     }
@@ -34,26 +34,33 @@ pub(super) fn checks(
     Ok(())
 }
 
-fn read_case(source: &str) -> Result<String> {
+fn read_case(source: &str) -> Result<String, EvalCommandError> {
     if source == "-" {
         let mut text = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
-            .context("reading the case from stdin")?;
+            .map_err(EvalCommandError::ReadStdin)?;
         return Ok(text);
     }
-    std::fs::read_to_string(source).with_context(|| format!("reading {source}"))
+    std::fs::read_to_string(source).map_err(|source_error| EvalCommandError::ReadCase {
+        path: source.to_owned(),
+        source: source_error,
+    })
 }
 
-fn validate_case(registry: &CheckRegistry, text: &str, out: &mut dyn Write) -> Result<()> {
-    let case: EvalCase = serde_json::from_str(text).context("parsing the eval case")?;
+fn validate_case(
+    registry: &CheckRegistry,
+    text: &str,
+    out: &mut dyn Write,
+) -> Result<(), EvalCommandError> {
+    let case: EvalCase = serde_json::from_str(text).map_err(EvalCommandError::ParseCase)?;
     let violations: Vec<String> = case_catalog_conformance(&case, registry)
         .into_iter()
         .collect();
     super::write_json(out, &serde_json::json!({ "violations": violations }))?;
-    anyhow::ensure!(
-        violations.is_empty(),
-        "the case names {} check problem(s); fix them and retry",
-        violations.len()
-    );
+    if !violations.is_empty() {
+        return Err(EvalCommandError::CaseViolations {
+            count: violations.len(),
+        });
+    }
     Ok(())
 }

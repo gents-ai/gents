@@ -4,6 +4,7 @@ use gents::config_client::ConfigAccess;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use std::sync::Arc;
 
+use super::super::ChatMutationError;
 use super::UnresolvedSubmission;
 
 /// The local encrypted store retains signed intent before the owner can see it.
@@ -57,7 +58,7 @@ pub(crate) async fn load(
                         == pending
                             .create
                             .graphql_mutation()
-                            .map_err(anyhow::Error::msg)?,
+                            .map_err(|reason| { ChatMutationError::CreateMutation { reason } })?,
                 "retained submission is inconsistent with its signed request"
             );
             Ok(pending)

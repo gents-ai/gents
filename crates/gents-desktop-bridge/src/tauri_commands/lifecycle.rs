@@ -84,7 +84,7 @@ pub async fn desktop_init_local_standard(
             .unwrap_or_else(|| "Forge".to_string()),
     })
     .await
-    .map_err(BridgeError::classify_transport_error)
+    .map_err(|error| BridgeError::classify_transport_error(&error))
 }
 
 fn ensure_client_stopped_for_init(client_is_running: bool) -> Result<(), BridgeError> {

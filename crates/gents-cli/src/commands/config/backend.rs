@@ -11,6 +11,8 @@ use gents::{discover_backend_models, BackendProviderKind, Collection};
 use gents_protocol::error_chain::ErrorChain;
 use serde_json::json;
 
+use super::ConfigCommandError;
+
 fn backend_plan(contents: &[u8]) -> Result<(InferenceBackend, DesiredStateApplyPlan)> {
     let backend: InferenceBackend =
         serde_json::from_slice(contents).context("decoding canonical InferenceBackend document")?;
@@ -48,9 +50,9 @@ pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
             })
         })
         .await?;
-    crate::print_json(
+    Ok(crate::print_json(
         &json!({"doc_id":doc_id,"node_did":backend.node_did,"backend_id":backend.backend_id,"provider_kind":backend.provider_kind.as_str(),"endpoint":backend.endpoint}),
-    )
+    )?)
 }
 
 pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> Result<()> {
@@ -147,12 +149,12 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     } else {
         false
     };
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "backend_id":args.backend_id,"backend_preset":args.backend_preset.map(BackendPresetArg::as_str),
         "provider_kind":target.provider_kind.as_str(),"endpoint":target.endpoint,
         "api_key":target.api_key.as_ref().map(|_|"<redacted>"),"api_key_env_var":target.api_key_env_var,
         "discovered_models":discovered_models,"catalog_written":catalog_written,
-    }))
+    }))?)
 }
 
 async fn load_oauth_credential_for_discovery(
@@ -202,7 +204,9 @@ fn discovery_error_is_client_version_gate(
         .is_some_and(|http| http.is_client_version_gate())
 }
 
-fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendConfig> {
+fn stored_backend_target(
+    backend: &InferenceBackend,
+) -> Result<ResolvedBackendConfig, ConfigCommandError> {
     backend.validate()?;
     Ok(ResolvedBackendConfig {
         provider_kind: backend.provider_kind,

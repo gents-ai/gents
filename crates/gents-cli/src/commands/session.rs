@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
+use gents::home::HomeError;
 use gents::session::{fork, fork_via_http, ForkBoundary, ForkError, ForkOutcome, ForkParams};
 use serde_json::{json, Value};
 
@@ -19,6 +20,31 @@ use crate::{
 
 const SESSION_FIELDS: &str = "session_id node_did requester_did agent_id created_at closed_at \
 title tags provenance observation";
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SessionCommandError {
+    #[error("not found: no AgentSession document with session_id {id}")]
+    NotFound { id: String },
+    #[error("offline fork requires local DefraDB access")]
+    OfflineForkNeedsLocalAccess,
+    #[error("gents home {} is not initialized; run `gents init --home {}` first", home.display(), home.display())]
+    NotInitialized { home: PathBuf },
+    #[error("creating data directory {}", path.display())]
+    CreateDataDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "the home's store is in use; to fork against the running runtime, rerun with --graphql"
+    )]
+    StoreInUse {
+        #[source]
+        source: HomeError,
+    },
+    #[error(transparent)]
+    Home(#[from] HomeError),
+}
 
 pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
     match command {
@@ -40,11 +66,11 @@ async fn session_list(args: ConfigListArgs) -> Result<()> {
     add_request_counts(&access, &mut rows).await?;
 
     match output {
-        OutputFormat::Json => print_json(&json!({
+        OutputFormat::Json => Ok(print_json(&json!({
             "collection": "AgentSession",
             "count": rows.len(),
             "items": rows,
-        })),
+        }))?),
         OutputFormat::Table => {
             print_session_table(&rows);
             Ok(())
@@ -67,13 +93,13 @@ async fn session_show(args: ConfigShowArgs) -> Result<()> {
         .await
         .context("resolving access for session show")?;
     let mut rows = query_sessions(&access, Some(&id)).await?;
-    let mut row = rows.pop().ok_or_else(|| {
-        anyhow::anyhow!("not found: no AgentSession document with session_id {id}")
-    })?;
+    let mut row = rows
+        .pop()
+        .ok_or_else(|| SessionCommandError::NotFound { id: id.clone() })?;
     add_request_count(&access, &mut row).await?;
 
     match output {
-        OutputFormat::Json => print_json(&row),
+        OutputFormat::Json => Ok(print_json(&row)?),
         _ => unreachable!("ensure_supported restricts session show output formats"),
     }
 }
@@ -107,7 +133,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     let access = open_offline_fork_store(&home, &data_dir).await?;
     let node = access
         .local_node()
-        .ok_or_else(|| anyhow::anyhow!("offline fork requires local DefraDB access"))?;
+        .ok_or(SessionCommandError::OfflineForkNeedsLocalAccess)?;
     gents::migration::ensure_all_runtime_migrations(node.clone())
         .await
         .context("ensuring runtime schemas")?;
@@ -131,20 +157,21 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
 }
 
 async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigAccess> {
-    anyhow::ensure!(
-        crate::read_init_config(home)?.is_some(),
-        "gents home {} is not initialized; run `gents init --home {}` first",
-        home.display(),
-        home.display(),
-    );
-    fs::create_dir_all(data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    if crate::read_init_config(home)?.is_none() {
+        return Err(SessionCommandError::NotInitialized {
+            home: home.to_path_buf(),
+        }
+        .into());
+    }
+    fs::create_dir_all(data_dir).map_err(|source| SessionCommandError::CreateDataDir {
+        path: data_dir.to_path_buf(),
+        source,
+    })?;
     let claim = gents::home::lock_store(home, data_dir).map_err(|error| {
-        match error.lock_held() {
-            Some(_) => anyhow::Error::new(error).context(
-                "the home's store is in use; to fork against the running runtime, rerun with --graphql",
-            ),
-            None => error.into(),
+        if error.lock_held().is_some() {
+            SessionCommandError::StoreInUse { source: error }
+        } else {
+            SessionCommandError::Home(error)
         }
     })?;
     let builder = crate::persistent_node_builder_with_stored_identity(home, data_dir).await?;

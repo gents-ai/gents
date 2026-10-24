@@ -1,8 +1,8 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn websocket_handshake_requires_configured_bearer_token() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-auth-{}", Uuid::new_v4().simple());
@@ -82,19 +82,19 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
 fn assert_http_status(
     error: tokio_tungstenite::tungstenite::Error,
     expected: StatusCode,
-) -> Result<()> {
+) -> TestResult<()> {
     let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
-        bail!("expected HTTP {expected}, got {error}");
+        return Err(format!("expected HTTP {expected}, got {error}").into());
     };
     if response.status() != expected {
-        bail!("expected HTTP {expected}, got {}", response.status());
+        return Err(format!("expected HTTP {expected}, got {}", response.status()).into());
     }
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn server_keeps_running_when_codex_shim_port_is_taken() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -116,7 +116,8 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
     )?;
     let node_did = node_did_from_init(&init)?;
 
-    let occupied = std::net::TcpListener::bind("127.0.0.1:0").context("occupying a port")?;
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| format!("occupying a port: {error}"))?;
     let shim_port = occupied.local_addr()?.port();
     let shim_port_string = shim_port.to_string();
     let (mut serve, readiness) = spawn_server_with_ready_json(
@@ -153,8 +154,8 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_waits_for_a_missing_bound_agent_instead_of_disabling() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_waits_for_a_missing_bound_agent_instead_of_disabling() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -240,8 +241,8 @@ async fn codex_shim_waits_for_a_missing_bound_agent_instead_of_disabling() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_binds_when_config_apply_supplies_its_agent() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_binds_when_config_apply_supplies_its_agent() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
     fs::create_dir_all(&home_dir)?;
@@ -304,7 +305,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_agent() -> Result<()> {
     agent["agent_id"] = Value::String(LATE_AGENT.to_string());
     config["agents"]
         .as_array_mut()
-        .context("agents is not an array")?
+        .ok_or("agents is not an array")?
         .push(agent);
     write_json_file(&config_path, &config)?;
 

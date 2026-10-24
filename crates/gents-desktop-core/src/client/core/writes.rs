@@ -1699,7 +1699,7 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no runtime record for this node")?;
-        crate::local_runtime::operator_signer(&record)
+        crate::local_runtime::operator_signer(&record).map_err(anyhow::Error::from)
     }
 
     pub fn operator_access(&self, node_did: &str) -> Result<ConfigAccess> {

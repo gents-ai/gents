@@ -1,8 +1,8 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error}"))?;
     let home_dir = tempdir.path().join("home");
     let client_codex_home = tempdir.path().join("existing-client-codex-home");
     fs::create_dir_all(&home_dir)?;
@@ -80,7 +80,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error}").into())
         })
         .await?;
     send_client_request(
@@ -131,7 +131,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
     assert_eq!(thread_start.approval_policy, codex::AskForApproval::Never);
     let expected_server_cwd = home_dir
         .canonicalize()
-        .with_context(|| format!("canonicalizing {}", home_dir.display()))?;
+        .map_err(|error| format!("canonicalizing {}: {error}", home_dir.display()))?;
     assert_eq!(
         thread_start.cwd.as_path(),
         expected_server_cwd.as_path(),
@@ -144,7 +144,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires stock codex CLI, expect, and the configured real OpenAI-compatible backend"]
 async fn stock_codex_remote_pty_smoke_uses_existing_client_codex_home_with_real_backend(
-) -> Result<()> {
+) -> TestResult<()> {
     require_command("codex")?;
     require_command("expect")?;
     let prompt_token = "PONGPTY";
@@ -165,16 +165,16 @@ async fn stock_codex_remote_pty_smoke_uses_existing_client_codex_home_with_real_
     let output = Command::new("expect")
         .arg(&expect_script)
         .output()
-        .context("running codex --remote PTY smoke through expect")?;
+        .map_err(|error| format!("running codex --remote PTY smoke through expect: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let transcript = fs::read_to_string(&transcript).unwrap_or_default();
     if !output.status.success() {
         let (server_stdout, server_stderr) = smoke._server.captured_output()?;
         let shim_trace = fs::read_to_string(&smoke.shim_trace).unwrap_or_default();
-        bail!(
+        return Err(format!(
             "codex --remote PTY smoke failed\nstdout:\n{stdout}\nstderr:\n{stderr}\ntranscript:\n{transcript}\nserver stdout:\n{server_stdout}\nserver stderr:\n{server_stderr}\nshim trace:\n{shim_trace}"
-        );
+        ).into());
     }
     let token_search_text = terminal_token_search_text(&transcript);
     assert!(
@@ -195,7 +195,7 @@ async fn stock_codex_remote_pty_smoke_uses_existing_client_codex_home_with_real_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux, stock codex CLI, and the configured real OpenAI-compatible backend"]
 async fn stock_codex_remote_tmux_multiturn_uses_existing_client_codex_home_with_real_backend(
-) -> Result<()> {
+) -> TestResult<()> {
     require_command("codex")?;
     if which("tmux").is_none() {
         eprintln!("skipping tmux multi-turn smoke: tmux is not installed");
@@ -219,27 +219,27 @@ async fn stock_codex_remote_tmux_multiturn_uses_existing_client_codex_home_with_
     let new_status = Command::new("tmux")
         .args(["new-session", "-d", "-s", &session, &command])
         .status()
-        .context("starting tmux codex multi-turn smoke session")?;
+        .map_err(|error| format!("starting tmux codex multi-turn smoke session: {error}"))?;
     if !new_status.success() {
-        bail!("tmux new-session failed");
+        return Err("tmux new-session failed".into());
     }
 
-    let result: Result<()> = async {
+    let result: TestResult<()> = async {
         wait_for_tmux_token_occurrences(&session, "READY", 2, Duration::from_secs(180))?;
         let literal_status = Command::new("tmux")
             .args(["send-keys", "-t", &session, "-l", second_prompt])
             .status()
-            .context("sending second prompt to tmux codex session")?;
+            .map_err(|error| format!("sending second prompt to tmux codex session: {error}"))?;
         if !literal_status.success() {
-            bail!("tmux send-keys second prompt failed");
+            return Err("tmux send-keys second prompt failed".into());
         }
         tokio::time::sleep(Duration::from_millis(1500)).await;
         let enter_status = Command::new("tmux")
             .args(["send-keys", "-t", &session, "Enter"])
             .status()
-            .context("submitting second prompt in tmux codex session")?;
+            .map_err(|error| format!("submitting second prompt in tmux codex session: {error}"))?;
         if !enter_status.success() {
-            bail!("tmux send-keys Enter failed");
+            return Err("tmux send-keys Enter failed".into());
         }
 
         let transcript = wait_for_tmux_token_occurrences(

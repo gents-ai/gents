@@ -24,7 +24,9 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
                     "asset and plugins packs are removed locally with --home; identity flags do not apply"
                 );
                 let removed = remove_home_install(&home, &coordinate).await?;
-                return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
+                return Ok(crate::print_json(
+                    &json!({ "pack": coordinate, "removed": removed }),
+                )?);
             }
             documents_record = true;
         }
@@ -78,7 +80,9 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
         &plugin_bytes,
         &archives,
     )?;
-    crate::print_json(&json!({ "pack": coordinate, "owner": owner, "removed": removed }))
+    Ok(crate::print_json(
+        &json!({ "pack": coordinate, "owner": owner, "removed": removed }),
+    )?)
 }
 
 fn augment_report(

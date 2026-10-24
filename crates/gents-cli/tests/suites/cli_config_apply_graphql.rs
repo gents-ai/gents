@@ -2,7 +2,7 @@ use crate::support::*;
 
 use std::{fs, time::Duration};
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -36,7 +36,7 @@ async fn config_apply_updates_backend_from_canonical_bundle_over_graphql() -> Re
     let mut config = read_json_file(&path)?;
     let backend_id = config["inference_backends"][0]["backend_id"]
         .as_str()
-        .context("exported backend id")?
+        .expect("exported backend id")
         .to_string();
     let updated_endpoint = "http://127.0.0.1:9200/v1";
     config["inference_backends"][0]["endpoint"] = Value::String(updated_endpoint.to_string());

@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::eval::checks::CheckRegistry;
@@ -36,6 +36,44 @@ mod render;
 pub(crate) mod testing;
 
 pub(crate) const DEFAULT_MAX_TEXT_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OptimizationCommandError {
+    #[error("reading proposer script {}", path.display())]
+    ReadScript {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing proposer script {}", path.display())]
+    ParseScript {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("proposer script {} holds {proposals} proposals, fewer than --rounds {rounds}", path.display())]
+    ScriptTooShort {
+        path: PathBuf,
+        proposals: usize,
+        rounds: u32,
+    },
+    #[error("pack {pack} has no inference-slot agent {agent:?}; it declares {declared:?}")]
+    AgentNotInSlot {
+        pack: String,
+        agent: String,
+        declared: Vec<String>,
+    },
+    #[error("pack {pack}: slot {slot} names no agent")]
+    SlotHasNoAgent { pack: String, slot: String },
+    #[error("pack {pack} declares {count} inference-slot agents; pass --proposer agent:{pack}:<agent> with one of {agents:?}")]
+    SlotAgentAmbiguous {
+        pack: String,
+        count: usize,
+        agents: Vec<String>,
+    },
+    #[error("{note}")]
+    Stopped { note: String },
+}
 
 pub(crate) async fn dispatch(
     command: OptimizationCommand,
@@ -92,17 +130,25 @@ fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("reading proposer script {}", path.display()))?;
-    let proposals: Vec<Proposal> = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing proposer script {}", path.display()))?;
+fn scripted_proposer(
+    path: &Path,
+    rounds: u32,
+) -> Result<ScriptedProposer, OptimizationCommandError> {
+    let bytes = std::fs::read(path).map_err(|source| OptimizationCommandError::ReadScript {
+        path: path.to_owned(),
+        source,
+    })?;
+    let proposals: Vec<Proposal> =
+        serde_json::from_slice(&bytes).map_err(|source| OptimizationCommandError::ParseScript {
+            path: path.to_owned(),
+            source,
+        })?;
     if proposals.len() < usize::try_from(rounds).unwrap_or(usize::MAX) {
-        anyhow::bail!(
-            "proposer script {} holds {} proposals, fewer than --rounds {rounds}",
-            path.display(),
-            proposals.len()
-        );
+        return Err(OptimizationCommandError::ScriptTooShort {
+            path: path.to_owned(),
+            proposals: proposals.len(),
+            rounds,
+        });
     }
     Ok(ScriptedProposer::new(
         proposals
@@ -240,23 +286,29 @@ fn proposer_agent_id(
     pack: &str,
     slot: &gents::pack::PackInferenceSlot,
     agent: Option<&str>,
-) -> Result<String> {
+) -> Result<String, OptimizationCommandError> {
     match agent {
         Some(agent) => {
-            anyhow::ensure!(
-                slot.agents.iter().any(|known| known == agent),
-                "pack {pack} has no inference-slot agent {agent:?}; it declares {:?}",
-                slot.agents
-            );
+            if !slot.agents.iter().any(|known| known == agent) {
+                return Err(OptimizationCommandError::AgentNotInSlot {
+                    pack: pack.to_owned(),
+                    agent: agent.to_owned(),
+                    declared: slot.agents.clone(),
+                });
+            }
             Ok(agent.to_owned())
         }
         None => match slot.agents.as_slice() {
             [only] => Ok(only.clone()),
-            [] => anyhow::bail!("pack {pack}: slot {} names no agent", slot.name),
-            many => anyhow::bail!(
-                "pack {pack} declares {} inference-slot agents; pass --proposer agent:{pack}:<agent> with one of {many:?}",
-                many.len()
-            ),
+            [] => Err(OptimizationCommandError::SlotHasNoAgent {
+                pack: pack.to_owned(),
+                slot: slot.name.clone(),
+            }),
+            many => Err(OptimizationCommandError::SlotAgentAmbiguous {
+                pack: pack.to_owned(),
+                count: many.len(),
+                agents: many.to_vec(),
+            }),
         },
     }
 }
@@ -362,7 +414,7 @@ async fn run(
         render::job_table(&view, out)?;
     }
     match stopped {
-        Some(note) => Err(anyhow::anyhow!(note)),
+        Some(note) => Err(OptimizationCommandError::Stopped { note }.into()),
         None => Ok(()),
     }
 }
@@ -425,7 +477,7 @@ async fn print_new_entries(
 async fn show(ctx: &EvalContext, args: &OptimizationShowArgs, out: &mut dyn Write) -> Result<()> {
     let view = show_job(&ctx.access, &ctx.owner, &args.job_id).await?;
     if args.json {
-        write_json(out, &view)
+        Ok(write_json(out, &view)?)
     } else {
         Ok(render::job_table(&view, out)?)
     }

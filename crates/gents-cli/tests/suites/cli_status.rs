@@ -3,13 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn status_reads_local_runtime_context_by_default() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn status_reads_local_runtime_context_by_default() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -57,7 +58,7 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
     let reconcile_phase = output
         .get("reconcile_phase")
         .and_then(Value::as_str)
-        .context("status omitted reconcile_phase")?;
+        .expect("status omitted reconcile_phase");
     assert!(
         matches!(
             reconcile_phase,
@@ -79,8 +80,8 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn status_includes_p2p_runtime_info() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn status_includes_p2p_runtime_info() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -174,10 +175,10 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
         .await
-        .context("GET /metrics")?;
+        .expect("GET /metrics");
     let status = response.status();
-    let metrics = response.text().await.context("/metrics body")?;
-    anyhow::ensure!(status.is_success(), "/metrics returned {status}: {metrics}");
+    let metrics = response.text().await.expect("/metrics body");
+    assert!(status.is_success(), "/metrics returned {status}: {metrics}");
     assert!(
         metrics.contains("gents_p2p_enabled 1"),
         "metrics missing p2p_enabled: {metrics}"
@@ -201,8 +202,8 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -310,10 +311,10 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
         .await
-        .context("GET /metrics")?;
+        .expect("GET /metrics");
     let status = response.status();
-    let metrics = response.text().await.context("/metrics body")?;
-    anyhow::ensure!(status.is_success(), "/metrics returned {status}: {metrics}");
+    let metrics = response.text().await.expect("/metrics body");
+    assert!(status.is_success(), "/metrics returned {status}: {metrics}");
     for needle in [
         "gents_p2p_admission_max_pending_dags 17",
         "gents_p2p_admission_max_concurrent_push_tasks 3",
@@ -331,8 +332,8 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn status_liveness_surfaces_expired_processing_request_and_running_tool() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn status_liveness_surfaces_expired_processing_request_and_running_tool() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -510,8 +511,8 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn status_liveness_progress_counts_completed_tools_and_inference() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn status_liveness_progress_counts_completed_tools_and_inference() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -736,14 +737,14 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
     let requests = output
         .pointer("/liveness/requests")
         .and_then(Value::as_array)
-        .context("status liveness must expose requests")?;
-    let age = |request_id: &str| -> Result<i64> {
+        .expect("status liveness must expose requests");
+    let age = |request_id: &str| -> TestResult<i64> {
         requests
             .iter()
             .find(|row| row.get("request_id").and_then(Value::as_str) == Some(request_id))
             .and_then(|row| row.get("last_progress_age_ms"))
             .and_then(Value::as_i64)
-            .with_context(|| format!("missing liveness row for {request_id}: {output}"))
+            .ok_or_else(|| format!("missing liveness row for {request_id}: {output}").into())
     };
     let batched_age = age(&batched)?;
     assert!(

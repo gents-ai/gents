@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents_codex_protocol as codex;
 
@@ -7,6 +7,7 @@ use gents::goal::{
     GoalStatus,
 };
 
+use super::CodexShimProjectionError;
 use crate::commands::codex_shim::ShimState;
 
 pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
@@ -94,9 +95,11 @@ fn codex_status_to_goal_status(status: codex::ThreadGoalStatus) -> GoalStatus {
     }
 }
 
-fn goal_status_to_codex(status: &str) -> Result<Option<codex::ThreadGoalStatus>> {
+fn goal_status_to_codex(
+    status: &str,
+) -> std::result::Result<Option<codex::ThreadGoalStatus>, CodexShimProjectionError> {
     Ok(Some(
-        match GoalStatus::parse(status).context("invalid durable Goal status")? {
+        match GoalStatus::parse(status).ok_or(CodexShimProjectionError::InvalidGoalStatus)? {
             GoalStatus::Active => codex::ThreadGoalStatus::Active,
             GoalStatus::Paused => codex::ThreadGoalStatus::Paused,
             GoalStatus::Blocked => codex::ThreadGoalStatus::Blocked,

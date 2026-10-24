@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 
 use anyhow::Result;
 use clap::Parser;
@@ -26,6 +27,29 @@ struct Args {
 mod editor_store;
 #[cfg(any(unix, windows))]
 mod native;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ClientHostError {
+    #[error("client home must be an absolute directory")]
+    HomeNotAbsolute,
+    #[cfg(not(any(unix, windows)))]
+    #[error("the native client transport is not available on this platform")]
+    TransportUnavailable,
+    #[error("starting the native client installation")]
+    StartInstallation(#[source] std::io::Error),
+    #[error("waiting for the native client installation")]
+    WaitInstallation(#[source] tokio::time::error::Elapsed),
+    #[error("missing private store input")]
+    MissingStoreInput,
+    #[error("missing private store output")]
+    MissingStoreOutput,
+    #[error("invalid store bootstrap message")]
+    InvalidBootstrapMessage(#[source] serde_json::Error),
+    #[error("local history needs attention in the editor")]
+    LocalHistoryNeedsAttention,
+    #[error("client host exited with {status}; inspect the Gents output for the startup error")]
+    HostExited { status: ExitStatus },
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -56,10 +80,9 @@ async fn main() -> Result<()> {
     });
     let paths = match args.home {
         Some(home) => {
-            anyhow::ensure!(
-                home.is_absolute(),
-                "client home must be an absolute directory"
-            );
+            if !home.is_absolute() {
+                return Err(ClientHostError::HomeNotAbsolute.into());
+            }
             DesktopPaths::from_root(home)
         }
         None => DesktopPaths::discover()?,
@@ -73,6 +96,6 @@ async fn main() -> Result<()> {
     #[cfg(not(any(unix, windows)))]
     {
         let _ = paths;
-        anyhow::bail!("the native client transport is not available on this platform")
+        Err(ClientHostError::TransportUnavailable.into())
     }
 }

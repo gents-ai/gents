@@ -2,7 +2,8 @@ use anyhow::Result;
 use gents_protocol::graphql::{
     extract_mutation_doc_id as shared_extract_mutation_doc_id,
     graphql_endpoint_available as shared_graphql_endpoint_available, graphql_rows_from_response,
-    graphql_string_list_literal as shared_graphql_string_list_literal, GraphqlRequestOptions,
+    graphql_string_list_literal as shared_graphql_string_list_literal, GraphqlError,
+    GraphqlRequestOptions,
 };
 use serde_json::Value;
 
@@ -54,6 +55,9 @@ pub(crate) fn graphql_string_list_literal(values: &[String]) -> String {
     shared_graphql_string_list_literal(values)
 }
 
-pub(crate) fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<String> {
-    Ok(shared_extract_mutation_doc_id(response, collection_name)?)
+pub(crate) fn extract_mutation_doc_id(
+    response: &Value,
+    collection_name: &str,
+) -> Result<String, GraphqlError> {
+    shared_extract_mutation_doc_id(response, collection_name)
 }

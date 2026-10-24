@@ -19,42 +19,38 @@ pub(super) async fn handle_background_request(
             request_id, params, ..
         } => {
             clean_background_terminals(state, &params.thread_id).await?;
-            send_result(
+            Ok(send_result(
                 outbound,
                 request_id,
                 codex::ThreadBackgroundTerminalsCleanResponse {},
             )
-            .await
+            .await?)
         }
         codex::ClientRequest::CommandExecTerminate {
             request_id, params, ..
         } => match cancel_projected_background_tool_key(state, &params.process_id).await {
-            Ok(_) => {
-                send_result(outbound, request_id, codex::CommandExecTerminateResponse {}).await
-            }
-            Err(err) => {
-                send_error(
-                    outbound,
-                    request_id,
-                    JSONRPC_INVALID_PARAMS,
-                    err.to_string(),
-                )
-                .await
-            }
+            Ok(_) => Ok(
+                send_result(outbound, request_id, codex::CommandExecTerminateResponse {}).await?,
+            ),
+            Err(err) => Ok(send_error(
+                outbound,
+                request_id,
+                JSONRPC_INVALID_PARAMS,
+                err.to_string(),
+            )
+            .await?),
         },
         codex::ClientRequest::ProcessKill {
             request_id, params, ..
         } => match cancel_projected_background_tool_key(state, &params.process_handle).await {
-            Ok(_) => send_result(outbound, request_id, codex::ProcessKillResponse {}).await,
-            Err(err) => {
-                send_error(
-                    outbound,
-                    request_id,
-                    JSONRPC_INVALID_PARAMS,
-                    err.to_string(),
-                )
-                .await
-            }
+            Ok(_) => Ok(send_result(outbound, request_id, codex::ProcessKillResponse {}).await?),
+            Err(err) => Ok(send_error(
+                outbound,
+                request_id,
+                JSONRPC_INVALID_PARAMS,
+                err.to_string(),
+            )
+            .await?),
         },
         other => unreachable!(
             "non-background Codex request routed to background handler: {}",

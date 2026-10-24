@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::usage_observation::account_usage::{visible_windows, Freshness, STALE_AFTER};
 use gents::usage_observation::StoredUsage;
@@ -13,6 +12,24 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::{trace, Outbound, ShimState};
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ProtocolError {
+    #[error("validating Codex response {type_name}")]
+    ValidateResponse {
+        type_name: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("serializing Codex response payload")]
+    SerializeResult(#[source] serde_json::Error),
+    #[error("serializing Codex shim WebSocket message")]
+    SerializeMessage(#[source] serde_json::Error),
+    #[error("Codex shim WebSocket writer closed")]
+    WriterClosed,
+}
+
+type Result<T, E = ProtocolError> = std::result::Result<T, E>;
 
 pub(super) fn client_request_from_jsonrpc(
     request: codex::JSONRPCRequest,
@@ -28,8 +45,11 @@ pub(super) async fn send_typed_json_result<T>(
 where
     T: DeserializeOwned + Serialize,
 {
-    let response = serde_json::from_value::<T>(value)
-        .with_context(|| format!("validating Codex response {}", std::any::type_name::<T>()))?;
+    let response =
+        serde_json::from_value::<T>(value).map_err(|source| ProtocolError::ValidateResponse {
+            type_name: std::any::type_name::<T>(),
+            source,
+        })?;
     send_result(outbound, id, response).await
 }
 
@@ -41,7 +61,7 @@ pub(super) async fn send_result<T>(
 where
     T: Serialize,
 {
-    let result = serde_json::to_value(response).context("serializing Codex response payload")?;
+    let result = serde_json::to_value(response).map_err(ProtocolError::SerializeResult)?;
     send_json(outbound, &codex::JSONRPCResponse { id, result }).await
 }
 
@@ -95,10 +115,8 @@ async fn send_json<T>(outbound: &Outbound, value: &T) -> Result<()>
 where
     T: Serialize,
 {
-    let text = serde_json::to_string(value).context("serializing Codex shim WebSocket message")?;
-    outbound
-        .send(text)
-        .map_err(|_| anyhow::anyhow!("Codex shim WebSocket writer closed"))
+    let text = serde_json::to_string(value).map_err(ProtocolError::SerializeMessage)?;
+    outbound.send(text).map_err(|_| ProtocolError::WriterClosed)
 }
 
 pub(super) fn initialize_result(state: &ShimState) -> Value {

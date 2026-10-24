@@ -1,18 +1,30 @@
 use std::io::{Read, Write};
 
-use anyhow::Result;
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
+use gents_protocol::error_chain::ErrorChain;
 
 use crate::NativeFsRunnerArgs;
 
-pub(crate) fn native_fs_runner(args: NativeFsRunnerArgs) -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NativeFsRunnerError {
+    #[error(transparent)]
+    Runner(#[from] gents_fs_runner::RunnerError),
+    #[error(transparent)]
+    Tool(#[from] gents_fs_runner::ToolError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
+pub(crate) fn native_fs_runner(args: NativeFsRunnerArgs) -> Result<(), NativeFsRunnerError> {
     if let Err(error) = run(args) {
         let _ = serde_json::to_writer(
             std::io::stdout(),
             &NativeFsRunnerResponse {
                 ok: false,
                 output: None,
-                error: Some(format!("{error:#}")),
+                error: Some(ErrorChain(&error).to_string()),
             },
         );
         let _ = writeln!(std::io::stdout());
@@ -21,7 +33,7 @@ pub(crate) fn native_fs_runner(args: NativeFsRunnerArgs) -> Result<()> {
     Ok(())
 }
 
-fn run(args: NativeFsRunnerArgs) -> Result<()> {
+fn run(args: NativeFsRunnerArgs) -> Result<(), NativeFsRunnerError> {
     if args.self_test {
         gents_fs_runner::self_test()?;
         println!("self-test ok");
@@ -54,7 +66,7 @@ fn run(args: NativeFsRunnerArgs) -> Result<()> {
                 &NativeFsRunnerResponse {
                     ok: false,
                     output: None,
-                    error: Some(format!("{error:#}")),
+                    error: Some(ErrorChain(&error).to_string()),
                 },
             )?;
             println!();

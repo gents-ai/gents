@@ -10,6 +10,7 @@ mod local;
 pub(crate) mod registry;
 mod remove;
 pub(crate) use remove::{remove, remove_home_install};
+mod error;
 mod scaffold;
 mod scenario;
 mod server;
@@ -18,6 +19,7 @@ pub(crate) mod update;
 pub(crate) mod wire;
 use crate::cli::*;
 use anyhow::{Context, Result};
+use error::PackCommandError;
 use futures_util::StreamExt;
 use gents::pack::{PackKind, PackManifest};
 use gents::pack_archive::PackArchive;
@@ -29,22 +31,28 @@ use gents::pack::materialize::CacheRelease;
 
 pub(crate) fn parse_inference_slot_bindings(
     values: &[String],
-) -> Result<gents::pack::PackInferenceBindings> {
+) -> Result<gents::pack::PackInferenceBindings, PackCommandError> {
     let mut bindings = BTreeMap::new();
     for value in values {
-        let (slot, profile_id) = value.split_once('=').with_context(|| {
-            format!("invalid inference slot binding {value:?}; expected NAME=PROFILE_ID")
-        })?;
-        anyhow::ensure!(
-            !slot.trim().is_empty() && !profile_id.trim().is_empty(),
-            "invalid inference slot binding {value:?}; slot and profile ID must not be blank"
-        );
-        anyhow::ensure!(
-            bindings
-                .insert(slot.trim().to_owned(), profile_id.trim().to_owned())
-                .is_none(),
-            "inference slot {slot:?} was bound more than once"
-        );
+        let (slot, profile_id) =
+            value
+                .split_once('=')
+                .ok_or_else(|| PackCommandError::InferenceSlotSyntax {
+                    value: value.clone(),
+                })?;
+        if slot.trim().is_empty() || profile_id.trim().is_empty() {
+            return Err(PackCommandError::InferenceSlotBlank {
+                value: value.clone(),
+            });
+        }
+        if bindings
+            .insert(slot.trim().to_owned(), profile_id.trim().to_owned())
+            .is_some()
+        {
+            return Err(PackCommandError::InferenceSlotDuplicate {
+                slot: slot.to_owned(),
+            });
+        }
     }
     Ok(bindings)
 }
@@ -251,7 +259,7 @@ async fn list(args: PackListArgs) -> Result<()> {
             "installed": installed.contains(&coordinate),
         }));
     }
-    crate::print_json(&json!({ "packs": entries }))
+    Ok(crate::print_json(&json!({ "packs": entries }))?)
 }
 
 pub(crate) async fn resolve_pack_source(
@@ -321,7 +329,7 @@ impl SubjectPack {
         dir
     }
 
-    pub(crate) fn default_agent(&self) -> Result<String> {
+    pub(crate) fn default_agent(&self) -> Result<String, PackCommandError> {
         let mut agents: Vec<&String> = self
             .manifest
             .metadata
@@ -333,11 +341,10 @@ impl SubjectPack {
         agents.dedup();
         match agents.as_slice() {
             [only] => Ok((*only).clone()),
-            _ => anyhow::bail!(
-                "pack {} declares {} agents in its inference slots; name one as <pack>:<agent>",
-                self.manifest.name,
-                agents.len()
-            ),
+            _ => Err(PackCommandError::DefaultAgentCount {
+                pack: self.manifest.name.clone(),
+                count: agents.len(),
+            }),
         }
     }
 }
@@ -371,27 +378,29 @@ pub(crate) async fn resolve_subject_pack(
     })
 }
 
-pub(crate) fn single_slot(manifest: &PackManifest) -> Result<&gents::pack::PackInferenceSlot> {
+pub(crate) fn single_slot(
+    manifest: &PackManifest,
+) -> Result<&gents::pack::PackInferenceSlot, PackCommandError> {
     match manifest.metadata.inference_slots.as_slice() {
         [only] => Ok(only),
-        slots => anyhow::bail!(
-            "pack {} declares {} inference slots; expected exactly one",
-            manifest.name,
-            slots.len()
-        ),
+        slots => Err(PackCommandError::SlotCount {
+            pack: manifest.name.clone(),
+            count: slots.len(),
+        }),
     }
 }
 
-pub(crate) fn single_slot_agent(manifest: &PackManifest) -> Result<(String, String)> {
+pub(crate) fn single_slot_agent(
+    manifest: &PackManifest,
+) -> Result<(String, String), PackCommandError> {
     let slot = single_slot(manifest)?;
     match slot.agents.as_slice() {
         [only] => Ok((slot.name.clone(), only.clone())),
-        agents => anyhow::bail!(
-            "pack {} slot {} declares {} agents; expected exactly one",
-            manifest.name,
-            slot.name,
-            agents.len()
-        ),
+        agents => Err(PackCommandError::SlotAgentCount {
+            pack: manifest.name.clone(),
+            slot: slot.name.clone(),
+            count: agents.len(),
+        }),
     }
 }
 
@@ -730,35 +739,35 @@ async fn install_documents_pack(
 
 /// Refuses, before any write, a pack whose content digest is not the one the
 /// operator reviewed with `gents pack show`.
-fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<()> {
+fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<(), PackCommandError> {
     match expected {
-        Some(expected) if expected != actual => anyhow::bail!(
-            "the pack's digest is {actual}, not the expected {expected}. Nothing was installed. \
-             Next: gents pack show ./dir"
-        ),
+        Some(expected) if expected != actual => Err(PackCommandError::DigestMismatch {
+            actual: actual.to_owned(),
+            expected: expected.to_owned(),
+        }),
         _ => Ok(()),
     }
 }
 
 /// `--wire` acts on plugins this install places, so a pack that cannot ship
 /// one refuses it before any write.
-fn check_wire_target(manifest: &PackManifest, wire: &[String]) -> Result<()> {
+fn check_wire_target(manifest: &PackManifest, wire: &[String]) -> Result<(), PackCommandError> {
     if wire.is_empty() {
         return Ok(());
     }
-    anyhow::ensure!(
-        matches!(
-            manifest.metadata.kind,
-            PackKind::Documents | PackKind::Plugins
-        ),
-        "--wire applies only to documents and plugins packs; {} is not one",
-        manifest.name
-    );
-    anyhow::ensure!(
-        !manifest.metadata.plugins.is_empty(),
-        "--wire needs a pack that ships a plugin; {} ships none",
-        manifest.name
-    );
+    if !matches!(
+        manifest.metadata.kind,
+        PackKind::Documents | PackKind::Plugins
+    ) {
+        return Err(PackCommandError::WireNeedsDocumentsOrPlugins {
+            pack: manifest.name.clone(),
+        });
+    }
+    if manifest.metadata.plugins.is_empty() {
+        return Err(PackCommandError::WireNeedsPlugin {
+            pack: manifest.name.clone(),
+        });
+    }
     Ok(())
 }
 
@@ -827,7 +836,7 @@ async fn install_documents_command(
     if let Some(node) = access.local_node() {
         node.shutdown().await;
     }
-    crate::print_json(&result?)
+    Ok(crate::print_json(&result?)?)
 }
 
 pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
@@ -877,7 +886,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 "asset and plugins packs install locally with --home; identity and graph binding flags do not apply"
             );
             if args.preview {
-                return crate::print_json(&json!({
+                return Ok(crate::print_json(&json!({
                     "pack": pack.manifest().name,
                     "source": pack.label(),
                     "digest": pack.digest(),
@@ -885,7 +894,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     "ux_plugins": pack.manifest().metadata.ux,
                     "inference_slots": pack.manifest().metadata.inference_slots,
                     "would_write": false,
-                }));
+                }))?);
             }
             let slot_owner =
                 resolve_plugin_slot_owner(&args.scope, pack.manifest(), &requested).await?;
@@ -924,7 +933,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .await?
                     .into();
             }
-            crate::print_json(&output)
+            Ok(crate::print_json(&output)?)
         }
     }
 }
@@ -1391,10 +1400,9 @@ mod tests {
 
     #[test]
     fn expect_digest_mismatch_names_both_digests_and_pack_show() {
-        let error = format!(
-            "{:#}",
-            check_expected_digest(Some("sha256:expected"), "sha256:actual").unwrap_err()
-        );
+        let error = check_expected_digest(Some("sha256:expected"), "sha256:actual")
+            .unwrap_err()
+            .to_string();
         for needle in ["sha256:expected", "sha256:actual", "gents pack show"] {
             assert!(error.contains(needle), "{needle} missing from {error}");
         }
@@ -1413,10 +1421,12 @@ mod tests {
 
         let mut pluginless = plugins;
         pluginless.metadata.plugins.clear();
-        let error = check_wire_target(&pluginless, &wire).unwrap_err();
+        let error = check_wire_target(&pluginless, &wire)
+            .unwrap_err()
+            .to_string();
         assert!(
-            format!("{error:#}").contains("--wire needs a pack that ships a plugin"),
-            "{error:#}"
+            error.contains("--wire needs a pack that ships a plugin"),
+            "{error}"
         );
     }
 }

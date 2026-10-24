@@ -1,9 +1,35 @@
 //! Shared node-scoped inference selection for protocol adapters.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::load_node;
 use std::sync::Arc;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InferenceBindingError {
+    #[error("agent {agent_id:?} missing for {node_did:?}")]
+    AgentMissing { agent_id: String, node_did: String },
+    #[error("bound agent is disabled")]
+    AgentDisabled,
+    #[error("bound inference profile missing")]
+    ProfileMissing,
+    #[error("bound inference backend missing")]
+    BackendMissing,
+    #[error("bound inference backend is disabled")]
+    BackendDisabled,
+    #[error("bound backend disappeared")]
+    BackendDisappeared,
+    #[error("selected model is absent from backend catalog")]
+    ModelAbsent,
+    #[error("ambiguous selected backend model")]
+    AmbiguousModel,
+    #[error("context window must be positive")]
+    NonPositiveContextWindow,
+    #[error("node {node_did:?} is not configured")]
+    NodeNotConfigured { node_did: String },
+    #[error("node {node_did:?} has no default agent binding")]
+    NoDefaultAgent { node_did: String },
+}
 
 pub(crate) async fn load_bound_profile(
     node: &Arc<EmbeddedNode>,
@@ -18,9 +44,14 @@ pub(crate) async fn load_bound_profile(
                 read(txn, Collection::Agent, node_did, agent_id)
                     .await?
                     .map(|(_, value)| value)
-                    .ok_or_else(|| anyhow!("agent {agent_id:?} missing for {node_did:?}"))?,
+                    .ok_or_else(|| InferenceBindingError::AgentMissing {
+                        agent_id: agent_id.to_owned(),
+                        node_did: node_did.to_owned(),
+                    })?,
             )?;
-            anyhow::ensure!(agent.enabled, "bound agent is disabled");
+            if !agent.enabled {
+                return Err(InferenceBindingError::AgentDisabled.into());
+            }
             let profile: gents::document_config::InferenceProfile = serde_json::from_value(
                 read(
                     txn,
@@ -30,7 +61,7 @@ pub(crate) async fn load_bound_profile(
                 )
                 .await?
                 .map(|(_, value)| value)
-                .ok_or_else(|| anyhow!("bound inference profile missing"))?,
+                .ok_or(InferenceBindingError::ProfileMissing)?,
             )?;
             profile.validate()?;
             let backend: gents::document_config::InferenceBackend = serde_json::from_value(
@@ -42,10 +73,12 @@ pub(crate) async fn load_bound_profile(
                 )
                 .await?
                 .map(|(_, value)| value)
-                .ok_or_else(|| anyhow!("bound inference backend missing"))?,
+                .ok_or(InferenceBindingError::BackendMissing)?,
             )?;
             backend.validate()?;
-            anyhow::ensure!(backend.enabled, "bound inference backend is disabled");
+            if !backend.enabled {
+                return Err(InferenceBindingError::BackendDisabled.into());
+            }
             Ok(profile)
         })
     })
@@ -60,7 +93,7 @@ pub(crate) async fn load_bound_context_window(
     let profile = load_bound_profile(node, node_did, agent_id).await?;
     let backend = gents::backend_registry::lookup_backend(node, node_did, &profile.backend_id)
         .await?
-        .ok_or_else(|| anyhow!("bound backend disappeared"))?;
+        .ok_or(InferenceBindingError::BackendDisappeared)?;
     let observation =
         gents::backend_registry::lookup_backend_observation(node, node_did, &profile.backend_id)
             .await?;
@@ -79,10 +112,10 @@ pub(crate) async fn load_bound_context_window(
             .models
             .iter()
             .filter(|model| model.model_name == profile.model_name);
-        let model = models
-            .next()
-            .ok_or_else(|| anyhow!("selected model is absent from backend catalog"))?;
-        anyhow::ensure!(models.next().is_none(), "ambiguous selected backend model");
+        let model = models.next().ok_or(InferenceBindingError::ModelAbsent)?;
+        if models.next().is_some() {
+            return Err(InferenceBindingError::AmbiguousModel.into());
+        }
         model.context_window
     } else {
         None
@@ -91,7 +124,9 @@ pub(crate) async fn load_bound_context_window(
         .context_window
         .or(advertised)
         .unwrap_or(gents::DEFAULT_CONTEXT_WINDOW as i64);
-    anyhow::ensure!(value > 0, "context window must be positive");
+    if value <= 0 {
+        return Err(InferenceBindingError::NonPositiveContextWindow.into());
+    }
     Ok(value)
 }
 
@@ -103,14 +138,18 @@ pub(crate) async fn resolve_bound_agent_id(
     if let Some(value) = explicit_agent_override(override_agent_id) {
         return Ok(value);
     }
-    let principal = load_node(node, node_did)
-        .await?
-        .ok_or_else(|| anyhow!("node {node_did:?} is not configured"))?;
-    principal
+    let principal = load_node(node, node_did).await?.ok_or_else(|| {
+        InferenceBindingError::NodeNotConfigured {
+            node_did: node_did.to_owned(),
+        }
+    })?;
+    Ok(principal
         .default_agent_id
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
-        .ok_or_else(|| anyhow!("node {node_did:?} has no default agent binding"))
+        .ok_or_else(|| InferenceBindingError::NoDefaultAgent {
+            node_did: node_did.to_owned(),
+        })?)
 }
 
 pub(crate) fn explicit_agent_override(value: Option<&str>) -> Option<String> {

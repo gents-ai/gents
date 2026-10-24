@@ -2,7 +2,7 @@ use crate::support::*;
 
 use std::{fs, time::Duration};
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -36,7 +36,7 @@ async fn config_apply_reconciles_canonical_event_source_and_trigger() -> Result<
     let mut config = read_json_file(&path)?;
     let agent_id = config["node"]["default_agent_id"]
         .as_str()
-        .context("default agent")?
+        .expect("default agent")
         .to_string();
     config["tasks"] = json!([{
         "task_id": "event-task",

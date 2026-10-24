@@ -1,4 +1,5 @@
 mod support;
+use crate::support::TestResult;
 use support::*;
 
 #[path = "cli_codex_shim/helpers/live.rs"]
@@ -22,7 +23,6 @@ use std::fs;
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use gents_codex_protocol as codex;
 use serde::de::DeserializeOwned;
@@ -50,7 +50,7 @@ async fn select_default_agent_skills(
     graphql: &str,
     node_did: &str,
     skill_ids: &[&str],
-) -> Result<()> {
+) -> TestResult<()> {
     let agent_id = escape_graphql_string(&format!("{node_did}:default"));
     let node_did = escape_graphql_string(node_did);
     let agent = graphql_query(
@@ -63,7 +63,7 @@ async fn select_default_agent_skills(
     let context_id = agent
         .pointer("/data/Agent/0/context_id")
         .and_then(Value::as_str)
-        .context("default agent has no canonical AgentContext")?;
+        .ok_or("default agent has no canonical AgentContext")?;
     let skills = skill_ids
         .iter()
         .map(|skill| format!(r#""{}""#, escape_graphql_string(skill)))
@@ -85,7 +85,7 @@ async fn seed_backend_catalog(
     node_did: &str,
     backend_id: &str,
     model_name: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let query = format!(
         r#"mutation($catalogs: JSON) {{
             update_InferenceBackend(
@@ -114,7 +114,7 @@ async fn seed_backend_catalog(
         .error_for_status()?
         .json::<Value>()
         .await?;
-    anyhow::ensure!(
+    assert!(
         response
             .get("errors")
             .and_then(Value::as_array)
@@ -152,8 +152,8 @@ mod turn_control;
 mod turn_streaming;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn thread_goal_round_trip_survives_shim_restart() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error:#}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-goal-restart-{}", Uuid::new_v4().simple());
@@ -254,7 +254,7 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     )
     .await?;
     let get: codex::ThreadGoalGetResponse = read_typed_response(&mut ws, request_id(121)).await?;
-    let goal = get.goal.context("goal disappeared across shim restart")?;
+    let goal = get.goal.ok_or("goal disappeared across shim restart")?;
     assert_eq!(goal.thread_id, thread_id);
     assert_eq!(goal.objective, objective);
     assert_eq!(goal.status, codex::ThreadGoalStatus::Active);

@@ -1,10 +1,11 @@
 use crate::support::*;
 
-use anyhow::{Context, Result};
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[test]
-fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exists() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exists() -> TestResult<()>
+{
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     std::fs::create_dir_all(&home_dir)?;
 
@@ -38,7 +39,7 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
             "smoke",
         ])
         .output()
-        .context("running gents")?;
+        .expect("running gents");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "a refusal exits 1: {stderr}");
     assert!(
@@ -53,8 +54,8 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
 }
 
 #[test]
-fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let cases: [(&[&str], &str); 3] = [
         (
             &[
@@ -93,7 +94,7 @@ fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> 
             .env("RUST_LOG", "error")
             .args(argv)
             .output()
-            .context("running gents")?;
+            .expect("running gents");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(2), "{stderr}");
         assert!(stderr.contains(message), "{stderr}");
@@ -102,8 +103,8 @@ fn a_repeated_cell_or_a_stray_or_repeated_profile_exits_2_as_a_usage_error() -> 
 }
 
 #[test]
-fn eval_cancel_writes_the_marker_before_opening_the_home() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn eval_cancel_writes_the_marker_before_opening_the_home() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let run_dir = tempdir.path().join(".gents/eval/runs/r1");
     std::fs::create_dir_all(&run_dir)?;
     let output = std::process::Command::new(cli_bin())
@@ -111,7 +112,7 @@ fn eval_cancel_writes_the_marker_before_opening_the_home() -> Result<()> {
         .env("RUST_LOG", "error")
         .args(["eval", "cancel", "r1"])
         .output()
-        .context("running gents")?;
+        .expect("running gents");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");

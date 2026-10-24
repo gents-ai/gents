@@ -7,7 +7,7 @@ use std::fs;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use chrono::Utc;
 use gents::default_agent_id_for_node;
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
@@ -34,13 +34,11 @@ fn enrollment_e2e_lock() -> &'static Mutex<()> {
 async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("agent-home");
     let desktop_home = tempdir.path().join("desktop-home");
     fs::create_dir_all(&home_dir)?;
-    let home_arg = home_dir
-        .to_str()
-        .ok_or_else(|| anyhow!("agent home path is not UTF-8"))?;
+    let home_arg = home_dir.to_str().ok_or("agent home path is not UTF-8")?;
 
     let (model_endpoint, model_name) = resolve_live_inference().await?;
     let port = allocate_port()?;
@@ -95,19 +93,19 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
                 ClientCoreOptions::local_only(),
             )
             .await
-            .context("starting fresh desktop ClientCore")?;
+            .expect("starting fresh desktop ClientCore");
 
             let pending = core
                 .request_status_enrollment_with_label(&status, Some(&agent_name))
                 .await
-                .context("requesting status enrollment from /status offer")?;
+                .expect("requesting status enrollment from /status offer");
             assert_eq!(pending.state, "pending_approval");
             assert_eq!(pending.owner_node, node_did);
 
             let active = core
                 .active_status_enrollment_requests()
                 .await
-                .context("loading pending enrollment requests")?;
+                .expect("loading pending enrollment requests");
             assert!(
                 active.iter().any(|request| {
                     request.request_id == pending.request_id
@@ -118,7 +116,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
 
             core.resend_status_enrollment(&pending.request_id)
                 .await
-                .context("resending the persisted enrollment request")?;
+                .expect("resending the persisted enrollment request");
             assert_eq!(
                 core.active_status_enrollment_requests()
                     .await?
@@ -140,7 +138,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
                     home_arg,
                 ],
             )
-            .context("approving enrollment request")?;
+            .expect("approving enrollment request");
 
             let enrolled = wait_for_chat_ready_enrollment(&core, &node_did).await?;
             assert_ne!(
@@ -171,7 +169,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
                 Some(&default_agent_id),
             )
             .await
-            .context("submitting chat request from the enrolled desktop")?;
+            .expect("submitting chat request from the enrolled desktop");
 
             let (request_id, runtime_session, _) =
                 wait_for_runtime_agent_request(&graphql, core.node(), &node_did, &prompt).await?;
@@ -211,7 +209,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
             let remaining = core
                 .active_status_enrollment_requests()
                 .await
-                .context("loading enrollment requests after pairing")?;
+                .expect("loading enrollment requests after pairing");
             assert!(
                 remaining.is_empty(),
                 "accepted pairing must clear the pending enrollment queue so another agent can be added; got {remaining:?}"
@@ -233,10 +231,10 @@ async fn resolve_live_inference() -> Result<(String, String)> {
         .get(&models_url)
         .send()
         .await
-        .with_context(|| {
-            format!("live inference at {endpoint} is unreachable; set GENTS_CLI_E2E_MODEL_ENDPOINT")
+        .map_err(|error| {
+            format!("live inference at {endpoint} is unreachable; set GENTS_CLI_E2E_MODEL_ENDPOINT: {error}")
         })?;
-    anyhow::ensure!(
+    assert!(
         response.status().is_success(),
         "live inference GET {models_url} returned {}",
         response.status()
@@ -244,7 +242,7 @@ async fn resolve_live_inference() -> Result<(String, String)> {
     let body: Value = response
         .json()
         .await
-        .context("decoding live inference /models")?;
+        .expect("decoding live inference /models");
     let advertised = body
         .pointer("/data")
         .and_then(Value::as_array)
@@ -252,7 +250,7 @@ async fn resolve_live_inference() -> Result<(String, String)> {
         .flatten()
         .filter_map(|row| row.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect::<Vec<_>>();
-    anyhow::ensure!(
+    assert!(
         !advertised.is_empty(),
         "live inference at {endpoint} advertised no models: {body}"
     );
@@ -263,7 +261,7 @@ async fn resolve_live_inference() -> Result<(String, String)> {
             .cloned()
             .unwrap_or_else(|| advertised[0].clone())
     });
-    anyhow::ensure!(
+    assert!(
         advertised.iter().any(|name| name == &model_name),
         "live inference at {endpoint} does not serve {model_name}; advertised {advertised:?}"
     );
@@ -285,12 +283,18 @@ async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> 
                     return Ok((status, token));
                 }
                 if Instant::now() >= deadline {
-                    bail!("timed out waiting for /status enrollment token; last={status}");
+                    return Err(format!(
+                        "timed out waiting for /status enrollment token; last={status}"
+                    )
+                    .into());
                 }
             }
             Err(error) => {
                 if Instant::now() >= deadline {
-                    bail!("timed out waiting for /status enrollment token: {error:#}");
+                    return Err(format!(
+                        "timed out waiting for /status enrollment token: {error:#}"
+                    )
+                    .into());
                 }
             }
         }
@@ -313,9 +317,7 @@ async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) ->
             return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!(
-                "timed out waiting for runtime to observe enrollment request {request_id}; last={response}"
-            );
+            return Err(format!("timed out waiting for runtime to observe enrollment request {request_id}; last={response}").into());
         }
         sleep(Duration::from_millis(200)).await;
     }
@@ -373,7 +375,7 @@ async fn wait_for_runtime_agent_request(
             }
             Err(error) => {
                 if Instant::now() >= deadline {
-                    bail!("runtime AgentRequest query failed: {error:#}");
+                    return Err(format!("runtime AgentRequest query failed: {error:#}").into());
                 }
             }
         }
@@ -387,11 +389,12 @@ async fn wait_for_runtime_agent_request(
             )
             .await
             .unwrap_or_else(|error| serde_json::json!({ "error": error.to_string() }));
-            bail!(
+            return Err(format!(
                 "runtime never received the enrolled client's AgentRequest; \
                  runtime_all={runtime_all}; client_requests={:?}",
                 client_requests.data
-            );
+            )
+            .into());
         }
         sleep(Duration::from_millis(250)).await;
     }
@@ -428,9 +431,9 @@ async fn wait_for_complete_agent_response(
         )
         .await?;
         if let Ok(row) = first_graphql_row(&response, "AgentRequest") {
-            let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())
-                .context("decoding canonical AgentRequest row")?;
-            anyhow::ensure!(
+            let request: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(row.clone()).expect("decoding canonical AgentRequest row");
+            assert!(
                 request.session_id.as_deref() == Some(session)
                     && request
                         .node_did
@@ -446,10 +449,11 @@ async fn wait_for_complete_agent_response(
                 .lifecycle_state
                 .is_some_and(|state| state.as_str() == "failed")
             {
-                bail!(
+                return Err(format!(
                     "live inference failed for {request_id}: failure_reason={:?}; row={row}",
                     request.failure_reason
-                );
+                )
+                .into());
             }
             if request.is_terminal() {
                 let output = gents::session::observe_request_output(
@@ -465,29 +469,25 @@ async fn wait_for_complete_agent_response(
                         presentation,
                         ..
                     } => {
-                        anyhow::ensure!(
+                        assert!(
                             header.request_doc_id.as_deref() == request.doc_id.as_deref()
                                 && header.session_id == session,
                             "canonical terminal header does not match the physical request for {request_id}: header={header:?}; row={row}"
                         );
                         Some(presentation.body_markdown.clone())
                     }
-                    gents::session::CanonicalRequestOutput::TerminalNoMessage => bail!(
-                        "live inference completed without a canonical terminal message for {request_id}: {output:?}"
-                    ),
+                    gents::session::CanonicalRequestOutput::TerminalNoMessage => return Err(format!("live inference completed without a canonical terminal message for {request_id}: {output:?}").into()),
                     gents::session::CanonicalRequestOutput::Denied
                     | gents::session::CanonicalRequestOutput::Invalid
                     | gents::session::CanonicalRequestOutput::Conflicted
-                    | gents::session::CanonicalRequestOutput::Retracted => bail!(
-                        "canonical terminal output is not presentable for {request_id}: {output:?}"
-                    ),
+                    | gents::session::CanonicalRequestOutput::Retracted => return Err(format!("canonical terminal output is not presentable for {request_id}: {output:?}").into()),
                     _ => None,
                 };
                 if let Some(visible) = visible.filter(|text| !text.trim().is_empty()) {
                     let Some(TerminalOutput::Message { message_doc_id }) =
                         request.terminal_output.clone()
                     else {
-                        bail!("terminal message output lost its header identity for {request_id}: {row}");
+                        return Err(format!("terminal message output lost its header identity for {request_id}: {row}").into());
                     };
                     return Ok(RuntimeTerminalReply {
                         header_doc_id: message_doc_id,
@@ -499,16 +499,12 @@ async fn wait_for_complete_agent_response(
                     .elapsed()
                     >= Duration::from_secs(15)
                 {
-                    bail!(
-                        "live inference produced no visible canonical terminal content for {request_id} within 15s of the first terminal observation: {row}; output={output:?}"
-                    );
+                    return Err(format!("live inference produced no visible canonical terminal content for {request_id} within 15s of the first terminal observation: {row}; output={output:?}").into());
                 }
             }
         }
         if Instant::now() >= deadline {
-            bail!(
-                "timed out waiting for canonical terminal output with visible text for {request_id}; last={response}"
-            );
+            return Err(format!("timed out waiting for canonical terminal output with visible text for {request_id}; last={response}").into());
         }
         sleep(Duration::from_millis(250)).await;
     }
@@ -600,17 +596,16 @@ async fn wait_for_client_complete_response(
                     .lifecycle_state
                     .is_some_and(|state| state.as_str() == "failed")
         }) {
-            bail!(
+            return Err(format!(
                 "client received a failed request for {request_id}: {:?}",
                 snapshot.requests
-            );
+            )
+            .into());
         }
         if Instant::now() >= deadline {
-            bail!(
-                "client never reconstructed the runtime-selected terminal header for {request_id} ({runtime_reply:?}); client_reply={client_reply:?}; requests={:?}; transcript_messages={:?}",
+            return Err(format!("client never reconstructed the runtime-selected terminal header for {request_id} ({runtime_reply:?}); client_reply={client_reply:?}; requests={:?}; transcript_messages={:?}",
                 snapshot.requests,
-                snapshot.transcript_messages
-            );
+                snapshot.transcript_messages).into());
         }
         sleep(Duration::from_millis(250)).await;
     }
@@ -634,7 +629,10 @@ async fn wait_for_chat_ready_enrollment(
         }
         if Instant::now() >= deadline {
             let records = core.peer_records().await;
-            bail!("timed out waiting for enrolled chat-ready route; peers={records:?}");
+            return Err(format!(
+                "timed out waiting for enrolled chat-ready route; peers={records:?}"
+            )
+            .into());
         }
         match tokio::time::timeout(
             deadline.saturating_duration_since(Instant::now()),
@@ -643,10 +641,13 @@ async fn wait_for_chat_ready_enrollment(
         .await
         {
             Ok(Ok(())) => {}
-            Ok(Err(_)) => bail!("client sync-state channel closed"),
+            Ok(Err(_)) => return Err("client sync-state channel closed".into()),
             Err(_) => {
                 let records = core.peer_records().await;
-                bail!("timed out waiting for enrolled chat-ready route; peers={records:?}");
+                return Err(format!(
+                    "timed out waiting for enrolled chat-ready route; peers={records:?}"
+                )
+                .into());
             }
         }
     }
@@ -666,11 +667,12 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
             return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!(
+            return Err(format!(
                 "timed out waiting for gossiped Agent/NodeReadiness; agents={} readiness={}",
                 snapshot.agents.len(),
                 snapshot.node_readiness.len()
-            );
+            )
+            .into());
         }
         match tokio::time::timeout(
             deadline.saturating_duration_since(Instant::now()),
@@ -679,13 +681,14 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
         .await
         {
             Ok(Ok(())) => {}
-            Ok(Err(_)) => bail!("app projection channel closed"),
+            Ok(Err(_)) => return Err("app projection channel closed".into()),
             Err(_) => {
-                bail!(
+                return Err(format!(
                     "timed out waiting for gossiped Agent/NodeReadiness; agents={} readiness={}",
                     snapshot.agents.len(),
                     snapshot.node_readiness.len()
-                );
+                )
+                .into());
             }
         }
     }
@@ -699,7 +702,7 @@ async fn query_collection_dids(
         .execute(&format!("{{ {collection} {{ node_did }} }}"))
         .await;
     if response.has_errors() {
-        bail!("query {collection} failed: {:?}", response.errors);
+        return Err(format!("query {collection} failed: {:?}", response.errors).into());
     }
     Ok(response
         .data

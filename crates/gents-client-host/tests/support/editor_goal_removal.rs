@@ -1,5 +1,5 @@
 use super::{fake_llm, ChatAction};
-use anyhow::{ensure, Context, Result};
+use crate::support::{TestError, TestResult};
 use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
 use serde_json::{json, Value};
@@ -67,7 +67,7 @@ pub async fn verify(
     root: &Path,
     node: &str,
     author: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let node_literal = gents::graphql::escape_graphql_string(node);
     let query = format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_literal}"}}, purpose: {{_eq: "normal"}}}}) {{ {} interrupt_requested_at }} Goal(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ intent_json }} }}"#,
@@ -75,8 +75,8 @@ pub async fn verify(
         gents::goal::GOAL_FIELDS,
     );
     let value = access.execute(&query).await?;
-    let goals = value["data"]["Goal"].as_array().context("goal rows")?;
-    ensure!(
+    let goals = value["data"]["Goal"].as_array().expect("goal rows");
+    assert!(
         goals.len() == 2,
         "removal must retain both canonical goals: {value}"
     );
@@ -85,33 +85,33 @@ pub async fn verify(
             .iter()
             .filter(|row| row["objective"] == objective)
             .collect();
-        ensure!(
+        assert!(
             matching.len() == 1 && matching[0]["status"] == "stopped",
             "removed goal lost its durable outcome: {value}"
         );
-        ensure!(
+        assert!(
             matching[0]["completion_evidence"].is_null(),
             "removal claimed completion evidence"
         );
     }
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value["data"]["AgentRequest"].clone())?;
-    ensure!(
+    assert!(
         rows.len() == 4,
         "initial chat, two goals and one queued follow-up required: {value}"
     );
     for row in &rows {
         gents::verify_request_receipt_signature(row)?;
-        ensure!(
+        assert!(
             row.requester_did.as_deref() == Some(author)
                 && row.admission_signer_did.as_deref() == Some(author),
             "removal changed the request signer"
         );
-        ensure!(
+        assert!(
             row.lifecycle_state == Some(RequestLifecycleState::Completed)
                 && row.interrupt_requested_at.is_none(),
             "removal cancelled owned work: {value}"
         );
-        ensure!(
+        assert!(
             row.input
                 .as_ref()
                 .and_then(|input| input.goal_continuation.as_ref())
@@ -120,7 +120,7 @@ pub async fn verify(
         );
     }
     let captured = provider.captured_chat_requests();
-    ensure!(
+    assert!(
         captured
             .iter()
             .all(|request| ![DRAFT, OBSERVER_DRAFT, OBSERVER_EDIT]
@@ -128,7 +128,7 @@ pub async fn verify(
                 .any(|draft| request.to_string().contains(draft))),
         "removal submitted the unsent composer draft"
     );
-    ensure!(
+    assert!(
         captured
             .iter()
             .filter(|request| is_input(request, QUEUED))
@@ -138,19 +138,19 @@ pub async fn verify(
     );
     let commands: Vec<Value> = value["data"]["AgentSessionGoalControl"]
         .as_array()
-        .context("goal control rows")?
+        .expect("goal control rows")
         .iter()
         .map(|row| {
-            serde_json::from_str(row["intent_json"].as_str().context("goal control intent")?)
-                .map_err(anyhow::Error::from)
+            serde_json::from_str(row["intent_json"].as_str().expect("goal control intent"))
+                .map_err(TestError::from)
         })
-        .collect::<Result<_>>()?;
-    ensure!(
+        .collect::<TestResult<_>>()?;
+    assert!(
         commands.len() == 5,
         "observer window published an unexpected goal control: {commands:?}"
     );
     for (kind, count) in [("create", 2), ("pause", 1), ("stop", 2)] {
-        ensure!(
+        assert!(
             commands
                 .iter()
                 .filter(|command| command["operation"]["kind"] == kind)
@@ -166,7 +166,7 @@ pub async fn verify(
         "staleGoalEditPreserved",
         "observerDraftPreserved",
     ] {
-        ensure!(ui[field] == true, "editor removal evidence omitted {field}");
+        assert!(ui[field] == true, "editor removal evidence omitted {field}");
     }
     Ok(
         json!({"nodeDid":node,"goals":goals,"verifiedRequestSignatures":rows.len(),"noAutonomousContinuation":true,"noInterrupt":true,"ui":ui}),

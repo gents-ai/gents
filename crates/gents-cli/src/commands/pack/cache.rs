@@ -102,19 +102,19 @@ pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
     let current = super::asset_cache_root(&home, &pack)?;
     let parent = current.parent().context("pack cache parent")?;
     if !parent.is_dir() {
-        return crate::print_json(&json!({
+        return Ok(crate::print_json(&json!({
             "pack": pack.manifest().name,
             "current_digest": pack.digest(),
             "removed_digests": [],
-        }));
+        }))?);
     }
     let _lock = lock_exclusive(parent)?;
     let removed = prune_stale_asset_cache(parent, &current)?;
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "pack": pack.manifest().name,
         "current_digest": pack.digest(),
         "removed_digests": removed,
-    }))
+    }))?)
 }
 
 #[cfg(test)]

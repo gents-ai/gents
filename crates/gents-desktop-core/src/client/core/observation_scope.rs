@@ -1,7 +1,10 @@
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
 use tokio::sync::watch;
+
+use super::ClientCoreError;
+
+type Result<T, E = ClientCoreError> = std::result::Result<T, E>;
 
 #[derive(Default)]
 struct Focus {
@@ -56,7 +59,7 @@ impl ObservationScope {
         focus.attachments = focus
             .attachments
             .checked_add(1)
-            .context("too many client observation attachments")?;
+            .ok_or(ClientCoreError::TooManyObservationAttachments)?;
         self.0.publish(&focus);
         Ok(ClientObservationAttachment(self.0.clone()))
     }

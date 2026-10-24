@@ -6,11 +6,91 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::enrollment::authorization_lease_is_fresh_at;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PeerDirectoryError {
+    #[error("creating peer-directory lock parent {}", path.display())]
+    CreateLockParent {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("opening peer-directory lock {}", path.display())]
+    OpenLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("peer directory {} is already owned by a running desktop process", path.display())]
+    AlreadyOwned { path: PathBuf },
+    #[error("locking peer directory {}", path.display())]
+    LockDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("local runtime has ambiguous enrollment records")]
+    AmbiguousEnrollment,
+    #[error("{field} must not be empty")]
+    EmptyField { field: &'static str },
+    #[error("authorization_sequence must be positive")]
+    NonPositiveAuthorizationSequence,
+    #[error("enrollment authorization generation {request_digest} was removed locally; a new enrollment is required")]
+    RemovedEnrollmentGeneration { request_digest: String },
+    #[error("authenticated enrollment conflicts with {owner}-owned peer {peer_id}")]
+    EnrollmentConflict { owner: String, peer_id: String },
+    #[error("replacement peer id must match the expected generation")]
+    ReplacementPeerIdMismatch,
+    #[error("creating peer directory parent {}", path.display())]
+    CreateParent {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("staging peer directory in {}", parent.display())]
+    StageDirectory {
+        parent: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing staged peer directory in {}", parent.display())]
+    WriteStagedDirectory {
+        parent: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[cfg(test)]
+    #[error("injected peer-directory persistence failure")]
+    InjectedPersistFailure,
+    #[error("persisting {}", path.display())]
+    Persist {
+        path: PathBuf,
+        #[source]
+        source: tempfile::PersistError,
+    },
+    #[error("parsing peer directory {}", path.display())]
+    ParseDirectory {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("reading peer directory {}", path.display())]
+    ReadDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("peer directory contains unsupported pre-enrollment source")]
+    UnsupportedPreEnrollmentSource,
+    #[error(transparent)]
+    Encode(#[from] serde_json::Error),
+}
+
+type Result<T, E = PeerDirectoryError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerRecord {
@@ -215,8 +295,11 @@ impl PeerDirectory {
         let path = path.into();
         let lock_path = path.with_extension("lock");
         if let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("creating peer-directory lock parent {}", parent.display())
+            std::fs::create_dir_all(parent).map_err(|source| {
+                PeerDirectoryError::CreateLockParent {
+                    path: parent.to_path_buf(),
+                    source,
+                }
             })?;
         }
         let file = OpenOptions::new()
@@ -225,7 +308,10 @@ impl PeerDirectory {
             .read(true)
             .write(true)
             .open(&lock_path)
-            .with_context(|| format!("opening peer-directory lock {}", lock_path.display()))?;
+            .map_err(|source| PeerDirectoryError::OpenLock {
+                path: lock_path.clone(),
+                source,
+            })?;
         match file.try_lock() {
             Ok(()) => {
                 let lease = Arc::new(PeerDirectoryLease(file));
@@ -244,12 +330,9 @@ impl PeerDirectory {
                 directory.sort_records();
                 Ok(directory)
             }
-            Err(TryLockError::WouldBlock) => anyhow::bail!(
-                "peer directory {} is already owned by a running desktop process",
-                path.display()
-            ),
-            Err(TryLockError::Error(error)) => {
-                Err(error).with_context(|| format!("locking peer directory {}", path.display()))
+            Err(TryLockError::WouldBlock) => Err(PeerDirectoryError::AlreadyOwned { path }),
+            Err(TryLockError::Error(source)) => {
+                Err(PeerDirectoryError::LockDirectory { path, source })
             }
         }
     }
@@ -312,10 +395,9 @@ impl PeerDirectory {
             .iter()
             .filter(|existing| existing.is_enrollment() && existing.node_did == node_did);
         let enrollment = enrolled.next().cloned();
-        anyhow::ensure!(
-            enrolled.next().is_none(),
-            "local runtime has ambiguous enrollment records"
-        );
+        if enrolled.next().is_some() {
+            return Err(PeerDirectoryError::AmbiguousEnrollment);
+        }
         let mut record = enrollment
             .or_else(|| {
                 candidate
@@ -369,19 +451,20 @@ impl PeerDirectory {
         let request_id = normalize_non_empty("request_id", request_id)?;
         let request_digest = normalize_non_empty("request_digest", request_digest)?;
         let admin_did = normalize_non_empty("admin_did", admin_did)?;
-        anyhow::ensure!(
-            authorization_sequence > 0,
-            "authorization_sequence must be positive"
-        );
+        if authorization_sequence == 0 {
+            return Err(PeerDirectoryError::NonPositiveAuthorizationSequence);
+        }
         let authorization_expires_at =
             normalize_non_empty("authorization_expires_at", authorization_expires_at)?;
-        anyhow::ensure!(
-            !self
-                .retired_enrollments
-                .iter()
-                .any(|retired| retired.request_digest == request_digest),
-            "enrollment authorization generation {request_digest} was removed locally; a new enrollment is required"
-        );
+        if self
+            .retired_enrollments
+            .iter()
+            .any(|retired| retired.request_digest == request_digest)
+        {
+            return Err(PeerDirectoryError::RemovedEnrollmentGeneration {
+                request_digest: request_digest.to_owned(),
+            });
+        }
 
         let mut candidate = self.clone();
         let managed = candidate
@@ -400,11 +483,10 @@ impl PeerDirectory {
                     .as_ref()
                     .is_none_or(|managed| managed.peer_id != record.peer_id)
         }) {
-            anyhow::bail!(
-                "authenticated enrollment conflicts with {}-owned peer {}",
-                conflict.source.as_deref().unwrap_or("unscoped"),
-                conflict.peer_id
-            );
+            return Err(PeerDirectoryError::EnrollmentConflict {
+                owner: conflict.source.as_deref().unwrap_or("unscoped").to_owned(),
+                peer_id: conflict.peer_id.clone(),
+            });
         }
         let now = Utc::now().to_rfc3339();
         let existing = candidate
@@ -529,10 +611,9 @@ impl PeerDirectory {
         if !self.peers.iter().any(|record| record == expected) {
             return Ok(None);
         }
-        anyhow::ensure!(
-            replacement.peer_id == expected.peer_id,
-            "replacement peer id must match the expected generation"
-        );
+        if replacement.peer_id != expected.peer_id {
+            return Err(PeerDirectoryError::ReplacementPeerIdMismatch);
+        }
         let mut candidate = self.clone();
         let replacement = candidate.apply_upsert(replacement);
         self.commit(candidate).await?;
@@ -631,9 +712,12 @@ impl PeerDirectory {
 
     async fn save(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("creating peer directory parent {}", parent.display()))?;
+            tokio::fs::create_dir_all(parent).await.map_err(|source| {
+                PeerDirectoryError::CreateParent {
+                    path: parent.to_path_buf(),
+                    source,
+                }
+            })?;
         }
         let bytes = serde_json::to_vec_pretty(&StoredPeerDirectory {
             peers: self.peers.clone(),
@@ -641,20 +725,30 @@ impl PeerDirectory {
             retired_enrollments: self.retired_enrollments.clone(),
         })?;
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
-        let mut staged = tempfile::NamedTempFile::new_in(parent)
-            .with_context(|| format!("staging peer directory in {}", parent.display()))?;
+        let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|source| {
+            PeerDirectoryError::StageDirectory {
+                parent: parent.to_path_buf(),
+                source,
+            }
+        })?;
         staged
             .write_all(&bytes)
-            .with_context(|| format!("writing staged peer directory in {}", parent.display()))?;
+            .map_err(|source| PeerDirectoryError::WriteStagedDirectory {
+                parent: parent.to_path_buf(),
+                source,
+            })?;
         #[cfg(test)]
         if self.fail_persist {
-            anyhow::bail!("injected peer-directory persistence failure");
+            return Err(PeerDirectoryError::InjectedPersistFailure);
         }
         // NamedTempFile::persist and the caller's in-memory swap contain
         // no cancellation point.
         staged
             .persist(&self.path)
-            .with_context(|| format!("persisting {}", self.path.display()))?;
+            .map_err(|error| PeerDirectoryError::Persist {
+                path: self.path.clone(),
+                source: error,
+            })?;
         Ok(())
     }
 
@@ -683,19 +777,24 @@ pub async fn load_peer_records(path: &Path) -> Result<Vec<PeerRecord>> {
     Ok(records)
 }
 
-fn normalize_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
+fn normalize_non_empty<'a>(field: &'static str, value: &'a str) -> Result<&'a str> {
     let trimmed = value.trim();
     (!trimmed.is_empty())
         .then_some(trimmed)
-        .with_context(|| format!("{field} must not be empty"))
+        .ok_or(PeerDirectoryError::EmptyField { field })
 }
 
 async fn read_stored_directory(path: &Path) -> Result<StoredPeerDirectory> {
     match tokio::fs::read(path).await {
         Ok(bytes) if bytes.is_empty() => Ok(StoredPeerDirectory::default()),
         Ok(bytes) => {
-            let stored = serde_json::from_slice::<StoredPeerDirectory>(&bytes)
-                .with_context(|| format!("parsing peer directory {}", path.display()))?;
+            let stored =
+                serde_json::from_slice::<StoredPeerDirectory>(&bytes).map_err(|source| {
+                    PeerDirectoryError::ParseDirectory {
+                        path: path.to_path_buf(),
+                        source,
+                    }
+                })?;
             #[cfg(not(test))]
             validate_fresh_directory(&stored)?;
             Ok(stored)
@@ -703,20 +802,21 @@ async fn read_stored_directory(path: &Path) -> Result<StoredPeerDirectory> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(StoredPeerDirectory::default())
         }
-        Err(error) => Err(anyhow::Error::from(error))
-            .with_context(|| format!("reading peer directory {}", path.display())),
+        Err(source) => Err(PeerDirectoryError::ReadDirectory {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
 fn validate_fresh_directory(stored: &StoredPeerDirectory) -> Result<()> {
     for record in stored.peers.iter().chain(&stored.pending_removals) {
-        anyhow::ensure!(
-            matches!(
-                record.source.as_deref(),
-                Some("local-standard" | "enrollment")
-            ),
-            "peer directory contains unsupported pre-enrollment source"
-        );
+        if !matches!(
+            record.source.as_deref(),
+            Some("local-standard" | "enrollment")
+        ) {
+            return Err(PeerDirectoryError::UnsupportedPreEnrollmentSource);
+        }
     }
     Ok(())
 }

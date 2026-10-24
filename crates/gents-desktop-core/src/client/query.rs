@@ -56,6 +56,24 @@ pub use session_transcript::{
 };
 pub(crate) use snapshot_loaders::*;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ClientQueryError {
+    #[error("query result missing root field {root}")]
+    MissingRootField { root: String },
+    #[error("query result for {root} returned non-array payload: {payload}")]
+    NonArrayPayload {
+        root: String,
+        payload: serde_json::Value,
+    },
+    #[error("{operation} returned errors: {errors}")]
+    GraphqlErrors {
+        operation: String,
+        errors: serde_json::Value,
+    },
+    #[error("{operation} returned no data")]
+    NoData { operation: String },
+}
+
 pub const DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 40;
 pub const MAX_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 80;
 pub(super) const SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET: usize = 320;
@@ -162,7 +180,7 @@ pub async fn load_chat_patch(
                             .execute(&query)
                             .await
                             .with_context(|| operation.to_string())?;
-                        into_access_graphql_data(response, operation)
+                        into_access_graphql_data(response, operation).map_err(anyhow::Error::from)
                     }) as QueryFuture<'_>
                 };
                 load_chat_patch_with(
@@ -579,7 +597,7 @@ where
     let data = response
         .data
         .with_context(|| format!("query for {root} returned no data"))?;
-    parse_query_rows(&data, root)
+    parse_query_rows(&data, root).map_err(anyhow::Error::from)
 }
 
 pub(super) async fn execute_access_graphql_query(
@@ -591,27 +609,34 @@ pub(super) async fn execute_access_graphql_query(
         .execute(query)
         .await
         .with_context(|| operation.to_string())?;
-    into_access_graphql_data(body, operation)
+    into_access_graphql_data(body, operation).map_err(anyhow::Error::from)
 }
 
-fn into_access_graphql_data(mut body: Value, operation: &str) -> Result<Value> {
+fn into_access_graphql_data(mut body: Value, operation: &str) -> Result<Value, ClientQueryError> {
     if let Some(errors) = body.get("errors") {
         if errors.as_array().is_some_and(|rows| !rows.is_empty()) {
-            anyhow::bail!("{operation} returned errors: {errors}");
+            return Err(ClientQueryError::GraphqlErrors {
+                operation: operation.to_owned(),
+                errors: errors.clone(),
+            });
         }
     }
     body.as_object_mut()
         .and_then(|root| root.remove("data"))
-        .with_context(|| format!("{operation} returned no data"))
+        .ok_or_else(|| ClientQueryError::NoData {
+            operation: operation.to_owned(),
+        })
 }
 
-pub(super) fn parse_query_rows<T>(data: &Value, root: &str) -> Result<Vec<T>>
+pub(super) fn parse_query_rows<T>(data: &Value, root: &str) -> Result<Vec<T>, ClientQueryError>
 where
     T: DeserializeOwned,
 {
     let rows = data
         .get(root)
-        .ok_or_else(|| anyhow!("query result missing root field {root}"))?;
+        .ok_or_else(|| ClientQueryError::MissingRootField {
+            root: root.to_owned(),
+        })?;
     parse_row_array(rows, root)
 }
 
@@ -633,7 +658,7 @@ where
         .collect::<std::result::Result<_, _>>()?)
 }
 
-pub(super) fn parse_row_array<T>(rows: &Value, root: &str) -> Result<Vec<T>>
+pub(super) fn parse_row_array<T>(rows: &Value, root: &str) -> Result<Vec<T>, ClientQueryError>
 where
     T: DeserializeOwned,
 {
@@ -654,9 +679,10 @@ where
             }
             Ok(parsed)
         }
-        other => Err(anyhow!(
-            "query result for {root} returned non-array payload: {other}"
-        )),
+        other => Err(ClientQueryError::NonArrayPayload {
+            root: root.to_owned(),
+            payload: other.clone(),
+        }),
     }
 }
 

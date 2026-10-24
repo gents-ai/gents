@@ -3710,7 +3710,14 @@ fn spawn_server_with_pack(
         .zip(tool_root_env_var)
         .map(|(path, name)| vec![(name, path.to_string_lossy().into_owned())])
         .unwrap_or_default();
-    spawn_server_with_args_and_env(bin, home, port, log, &["--apply-root", &root], &environment)
+    Ok(spawn_server_with_args_and_env(
+        bin,
+        home,
+        port,
+        log,
+        &["--apply-root", &root],
+        &environment,
+    )?)
 }
 
 fn stage_scenario_pack(

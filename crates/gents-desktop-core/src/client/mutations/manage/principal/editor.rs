@@ -1,4 +1,6 @@
 use anyhow::{ensure, Context, Result};
+
+use super::super::ManageMutationError;
 use gents::config_client::{
     patch::{SelfConfigPatch, SelfConfigTarget},
     read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn,
@@ -37,10 +39,13 @@ fn editable_fields(target: SelfConfigTarget) -> Vec<&'static str> {
         .collect()
 }
 
-fn visible(target: SelfConfigTarget, value: &Value) -> Result<Map<String, Value>> {
+fn visible(
+    target: SelfConfigTarget,
+    value: &Value,
+) -> Result<Map<String, Value>, ManageMutationError> {
     let object = value
         .as_object()
-        .context("Configuration must be an object.")?;
+        .ok_or(ManageMutationError::ConfigurationNotObject)?;
     Ok(editable_fields(target)
         .into_iter()
         .filter_map(|field| {
@@ -178,7 +183,7 @@ pub async fn save_config_editor_on(
             super::patch_config_components_in_txn(txn, node_did, &[(target, id.to_owned(), patch)]).await?;
             let (_, canonical) = read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
                 .await?.context("Saved configuration disappeared in its transaction.")?;
-            visible(target, &canonical)
+            visible(target, &canonical).map_err(anyhow::Error::from)
         })
     }).await?;
     match read_config_editor_on(access, node_did, target, id).await {

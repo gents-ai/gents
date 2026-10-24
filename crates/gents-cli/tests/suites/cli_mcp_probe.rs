@@ -1,14 +1,15 @@
 use crate::support::*;
 
-use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::ensure_runtime_schemas;
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test]
-async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn mcp_register_upserts_a_host_endpoint() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let node_home = tempdir.path().join("node-home");
     let service_id = format!("registered-mcp-{}", Uuid::new_v4().simple());
     {
@@ -16,7 +17,7 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
         ensure_runtime_schemas(&node).await?;
         node.shutdown().await;
     }
-    let node_home_text = node_home.to_str().context("node home utf8")?;
+    let node_home_text = node_home.to_str().expect("node home utf8");
     let output = run_cli_text(
         tempdir.path(),
         &[
@@ -48,7 +49,7 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
         .and_then(|data| data.get("ToolServiceRegistry"))
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
-        .context("registered row")?;
+        .expect("registered row");
     assert_eq!(row.get("lan_ip").and_then(Value::as_str), Some("127.0.0.1"));
     assert_eq!(row.get("mcp_port").and_then(Value::as_i64), Some(9213));
     assert_eq!(row.get("mcp_path").and_then(Value::as_str), Some("/mcp"));
@@ -61,8 +62,8 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
 }
 
 #[tokio::test]
-async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let node_home = tempdir.path().join("node-home");
     let service_id = format!("fixture-mcp-{}", Uuid::new_v4().simple());
 
@@ -73,7 +74,7 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
         node.shutdown().await;
     }
 
-    let node_home = node_home.to_str().context("node home utf8")?;
+    let node_home = node_home.to_str().expect("node home utf8");
     let output = run_cli_json(
         tempdir.path(),
         &[
@@ -93,8 +94,8 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
     let items = output
         .get("items")
         .and_then(Value::as_array)
-        .context("mcp probe output must include items")?;
-    let row = items.first().context("expected one MCP probe row")?;
+        .expect("mcp probe output must include items");
+    let row = items.first().expect("expected one MCP probe row");
     assert_eq!(
         row.get("service").and_then(Value::as_str),
         Some(service_id.as_str())
@@ -127,8 +128,8 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
 }
 
 #[tokio::test]
-async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn mcp_probe_all_json_lists_each_online_service() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let node_home = tempdir.path().join("node-home");
     let missing_port_id = format!("a-fixture-mcp-{}", Uuid::new_v4().simple());
     let missing_address_id = format!("b-fixture-mcp-{}", Uuid::new_v4().simple());
@@ -143,7 +144,7 @@ async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
         node.shutdown().await;
     }
 
-    let node_home = node_home.to_str().context("node home utf8")?;
+    let node_home = node_home.to_str().expect("node home utf8");
     let output = run_cli_json(
         tempdir.path(),
         &[
@@ -163,7 +164,7 @@ async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
     let items = output
         .get("items")
         .and_then(Value::as_array)
-        .context("mcp probe --all output must include items")?;
+        .expect("mcp probe --all output must include items");
     assert_eq!(
         service_ids(items),
         vec![missing_port_id.as_str(), missing_address_id.as_str()]
@@ -181,8 +182,8 @@ async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
 }
 
 #[tokio::test]
-async fn mcp_probe_single_missing_service_fails() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn mcp_probe_single_missing_service_fails() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let node_home = tempdir.path().join("node-home");
 
     {
@@ -191,7 +192,7 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
         node.shutdown().await;
     }
 
-    let node_home = node_home.to_str().context("node home utf8")?;
+    let node_home = node_home.to_str().expect("node home utf8");
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
         &["mcp", "probe", "--home", node_home, "missing-service"],
@@ -205,8 +206,8 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
 }
 
 #[test]
-fn mcp_probe_rejects_zero_timeout() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn mcp_probe_rejects_zero_timeout() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let stderr =
         run_cli_failure_stderr(tempdir.path(), &["mcp", "probe", "--all", "--timeout", "0"])?;
     assert!(
@@ -223,11 +224,11 @@ fn service_ids(items: &[Value]) -> Vec<&str> {
         .collect()
 }
 
-fn assert_last_error_contains(row: &Value, needle: &str) -> Result<()> {
+fn assert_last_error_contains(row: &Value, needle: &str) -> TestResult<()> {
     let last_error = row
         .get("last_error")
         .and_then(Value::as_str)
-        .context("probe row missing last_error")?;
+        .expect("probe row missing last_error");
     assert!(
         last_error.contains(needle),
         "expected last_error to contain {needle:?}, got {last_error:?}"
@@ -243,7 +244,7 @@ async fn seed_mcp_service(
     lan_ip: &str,
     mcp_port: u16,
     status: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let service_id = escape_graphql_string(service_id);
     let hostname = escape_graphql_string(hostname);
     let tailscale_ip = escape_graphql_string(tailscale_ip);
@@ -268,14 +269,14 @@ async fn seed_mcp_service(
     );
     let response = node.execute(&mutation).await;
     if response.has_errors() {
-        anyhow::bail!("seed ToolServiceRegistry failed: {:?}", response.errors);
+        return Err(format!("seed ToolServiceRegistry failed: {:?}", response.errors).into());
     }
     Ok(())
 }
 
 #[test]
-fn mcp_probe_rejects_service_and_all_together() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn mcp_probe_rejects_service_and_all_together() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
         &["mcp", "probe", "--all", "some-service", "--timeout", "1s"],
@@ -288,8 +289,8 @@ fn mcp_probe_rejects_service_and_all_together() -> Result<()> {
 }
 
 #[test]
-fn mcp_probe_rejects_missing_target() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn mcp_probe_rejects_missing_target() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let stderr = run_cli_failure_stderr(tempdir.path(), &["mcp", "probe"])?;
     assert!(
         stderr.contains("provide a service id or --all"),

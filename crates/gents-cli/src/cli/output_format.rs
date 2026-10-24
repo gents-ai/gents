@@ -1,5 +1,16 @@
-use anyhow::Result;
 use clap::ValueEnum;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OutputFormatError {
+    #[error("unsupported --output {requested} for {command}; supported values: {supported}")]
+    Unsupported {
+        requested: &'static str,
+        command: String,
+        supported: String,
+    },
+}
+
+type Result<T, E = OutputFormatError> = std::result::Result<T, E>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum OutputFormat {
@@ -30,9 +41,10 @@ impl OutputFormat {
             .map(|format| format.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        anyhow::bail!(
-            "unsupported --output {} for {command}; supported values: {supported}",
-            self.as_str()
-        );
+        Err(OutputFormatError::Unsupported {
+            requested: self.as_str(),
+            command: command.to_owned(),
+            supported,
+        })
     }
 }

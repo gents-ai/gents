@@ -56,7 +56,7 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
     } else if wait_for_desktop {
         result.map(|_| ())
     } else {
-        crate::print_json(&serde_json::to_value(result?)?)
+        Ok(crate::print_json(&serde_json::to_value(result?)?)?)
     }
 }
 

@@ -5,6 +5,34 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use crate::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
+
+#[derive(Debug, thiserror::Error)]
+pub enum HomeResetError {
+    #[error(transparent)]
+    Reject(#[from] BridgeError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("Quit Gents before resetting its desktop state")]
+    StoreHeld(#[source] gents::home::HomeError),
+    #[error("opening {}", path.display())]
+    OpenPeerLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Quit Gents before resetting its desktop state")]
+    PeerLockHeld(#[source] std::fs::TryLockError),
+    #[error("unable to resolve a local application data directory")]
+    DataDirectory,
+    #[error(
+        "Gents is running or a reset is in progress; quit Gents or wait for the reset to finish"
+    )]
+    LockBusy(#[source] std::fs::TryLockError),
+    #[error("Reading desktop preference; specify --home to choose the reset target explicitly")]
+    PreferenceUnreadable(#[source] std::io::Error),
+    #[error("Reading desktop preference; specify --home to choose the reset target explicitly")]
+    PreferenceInvalid(#[source] serde_json::Error),
+}
 const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. Nothing is imported into the new home.";
 const DELETE_CONSEQUENCE: &str =
     "The selected local state is permanently deleted. Nothing is imported into the new home.";
@@ -1194,7 +1222,7 @@ fn reject_symlink_if_present(path: &Path, label: &str) -> Result<(), BridgeError
 pub fn lock_desktop_process(
     paths: &crate::client::DesktopPaths,
     wait: bool,
-) -> anyhow::Result<DesktopProcessLock> {
+) -> Result<DesktopProcessLock, HomeResetError> {
     lock_file(paths, ".desktop-process.lock", wait).map(|lock| DesktopProcessLock { _lock: lock })
 }
 
@@ -1215,7 +1243,7 @@ pub struct BrowserStoreLock {
 /// exit. Startup takes this lock first, so it cannot overtake the waiting reset.
 pub fn lock_reset(
     paths: &crate::client::DesktopPaths,
-) -> anyhow::Result<gents::file_lock::FileLock> {
+) -> Result<gents::file_lock::FileLock, HomeResetError> {
     lock_file(paths, ".reset.lock", false)
 }
 
@@ -1224,10 +1252,9 @@ pub fn lock_reset(
 /// writer lease. A desktop without the process lock is excluded by these.
 pub fn lock_client_state(
     paths: &crate::client::DesktopPaths,
-) -> anyhow::Result<(gents::home::StoreLock, gents::file_lock::FileLock)> {
-    use anyhow::Context;
+) -> Result<(gents::home::StoreLock, gents::file_lock::FileLock), HomeResetError> {
     let store = gents::home::lock_store_at(paths.root(), paths.node_data_dir())
-        .context("Quit Gents before resetting its desktop state")?;
+        .map_err(HomeResetError::StoreHeld)?;
     let peers = paths.peer_directory_path().with_extension("lock");
     reject_symlink_if_present(&peers, "peer directory lock")?;
     let file = std::fs::OpenOptions::new()
@@ -1236,9 +1263,12 @@ pub fn lock_client_state(
         .create(true)
         .truncate(false)
         .open(&peers)
-        .with_context(|| format!("opening {}", peers.display()))?;
-    let peers = gents::file_lock::FileLock::try_exclusive(file)
-        .context("Quit Gents before resetting its desktop state")?;
+        .map_err(|source| HomeResetError::OpenPeerLock {
+            path: peers.clone(),
+            source,
+        })?;
+    let peers =
+        gents::file_lock::FileLock::try_exclusive(file).map_err(HomeResetError::PeerLockHeld)?;
     Ok((store, peers))
 }
 
@@ -1247,12 +1277,13 @@ pub fn lock_client_state(
 /// lock while it runs and browser clearing takes it, so the store is never
 /// cleared under a running desktop, whatever its home. An isolated store's
 /// lock lives in the temporary directory its test run shares.
-pub fn lock_browser_store(isolated_store: Option<&str>) -> anyhow::Result<BrowserStoreLock> {
-    use anyhow::Context;
+pub fn lock_browser_store(
+    isolated_store: Option<&str>,
+) -> Result<BrowserStoreLock, HomeResetError> {
     let directory = match isolated_store {
         Some(_) => std::env::temp_dir(),
         None => dirs::data_local_dir()
-            .context("unable to resolve a local application data directory")?
+            .ok_or(HomeResetError::DataDirectory)?
             .join("gents"),
     };
     lock_browser_store_in(&directory, isolated_store)
@@ -1261,7 +1292,7 @@ pub fn lock_browser_store(isolated_store: Option<&str>) -> anyhow::Result<Browse
 fn lock_browser_store_in(
     directory: &Path,
     isolated_store: Option<&str>,
-) -> anyhow::Result<BrowserStoreLock> {
+) -> Result<BrowserStoreLock, HomeResetError> {
     let name = match isolated_store {
         Some(identifier) => format!("browser-store-{identifier}.lock"),
         None => "browser-store.lock".into(),
@@ -1273,12 +1304,15 @@ fn lock_file(
     paths: &crate::client::DesktopPaths,
     name: &str,
     wait: bool,
-) -> anyhow::Result<gents::file_lock::FileLock> {
+) -> Result<gents::file_lock::FileLock, HomeResetError> {
     lock_in(paths.root(), name, wait)
 }
 
-fn lock_in(directory: &Path, name: &str, wait: bool) -> anyhow::Result<gents::file_lock::FileLock> {
-    use anyhow::Context;
+fn lock_in(
+    directory: &Path,
+    name: &str,
+    wait: bool,
+) -> Result<gents::file_lock::FileLock, HomeResetError> {
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -1300,27 +1334,24 @@ fn lock_in(directory: &Path, name: &str, wait: bool) -> anyhow::Result<gents::fi
     if wait {
         Ok(gents::file_lock::FileLock::exclusive(file)?)
     } else {
-        gents::file_lock::FileLock::try_exclusive(file).context("Gents is running or a reset is in progress; quit Gents or wait for the reset to finish")
+        gents::file_lock::FileLock::try_exclusive(file).map_err(HomeResetError::LockBusy)
     }
 }
 
 /// The CLI defaults to the home the desktop actually reviewed. An unreadable
 /// preference requires an explicit home, so corruption cannot select a
 /// different node for a destructive reset.
-pub fn reviewed_reset_home(paths: &crate::client::DesktopPaths) -> anyhow::Result<Option<PathBuf>> {
-    use anyhow::Context;
+pub fn reviewed_reset_home(
+    paths: &crate::client::DesktopPaths,
+) -> Result<Option<PathBuf>, HomeResetError> {
     let path = paths.root().join(MANAGED_SERVER_CONFIG);
-    let bytes =
-        match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error).context(
-                "Reading desktop preference; specify --home to choose the reset target explicitly",
-            ),
-        };
-    let stored: StoredManagedServer = serde_json::from_slice(&bytes).context(
-        "Reading desktop preference; specify --home to choose the reset target explicitly",
-    )?;
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(HomeResetError::PreferenceUnreadable(source)),
+    };
+    let stored: StoredManagedServer =
+        serde_json::from_slice(&bytes).map_err(HomeResetError::PreferenceInvalid)?;
     Ok(stored
         .reviewed_for
         .map(|reviewed| reviewed.node_home)

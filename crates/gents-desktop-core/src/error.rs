@@ -1,3 +1,4 @@
+use gents_protocol::error_chain::find_source;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -92,10 +93,8 @@ impl BridgeError {
         }
     }
 
-    pub fn classify_transport_error(error: anyhow::Error) -> Self {
-        let transport = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
+    pub fn classify_transport_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        let transport = find_source::<reqwest::Error>(error)
             .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
         let message = error.to_string();
         let Some(transport) = transport else {
@@ -170,21 +169,21 @@ mod tests {
         let error = crate::local_runtime::fetch_runtime_connection_payload(&endpoint)
             .await
             .expect_err("closed temporary port must refuse the request");
-        let err = BridgeError::classify_transport_error(error);
+        let err = BridgeError::classify_transport_error(&error);
         assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
         assert_eq!(err.endpoint.as_deref(), Some(endpoint.as_str()));
     }
 
     #[test]
     fn classify_transport_error_leaves_application_level_failures_untyped() {
-        let err = BridgeError::classify_transport_error(anyhow::anyhow!(
-            "GET http://127.0.0.1:9181/status failed with 504 Gateway Timeout: request refused"
+        let err = BridgeError::classify_transport_error(&std::io::Error::other(
+            "GET http://127.0.0.1:9181/status failed with 504 Gateway Timeout: request refused",
         ));
         assert_eq!(err.code, BridgeErrorCode::Unknown);
         assert_eq!(err.endpoint, None);
 
-        let err = BridgeError::classify_transport_error(anyhow::anyhow!(
-            "decoding JSON response from http://127.0.0.1:9181/status"
+        let err = BridgeError::classify_transport_error(&std::io::Error::other(
+            "decoding JSON response from http://127.0.0.1:9181/status",
         ));
         assert_eq!(err.code, BridgeErrorCode::Unknown);
         assert_eq!(err.endpoint, None);
@@ -192,8 +191,8 @@ mod tests {
 
     #[test]
     fn classify_transport_error_rejects_message_only_transport_lookalikes() {
-        let lookalike = BridgeError::classify_transport_error(anyhow::anyhow!(
-            "no gents server found at http://198.51.100.7:9191/status: connection refused"
+        let lookalike = BridgeError::classify_transport_error(&std::io::Error::other(
+            "no gents server found at http://198.51.100.7:9191/status: connection refused",
         ));
         assert_eq!(lookalike.code, BridgeErrorCode::Unknown);
         assert_eq!(lookalike.endpoint, None);

@@ -91,14 +91,14 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
         .map_err(|error| error.error)
         .with_context(|| format!("writing {}", out.display()))?;
 
-    crate::print_json(&serde_json::json!({
+    Ok(crate::print_json(&serde_json::json!({
         "pack": name,
         "namespace": namespace,
         "version": coordinate.version,
         "digest": header.digest,
         "size_bytes": size_bytes,
         "out": out.display().to_string(),
-    }))
+    }))?)
 }
 
 async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
@@ -111,14 +111,14 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
         );
         let archive = crate::commands::pack::local::open(&local, &home)?;
         let manifest = archive.manifest();
-        return crate::print_json(&serde_json::json!({
+        return Ok(crate::print_json(&serde_json::json!({
             "pack": manifest.name,
             "namespace": manifest.metadata.namespace,
             "version": manifest.version,
             "digest": archive.digest(),
             "source": "local",
             "home": home,
-        }));
+        }))?);
     }
     let spec = match &args.version {
         Some(version) => format!("{}@{version}", args.package),
@@ -137,14 +137,14 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
         gents::pack_resolve::ResolvedFrom::Registry { .. } => "registry",
     };
     let manifest = resolved.archive.manifest();
-    crate::print_json(&serde_json::json!({
+    Ok(crate::print_json(&serde_json::json!({
         "pack": manifest.name,
         "namespace": manifest.metadata.namespace,
         "version": manifest.version,
         "digest": resolved.archive.digest(),
         "source": source,
         "home": home,
-    }))
+    }))?)
 }
 
 fn verify_digest_hex(computed: &str, advertised: &str, version: &str) -> Result<()> {
@@ -160,7 +160,7 @@ pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
     let results = client
         .search(args.query.as_deref().unwrap_or(""), args.page.max(1))
         .await?;
-    crate::print_json(&results)
+    Ok(crate::print_json(&results)?)
 }
 
 pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
@@ -173,7 +173,7 @@ pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
     anyhow::ensure!(!bytes.is_empty(), "{} is empty", args.file.display());
     let client = RegistryClient::new(registry);
     let result = client.publish(&token, bytes).await?;
-    crate::print_json(&result)
+    Ok(crate::print_json(&result)?)
 }
 
 #[cfg(test)]

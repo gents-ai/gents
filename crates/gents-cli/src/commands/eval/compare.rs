@@ -7,7 +7,7 @@ use gents::eval::report::{
 };
 use serde::Serialize;
 
-use super::{load_policy, render, write_json, EvalContext};
+use super::{load_policy, render, write_json, EvalCommandError, EvalContext};
 use crate::cli::{BreakdownArg, EvalCompareArgs};
 
 pub(super) async fn compare(
@@ -53,7 +53,7 @@ pub(super) async fn compare(
             BreakdownArg::Stage => render::Breakdown::Stage(by_stage(&comparison)),
         };
         if args.json {
-            return write_json(out, &with_policy(&breakdown, &comparison));
+            return Ok(write_json(out, &with_policy(&breakdown, &comparison))?);
         }
         render::comparison_table(&comparison, out)?;
         return Ok(render::breakdown_table(&breakdown, out)?);
@@ -61,13 +61,13 @@ pub(super) async fn compare(
     if let Some(case_id) = &args.case_id {
         let view = case_view(&comparison, case_id)?;
         if args.json {
-            return write_json(out, &with_policy(&view, &comparison));
+            return Ok(write_json(out, &with_policy(&view, &comparison))?);
         }
         render::comparison_table(&comparison, out)?;
         return Ok(render::case_view_text(&view, out)?);
     }
     if args.json {
-        write_json(out, &comparison)
+        Ok(write_json(out, &comparison)?)
     } else {
         Ok(render::comparison_table(&comparison, out)?)
     }
@@ -96,15 +96,19 @@ where
     }
 }
 
-fn pick_cell(report: &EvalReport, named: Option<&str>, flag: &str) -> Result<String> {
+fn pick_cell(
+    report: &EvalReport,
+    named: Option<&str>,
+    flag: &'static str,
+) -> Result<String, EvalCommandError> {
     match (named, report.cells.as_slice()) {
         (Some(cell), _) => Ok(cell.to_owned()),
         (None, [only]) => Ok(only.cell_id.clone()),
-        (None, cells) => anyhow::bail!(
-            "run {} has {} cells; name one with {flag}",
-            report.run.run_id,
-            cells.len()
-        ),
+        (None, cells) => Err(EvalCommandError::AmbiguousCell {
+            run_id: report.run.run_id.clone(),
+            cells: cells.len(),
+            flag,
+        }),
     }
 }
 

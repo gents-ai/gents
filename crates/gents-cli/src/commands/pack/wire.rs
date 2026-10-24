@@ -40,7 +40,9 @@ pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
         remove: args.remove,
         preview: args.preview,
     };
-    crate::print_json(&wire_in(&access, &owner, &home, &request).await?)
+    Ok(crate::print_json(
+        &wire_in(&access, &owner, &home, &request).await?,
+    )?)
 }
 
 /// Wires (or with `remove`, unwires) `request.plugin` over a held `access`.

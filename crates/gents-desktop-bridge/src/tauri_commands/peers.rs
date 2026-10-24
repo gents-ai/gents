@@ -34,7 +34,7 @@ pub async fn desktop_peer_status_fetch(
         .ok_or_else(|| format!("saved peer {peer_id} was not found"))?;
     fetch_runtime_connection_payload(&addr)
         .await
-        .map_err(BridgeError::classify_transport_error)
+        .map_err(|error| BridgeError::classify_transport_error(&error))
 }
 
 #[tauri::command]

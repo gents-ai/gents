@@ -10,6 +10,86 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cli::{EvalCommand, EvalScopeArgs};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EvalCommandError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Run(#[from] gents::eval::documents::EvalError),
+    #[error("reading policy {}", path.display())]
+    ReadPolicy {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing policy {}", path.display())]
+    ParsePolicy {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("--cell declares cell {cell_id:?} more than once")]
+    DuplicateCell { cell_id: String },
+    #[error("--profile names cell {cell_id:?}, which no --cell declares")]
+    ProfileForUndeclaredCell { cell_id: String },
+    #[error("--profile names cell {cell_id:?} more than once")]
+    DuplicateProfile { cell_id: String },
+    #[error("run {run_id} has {cells} cells; name one with {flag}")]
+    AmbiguousCell {
+        run_id: String,
+        cells: usize,
+        flag: &'static str,
+    },
+    #[error("reading the case from stdin")]
+    ReadStdin(#[source] std::io::Error),
+    #[error("reading {path}")]
+    ReadCase {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing the eval case")]
+    ParseCase(#[source] serde_json::Error),
+    #[error("the case names {count} check problem(s); fix them and retry")]
+    CaseViolations { count: usize },
+    #[error("parsing eval batch plan")]
+    ParsePlan(#[source] serde_json::Error),
+    #[error("eval batch plan must contain at least one run")]
+    EmptyPlan,
+    #[error("parsing batch run {index}")]
+    BatchRunArgs {
+        index: usize,
+        #[source]
+        source: clap::Error,
+    },
+    #[error("batch run {index} must use the batch's --home/--graphql scope")]
+    BatchScope { index: usize },
+    #[error("batch run {index} must not override --json")]
+    BatchJson { index: usize },
+    #[error("each batch run requires an explicit --run-id")]
+    MissingRunId,
+    #[error("duplicate batch run ID {id:?}")]
+    DuplicateRunId { id: String },
+    #[error("one or more batch runs failed or stopped; rerun the saved plan to resume")]
+    BatchRunsFailed,
+    #[error("reading {}", path.display())]
+    ReadPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("listing {}", path.display())]
+    ListPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{note}")]
+    Stopped { note: String },
+}
+
 pub(crate) struct EvalContext {
     pub(crate) access: gents::config_client::ConfigAccess,
     pub(crate) home_dir: PathBuf,
@@ -55,7 +135,9 @@ pub(crate) struct Deps<'a> {
 
 pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
     match command {
-        EvalCommand::Run(args) => run::profiles_by_cell(args).err(),
+        EvalCommand::Run(args) => run::profiles_by_cell(args)
+            .err()
+            .map(|error| error.to_string()),
         _ => None,
     }
 }
@@ -80,7 +162,7 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
     if let EvalCommand::Checks(args) = &command {
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
-        return checks::checks(&CheckRegistry::builtin(), args, &mut out);
+        return checks::checks(&CheckRegistry::builtin(), args, &mut out).map_err(Into::into);
     }
     if let EvalCommand::Init(args) = &command {
         init::preflight(args).await?;
@@ -143,7 +225,7 @@ pub(crate) async fn execute(
             .await
         }
         EvalCommand::Gc(args) => manage::gc(ctx, &args, out).await,
-        EvalCommand::Checks(args) => checks::checks(deps.registry, &args, out),
+        EvalCommand::Checks(args) => checks::checks(deps.registry, &args, out).map_err(Into::into),
         EvalCommand::Init(args) => init::run(ctx, &args, deps, out).await,
     };
     result.map_err(surface_refusal)
@@ -305,7 +387,7 @@ pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
-pub(crate) fn write_json<T>(out: &mut dyn Write, value: &T) -> Result<()>
+pub(crate) fn write_json<T>(out: &mut dyn Write, value: &T) -> Result<(), EvalCommandError>
 where
     T: Serialize,
 {
@@ -336,15 +418,20 @@ fn format_default_id(definition_id: &str, unix_ms: i64, random: u16) -> String {
 pub(crate) const UNCALIBRATED_BANNER: &str =
     "policy defaults are uncalibrated until an A/A calibration run has set them";
 
-pub(crate) fn load_policy(arg: &crate::cli::PolicyArg) -> Result<gents::optimization::PolicyV2> {
-    use anyhow::Context;
+pub(crate) fn load_policy(
+    arg: &crate::cli::PolicyArg,
+) -> Result<gents::optimization::PolicyV2, EvalCommandError> {
     match arg {
         crate::cli::PolicyArg::Defaults => Ok(gents::optimization::PolicyV2::uncalibrated()),
         crate::cli::PolicyArg::File(path) => {
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("reading policy {}", path.display()))?;
-            serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing policy {}", path.display()))
+            let bytes = std::fs::read(path).map_err(|source| EvalCommandError::ReadPolicy {
+                path: path.clone(),
+                source,
+            })?;
+            serde_json::from_slice(&bytes).map_err(|source| EvalCommandError::ParsePolicy {
+                path: path.clone(),
+                source,
+            })
         }
     }
 }

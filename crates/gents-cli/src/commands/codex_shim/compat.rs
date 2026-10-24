@@ -1,11 +1,10 @@
-use anyhow::Result;
 use gents_codex_protocol as codex;
 
 mod empty_local;
 
 use empty_local::send_empty_local_stub;
 
-use super::protocol::send_error;
+use super::protocol::{send_error, ProtocolError};
 use super::{trace, Outbound, ShimState, JSONRPC_METHOD_NOT_FOUND};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +48,7 @@ pub(super) async fn send_planned_stub(
     outbound: &Outbound,
     state: &ShimState,
     request: codex::ClientRequest,
-) -> Result<()> {
+) -> std::result::Result<(), ProtocolError> {
     if send_empty_local_stub(outbound, state, &request).await? {
         return Ok(());
     }

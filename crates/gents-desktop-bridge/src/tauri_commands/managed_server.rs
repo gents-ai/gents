@@ -453,14 +453,10 @@ where
             launchable_native_service(self.app, self.state)?,
             move |service| match service.start(enable_at_login) {
                 Ok(()) => Ok(Launched::Started),
-                Err(error) => {
-                    match error
-                        .downcast::<gents_server::native_service::BackgroundApprovalPending>()
-                    {
-                        Ok(pending) => Ok(Launched::ApprovalPending(pending.detail)),
-                        Err(error) => Err(error),
-                    }
+                Err(gents_server::native_service::NativeServiceError::ApprovalPending(pending)) => {
+                    Ok(Launched::ApprovalPending(pending.detail))
                 }
+                Err(error) => Err(error),
             },
         )
         .await?;
@@ -1955,8 +1951,8 @@ where
     gents_server::native_service::NativeServiceManager::new(config).map_err(native_error)
 }
 
-fn native_error(error: anyhow::Error) -> BridgeError {
-    let message = format!("{error:#}");
+fn native_error(error: gents_server::native_service::NativeServiceError) -> BridgeError {
+    let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
     let code = if message.contains("supported only on macOS and Linux") {
         BridgeErrorCode::Unsupported
     } else {
@@ -1971,7 +1967,9 @@ async fn run_native<T, F>(
 ) -> Result<T, BridgeError>
 where
     T: Send + 'static,
-    F: FnOnce(gents_server::native_service::NativeServiceManager) -> anyhow::Result<T>
+    F: FnOnce(
+            gents_server::native_service::NativeServiceManager,
+        ) -> Result<T, gents_server::native_service::NativeServiceError>
         + Send
         + 'static,
 {

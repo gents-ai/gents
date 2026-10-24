@@ -85,8 +85,8 @@ async fn job_watch(args: JobWatchArgs) -> Result<()> {
         Duration::from_millis(args.interval_ms.max(100)),
         args.until_terminal,
         |view| match format {
-            OutputFormat::Json => print_json(view),
-            OutputFormat::Ndjson => print_ndjson(&serde_json::to_value(view)?),
+            OutputFormat::Json => Ok(print_json(view)?),
+            OutputFormat::Ndjson => Ok(print_ndjson(&serde_json::to_value(view)?)?),
             _ => {
                 if redraw {
                     print!("\x1b[2J\x1b[H");
@@ -265,7 +265,7 @@ async fn job_show(args: JobShowArgs) -> Result<()> {
         resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
     let view = resolve_job(&access, &actor, &args.selector, args.session.as_deref()).await?;
     match format {
-        OutputFormat::Json => print_json(&view),
+        OutputFormat::Json => Ok(print_json(&view)?),
         _ => {
             for line in show_lines(&view) {
                 println!("{line}");
@@ -363,7 +363,7 @@ async fn job_list(args: JobListArgs) -> Result<()> {
     .await
     .map_err(read_error)?;
     match format {
-        OutputFormat::Json => print_json(&views),
+        OutputFormat::Json => Ok(print_json(&views)?),
         _ => {
             print_table(&views, Utc::now().timestamp_millis().max(0) as u64);
             Ok(())

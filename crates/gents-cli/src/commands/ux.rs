@@ -19,13 +19,15 @@ pub(crate) async fn dispatch(command: UxCommand) -> Result<()> {
 fn list(args: UxListArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let plugins = crate::packs::ux_list(&home)?;
-    crate::print_json(&serde_json::json!({ "home": home, "plugins": plugins }))
+    Ok(crate::print_json(
+        &serde_json::json!({ "home": home, "plugins": plugins }),
+    )?)
 }
 
 async fn module(args: UxModuleArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let module = crate::packs::ux_module(home, args.id).await?;
-    crate::print_json(&serde_json::to_value(module)?)
+    Ok(crate::print_json(&serde_json::to_value(module)?)?)
 }
 
 fn lint(args: UxLintArgs) -> Result<()> {

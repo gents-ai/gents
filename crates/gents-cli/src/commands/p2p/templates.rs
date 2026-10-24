@@ -52,10 +52,10 @@ pub(super) async fn p2p_templates_list(args: P2pTemplatesListArgs) -> Result<()>
         "p2p templates list",
         &[OutputFormat::Json, OutputFormat::Table],
     )? {
-        OutputFormat::Json => print_json(&json!({
+        OutputFormat::Json => Ok(print_json(&json!({
             "templates": rows,
             "count": rows.len(),
-        })),
+        }))?),
         OutputFormat::Table => print_templates_table(&rows),
         _ => unreachable!("ensure_supported restricts p2p templates list output formats"),
     }

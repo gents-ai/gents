@@ -125,19 +125,61 @@ pub(crate) fn lock_init_store_for_user(
 /// directory reached through a symlink or `..` inside the home would be
 /// replaced by a different directory than the one locked, so it is refused;
 /// one outside the home is not wiped and keeps its lock.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InitError {
+    #[error("refusing to dangerously overwrite {}: its data directory {} is reached through a symlink or `..`; remove the link or pass a plain --data-dir", home_dir.display(), data_dir.display())]
+    RefuseOverwrite {
+        home_dir: PathBuf,
+        data_dir: PathBuf,
+    },
+    #[error("init output has no default_agent_id")]
+    MissingDefaultAgentId,
+    #[error("--key-path cannot be used with non-file identity backends")]
+    KeyPathWithNonFileBackend,
+    #[error("--key-path cannot be used with --identity-backend macos-keychain")]
+    KeyPathWithKeychain,
+    #[error("--keychain-label is required with --identity-backend macos-keychain")]
+    KeychainLabelRequired,
+    #[error("--key-path cannot be used with --identity-backend macos-secure-enclave")]
+    KeyPathWithSecureEnclave,
+    #[error("--secure-enclave-label is required with --identity-backend macos-secure-enclave")]
+    SecureEnclaveLabelRequired,
+    #[error("init requires local DefraDB access")]
+    RequiresLocalDefra,
+    #[error("Agent {agent_id} belongs to {owner} not {node_did}")]
+    AgentOwnedByOtherNode {
+        agent_id: String,
+        owner: String,
+        node_did: String,
+    },
+    #[error("seeded Tools document: {error}")]
+    SeededToolsDocument { error: String },
+    #[error("--yolo is shorthand for --tool-package yolo; remove --yolo or choose --tool-package {package}")]
+    YoloWithToolPackage { package: &'static str },
+    #[error("--write is shorthand for --tool-package write; remove --write or choose --tool-package {package}")]
+    WriteWithToolPackage { package: &'static str },
+    #[error("--enable-memory, --enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no Tools document is written")]
+    IdentityOnlyToolFlags,
+    #[error("--defra-query-collection requires defra_query to be enabled — pass --enable-defra-query or a tool package that enables it, and do not combine with --disable-defra-query")]
+    DefraQueryCollectionNeedsEnable,
+    #[error("--model-name must not be empty")]
+    EmptyModelName,
+    #[error("--model-name is required for --backend-preset {preset} because that preset has no safe default model")]
+    ModelNameRequired { preset: &'static str },
+    #[error("unable to determine a default tool root for local tools")]
+    DefaultToolRootUnavailable,
+}
+
 fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<PathBuf> {
     use std::path::Component;
 
-    let refuse = || {
-        anyhow::anyhow!(
-            "refusing to dangerously overwrite {}: its data directory {} is reached through a symlink or `..`; remove the link or pass a plain --data-dir",
-            home_dir.display(),
-            data_dir.display()
-        )
+    let refuse = || InitError::RefuseOverwrite {
+        home_dir: home_dir.to_path_buf(),
+        data_dir: data_dir.to_path_buf(),
     };
     let Ok(relative) = data_dir.strip_prefix(home_dir) else {
         if fs::canonicalize(data_dir).is_ok_and(|resolved| resolved.starts_with(home)) {
-            return Err(refuse());
+            return Err(refuse().into());
         }
         return Ok(data_dir.to_path_buf());
     };
@@ -146,10 +188,10 @@ fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<P
         match component {
             Component::Normal(name) => resolved.push(name),
             Component::CurDir => continue,
-            _ => return Err(refuse()),
+            _ => return Err(refuse().into()),
         }
         if fs::symlink_metadata(&resolved).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-            return Err(refuse());
+            return Err(refuse().into());
         }
     }
     Ok(resolved)
@@ -164,7 +206,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     if workflows {
         let agent = output["default_agent_id"]
             .as_str()
-            .context("init output has no default_agent_id")?
+            .ok_or(InitError::MissingDefaultAgentId)?
             .to_owned();
         output["workflows"] = capture_report(crate::commands::pack::install(PackInstallArgs {
             package: "gents/rhai_workflows".to_owned(),
@@ -187,7 +229,7 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
         }))
         .await?;
     }
-    print_json(&output)
+    Ok(print_json(&output)?)
 }
 
 async fn init_home(mut args: InitArgs) -> Result<Value> {
@@ -206,7 +248,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
-            anyhow::bail!("--key-path cannot be used with non-file identity backends");
+            return Err(InitError::KeyPathWithNonFileBackend.into());
         }
         let key_path = (args.identity_backend == IdentityBackendArg::File).then(|| {
             args.key_path
@@ -786,17 +828,13 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
         }
         IdentityBackendArg::MacosKeychain => {
             if options.key_path.is_some() {
-                anyhow::bail!("--key-path cannot be used with --identity-backend macos-keychain");
+                return Err(InitError::KeyPathWithKeychain.into());
             }
             let label = options
                 .keychain_label
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "--keychain-label is required with --identity-backend macos-keychain"
-                    )
-                })?;
+                .ok_or(InitError::KeychainLabelRequired)?;
             let identity = Arc::new(
                 load_or_create_macos_keychain_identity(label, None)
                     .with_context(|| format!("loading macOS keychain identity {label}"))?,
@@ -813,19 +851,13 @@ fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<Home
         }
         IdentityBackendArg::MacosSecureEnclave => {
             if options.key_path.is_some() {
-                anyhow::bail!(
-                    "--key-path cannot be used with --identity-backend macos-secure-enclave"
-                );
+                return Err(InitError::KeyPathWithSecureEnclave.into());
             }
             let label = options
                 .secure_enclave_label
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "--secure-enclave-label is required with --identity-backend macos-secure-enclave"
-                    )
-                })?;
+                .ok_or(InitError::SecureEnclaveLabelRequired)?;
             let identity = Arc::new(
                 load_or_create_macos_secure_enclave_identity(label, None)
                     .with_context(|| format!("loading macOS Secure Enclave identity {label}"))?,
@@ -850,7 +882,7 @@ async fn initialize_runtime_home(
     tool_package: ToolPackageArg,
 ) -> Result<InitSummary> {
     let Some(node) = access.local_node() else {
-        anyhow::bail!("init requires local DefraDB access");
+        return Err(InitError::RequiresLocalDefra.into());
     };
     let explicit_backend_id = args
         .backend_id
@@ -887,12 +919,12 @@ async fn initialize_runtime_home(
     let existing_default_agent = load_agent(node, &default_agent_id).await?;
     if let Some(agent) = existing_default_agent.as_ref() {
         if agent.node_did != node_did {
-            anyhow::bail!(
-                "Agent {} belongs to {} not {}",
-                default_agent_id,
-                agent.node_did,
-                node_did
-            );
+            return Err(InitError::AgentOwnedByOtherNode {
+                agent_id: default_agent_id.to_string(),
+                owner: agent.node_did.clone(),
+                node_did: node_did.to_owned(),
+            }
+            .into());
         }
     }
     let node_display_name = existing_node
@@ -1007,7 +1039,10 @@ async fn initialize_runtime_home(
         .chain(wide_open_tools_document(node_did).validation_violations())
         .next()
     {
-        return Err(anyhow::anyhow!("seeded Tools document: {error}"));
+        return Err(InitError::SeededToolsDocument {
+            error: error.to_string(),
+        }
+        .into());
     }
     backend_doc.validate()?;
     inference_execution.validate()?;
@@ -1284,56 +1319,53 @@ fn backend_auth_for_init(backend: &ResolvedBackendConfig) -> Result<BackendAuth>
 }
 
 fn resolve_initial_tool_package(args: &InitArgs) -> Result<ToolPackageArg> {
-    resolve_init_tool_package(
+    Ok(resolve_init_tool_package(
         args.write_tools || (args.engineer && !args.yolo && args.tool_package.is_none()),
         args.yolo,
         args.tool_package,
-    )
+    )?)
 }
 
 fn resolve_init_tool_package(
     write_tools: bool,
     yolo: bool,
     explicit: Option<ToolPackageArg>,
-) -> Result<ToolPackageArg> {
+) -> Result<ToolPackageArg, InitError> {
     if yolo {
         return match explicit {
             Some(ToolPackageArg::Yolo) | None => Ok(ToolPackageArg::Yolo),
-            Some(other) => anyhow::bail!(
-                "--yolo is shorthand for --tool-package yolo; remove --yolo or choose --tool-package {}",
-                format_tool_package(other)
-            ),
+            Some(other) => Err(InitError::YoloWithToolPackage {
+                package: format_tool_package(other),
+            }),
         };
     }
     match (write_tools, explicit) {
         (true, Some(ToolPackageArg::Write)) | (true, None) => Ok(ToolPackageArg::Write),
-        (true, Some(other)) => anyhow::bail!(
-            "--write is shorthand for --tool-package write; remove --write or choose --tool-package {}",
-            format_tool_package(other)
-        ),
+        (true, Some(other)) => Err(InitError::WriteWithToolPackage {
+            package: format_tool_package(other),
+        }),
         (false, Some(package)) => Ok(package),
         (false, None) => Ok(ToolPackageArg::Readonly),
     }
 }
 
-fn validate_init_tool_flags(args: &InitArgs, tool_package: ToolPackageArg) -> Result<()> {
+fn validate_init_tool_flags(
+    args: &InitArgs,
+    tool_package: ToolPackageArg,
+) -> Result<(), InitError> {
     if args.identity_only
         && (args.enable_memory
             || args.enable_defra_query
             || args.disable_defra_query
             || !args.defra_query_collections.is_empty())
     {
-        anyhow::bail!(
-            "--enable-memory, --enable-defra-query, --disable-defra-query, and --defra-query-collection cannot be used with --identity-only because no Tools document is written"
-        );
+        return Err(InitError::IdentityOnlyToolFlags);
     }
     if !args.defra_query_collections.is_empty()
         && (args.disable_defra_query
             || !(package_enables_defra_query(tool_package) || args.enable_defra_query))
     {
-        anyhow::bail!(
-                "--defra-query-collection requires defra_query to be enabled — pass --enable-defra-query or a tool package that enables it, and do not combine with --disable-defra-query"
-            );
+        return Err(InitError::DefraQueryCollectionNeedsEnable);
     }
     Ok(())
 }
@@ -1482,11 +1514,11 @@ fn initial_backend_enabled(args: &InitArgs) -> bool {
     !args.engineer || args.model_name.is_some() || args.backend_preset.is_some()
 }
 
-fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
+fn resolve_init_model_name(args: &InitArgs) -> Result<&str, InitError> {
     if let Some(explicit) = args.model_name.as_deref() {
         let model_name = explicit.trim();
         if model_name.is_empty() {
-            anyhow::bail!("--model-name must not be empty");
+            return Err(InitError::EmptyModelName);
         }
         return Ok(model_name);
     }
@@ -1496,16 +1528,15 @@ fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
     }
 
     if let Some(preset) = args.backend_preset {
-        anyhow::bail!(
-            "--model-name is required for --backend-preset {} because that preset has no safe default model",
-            preset.as_str()
-        );
+        return Err(InitError::ModelNameRequired {
+            preset: preset.as_str(),
+        });
     }
 
     Ok(crate::DEFAULT_INIT_MODEL_NAME)
 }
 
-fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
+fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf, InitError> {
     if let Some(path) = explicit {
         return Ok(path.to_path_buf());
     }
@@ -1513,7 +1544,7 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
     std::env::current_dir()
         .ok()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
+        .ok_or(InitError::DefaultToolRootUnavailable)
 }
 
 #[cfg(test)]

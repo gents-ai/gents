@@ -9,15 +9,17 @@ use gents::Collection;
 use serde_json::json;
 
 pub(super) fn agent_target_entry_command(args: AgentTargetEntryArgs) -> Result<()> {
-    crate::print_json(&serde_json::to_value(AgentTargetDocument {
-        target_id: args.target_id,
-        node_did: args.node_did,
-        target_node_did: args.target_node_did,
-        agent_id: args.agent_id,
-        name: args.name,
-        description: args.description,
-        tags: Vec::new(),
-    })?)
+    Ok(crate::print_json(&serde_json::to_value(
+        AgentTargetDocument {
+            target_id: args.target_id,
+            node_did: args.node_did,
+            target_node_did: args.target_node_did,
+            agent_id: args.agent_id,
+            name: args.name,
+            description: args.description,
+            tags: Vec::new(),
+        },
+    )?)?)
 }
 
 fn tools_plan(contents: &[u8]) -> Result<(Tools, DesiredStateApplyPlan)> {
@@ -55,7 +57,7 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
             })
         })
         .await?;
-    crate::print_json(
+    Ok(crate::print_json(
         &json!({"doc_id": doc_id, "tools_id": tools.tools_id, "node_did": tools.node_did}),
-    )
+    )?)
 }

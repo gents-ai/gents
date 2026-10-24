@@ -3,13 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn diagnose_works_from_local_home_without_server() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn diagnose_works_from_local_home_without_server() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -40,7 +41,7 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
                 check.get("collection").and_then(Value::as_str) == Some("NodeRuntime")
             })
         })
-        .ok_or_else(|| anyhow!("diagnose output missing NodeRuntime schema check: {output}"))?;
+        .ok_or_else(|| format!("diagnose output missing NodeRuntime schema check: {output}"))?;
     assert_eq!(
         runtime_schema
             .get("required_for_config")
@@ -102,8 +103,8 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-live-diagnose-model-{}", Uuid::new_v4().simple());
@@ -239,8 +240,9 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state() -> TestResult<()>
+{
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 

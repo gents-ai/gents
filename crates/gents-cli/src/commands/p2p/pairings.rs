@@ -56,13 +56,13 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
         "p2p pairings list",
         &[OutputFormat::Json, OutputFormat::Table],
     )? {
-        OutputFormat::Json => print_json(&json!({
+        OutputFormat::Json => Ok(print_json(&json!({
             "status": "ok",
             "home": home_dir,
             "access_mode": access.mode(),
             "pairings": pairings,
             "count": count,
-        })),
+        }))?),
         OutputFormat::Table => print_pairings_table(&pairings),
         _ => unreachable!("ensure_supported restricts p2p pairings list output formats"),
     }

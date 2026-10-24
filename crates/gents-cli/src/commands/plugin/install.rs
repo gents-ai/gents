@@ -67,12 +67,12 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         .await
         .context("the plugins were installed locally, but their node notification was not confirmed; retry to reconcile")?;
 
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "pack": format!("{namespace}/{name}"),
         "version": manifest.version,
         "plugins": installed,
         "home": home,
-    }))
+    }))?)
 }
 
 #[cfg(test)]

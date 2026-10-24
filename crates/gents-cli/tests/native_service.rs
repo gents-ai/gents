@@ -1,13 +1,16 @@
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
 use gents_server::native_service::{
-    CommandOutput, CommandRunner, NativeServiceConfig, NativeServiceManager, NativeServicePlatform,
+    CommandOutput, CommandRunner, NativeServiceConfig, NativeServiceError, NativeServiceManager,
+    NativeServicePlatform,
 };
+
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Clone, Default)]
 struct ScriptedRunner {
@@ -29,7 +32,7 @@ impl ScriptedRunner {
 }
 
 impl CommandRunner for ScriptedRunner {
-    fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
+    fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput, NativeServiceError> {
         let mut call = vec![program.to_string_lossy().into_owned()];
         call.extend(args.iter().map(|arg| arg.to_string_lossy().into_owned()));
         self.calls.lock().expect("calls mutex").push(call);
@@ -37,7 +40,9 @@ impl CommandRunner for ScriptedRunner {
             .lock()
             .expect("outputs mutex")
             .pop_front()
-            .ok_or_else(|| anyhow!("unexpected native supervisor command"))
+            .ok_or_else(|| {
+                NativeServiceError::from(io::Error::other("unexpected native supervisor command"))
+            })
     }
 }
 
@@ -84,7 +89,7 @@ fn manager(
 }
 
 #[test]
-fn mac_loaded_but_exited_job_is_not_running() -> Result<()> {
+fn mac_loaded_but_exited_job_is_not_running() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
     let runner = ScriptedRunner::with_outputs([
@@ -107,7 +112,7 @@ fn mac_loaded_but_exited_job_is_not_running() -> Result<()> {
 }
 
 #[test]
-fn mac_print_disabled_error_fails_closed() -> Result<()> {
+fn mac_print_disabled_error_fails_closed() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
     let runner = ScriptedRunner::with_outputs([
@@ -128,7 +133,7 @@ fn mac_print_disabled_error_fails_closed() -> Result<()> {
 }
 
 #[test]
-fn failed_stop_prevents_restart_and_preserves_definition_and_home() -> Result<()> {
+fn failed_stop_prevents_restart_and_preserves_definition_and_home() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
     fs::write(config.home.join("durable.txt"), b"keep")?;
@@ -162,7 +167,7 @@ fn failed_stop_prevents_restart_and_preserves_definition_and_home() -> Result<()
 }
 
 #[test]
-fn same_home_allows_a_new_caller_executable_and_path() -> Result<()> {
+fn same_home_allows_a_new_caller_executable_and_path() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let owner = config(temp.path(), "old-gents");
     let install_runner = ScriptedRunner::with_outputs([ok(), ok()]);
@@ -203,7 +208,7 @@ fn same_home_allows_a_new_caller_executable_and_path() -> Result<()> {
 }
 
 #[test]
-fn foreign_home_cannot_stop_or_update_the_fixed_label_definition() -> Result<()> {
+fn foreign_home_cannot_stop_or_update_the_fixed_label_definition() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let owner = config(temp.path(), "owner-gents");
     manager(
@@ -229,7 +234,8 @@ fn foreign_home_cannot_stop_or_update_the_fixed_label_definition() -> Result<()>
 }
 
 #[test]
-fn same_home_stopped_upgrade_unloads_old_launchd_job_without_changing_enablement() -> Result<()> {
+fn same_home_stopped_upgrade_unloads_old_launchd_job_without_changing_enablement() -> TestResult<()>
+{
     let temp = tempfile::tempdir()?;
     let old = config(temp.path(), "old-gents");
     let install_runner = ScriptedRunner::with_outputs([output(true, "501", ""), ok()]);
@@ -280,7 +286,7 @@ fn same_home_stopped_upgrade_unloads_old_launchd_job_without_changing_enablement
 }
 
 #[test]
-fn status_for_missing_definition_does_not_create_home_or_service_directories() -> Result<()> {
+fn status_for_missing_definition_does_not_create_home_or_service_directories() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let root = temp.path().join("missing-root");
     let config = NativeServiceConfig {
@@ -307,7 +313,7 @@ fn status_for_missing_definition_does_not_create_home_or_service_directories() -
 }
 
 #[test]
-fn mac_spawn_scheduled_job_is_loaded_but_not_running() -> Result<()> {
+fn mac_spawn_scheduled_job_is_loaded_but_not_running() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let config = config(temp.path(), "gents");
     let runner = ScriptedRunner::with_outputs([
@@ -328,7 +334,7 @@ fn mac_spawn_scheduled_job_is_loaded_but_not_running() -> Result<()> {
 }
 
 #[test]
-fn stop_for_missing_definition_is_a_noop_without_host_mutation() -> Result<()> {
+fn stop_for_missing_definition_is_a_noop_without_host_mutation() -> TestResult<()> {
     let temp = tempfile::tempdir()?;
     let root = temp.path().join("missing-root");
     let config = NativeServiceConfig {
@@ -349,7 +355,7 @@ fn stop_for_missing_definition_is_a_noop_without_host_mutation() -> Result<()> {
 
 #[cfg(unix)]
 #[test]
-fn native_definition_is_private_to_the_user() -> Result<()> {
+fn native_definition_is_private_to_the_user() -> TestResult<()> {
     use std::os::unix::fs::PermissionsExt as _;
 
     let temp = tempfile::tempdir()?;
@@ -370,7 +376,7 @@ fn native_definition_is_private_to_the_user() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn generated_launchd_definition_passes_plutil_lint_without_loading_it() -> Result<()> {
+fn generated_launchd_definition_passes_plutil_lint_without_loading_it() -> TestResult<()> {
     use std::process::Command;
 
     let temp = tempfile::tempdir()?;

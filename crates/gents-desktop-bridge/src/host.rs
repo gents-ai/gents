@@ -454,7 +454,7 @@ impl ClientHost {
                 let home = match node_home {
                     Some(path) if !path.trim().is_empty() => std::path::PathBuf::from(path.trim()),
                     _ => gents_desktop_core::local_runtime::default_node_home()
-                        .map_err(backend_error)?,
+                        .map_err(|error| backend_error(error.into()))?,
                 };
                 if !home.is_absolute() {
                     return Err(BridgeError::new(

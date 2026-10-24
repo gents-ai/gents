@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use serde::Deserialize;
+
+use super::{LocalRuntimeError, Result};
 
 pub(super) async fn peer_status(
     record: &crate::client::PeerRecord,
@@ -26,8 +27,14 @@ pub(super) fn read_json<T>(path: &Path) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
+    let bytes = std::fs::read(path).map_err(|source| LocalRuntimeError::ReadJsonFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| LocalRuntimeError::DecodeJsonFile {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 pub(super) fn p2p_api_base(graphql: &str) -> Result<String> {
@@ -35,34 +42,45 @@ pub(super) fn p2p_api_base(graphql: &str) -> Result<String> {
         .trim()
         .strip_suffix("/graphql")
         .map(ToOwned::to_owned)
-        .with_context(|| format!("expected GraphQL endpoint ending in /graphql, got {graphql}"))
+        .ok_or_else(|| LocalRuntimeError::NotGraphqlEndpoint {
+            endpoint: graphql.to_owned(),
+        })
 }
 
 pub(super) async fn http_get_json<T>(client: &reqwest::Client, url: &str) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let response = client.get(url).send().await.map_err(|error| {
-        if error.is_connect() {
-            anyhow::Error::from(error).context(format!(
-                "no gents server found at {url}. Start one first with \
-                 `gents server`. Remote runtimes must be added \
-                 through authenticated status enrollment in the desktop app."
-            ))
+    let response = client.get(url).send().await.map_err(|source| {
+        if source.is_connect() {
+            LocalRuntimeError::NoServerFound {
+                url: url.to_owned(),
+                source,
+            }
         } else {
-            anyhow::Error::from(error).context(format!("sending GET request to {url}"))
+            LocalRuntimeError::SendGet {
+                url: url.to_owned(),
+                source,
+            }
         }
     })?;
     let status = response.status();
     let body = response
         .bytes()
         .await
-        .with_context(|| format!("reading GET response body from {url}"))?;
+        .map_err(|source| LocalRuntimeError::ReadGetBody {
+            url: url.to_owned(),
+            source,
+        })?;
     if !status.is_success() {
-        anyhow::bail!(
-            "GET {url} failed with {status}: {}",
-            String::from_utf8_lossy(&body)
-        );
+        return Err(LocalRuntimeError::GetStatus {
+            url: url.to_owned(),
+            status,
+            body: String::from_utf8_lossy(&body).into_owned(),
+        });
     }
-    serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
+    serde_json::from_slice(&body).map_err(|source| LocalRuntimeError::DecodeGetJson {
+        url: url.to_owned(),
+        source,
+    })
 }

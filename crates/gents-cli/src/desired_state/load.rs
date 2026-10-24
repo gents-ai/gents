@@ -1,3 +1,4 @@
+use super::convert::DesiredStateError;
 use super::{DesiredStateManifest, DesiredStateValidationReport};
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -92,14 +93,14 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
     Ok(config)
 }
 
-fn pack_manifest(root: &Path) -> Result<Option<gents::pack::PackManifest>> {
+fn pack_manifest(root: &Path) -> Result<Option<gents::pack::PackManifest>, DesiredStateError> {
     let path = root.join("manifest.json");
     if !path.is_file() {
         return Ok(None);
     }
     serde_json::from_value(read_json(&path)?)
         .map(Some)
-        .with_context(|| format!("invalid pack manifest {}", path.display()))
+        .map_err(|source| DesiredStateError::InvalidPackManifest { path, source })
 }
 
 fn read_pack_asset(root: &Path, relative: &str) -> Result<Vec<u8>> {
@@ -115,9 +116,15 @@ fn read_pack_asset(root: &Path, relative: &str) -> Result<Vec<u8>> {
     fs::read(&path).with_context(|| format!("reading {}", path.display()))
 }
 
-fn read_json(path: &Path) -> Result<Value> {
-    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("invalid JSON in {}", path.display()))
+fn read_json(path: &Path) -> Result<Value, DesiredStateError> {
+    let bytes = fs::read(path).map_err(|source| DesiredStateError::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| DesiredStateError::InvalidJson {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 pub(crate) fn hydrate_sidecar(value: &mut Option<String>, json_dir: &Path) -> Result<(), String> {

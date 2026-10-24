@@ -1,43 +1,48 @@
+use crate::support::TestResult;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
 use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 use serde_json::Value;
 
 use super::graphql::escape_graphql_string;
 
-pub fn copy_dir_all(from: &Path, to: &Path) -> Result<()> {
-    fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
-    for entry in fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {
+pub fn copy_dir_all(from: &Path, to: &Path) -> TestResult<()> {
+    fs::create_dir_all(to).map_err(|error| format!("creating {}: {error:#}", to.display()))?;
+    for entry in
+        fs::read_dir(from).map_err(|error| format!("reading {}: {error:#}", from.display()))?
+    {
         let entry = entry?;
         let target = to.join(entry.file_name());
         if entry.file_type()?.is_dir() {
             copy_dir_all(&entry.path(), &target)?;
         } else {
             fs::copy(entry.path(), &target)
-                .with_context(|| format!("copying {}", entry.path().display()))?;
+                .map_err(|error| format!("copying {}: {error:#}", entry.path().display()))?;
         }
     }
     Ok(())
 }
 
-pub fn write_json_file(path: &Path, value: &Value) -> Result<()> {
+pub fn write_json_file(path: &Path, value: &Value) -> TestResult<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent directory {}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("creating parent directory {}: {error:#}", parent.display())
+        })?;
     }
     fs::write(path, serde_json::to_vec_pretty(value)?)
-        .with_context(|| format!("writing JSON file {}", path.display()))?;
+        .map_err(|error| format!("writing JSON file {}: {error:#}", path.display()))?;
     Ok(())
 }
 
-pub fn read_json_file(path: &Path) -> Result<Value> {
-    let bytes = fs::read(path).with_context(|| format!("reading JSON file {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("decoding JSON file {}", path.display()))
+pub fn read_json_file(path: &Path) -> TestResult<Value> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("reading JSON file {}: {error:#}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("decoding JSON file {}: {error:#}", path.display()).into())
 }
 
-pub fn rewrite_manifest_node_dids(root: &Path, node_did: &str) -> Result<()> {
+pub fn rewrite_manifest_node_dids(root: &Path, node_did: &str) -> TestResult<()> {
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
     config["node"]["node_did"] = Value::String(node_did.to_string());
@@ -57,7 +62,7 @@ pub fn rewrite_manifest_node_dids(root: &Path, node_did: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn assert_manifest_node_dids(root: &Path, expected_node_did: &str) -> Result<()> {
+pub fn assert_manifest_node_dids(root: &Path, expected_node_did: &str) -> TestResult<()> {
     let config = read_json_file(&root.join("pack_config.json"))?;
     let principal = &config["node"];
     assert_eq!(
@@ -86,11 +91,11 @@ pub fn assert_manifest_node_dids(root: &Path, expected_node_did: &str) -> Result
     Ok(())
 }
 
-pub fn manifest_contains(root: &Path, needle: &str) -> Result<bool> {
-    fn visit(path: &Path, needle: &str) -> Result<bool> {
+pub fn manifest_contains(root: &Path, needle: &str) -> TestResult<bool> {
+    fn visit(path: &Path, needle: &str) -> TestResult<bool> {
         if path.is_dir() {
-            for entry in
-                fs::read_dir(path).with_context(|| format!("reading {}", path.display()))?
+            for entry in fs::read_dir(path)
+                .map_err(|error| format!("reading {}: {error:#}", path.display()))?
             {
                 if visit(&entry?.path(), needle)? {
                     return Ok(true);
@@ -101,38 +106,38 @@ pub fn manifest_contains(root: &Path, needle: &str) -> Result<bool> {
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
             return Ok(false);
         }
-        let contents =
-            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let contents = fs::read_to_string(path)
+            .map_err(|error| format!("reading {}: {error:#}", path.display()))?;
         Ok(contents.contains(needle))
     }
 
     visit(root, needle)
 }
 
-pub fn read_captured_log(log: Option<&tempfile::NamedTempFile>) -> Result<String> {
+pub fn read_captured_log(log: Option<&tempfile::NamedTempFile>) -> TestResult<String> {
     let Some(log) = log else {
         return Ok(String::new());
     };
     let bytes = fs::read(log.path())
-        .with_context(|| format!("reading captured log {}", log.path().display()))?;
+        .map_err(|error| format!("reading captured log {}: {error:#}", log.path().display()))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<()> {
+pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> TestResult<()> {
     let mut config = exported.clone();
     let object = config
         .as_object_mut()
-        .ok_or_else(|| anyhow!("exported configuration is not an object"))?;
+        .ok_or_else(|| "exported configuration is not an object".to_string())?;
     for metadata in ["format", "node_did", "exported_at", "access_mode"] {
         object.remove(metadata);
     }
     write_json_file(&root.join("pack_config.json"), &config)
 }
 
-pub fn project_object_fields(value: &Value, fields: &[&str]) -> Result<Value> {
+pub fn project_object_fields(value: &Value, fields: &[&str]) -> TestResult<Value> {
     let object = value
         .as_object()
-        .ok_or_else(|| anyhow!("expected object while projecting manifest fields: {value}"))?;
+        .ok_or_else(|| format!("expected object while projecting manifest fields: {value}"))?;
     let mut projected = serde_json::Map::new();
     for field in fields {
         if let Some(value) = object.get(*field) {
@@ -142,14 +147,16 @@ pub fn project_object_fields(value: &Value, fields: &[&str]) -> Result<Value> {
     Ok(Value::Object(projected))
 }
 
-pub fn read_runtime_state_json(home_dir: &Path) -> Result<Value> {
+pub fn read_runtime_state_json(home_dir: &Path) -> TestResult<Value> {
     let path = if home_dir.join("runtime.json").exists() {
         home_dir.join("runtime.json")
     } else {
         home_dir.join(".gents").join("runtime.json")
     };
-    let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", path.display()))
+    let bytes =
+        fs::read(&path).map_err(|error| format!("reading {}: {error:#}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("decoding {}: {error:#}", path.display()).into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -166,7 +173,7 @@ pub async fn assert_runtime_init_state(
     expected_file_tools_mode: &str,
     expected_bash_mode: &str,
     expected_prompt_snippet: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     use super::graphql::{first_graphql_row, graphql_query};
 
     let default_agent_id = default_agent_id_for_node(node_did);
@@ -324,36 +331,37 @@ pub async fn assert_runtime_init_state(
     Ok(())
 }
 
-pub fn workspace_root() -> Result<std::path::PathBuf> {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+pub fn workspace_root() -> TestResult<std::path::PathBuf> {
+    Ok(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(std::path::Path::parent)
         .map(std::path::Path::to_path_buf)
-        .ok_or_else(|| anyhow!("unable to resolve workspace root"))
+        .ok_or_else(|| "unable to resolve workspace root".to_string())?)
 }
 
-pub fn read_workspace_json(relative_path: &str) -> Result<Value> {
+pub fn read_workspace_json(relative_path: &str) -> TestResult<Value> {
     read_json_file(&workspace_root()?.join(relative_path))
 }
 
-pub fn parse_jsonl(output: &str, label: &str) -> Result<Vec<Value>> {
+pub fn parse_jsonl(output: &str, label: &str) -> TestResult<Vec<Value>> {
     output
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            serde_json::from_str::<Value>(line).with_context(|| format!("parsing {label} line"))
+            serde_json::from_str::<Value>(line)
+                .map_err(|error| format!("parsing {label} line: {error:#}").into())
         })
         .collect()
 }
 
-pub fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> Result<()> {
-    let validator =
-        jsonschema::validator_for(schema).with_context(|| format!("compiling {label} schema"))?;
+pub fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> TestResult<()> {
+    let validator = jsonschema::validator_for(schema)
+        .map_err(|error| format!("compiling {label} schema: {error:#}"))?;
     let errors = validator
         .iter_errors(instance)
         .map(|error| format!("{}: {error}", error.instance_path()))
         .collect::<Vec<_>>();
-    anyhow::ensure!(
+    assert!(
         errors.is_empty(),
         "{label} failed JSON Schema validation:\n{}",
         errors.join("\n")

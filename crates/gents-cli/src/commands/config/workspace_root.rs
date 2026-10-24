@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
+use super::ConfigCommandError;
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
@@ -23,9 +24,9 @@ pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
         "config workspace-root list",
         &[OutputFormat::Table, OutputFormat::Json],
     )? {
-        OutputFormat::Json => {
-            print_json(&json!({"collection":"WorkspaceRoot","count":rows.len(),"items":rows}))
-        }
+        OutputFormat::Json => Ok(print_json(
+            &json!({"collection":"WorkspaceRoot","count":rows.len(),"items":rows}),
+        )?),
         OutputFormat::Table => {
             super::crud::print_document_table("root_path", &rows);
             Ok(())
@@ -54,19 +55,17 @@ pub(super) async fn workspace_root_show(args: ConfigShowArgs) -> Result<()> {
         "expected one WorkspaceRoot for {id:?}, found {}",
         rows.len()
     );
-    print_json(&rows.remove(0))
+    Ok(print_json(&rows.remove(0))?)
 }
 
 /// The operator may pre-register a root before it exists, so this cannot use
 /// `std::fs::canonicalize` (which requires the path to exist and additionally
 /// resolves symlinks).
-fn canonicalize_workspace_root_path(path: &Path) -> Result<PathBuf> {
+fn canonicalize_workspace_root_path(path: &Path) -> Result<PathBuf, ConfigCommandError> {
     if !path.is_absolute() {
-        anyhow::bail!(
-            "--path must be an absolute path, got {}; the workspace root does not need to \
-             exist yet, but its path must be absolute",
-            path.display()
-        );
+        return Err(ConfigCommandError::WorkspaceRootPathNotAbsolute {
+            path: path.to_path_buf(),
+        });
     }
     let mut normalized = PathBuf::new();
     for component in path.components() {

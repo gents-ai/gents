@@ -8,6 +8,7 @@ pub(crate) mod behavior;
 pub(crate) mod binding;
 mod crud;
 pub(crate) mod diff;
+mod error;
 pub(crate) mod export;
 pub(crate) mod profile;
 pub(crate) mod skill;
@@ -15,6 +16,8 @@ pub(crate) mod task_run;
 pub(crate) mod tools;
 pub(crate) mod validate;
 pub(crate) mod workspace_root;
+
+pub(crate) use error::ConfigCommandError;
 
 pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
     match command {

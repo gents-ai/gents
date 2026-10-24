@@ -7,10 +7,11 @@ pub(super) fn request_id(value: i64) -> codex::RequestId {
 pub(super) async fn send_client_request(
     ws: &mut ShimWebSocket,
     request: codex::ClientRequest,
-) -> Result<()> {
-    let value = serde_json::to_value(request).context("serializing Codex client request")?;
-    let request: codex::JSONRPCRequest =
-        serde_json::from_value(value).context("building JSON-RPC request")?;
+) -> TestResult<()> {
+    let value = serde_json::to_value(request)
+        .map_err(|error| format!("serializing Codex client request: {error}"))?;
+    let request: codex::JSONRPCRequest = serde_json::from_value(value)
+        .map_err(|error| format!("building JSON-RPC request: {error}"))?;
     write_jsonrpc(ws, codex::JSONRPCMessage::Request(request)).await
 }
 
@@ -19,38 +20,39 @@ pub(super) async fn send_raw_client_request(
     request_id: codex::RequestId,
     method: &str,
     params: Value,
-) -> Result<()> {
+) -> TestResult<()> {
     let request: codex::JSONRPCRequest = serde_json::from_value(json!({
         "id": request_id,
         "method": method,
         "params": params,
     }))
-    .with_context(|| format!("building raw JSON-RPC request for {method}"))?;
+    .map_err(|error| format!("building raw JSON-RPC request for {method}: {error}"))?;
     write_jsonrpc(ws, codex::JSONRPCMessage::Request(request)).await
 }
 
 pub(super) async fn send_client_notification(
     ws: &mut ShimWebSocket,
     notification: codex::ClientNotification,
-) -> Result<()> {
-    let value =
-        serde_json::to_value(notification).context("serializing Codex client notification")?;
-    let notification: codex::JSONRPCNotification =
-        serde_json::from_value(value).context("building JSON-RPC notification")?;
+) -> TestResult<()> {
+    let value = serde_json::to_value(notification)
+        .map_err(|error| format!("serializing Codex client notification: {error}"))?;
+    let notification: codex::JSONRPCNotification = serde_json::from_value(value)
+        .map_err(|error| format!("building JSON-RPC notification: {error}"))?;
     write_jsonrpc(ws, codex::JSONRPCMessage::Notification(notification)).await
 }
 
-async fn write_jsonrpc(ws: &mut ShimWebSocket, message: codex::JSONRPCMessage) -> Result<()> {
-    let text = serde_json::to_string(&message).context("encoding JSON-RPC message")?;
+async fn write_jsonrpc(ws: &mut ShimWebSocket, message: codex::JSONRPCMessage) -> TestResult<()> {
+    let text = serde_json::to_string(&message)
+        .map_err(|error| format!("encoding JSON-RPC message: {error}"))?;
     ws.send(WsMessage::Text(text.into()))
         .await
-        .context("sending JSON-RPC websocket message")
+        .map_err(|error| format!("sending JSON-RPC websocket message: {error}").into())
 }
 
 pub(super) async fn read_typed_response<T>(
     ws: &mut ShimWebSocket,
     expected_id: codex::RequestId,
-) -> Result<T>
+) -> TestResult<T>
 where
     T: DeserializeOwned,
 {
@@ -58,18 +60,21 @@ where
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Response(response) if response.id == expected_id => {
                 return serde_json::from_value(response.result)
-                    .context("decoding typed Codex response");
+                    .map_err(|error| format!("decoding typed Codex response: {error}").into());
             }
             codex::JSONRPCMessage::Error(error) if error.id == expected_id => {
-                bail!(
+                return Err(format!(
                     "Codex shim returned error for request {}: {}",
-                    expected_id,
-                    error.error.message
-                );
+                    expected_id, error.error.message
+                )
+                .into());
             }
             codex::JSONRPCMessage::Notification(_) => {}
             other => {
-                bail!("unexpected JSON-RPC message while waiting for {expected_id}: {other:?}")
+                return Err(format!(
+                    "unexpected JSON-RPC message while waiting for {expected_id}: {other:?}"
+                )
+                .into())
             }
         }
     }
@@ -78,20 +83,24 @@ where
 pub(super) async fn read_error_response(
     ws: &mut ShimWebSocket,
     expected_id: codex::RequestId,
-) -> Result<codex::JSONRPCErrorError> {
+) -> TestResult<codex::JSONRPCErrorError> {
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Error(error) if error.id == expected_id => {
                 return Ok(error.error);
             }
             codex::JSONRPCMessage::Response(response) if response.id == expected_id => {
-                bail!("expected JSON-RPC error for {expected_id}, got response {response:?}");
+                return Err(format!(
+                    "expected JSON-RPC error for {expected_id}, got response {response:?}"
+                )
+                .into());
             }
             codex::JSONRPCMessage::Notification(_) => {}
             other => {
-                bail!(
+                return Err(format!(
                     "unexpected JSON-RPC message while waiting for error {expected_id}: {other:?}"
                 )
+                .into())
             }
         }
     }
@@ -99,7 +108,7 @@ pub(super) async fn read_error_response(
 
 pub(super) async fn read_turn_started(
     ws: &mut ShimWebSocket,
-) -> Result<codex::TurnStartedNotification> {
+) -> TestResult<codex::TurnStartedNotification> {
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
@@ -110,10 +119,14 @@ pub(super) async fn read_turn_started(
                 }
             }
             codex::JSONRPCMessage::Error(error) => {
-                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+                return Err(
+                    format!("Codex shim emitted JSON-RPC error: {}", error.error.message).into(),
+                );
             }
             codex::JSONRPCMessage::Request(request) => {
-                bail!("Codex shim sent unexpected server request: {request:?}");
+                return Err(
+                    format!("Codex shim sent unexpected server request: {request:?}").into(),
+                );
             }
             codex::JSONRPCMessage::Response(_) => {}
         }
@@ -123,7 +136,7 @@ pub(super) async fn read_turn_started(
 pub(super) async fn read_background_command_started(
     ws: &mut ShimWebSocket,
     expected_tool_call_key: &str,
-) -> Result<String> {
+) -> TestResult<String> {
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Notification(notification) => {
@@ -141,10 +154,14 @@ pub(super) async fn read_background_command_started(
                 }
             }
             codex::JSONRPCMessage::Error(error) => {
-                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+                return Err(
+                    format!("Codex shim emitted JSON-RPC error: {}", error.error.message).into(),
+                );
             }
             codex::JSONRPCMessage::Request(request) => {
-                bail!("Codex shim sent unexpected server request: {request:?}");
+                return Err(
+                    format!("Codex shim sent unexpected server request: {request:?}").into(),
+                );
             }
             codex::JSONRPCMessage::Response(_) => {}
         }
@@ -154,22 +171,22 @@ pub(super) async fn read_background_command_started(
 pub(super) async fn read_interrupt_response_and_completed_turn(
     ws: &mut ShimWebSocket,
     expected_id: codex::RequestId,
-) -> Result<codex::Turn> {
+) -> TestResult<codex::Turn> {
     let mut saw_interrupt_response = false;
     let mut completed_turn = None;
     loop {
         match read_jsonrpc(ws).await? {
             codex::JSONRPCMessage::Response(response) if response.id == expected_id => {
                 let _: codex::TurnInterruptResponse = serde_json::from_value(response.result)
-                    .context("decoding interrupt response")?;
+                    .map_err(|error| format!("decoding interrupt response: {error}"))?;
                 saw_interrupt_response = true;
             }
             codex::JSONRPCMessage::Error(error) if error.id == expected_id => {
-                bail!(
+                return Err(format!(
                     "Codex shim returned error for interrupt {}: {}",
-                    expected_id,
-                    error.error.message
-                );
+                    expected_id, error.error.message
+                )
+                .into());
             }
             codex::JSONRPCMessage::Notification(notification) => {
                 if let codex::ServerNotification::TurnCompleted(completed) =
@@ -179,15 +196,19 @@ pub(super) async fn read_interrupt_response_and_completed_turn(
                 }
             }
             codex::JSONRPCMessage::Error(error) => {
-                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+                return Err(
+                    format!("Codex shim emitted JSON-RPC error: {}", error.error.message).into(),
+                );
             }
             codex::JSONRPCMessage::Request(request) => {
-                bail!("Codex shim sent unexpected server request: {request:?}");
+                return Err(
+                    format!("Codex shim sent unexpected server request: {request:?}").into(),
+                );
             }
             codex::JSONRPCMessage::Response(response) => {
-                bail!(
+                return Err(format!(
                     "unexpected JSON-RPC response while waiting for interrupt {expected_id}: {response:?}"
-                );
+                ).into());
             }
         }
 
@@ -204,7 +225,7 @@ pub(super) async fn read_fuzzy_file_search_exchange(
     expected_id: codex::RequestId,
     session_id: &str,
     query: &str,
-) -> Result<codex::FuzzyFileSearchSessionUpdatedNotification> {
+) -> TestResult<codex::FuzzyFileSearchSessionUpdatedNotification> {
     let mut exchange = FuzzySearchExchange::default();
     tokio::time::timeout(Duration::from_secs(60), async {
         loop {
@@ -215,9 +236,9 @@ pub(super) async fn read_fuzzy_file_search_exchange(
         }
     })
     .await
-    .with_context(|| {
+    .map_err(|error| {
         format!(
-            "fuzzy search exchange did not finish: response={}, update={}, completed={}",
+            "fuzzy search exchange did not finish: response={}, update={}, completed={}: {error}",
             exchange.response,
             exchange.update.is_some(),
             exchange.completed
@@ -239,7 +260,7 @@ impl FuzzySearchExchange {
         expected_id: &codex::RequestId,
         session_id: &str,
         query: &str,
-    ) -> Result<()> {
+    ) -> TestResult<()> {
         match message {
             codex::JSONRPCMessage::Response(response) if &response.id == expected_id => {
                 let _: codex::FuzzyFileSearchSessionUpdateResponse =
@@ -262,9 +283,13 @@ impl FuzzySearchExchange {
                 }
             }
             codex::JSONRPCMessage::Error(error) => {
-                bail!("Codex shim emitted JSON-RPC error: {}", error.error.message);
+                return Err(
+                    format!("Codex shim emitted JSON-RPC error: {}", error.error.message).into(),
+                );
             }
-            other => bail!("unexpected fuzzy search exchange message: {other:?}"),
+            other => {
+                return Err(format!("unexpected fuzzy search exchange message: {other:?}").into())
+            }
         }
         Ok(())
     }

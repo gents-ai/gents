@@ -31,6 +31,7 @@ use super::super::thread_projection::{
     thread_token_usage,
 };
 use super::super::turn_projection::TurnProjection;
+use super::super::CodexShimError;
 use super::super::{ConnectionState, ShimState};
 use super::active::next_steering_request_after;
 use crate::{request_diagnostic_hint, SubmittedRequest};
@@ -227,23 +228,22 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         let requests = response
             .pointer("/data/AgentRequest")
             .and_then(Value::as_array)
-            .context("live request query omitted rows")?;
-        anyhow::ensure!(
-            requests.len() == 1,
-            "missing or ambiguous physical live request"
-        );
+            .ok_or(CodexShimError::LiveRequestRowsOmitted)?;
+        if requests.len() != 1 {
+            return Err(CodexShimError::AmbiguousLiveRequest.into());
+        }
         let request_row = requests.first();
         for row in requests.iter() {
-            anyhow::ensure!(
-                row.get("node_did").and_then(Value::as_str) == Some(current.node_did.as_str())
-                    && row.get("requester_did").and_then(Value::as_str)
-                        == current.requester_did.as_deref()
-                    && row.get("session_id").and_then(Value::as_str)
-                        == Some(current.session_id.as_str())
-                    && row.get("request_id").and_then(Value::as_str)
-                        == Some(current.request_id.as_str()),
-                "live projection crossed exact request scope"
-            );
+            if !(row.get("node_did").and_then(Value::as_str) == Some(current.node_did.as_str())
+                && row.get("requester_did").and_then(Value::as_str)
+                    == current.requester_did.as_deref()
+                && row.get("session_id").and_then(Value::as_str)
+                    == Some(current.session_id.as_str())
+                && row.get("request_id").and_then(Value::as_str)
+                    == Some(current.request_id.as_str()))
+            {
+                return Err(CodexShimError::LiveRequestScopeCrossed.into());
+            }
         }
         let mut consumed_input_error = None;
         if options.follow_steering {
@@ -276,9 +276,12 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .and_then(|row| row.get("lifecycle_state"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        let canonical_request: gents_protocol::row::AgentRequestRow =
-            serde_json::from_value(request_row.cloned().context("live request row missing")?)
-                .context("decoding canonical Codex request")?;
+        let canonical_request: gents_protocol::row::AgentRequestRow = serde_json::from_value(
+            request_row
+                .cloned()
+                .ok_or(CodexShimError::LiveRequestRowMissing)?,
+        )
+        .map_err(CodexShimError::DecodeCanonicalRequest)?;
         let canonical_output = gents::session::observe_request_output(
             &ConfigAccess::local(state.node.clone()),
             &canonical_request,
@@ -297,13 +300,13 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 ..
             } => Some(value),
             gents::session::CanonicalRequestOutput::Denied => {
-                anyhow::bail!("canonical Codex output is denied")
+                return Err(CodexShimError::OutputDenied.into())
             }
             gents::session::CanonicalRequestOutput::Conflicted => {
-                anyhow::bail!("canonical Codex output is conflicted")
+                return Err(CodexShimError::OutputConflicted.into())
             }
             gents::session::CanonicalRequestOutput::Invalid => {
-                anyhow::bail!("canonical Codex output is invalid")
+                return Err(CodexShimError::OutputInvalid.into())
             }
             _ => None,
         };
@@ -483,12 +486,12 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 } => Some(presentation),
                 gents::session::CanonicalRequestOutput::Loading => {
                     if options.enforce_timeout && last_progress_at.elapsed() >= state.timeout {
-                        anyhow::bail!(
-                            "timed out waiting for terminal canonical output {} after {}s of inactivity\n{}",
-                            current.request_id,
-                            state.timeout.as_secs(),
-                            request_diagnostic_hint(&current.request_id)
-                        );
+                        return Err(CodexShimError::TerminalOutputTimeout {
+                            request_id: current.request_id.clone(),
+                            timeout_secs: state.timeout.as_secs(),
+                            hint: request_diagnostic_hint(&current.request_id),
+                        }
+                        .into());
                     }
                     tokio::time::sleep(state.poll_interval).await;
                     continue;
@@ -503,9 +506,10 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 | gents::session::CanonicalRequestOutput::Retracted
                 | gents::session::CanonicalRequestOutput::RetainedPartial(_)
                 | gents::session::CanonicalRequestOutput::Published { .. } => {
-                    anyhow::bail!(
-                        "settled Codex request has no valid terminal output: {canonical_output:?}"
-                    )
+                    return Err(CodexShimError::SettledWithoutTerminalOutput {
+                        output: format!("{canonical_output:?}"),
+                    }
+                    .into())
                 }
             };
 
@@ -561,12 +565,12 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     if next_request.is_pending() {
                         if last_progress_at.elapsed() >= state.timeout {
                             cancel_pending_steering_request(connection, state, &next_request).await;
-                            anyhow::bail!(
-                                "timed out waiting for queued Codex steering request {} after {}s of inactivity\n{}",
-                                next_request.request_id,
-                                state.timeout.as_secs(),
-                                request_diagnostic_hint(&next_request.request_id)
-                            );
+                            return Err(CodexShimError::SteeringQueueTimeout {
+                                request_id: next_request.request_id.clone(),
+                                timeout_secs: state.timeout.as_secs(),
+                                hint: request_diagnostic_hint(&next_request.request_id),
+                            }
+                            .into());
                         }
                         tokio::select! {
                             _ = tokio::time::sleep(state.poll_interval) => {}
@@ -660,12 +664,12 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         }
 
         if options.enforce_timeout && last_progress_at.elapsed() >= state.timeout {
-            anyhow::bail!(
-                "timed out waiting for canonical output for request {} after {}s of inactivity\n{}",
-                current.request_id,
-                state.timeout.as_secs(),
-                request_diagnostic_hint(&current.request_id)
-            );
+            return Err(CodexShimError::OutputTimeout {
+                request_id: current.request_id.clone(),
+                timeout_secs: state.timeout.as_secs(),
+                hint: request_diagnostic_hint(&current.request_id),
+            }
+            .into());
         }
 
         tokio::select! {
@@ -1123,10 +1127,10 @@ async fn send_thread_token_usage_update(
         request
             .agent_id
             .as_deref()
-            .context("committed request missing agent")?,
+            .ok_or(CodexShimError::CommittedRequestMissingAgent)?,
     )
     .await?;
-    send_notification(
+    Ok(send_notification(
         outbound,
         state,
         codex::ServerNotification::ThreadTokenUsageUpdated(
@@ -1137,7 +1141,7 @@ async fn send_thread_token_usage_update(
             },
         ),
     )
-    .await
+    .await?)
 }
 
 fn scalar_marker(row: Option<&Value>, field: &str) -> Option<String> {
@@ -1214,7 +1218,7 @@ async fn announce_consumed_inputs(
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("consumed input query omitted rows")?;
+        .ok_or(CodexShimError::ConsumedInputRowsOmitted)?;
     let access = ConfigAccess::local(state.node.clone());
     let mut ready = Vec::new();
     for raw in rows {
@@ -1222,12 +1226,12 @@ async fn announce_consumed_inputs(
         let doc = row
             .doc_id
             .as_deref()
-            .context("consumed input lacks physical identity")?;
+            .ok_or(CodexShimError::ConsumedInputMissingPhysicalIdentity)?;
         if announced.contains(doc) {
             continue;
         }
         let (_, key) = gents::lifecycle::input_message_owner(&row)
-            .context("consumed input lacks authored owner")?;
+            .ok_or(CodexShimError::ConsumedInputMissingOwner)?;
         let query = format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{_eq:"{}"}}, node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, request_doc_id: {{_eq:"{}"}} }}) {{ {} }} }}"#,
             escape_graphql_string(&key),
@@ -1241,14 +1245,13 @@ async fn announce_consumed_inputs(
         let headers = headers
             .pointer("/data/AgentMessage")
             .and_then(Value::as_array)
-            .context("consumed message query omitted rows")?;
-        anyhow::ensure!(
-            headers.len() <= 1,
-            "consumed input has conflicting authored headers"
-        );
+            .ok_or(CodexShimError::ConsumedMessageRowsOmitted)?;
+        if headers.len() > 1 {
+            return Err(CodexShimError::ConsumedInputConflictingHeaders.into());
+        }
         let raw_header = headers
             .first()
-            .context("consumed input authored header is not yet visible")?;
+            .ok_or(CodexShimError::ConsumedInputHeaderMissing)?;
         let observed = gents::session::canonical_rows::decode_transcript_message_row(raw_header)?;
         let (header, _) = gents::session::load_canonical_message(
             &access,
@@ -1257,10 +1260,9 @@ async fn announce_consumed_inputs(
             current.requester_did.as_deref(),
         )
         .await?;
-        anyhow::ensure!(
-            header == observed.message,
-            "consumed input header changed during reconstruction"
-        );
+        if header != observed.message {
+            return Err(CodexShimError::ConsumedInputHeaderChanged.into());
+        }
         ready.push((header.sequence, row));
     }
     ready.sort_by_key(|(sequence, _)| *sequence);
@@ -1322,15 +1324,14 @@ async fn steering_input_for_request(
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .context("steering request query omitted rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "steering physical request missing or ambiguous"
-    );
+        .ok_or(CodexShimError::SteeringRequestRowsOmitted)?;
+    if rows.len() != 1 {
+        return Err(CodexShimError::SteeringRequestAmbiguous.into());
+    }
     let content = rows[0]
         .get("content")
         .and_then(Value::as_str)
-        .context("steering request omitted content")?
+        .ok_or(CodexShimError::SteeringRequestContentMissing)?
         .to_string();
     let input: gents_protocol::request_input::RequestInput = serde_json::from_value(
         rows[0]
@@ -1338,7 +1339,7 @@ async fn steering_input_for_request(
             .cloned()
             .unwrap_or_else(|| serde_json::json!({})),
     )
-    .context("decoding persisted steering input")?;
+    .map_err(CodexShimError::DecodeSteeringInput)?;
     Ok(persisted_steering_input(content, input.selected_skill_ids))
 }
 

@@ -10,6 +10,62 @@ use crate::cli::args::{SchemaApplyArgs, SchemaCommand};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SchemaError {
+    #[error("no schema inputs found under {}; expected *.graphql, *.gql, *.patch.json, or *.json-patch", root.display())]
+    NoInputs { root: PathBuf },
+    #[error("pack root {} has a schemas/ directory but no *.graphql, *.gql, *.patch.json, or *.json-patch files", pack_root.display())]
+    PackHasNoInputs { pack_root: PathBuf },
+    #[error("reading metadata for {}", path.display())]
+    ReadMetadata {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("schema input path is neither file nor directory: {}", path.display())]
+    NotFileOrDirectory { path: PathBuf },
+    #[error("reading schema directory {}", path.display())]
+    ReadDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading schema directory entries from {}", path.display())]
+    ReadDirectoryEntries {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading schema SDL {}", path.display())]
+    ReadSdl {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reading schema patch {}", path.display())]
+    ReadPatch {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing schema patch JSON {}", path.display())]
+    ParsePatch {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("schema patch must be a JSON Patch array or an object with Patch/patch")]
+    PatchShape,
+    #[error("schema patch must start with an op containing path")]
+    PatchMissingPath,
+    #[error("schema patch path has no collection name: {path}")]
+    PatchMissingCollection { path: String },
+    #[error("schema patch must be a JSON Patch array")]
+    PatchNotArray,
+    #[error("collection {collection} does not exist")]
+    CollectionMissing { collection: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SchemaInputKind {
     Sdl,
@@ -61,10 +117,7 @@ pub(crate) async fn schema_apply(args: SchemaApplyArgs) -> Result<()> {
     let explicit_patches = args.patches;
     let inputs = discover_schema_inputs(&root, &explicit_patches)?;
     if inputs.is_empty() {
-        anyhow::bail!(
-            "no schema inputs found under {}; expected *.graphql, *.gql, *.patch.json, or *.json-patch",
-            root.display()
-        );
+        return Err(SchemaError::NoInputs { root: root.clone() }.into());
     }
 
     let (access, home_dir) =
@@ -119,10 +172,10 @@ pub(crate) async fn apply_pack_schemas_if_present(
     }
     let inputs = discover_schema_inputs(&schemas_dir, &[])?;
     if inputs.is_empty() {
-        anyhow::bail!(
-            "pack root {} has a schemas/ directory but no *.graphql, *.gql, *.patch.json, or *.json-patch files",
-            pack_root.display()
-        );
+        return Err(SchemaError::PackHasNoInputs {
+            pack_root: pack_root.to_path_buf(),
+        }
+        .into());
     }
     Ok(Some(
         apply_schema_inputs(access, &schemas_dir, &inputs).await?,
@@ -169,7 +222,10 @@ async fn apply_schema_inputs(
     })
 }
 
-fn discover_schema_inputs(root: &Path, explicit_patches: &[PathBuf]) -> Result<Vec<SchemaInput>> {
+fn discover_schema_inputs(
+    root: &Path,
+    explicit_patches: &[PathBuf],
+) -> Result<Vec<SchemaInput>, SchemaError> {
     let mut discovered = Vec::new();
     collect_schema_inputs(root, &mut discovered)?;
     for path in explicit_patches {
@@ -190,9 +246,11 @@ fn discover_schema_inputs(root: &Path, explicit_patches: &[PathBuf]) -> Result<V
         .collect())
 }
 
-fn collect_schema_inputs(path: &Path, output: &mut Vec<SchemaInput>) -> Result<()> {
-    let metadata =
-        fs::metadata(path).with_context(|| format!("reading metadata for {}", path.display()))?;
+fn collect_schema_inputs(path: &Path, output: &mut Vec<SchemaInput>) -> Result<(), SchemaError> {
+    let metadata = fs::metadata(path).map_err(|source| SchemaError::ReadMetadata {
+        path: path.to_path_buf(),
+        source,
+    })?;
     if metadata.is_file() {
         if let Some(kind) = classify_schema_input(path) {
             output.push(SchemaInput {
@@ -204,16 +262,21 @@ fn collect_schema_inputs(path: &Path, output: &mut Vec<SchemaInput>) -> Result<(
     }
 
     if !metadata.is_dir() {
-        anyhow::bail!(
-            "schema input path is neither file nor directory: {}",
-            path.display()
-        );
+        return Err(SchemaError::NotFileOrDirectory {
+            path: path.to_path_buf(),
+        });
     }
 
     let mut entries = fs::read_dir(path)
-        .with_context(|| format!("reading schema directory {}", path.display()))?
+        .map_err(|source| SchemaError::ReadDirectory {
+            path: path.to_path_buf(),
+            source,
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("reading schema directory entries from {}", path.display()))?;
+        .map_err(|source| SchemaError::ReadDirectoryEntries {
+            path: path.to_path_buf(),
+            source,
+        })?;
     entries.sort_by_key(|entry| entry.path());
 
     for entry in entries {
@@ -236,8 +299,10 @@ fn classify_schema_input(path: &Path) -> Option<SchemaInputKind> {
 }
 
 async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyFileResult> {
-    let sdl = fs::read_to_string(path)
-        .with_context(|| format!("reading schema SDL {}", path.display()))?;
+    let sdl = fs::read_to_string(path).map_err(|source| SchemaError::ReadSdl {
+        path: path.to_path_buf(),
+        source,
+    })?;
     let plan = gents::config_client::preview_additive_schema_install(access, &sdl)
         .await
         .with_context(|| format!("preview schema SDL {}", path.display()))?;
@@ -257,12 +322,16 @@ async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaAppl
 }
 
 async fn apply_patch_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyPatchResult> {
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("reading schema patch {}", path.display()))?;
-    let patch = normalize_patch_value(
-        serde_json::from_str::<Value>(&raw)
-            .with_context(|| format!("parsing schema patch JSON {}", path.display()))?,
-    )?;
+    let raw = fs::read_to_string(path).map_err(|source| SchemaError::ReadPatch {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let patch = normalize_patch_value(serde_json::from_str::<Value>(&raw).map_err(|source| {
+        SchemaError::ParsePatch {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?)?;
     let collection = collection_name_from_patch(&patch)?;
     let field_adds = additive_field_ops(&collection, &patch)?;
     let existing_fields = collection_field_names(access, &collection).await?;
@@ -302,10 +371,12 @@ async fn collection_field_names(
     access: &ConfigAccess,
     collection: &str,
 ) -> Result<BTreeSet<String>> {
-    access
-        .collection_fields(collection)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("collection {collection} does not exist"))
+    let fields = access.collection_fields(collection).await?.ok_or_else(|| {
+        SchemaError::CollectionMissing {
+            collection: collection.to_owned(),
+        }
+    })?;
+    Ok(fields)
 }
 
 async fn current_collection_version(
@@ -323,27 +394,29 @@ async fn current_collection_version(
         }))
 }
 
-fn normalize_patch_value(value: Value) -> Result<Value> {
+fn normalize_patch_value(value: Value) -> Result<Value, SchemaError> {
     if let Some(patch) = value.get("Patch").or_else(|| value.get("patch")) {
         return normalize_patch_value(patch.clone());
     }
     if !value.is_array() {
-        anyhow::bail!("schema patch must be a JSON Patch array or an object with Patch/patch");
+        return Err(SchemaError::PatchShape);
     }
     Ok(value)
 }
 
-fn collection_name_from_patch(patch: &Value) -> Result<String> {
+fn collection_name_from_patch(patch: &Value) -> Result<String, SchemaError> {
     let path = patch
         .as_array()
         .and_then(|ops| ops.first())
         .and_then(|op| op.get("path"))
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("schema patch must start with an op containing path"))?;
+        .ok_or(SchemaError::PatchMissingPath)?;
     let collection = path
         .split('/')
         .find(|segment| !segment.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("schema patch path has no collection name: {path}"))?;
+        .ok_or_else(|| SchemaError::PatchMissingCollection {
+            path: path.to_owned(),
+        })?;
     Ok(collection.to_string())
 }
 
@@ -353,10 +426,8 @@ struct FieldAdd {
     name: String,
 }
 
-fn additive_field_ops(collection: &str, patch: &Value) -> Result<Vec<FieldAdd>> {
-    let ops = patch
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("schema patch must be a JSON Patch array"))?;
+fn additive_field_ops(collection: &str, patch: &Value) -> Result<Vec<FieldAdd>, SchemaError> {
+    let ops = patch.as_array().ok_or(SchemaError::PatchNotArray)?;
     let mut fields = Vec::new();
     for (index, op) in ops.iter().enumerate() {
         let op_name = op.get("op").and_then(Value::as_str).unwrap_or_default();
@@ -383,7 +454,7 @@ fn filter_existing_field_adds(
     patch: &Value,
     field_adds: &[FieldAdd],
     existing_fields: &BTreeSet<String>,
-) -> Result<(Value, Vec<String>, Vec<String>)> {
+) -> Result<(Value, Vec<String>, Vec<String>), SchemaError> {
     if field_adds.is_empty() {
         return Ok((patch.clone(), Vec::new(), Vec::new()));
     }
@@ -400,9 +471,7 @@ fn filter_existing_field_adds(
         }
     }
 
-    let ops = patch
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("schema patch must be a JSON Patch array"))?;
+    let ops = patch.as_array().ok_or(SchemaError::PatchNotArray)?;
     let filtered = ops
         .iter()
         .enumerate()

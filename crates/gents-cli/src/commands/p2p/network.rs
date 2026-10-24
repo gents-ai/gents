@@ -150,12 +150,12 @@ pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
         "p2p network list",
         &[OutputFormat::Json, OutputFormat::Table],
     )? {
-        OutputFormat::Json => print_json(&json!({
+        OutputFormat::Json => Ok(print_json(&json!({
             "status": "ok",
             "home": home_dir,
             "peers": peers,
             "count": count,
-        })),
+        }))?),
         OutputFormat::Table => print_network_table(&peers),
         _ => unreachable!("ensure_supported restricts p2p network list output formats"),
     }

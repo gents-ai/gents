@@ -1,15 +1,14 @@
-use anyhow::Result;
 use gents_codex_protocol as codex;
 use serde_json::json;
 
-use super::super::protocol::{absolute_path, send_result, send_typed_json_result};
+use super::super::protocol::{absolute_path, send_result, send_typed_json_result, ProtocolError};
 use super::super::{trace, Outbound, ShimState};
 
 pub(super) async fn send_empty_local_stub(
     outbound: &Outbound,
     state: &ShimState,
     request: &codex::ClientRequest,
-) -> Result<bool> {
+) -> std::result::Result<bool, ProtocolError> {
     let request_id = request.id().clone();
     let method = request.method();
     match request {

@@ -406,10 +406,10 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
         Command::NativeFsRunner(args) => {
-            return commands::native_fs_runner::native_fs_runner(args);
+            return Ok(commands::native_fs_runner::native_fs_runner(args)?);
         }
         Command::Codex(args) => {
-            return commands::codex::codex(args).await;
+            return Ok(commands::codex::codex(args).await?);
         }
         command => command,
     };
@@ -496,23 +496,23 @@ fn service_command(command: ServiceCommand) -> Result<()> {
     let manager = NativeServiceManager::new(config)?;
     match action {
         ServiceAction::Install { network } => {
-            network_settings::install_service(&manager, &home, &network).map(drop)
+            network_settings::install_service(&manager, &home, &network)?;
         }
-        ServiceAction::Start { enable } => manager.start(enable),
-        ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
-        ServiceAction::Restart => manager.restart(),
-        ServiceAction::Enable => manager.set_enabled(true),
-        ServiceAction::Disable => manager.set_enabled(false),
+        ServiceAction::Start { enable } => manager.start(enable)?,
+        ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled)?,
+        ServiceAction::Restart => manager.restart()?,
+        ServiceAction::Enable => manager.set_enabled(true)?,
+        ServiceAction::Disable => manager.set_enabled(false)?,
         ServiceAction::Status => {
             print!(
                 "{}\n{}\n",
                 manager.status()?.summary(),
                 network_settings::NetworkSettings::read(&home)?.summary()
             );
-            Ok(())
         }
-        ServiceAction::Uninstall => manager.uninstall(),
+        ServiceAction::Uninstall => manager.uninstall()?,
     }
+    Ok(())
 }
 
 fn absolutize(path: PathBuf) -> Result<PathBuf> {

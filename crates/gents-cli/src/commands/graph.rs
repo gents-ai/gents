@@ -100,13 +100,13 @@ pub(crate) async fn install_with_access(
     .await?;
     bindings.inference_slots = preview.bindings.clone();
     if args.preview {
-        return print_json(&json!({
+        return Ok(print_json(&json!({
             "pack": package.manifest.name,
             "owner": owner_did,
             "inference": preview,
             "origin_tag": gents::pack::pack_origin_tag(&package.manifest.name)?,
             "would_write": false,
-        }));
+        }))?);
     }
     let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let installed_plugins = if package.manifest.metadata.plugins.is_empty() {
@@ -161,12 +161,12 @@ pub(crate) async fn install_with_access(
         return Ok(());
     }
     match args.output {
-        OutputFormat::Json => print_json(&json!({
+        OutputFormat::Json => Ok(print_json(&json!({
             "install": receipt,
             "activation": activation,
             "bindings": bindings,
             "external_dependencies": package.manifest.external_dependencies,
-        })),
+        }))?),
         OutputFormat::Text => {
             let mut out = io::stdout().lock();
             writeln!(
@@ -196,33 +196,68 @@ async fn access_and_actor(
     Ok((access, actor))
 }
 
-fn parse_input_arg(raw: Option<&str>) -> Result<Value> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GraphCommandError {
+    #[error("reading --input file {path}")]
+    ReadInputFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing --input as JSON")]
+    ParseInputJson(#[source] serde_json::Error),
+    #[error("--input must be a JSON object")]
+    InputNotObject,
+    #[error("--field {field:?} must be NAME=VALUE")]
+    FieldNotPair { field: String },
+    #[error("--field {field:?} must name a field before '='")]
+    FieldNameEmpty { field: String },
+    #[error("graph progress has no {format} rendering")]
+    ProgressFormat { format: &'static str },
+    #[error(transparent)]
+    SerializeProgress(serde_json::Error),
+    #[error(transparent)]
+    WriteProgressLine(std::io::Error),
+    #[error("writing graph progress to stdout")]
+    FlushProgress(#[source] std::io::Error),
+}
+
+fn parse_input_arg(raw: Option<&str>) -> Result<Value, GraphCommandError> {
     let Some(raw) = raw else {
         return Ok(json!({}));
     };
     let text = match raw.strip_prefix('@') {
         Some(path) => {
-            std::fs::read_to_string(path).with_context(|| format!("reading --input file {path}"))?
+            std::fs::read_to_string(path).map_err(|source| GraphCommandError::ReadInputFile {
+                path: path.to_owned(),
+                source,
+            })?
         }
         None => raw.to_owned(),
     };
-    let value: Value = serde_json::from_str(&text).context("parsing --input as JSON")?;
-    anyhow::ensure!(value.is_object(), "--input must be a JSON object");
+    let value: Value = serde_json::from_str(&text).map_err(GraphCommandError::ParseInputJson)?;
+    if !value.is_object() {
+        return Err(GraphCommandError::InputNotObject);
+    }
     Ok(value)
 }
 
-fn apply_input_fields(mut input: Value, fields: &[String]) -> Result<Value> {
+fn apply_input_fields(mut input: Value, fields: &[String]) -> Result<Value, GraphCommandError> {
     let object = input
         .as_object_mut()
-        .context("--input must be a JSON object")?;
+        .ok_or(GraphCommandError::InputNotObject)?;
     for field in fields {
-        let (name, value) = field
-            .split_once('=')
-            .with_context(|| format!("--field {field:?} must be NAME=VALUE"))?;
-        anyhow::ensure!(
-            !name.is_empty(),
-            "--field {field:?} must name a field before '='"
-        );
+        let (name, value) =
+            field
+                .split_once('=')
+                .ok_or_else(|| GraphCommandError::FieldNotPair {
+                    field: field.clone(),
+                })?;
+        if name.is_empty() {
+            return Err(GraphCommandError::FieldNameEmpty {
+                field: field.clone(),
+            });
+        }
         object.insert(name.to_owned(), Value::String(value.to_owned()));
     }
     Ok(input)
@@ -297,8 +332,8 @@ async fn run(args: GraphRunArgs) -> Result<()> {
             "graph run",
             &[OutputFormat::Text, OutputFormat::Json, OutputFormat::Ndjson],
         )? {
-            OutputFormat::Json => print_json(&serde_json::to_value(receipt)?),
-            OutputFormat::Ndjson => print_ndjson(&serde_json::to_value(receipt)?),
+            OutputFormat::Json => Ok(print_json(&serde_json::to_value(receipt)?)?),
+            OutputFormat::Ndjson => Ok(print_ndjson(&serde_json::to_value(receipt)?)?),
             OutputFormat::Text => {
                 let mut out = io::stdout().lock();
                 writeln!(out, "Started {}", receipt.run_id)?;
@@ -632,14 +667,23 @@ fn print_result_text(view: &GraphRunView) -> Result<()> {
     write_result_text(&mut io::stdout().lock(), view)
 }
 
-fn emit_progress(out: &mut impl io::Write, format: OutputFormat, value: &Value) -> Result<()> {
+fn emit_progress(
+    out: &mut impl io::Write,
+    format: OutputFormat,
+    value: &Value,
+) -> Result<(), GraphCommandError> {
     let line = match format {
-        OutputFormat::Json => serde_json::to_string_pretty(value)?,
-        OutputFormat::Ndjson => serde_json::to_string(value)?,
-        other => anyhow::bail!("graph progress has no {} rendering", other.as_str()),
-    };
-    writeln!(out, "{line}")?;
-    out.flush().context("writing graph progress to stdout")
+        OutputFormat::Json => serde_json::to_string_pretty(value),
+        OutputFormat::Ndjson => serde_json::to_string(value),
+        other => {
+            return Err(GraphCommandError::ProgressFormat {
+                format: other.as_str(),
+            })
+        }
+    }
+    .map_err(GraphCommandError::SerializeProgress)?;
+    writeln!(out, "{line}").map_err(GraphCommandError::WriteProgressLine)?;
+    out.flush().map_err(GraphCommandError::FlushProgress)
 }
 
 async fn watch_run(
@@ -709,14 +753,14 @@ async fn result(args: GraphResultArgs) -> Result<()> {
         .output
         .ensure_supported("graph result", &[OutputFormat::Text, OutputFormat::Json])?
     {
-        OutputFormat::Json => print_json(&json!({
+        OutputFormat::Json => Ok(print_json(&json!({
             "run_id": view.run_id,
             "status": view.status,
             "revision_digest": view.revision_digest,
             "results": view.results,
             "result_refs": view.persisted_result_refs,
             "error": effective_error(&view),
-        })),
+        }))?),
         OutputFormat::Text => print_result_text(&view),
         _ => unreachable!("validated output format"),
     }
@@ -731,7 +775,7 @@ async fn cancel(args: GraphCancelArgs) -> Result<()> {
         args.reason.as_deref(),
     )
     .await?;
-    print_json(&progress(&view))
+    Ok(print_json(&progress(&view))?)
 }
 
 async fn toggle(args: GraphToggleArgs, enabled: bool) -> Result<()> {
@@ -742,5 +786,7 @@ async fn toggle(args: GraphToggleArgs, enabled: bool) -> Result<()> {
         .context("package graph is not installed")?
         .graph_id;
     set_graph_enabled_with_access(&access, &actor, &graph_id, enabled).await?;
-    print_json(&json!({ "graph_id": graph_id, "enabled": enabled }))
+    Ok(print_json(
+        &json!({ "graph_id": graph_id, "enabled": enabled }),
+    )?)
 }

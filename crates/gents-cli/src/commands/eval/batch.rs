@@ -8,7 +8,7 @@ use gents::eval::report::load_report;
 use gents::eval::runner::{self, TrialBudget};
 use serde::{Deserialize, Serialize};
 
-use super::{run, write_json, Deps, EvalContext};
+use super::{run, write_json, Deps, EvalCommandError, EvalContext};
 use crate::cli::{EvalBatchArgs, EvalRunArgs};
 
 #[derive(Deserialize)]
@@ -29,39 +29,37 @@ struct RunParser {
     args: EvalRunArgs,
 }
 
-fn parse_plan(bytes: &[u8]) -> Result<Vec<EvalRunArgs>> {
-    let plan: Plan = serde_json::from_slice(bytes).context("parsing eval batch plan")?;
-    anyhow::ensure!(
-        !plan.runs.is_empty(),
-        "eval batch plan must contain at least one run"
-    );
+fn parse_plan(bytes: &[u8]) -> Result<Vec<EvalRunArgs>, EvalCommandError> {
+    let plan: Plan = serde_json::from_slice(bytes).map_err(EvalCommandError::ParsePlan)?;
+    if plan.runs.is_empty() {
+        return Err(EvalCommandError::EmptyPlan);
+    }
     let mut ids = BTreeSet::new();
     plan.runs
         .into_iter()
         .enumerate()
-        .map(|(index, entry)| {
+        .map(|(entry_index, entry)| {
+            let index = entry_index + 1;
             let mut args = RunParser::try_parse_from(
                 std::iter::once("eval batch run".to_owned()).chain(entry.args),
             )
-            .with_context(|| format!("parsing batch run {}", index + 1))?
+            .map_err(|source| EvalCommandError::BatchRunArgs { index, source })?
             .args;
-            anyhow::ensure!(
-                args.scope.home.is_none() && args.scope.graphql.is_none(),
-                "batch run {} must use the batch's --home/--graphql scope",
-                index + 1
-            );
-            anyhow::ensure!(
-                !args.json,
-                "batch run {} must not override --json",
-                index + 1
-            );
-            run::profiles_by_cell(&args).map_err(anyhow::Error::msg)?;
+            if args.scope.home.is_some() || args.scope.graphql.is_some() {
+                return Err(EvalCommandError::BatchScope { index });
+            }
+            if args.json {
+                return Err(EvalCommandError::BatchJson { index });
+            }
+            run::profiles_by_cell(&args)?;
             let id = args
                 .run_id
                 .as_deref()
-                .context("each batch run requires an explicit --run-id")?;
+                .ok_or(EvalCommandError::MissingRunId)?;
             runner::run_dir(std::path::Path::new("."), id)?;
-            anyhow::ensure!(ids.insert(id.to_owned()), "duplicate batch run ID {id:?}");
+            if !ids.insert(id.to_owned()) {
+                return Err(EvalCommandError::DuplicateRunId { id: id.to_owned() });
+            }
             args.json = true;
             Ok(args)
         })
@@ -178,10 +176,9 @@ pub(super) async fn run(
     if let Some(error) = output_error {
         return Err(error);
     }
-    anyhow::ensure!(
-        result.runs.iter().all(|run| run.error.is_none()),
-        "one or more batch runs failed or stopped; rerun the saved plan to resume"
-    );
+    if result.runs.iter().any(|run| run.error.is_some()) {
+        return Err(EvalCommandError::BatchRunsFailed.into());
+    }
     Ok(())
 }
 

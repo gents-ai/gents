@@ -2,7 +2,7 @@ use crate::support::*;
 
 use std::fs;
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -60,7 +60,7 @@ async fn config_apply_prunes_live_only_task_from_canonical_bundle() -> Result<()
     let mut config = read_json_file(&path)?;
     let agent_id = config["node"]["default_agent_id"]
         .as_str()
-        .context("default agent")?
+        .expect("default agent")
         .to_string();
     config["tasks"] = json!([{
         "task_id": "temporary-task",

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::drop_cleanup::DropCleanup;
 use gents_protocol::client_protocol::{project_persisted_attempt, RequestLifecycleState};
 use gents_protocol::row::AgentRequestRow;
@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use super::super::caused_threads::CausedThread;
+use super::super::CodexShimError;
 use super::super::{trace, ConnectionState, ShimState, TurnStreamControl};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -274,7 +275,7 @@ pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
                 row.request_id.clone(),
                 row.doc_id
                     .clone()
-                    .context("steering request has no physical identity")?,
+                    .ok_or(CodexShimError::SteeringRequestMissingPhysicalIdentity)?,
             ));
         }
     }
@@ -482,10 +483,14 @@ async fn load_thread_request_rows(
                     _docID request_id node_did requester_did session_id agent_id lifecycle_state superseded_by_request failure_reason input created_at
                 }}
             }}"#)).await?;
-            let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).context("active request query omitted rows")?;
+            let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).ok_or(CodexShimError::ActiveRequestRowsOmitted)?;
             let rows=values.iter().cloned().map(decode_request_row).collect::<Result<Vec<_>>>()?;
             let mut labels=BTreeSet::new();
-            for row in &rows {anyhow::ensure!(labels.insert(row.request_id.clone()),"ambiguous scoped active request label");}
+            for row in &rows {
+                if !labels.insert(row.request_id.clone()) {
+                    return Err(CodexShimError::AmbiguousScopedActiveRequestLabel.into());
+                }
+            }
             Ok(rows)
         })
     }).await
@@ -493,17 +498,17 @@ async fn load_thread_request_rows(
 
 fn decode_request_row(row: Value) -> Result<AgentRequestRow> {
     let request: AgentRequestRow =
-        serde_json::from_value(row).context("decoding canonical AgentRequest row")?;
+        serde_json::from_value(row).map_err(CodexShimError::DecodeAgentRequestRow)?;
     request
         .doc_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .context("AgentRequest row missing physical identity")?;
+        .ok_or(CodexShimError::AgentRequestMissingPhysicalIdentity)?;
     request
         .created_at
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .context("AgentRequest row missing created_at")?;
+        .ok_or(CodexShimError::AgentRequestMissingCreatedAt)?;
     Ok(request)
 }
 
@@ -554,7 +559,7 @@ fn active_codex_turn_from_rows(
     let interrupt_request_doc_id = by_id
         .get(interrupt_request_id.as_str())
         .and_then(|row| row.doc_id.clone())
-        .context("interrupt request has no physical identity")?;
+        .ok_or(CodexShimError::InterruptRequestMissingPhysicalIdentity)?;
     Ok(Some(ActiveCodexTurn {
         turn_id: root,
         interrupt_request_id,
@@ -562,7 +567,7 @@ fn active_codex_turn_from_rows(
         current_request_doc_id: tail
             .doc_id
             .clone()
-            .context("active request has no physical identity")?,
+            .ok_or(CodexShimError::ActiveRequestMissingPhysicalIdentity)?,
         interrupt_request_doc_id,
     }))
 }
@@ -575,10 +580,10 @@ fn steering_lineage_has_superseded_request<'a>(
     let mut seen = BTreeSet::<String>::new();
     loop {
         if !seen.insert(current.request_id.clone()) {
-            anyhow::bail!(
-                "cycle in Codex steering queue ancestry at request {}",
-                current.request_id
-            );
+            return Err(CodexShimError::SteeringQueueCycle {
+                request_id: current.request_id.clone(),
+            }
+            .into());
         }
         if current
             .superseded_by_request
@@ -606,10 +611,10 @@ fn codex_turn_root_and_depth<'a>(
     let mut depth = 0usize;
     loop {
         if !seen.insert(current.request_id.clone()) {
-            anyhow::bail!(
-                "cycle in Codex steering queue ancestry at request {}",
-                current.request_id
-            );
+            return Err(CodexShimError::SteeringQueueCycle {
+                request_id: current.request_id.clone(),
+            }
+            .into());
         }
 
         let Some(parent_id) = steering_parent_id(current) else {

@@ -12,5 +12,7 @@ pub(crate) async fn write(args: WriteArgs) -> Result<()> {
         None,
     );
     let result = tool.call(call).await?;
-    crate::print_json(&serde_json::from_str::<serde_json::Value>(&result)?)
+    Ok(crate::print_json(&serde_json::from_str::<
+        serde_json::Value,
+    >(&result)?)?)
 }

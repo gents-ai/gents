@@ -2,7 +2,7 @@ use crate::support::fs::write_json_file;
 
 use std::process::Command;
 
-use anyhow::Result;
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 

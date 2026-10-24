@@ -1,24 +1,31 @@
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::schemas::ALL_COLLECTION_NAMES;
 
-pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
+#[derive(Debug, thiserror::Error)]
+pub enum SchemaError {
+    #[error("desktop node missing P2P support")]
+    MissingP2p,
+    #[error(transparent)]
+    Subscribe(#[from] defra_p2p_adapter::P2PError),
+}
+
+pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> anyhow::Result<()> {
     gents::schema::ensure_runtime_schemas(node).await
 }
 
 #[allow(dead_code)]
-pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
+pub async fn ensure_schemas(node: &EmbeddedNode) -> anyhow::Result<()> {
     ensure_runtime_schemas(node).await
 }
 
-pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
-    let p2p = node.p2p().context("desktop node missing P2P support")?;
+pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<(), SchemaError> {
+    let p2p = node.p2p().ok_or(SchemaError::MissingP2p)?;
     subscribe_runtime_collections(p2p).await
 }
 
 pub(crate) async fn subscribe_runtime_collections(
     p2p: &dyn defra_p2p_adapter::P2POperations,
-) -> Result<()> {
+) -> Result<(), SchemaError> {
     p2p.add_collections(
         subscribed_collection_names()
             .into_iter()

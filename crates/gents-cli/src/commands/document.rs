@@ -114,5 +114,7 @@ async fn create(args: DocumentCreateArgs) -> Result<()> {
     ensure_known_fields(&args.collection, &fields, &input_fields)?;
     let response = access.write("cli.document.create", &mutation).await?;
     let doc_id = extract_mutation_doc_id(&response, &args.collection)?;
-    print_json(&json!({ "collection": args.collection, "doc_id": doc_id }))
+    Ok(print_json(
+        &json!({ "collection": args.collection, "doc_id": doc_id }),
+    )?)
 }

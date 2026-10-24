@@ -1,43 +1,51 @@
 use super::*;
+use crate::support::TestResult;
 
-pub(super) fn require_command(name: &str) -> Result<()> {
+pub(super) fn require_command(name: &str) -> TestResult<()> {
     if which(name).is_some() {
         Ok(())
     } else {
-        bail!("{name} is required for this smoke test")
+        Err(format!("{name} is required for this smoke test").into())
     }
 }
 
-pub(super) fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Result<()> {
+pub(super) fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> TestResult<()> {
     let _ = run_git_output(cwd, args)?;
     Ok(())
 }
 
-fn run_git_output(cwd: &std::path::Path, args: &[&str]) -> Result<String> {
+fn run_git_output(cwd: &std::path::Path, args: &[&str]) -> TestResult<String> {
     let output = Command::new("git")
         .args(["-c", "commit.gpgsign=false"])
         .args(args)
         .current_dir(cwd)
         .output()
-        .with_context(|| format!("running git {} in {}", args.join(" "), cwd.display()))?;
+        .map_err(|error| {
+            format!(
+                "running git {} in {}: {error:#}",
+                args.join(" "),
+                cwd.display()
+            )
+        })?;
     if !output.status.success() {
-        bail!(
+        return Err(format!(
             "git {} failed in {}\nstdout:\n{}\nstderr:\n{}",
             args.join(" "),
             cwd.display(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        );
+        )
+        .into());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-pub(super) fn init_test_git_repo(cwd: &std::path::Path, branch: &str) -> Result<String> {
+pub(super) fn init_test_git_repo(cwd: &std::path::Path, branch: &str) -> TestResult<String> {
     require_command("git")?;
     run_git_command(cwd, &["init"])?;
     run_git_command(cwd, &["checkout", "-B", branch])?;
     fs::write(cwd.join(".codex-shim-git-fixture"), "base\n")
-        .with_context(|| format!("writing git fixture in {}", cwd.display()))?;
+        .map_err(|error| format!("writing git fixture in {}: {error:#}", cwd.display()))?;
     run_git_command(cwd, &["add", ".codex-shim-git-fixture"])?;
     run_git_command(
         cwd,
@@ -75,12 +83,12 @@ pub(super) fn which(name: &str) -> Option<std::path::PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
-pub(super) fn workspace_root() -> Result<std::path::PathBuf> {
+pub(super) fn workspace_root() -> TestResult<std::path::PathBuf> {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(std::path::Path::parent)
         .map(std::path::Path::to_path_buf)
-        .ok_or_else(|| anyhow!("unable to resolve workspace root from CARGO_MANIFEST_DIR"))
+        .ok_or_else(|| "unable to resolve workspace root from CARGO_MANIFEST_DIR".into())
 }
 
 pub(super) fn write_expect_smoke(
@@ -89,7 +97,7 @@ pub(super) fn write_expect_smoke(
     client_codex_home: &std::path::Path,
     shim_port: u16,
     prompt_token: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let prompt = smoke_prompt(prompt_token);
     let token_match_regex = tcl_regex_terminal_tolerant_literal(prompt_token);
     let contents = format!(
@@ -149,7 +157,8 @@ expect {{
         prompt = tcl_brace_str(&prompt),
         token_match_regex = tcl_brace_str(&token_match_regex),
     );
-    fs::write(script, contents).with_context(|| format!("writing {}", script.display()))
+    fs::write(script, contents)
+        .map_err(|error| format!("writing {}: {error:#}", script.display()).into())
 }
 
 pub(super) fn smoke_prompt(prompt_token: &str) -> String {
@@ -166,9 +175,12 @@ pub(super) fn multiturn_second_prompt() -> &'static str {
     "Take the project codeword I gave earlier, replace LIME with MINT, keep the digit, and reply with exactly the transformed codeword and no extra words."
 }
 
-pub(super) fn assert_shim_trace_methods(path: &std::path::Path, methods: &[&str]) -> Result<()> {
+pub(super) fn assert_shim_trace_methods(
+    path: &std::path::Path,
+    methods: &[&str],
+) -> TestResult<()> {
     let trace = fs::read_to_string(path)
-        .with_context(|| format!("reading shim trace {}", path.display()))?;
+        .map_err(|error| format!("reading shim trace {}: {error:#}", path.display()))?;
     for method in methods {
         assert!(
             trace.contains(method),
@@ -182,9 +194,9 @@ pub(super) fn assert_shim_trace_method_count_at_least(
     path: &std::path::Path,
     method: &str,
     minimum: usize,
-) -> Result<()> {
+) -> TestResult<()> {
     let trace = fs::read_to_string(path)
-        .with_context(|| format!("reading shim trace {}", path.display()))?;
+        .map_err(|error| format!("reading shim trace {}: {error:#}", path.display()))?;
     let count = trace.matches(method).count();
     assert!(
         count >= minimum,
@@ -202,14 +214,14 @@ pub(super) fn wait_for_tmux_token_occurrences(
     needle: &str,
     required_count: usize,
     timeout: Duration,
-) -> Result<String> {
+) -> TestResult<String> {
     let deadline = std::time::Instant::now() + timeout;
     let mut last = String::new();
     loop {
         let output = Command::new("tmux")
             .args(["capture-pane", "-pt", session])
             .output()
-            .context("capturing tmux pane")?;
+            .map_err(|error| format!("capturing tmux pane: {error:#}"))?;
         if output.status.success() {
             last = String::from_utf8_lossy(&output.stdout).into_owned();
             if token_occurrences(&terminal_token_search_text(&last), needle) >= required_count {
@@ -217,9 +229,9 @@ pub(super) fn wait_for_tmux_token_occurrences(
             }
         }
         if std::time::Instant::now() >= deadline {
-            bail!(
+            return Err(format!(
                 "timed out waiting for {required_count} occurrences of {needle} in tmux pane; last transcript:\n{last}"
-            );
+            ).into());
         }
         std::thread::sleep(Duration::from_secs(1));
     }

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::graphql::escape_graphql_string;
 use gents::session::{
@@ -11,14 +11,20 @@ use gents_protocol::graphql::GraphqlTurnState;
 use gents_protocol::session::AgentSession;
 use serde_json::Value;
 
+use super::CodexShimProjectionError;
 use crate::commands::codex_shim::ShimState;
 
-fn rows<'a>(response: &'a Value, collection: &str) -> Result<&'a Vec<Value>> {
+fn rows<'a>(
+    response: &'a Value,
+    collection: &str,
+) -> std::result::Result<&'a Vec<Value>, CodexShimProjectionError> {
     response
         .get("data")
         .and_then(|data| data.get(collection))
         .and_then(Value::as_array)
-        .with_context(|| format!("thread projection omitted {collection} rows"))
+        .ok_or_else(|| CodexShimProjectionError::ThreadRowsMissing {
+            collection: collection.to_owned(),
+        })
 }
 
 pub(super) async fn load_scoped_session(
@@ -88,10 +94,9 @@ async fn load_head_in_txn(
     else {
         return Ok(None);
     };
-    anyhow::ensure!(
-        head.agent_id == state.agent_id.as_ref(),
-        "thread request head conflicts with bound session agent"
-    );
+    if head.agent_id != state.agent_id.as_ref() {
+        return Err(CodexShimProjectionError::ThreadHeadConflict.into());
+    }
     let doc_id = escape_graphql_string(&head.observed.request_doc_id);
     let scope = session_scope_filter(
         &state.node_did,
@@ -109,12 +114,11 @@ async fn load_head_in_txn(
         ))
         .await?;
     let requests = rows(&response, "AgentRequest")?;
-    anyhow::ensure!(
-        requests.len() == 1,
-        "thread head has missing or ambiguous physical request"
-    );
-    let request =
-        serde_json::from_value(requests[0].clone()).context("decode exact thread head")?;
+    if requests.len() != 1 {
+        return Err(CodexShimProjectionError::ThreadHeadAmbiguous.into());
+    }
+    let request = serde_json::from_value(requests[0].clone())
+        .map_err(|source| CodexShimProjectionError::DecodeThreadHead { source })?;
     Ok(Some(GraphqlTurnState {
         request: Some(request),
     }))

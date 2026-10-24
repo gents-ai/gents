@@ -1,16 +1,19 @@
 use crate::support::{self, *};
 
-use anyhow::{Context, Result};
 use serde_json::Value;
 
 /// A documents pack that ships a plugin: install stores the plugin and
 /// records it, and remove takes back exactly what the install created. Every
 /// pack here is scaffolded on the fly, so this needs no fixture at all.
+use gents_protocol::error_chain::ErrorChain;
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 #[test]
 fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("node");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().ok_or("path")?;
     run_init_json(
         temp.path(),
         &["--node-name", "pack-remover", "--home", home_arg],
@@ -31,7 +34,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
         &["pack", "build", "demo_tools", "--out", "demo_tools.pack"],
     ] {
         let output = gents(args)?;
-        anyhow::ensure!(
+        assert!(
             output.status.success(),
             "gents {}: {}",
             args.join(" "),
@@ -44,19 +47,16 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
         &[
             "pack",
             "install",
-            temp.path()
-                .join("demo_tools.pack")
-                .to_str()
-                .context("path")?,
+            temp.path().join("demo_tools.pack").to_str().ok_or("path")?,
             "--home",
             home_arg,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         install["apply"]["plugins"][0]["name"] == "echo_tool"
             && !install["apply"]["created"]
                 .as_array()
-                .context("created")?
+                .ok_or("created")?
                 .is_empty(),
         "{install}"
     );
@@ -72,7 +72,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
             r#"{"a":1}"#,
         ],
     )?;
-    anyhow::ensure!(echoed == serde_json::json!({"a": 1}), "{echoed}");
+    assert!(echoed == serde_json::json!({"a": 1}), "{echoed}");
 
     let removed = run_cli_json(
         temp.path(),
@@ -83,7 +83,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
         names.sort();
         Ok(names)
     };
-    anyhow::ensure!(
+    assert!(
         sorted(&removed["removed"]["removed"])? == sorted(&install["apply"]["created"])?,
         "{removed}"
     );
@@ -99,12 +99,12 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
             "{}",
         ],
     )?;
-    anyhow::ensure!(gone.contains("not installed"), "{gone}");
+    assert!(gone.contains("not installed"), "{gone}");
     let again = run_cli_failure_stderr(
         temp.path(),
         &["pack", "remove", "demo_tools", "--home", home_arg],
     )?;
-    anyhow::ensure!(again.contains("is not installed"), "{again}");
+    assert!(again.contains("is not installed"), "{again}");
     Ok(())
 }
 
@@ -131,9 +131,10 @@ impl DependentHome {
     }
 
     fn with_dependee(node_name: &str, dependee: &std::path::Path) -> Result<Self> {
-        let tempdir = tempfile::tempdir().context("creating pack install tempdir")?;
+        let tempdir = tempfile::tempdir()
+            .map_err(|error| format!("creating pack install tempdir: {}", ErrorChain(&error)))?;
         let home = tempdir.path().join("agent-home");
-        let home_arg = home.to_str().context("pack home path is not UTF-8")?;
+        let home_arg = home.to_str().ok_or("pack home path is not UTF-8")?;
         let initialized = run_init_json(
             tempdir.path(),
             &["--node-name", node_name, "--home", home_arg],
@@ -188,7 +189,7 @@ fn offline_pack_install_with_a_documents_dependency_holds_one_store_claim() -> R
     let install_args = setup.install_args();
 
     let installed = run_cli_json(setup.tempdir.path(), &install_args)?;
-    anyhow::ensure!(
+    assert!(
         installed["dependencies"] == serde_json::json!(["fixture/dependee_fixture"]),
         "pack install did not report its documents dependency: {installed}"
     );
@@ -202,14 +203,14 @@ fn offline_pack_install_with_a_documents_dependency_holds_one_store_claim() -> R
             setup.home_arg(),
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("fixture/dependent_fixture"),
         "the documents dependency was not installed: {denial}"
     );
 
     let _held = gents::home::lock_store(&setup.home, &gents::home::default_data_dir(&setup.home))?;
     let denial = run_cli_failure_stderr(setup.tempdir.path(), &install_args)?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("another Gents runtime")
             && denial.contains(&format!("process {}", std::process::id())),
         "a second holder of the home was not refused: {denial}"
@@ -234,7 +235,7 @@ fn a_documents_dependency_is_released_with_its_dependent() -> Result<()> {
             setup.home_arg(),
         ],
     )?;
-    anyhow::ensure!(denial.contains("fixture/dependent_fixture"), "{denial}");
+    assert!(denial.contains("fixture/dependent_fixture"), "{denial}");
 
     let removed = run_cli_json(
         setup.tempdir.path(),
@@ -246,7 +247,7 @@ fn a_documents_dependency_is_released_with_its_dependent() -> Result<()> {
             setup.home_arg(),
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         removed["removed"]["dependencies"][0]["pack"] == "fixture/dependee_fixture",
         "{removed}"
     );
@@ -260,7 +261,7 @@ fn a_documents_dependency_is_released_with_its_dependent() -> Result<()> {
             setup.home_arg(),
         ],
     )?;
-    anyhow::ensure!(denial.contains("is not installed"), "{denial}");
+    assert!(denial.contains("is not installed"), "{denial}");
     Ok(())
 }
 
@@ -272,7 +273,7 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
     let owner_slot = setup
         .install_args
         .last()
-        .context("the install arguments end with the slot binding")?
+        .ok_or("the install arguments end with the slot binding")?
         .clone();
     run_cli_json(
         setup.tempdir.path(),
@@ -307,7 +308,7 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
             setup.home_arg(),
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         removed["pack"] == "fixture/dependee_fixture",
         "an explicit install of the dependency must survive removing its dependent: {removed}"
     );
@@ -318,7 +319,8 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
 /// dependency's own coordinate, and removing the dependent releases it.
 #[test]
 fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> {
-    let scratch = tempfile::tempdir().context("creating dependee tempdir")?;
+    let scratch = tempfile::tempdir()
+        .map_err(|error| format!("creating dependee tempdir: {}", ErrorChain(&error)))?;
     let dependee = scratch.path().join("dependee_fixture");
     copy_dir_all(&fixture_pack_dir("dependee_fixture"), &dependee)?;
     run_cli_text(
@@ -337,7 +339,7 @@ fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> 
     let setup = DependentHome::with_dependee("dep-plugin", &dependee)?;
     run_cli_json(setup.tempdir.path(), &setup.install_args())?;
     let record = gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;
-    anyhow::ensure!(
+    assert!(
         record.owner_pack_coordinate.as_deref() == Some("fixture/dependee_fixture"),
         "the dependency's plugin is not owned by the dependency: {record:?}"
     );
@@ -352,7 +354,7 @@ fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> 
             setup.home_arg(),
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool").is_err(),
         "the dependency's plugin outlived its dependent"
     );
@@ -395,7 +397,8 @@ fn wire_fixture(reviewed_job: bool) -> Result<WireFixture> {
 
 /// `wire_fixture` with `init_extra` appended to the `gents init` arguments.
 fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixture> {
-    let tempdir = tempfile::tempdir().context("creating wire tempdir")?;
+    let tempdir = tempfile::tempdir()
+        .map_err(|error| format!("creating wire tempdir: {}", ErrorChain(&error)))?;
     let scratch = tempdir.path();
     let home = scratch.join("agent-home");
     let home_arg = dir_arg(&home);
@@ -405,7 +408,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
     let owner_did = node_did_from_init(&initialized)?;
     let agent = initialized["default_agent_id"]
         .as_str()
-        .context("init output missing default_agent_id")?
+        .ok_or("init output missing default_agent_id")?
         .to_owned();
 
     let job_pack = scratch.join("job_plugin_fixture");
@@ -528,8 +531,8 @@ fn pack_wire_writes_tools_and_context_in_one_transaction() -> Result<()> {
     fixture.wire(&[])?;
     let plugin = gents::plugin::store::read_record(&fixture.home, "fixture", "job_fixture")?;
     let tools = fixture.agent_tools()?;
-    let entry = wired_plugin(&tools).context("the agent's Tools does not list the plugin")?;
-    anyhow::ensure!(
+    let entry = wired_plugin(&tools).ok_or("the agent's Tools does not list the plugin")?;
+    assert!(
         entry["digest"] == plugin.digest.as_str(),
         "the plugin is not pinned to the installed digest: {entry}"
     );
@@ -540,12 +543,12 @@ fn pack_wire_writes_tools_and_context_in_one_transaction() -> Result<()> {
 fn pack_wire_uses_the_packs_reviewed_block() -> Result<()> {
     let fixture = wire_fixture(true)?;
     let reviewed = wired_plugin(&fixture.tools("job-fixture-caller")?)
-        .context("the job pack's Tools does not list the plugin")?["job"]
+        .ok_or("the job pack's Tools does not list the plugin")?["job"]
         .clone();
     let printed = fixture.wire(&[])?;
     let tools = fixture.agent_tools()?;
-    let written = &wired_plugin(&tools).context("plugin not wired")?["job"];
-    anyhow::ensure!(
+    let written = &wired_plugin(&tools).ok_or("plugin not wired")?["job"];
+    assert!(
         *written == reviewed && printed["report"]["job"] == reviewed,
         "the written block {written} or the report {} differs from the reviewed {reviewed}",
         printed["report"]["job"]
@@ -558,8 +561,8 @@ fn pack_wire_targets_from_adds_targets_and_trust() -> Result<()> {
     let fixture = wire_fixture(true)?;
     fixture.wire(&["--targets-from", "fixture/dependee_fixture"])?;
     let tools = fixture.agent_tools()?;
-    let job = &wired_plugin(&tools).context("plugin not wired")?["job"];
-    anyhow::ensure!(
+    let job = &wired_plugin(&tools).ok_or("plugin not wired")?["job"];
+    assert!(
         job["agent_targets"]
             .as_array()
             .is_some_and(|targets| targets.iter().any(|id| id == "wf-content"))
@@ -577,11 +580,11 @@ fn pack_wire_without_targets_writes_no_job_block() -> Result<()> {
     let fixture = wire_fixture(false)?;
     let printed = fixture.wire(&[])?;
     let tools = fixture.agent_tools()?;
-    anyhow::ensure!(
+    assert!(
         wired_plugin(&tools).is_some_and(|entry| entry.get("job").is_none()),
         "a job block was written without targets: {tools}"
     );
-    anyhow::ensure!(
+    assert!(
         printed["report"]["next_call"]
             .as_str()
             .is_some_and(|call| call.contains("--targets-from <pack>")),
@@ -612,17 +615,17 @@ fn diagnose_status_degrades_on_a_plugin_jobs_failure() -> Result<()> {
         )
     };
     let before = diagnose()?;
-    anyhow::ensure!(
+    assert!(
         before["checks"]["plugin_jobs"]["ok"] == true && before["status"] == "ok",
         "an unwired home is not healthy: {before}"
     );
     fixture.wire(&[])?;
     let after = diagnose()?;
-    anyhow::ensure!(
+    assert!(
         after["checks"]["plugin_jobs"]["ok"] == false && after["status"] == "degraded",
         "a plugin_jobs failure did not degrade status: {after}"
     );
-    anyhow::ensure!(
+    assert!(
         after["checks"]["plugin_jobs"]["agents"][0]["checks"][0]["check"] == "job_block_missing",
         "unexpected plugin_jobs row: {after}"
     );
@@ -634,16 +637,16 @@ fn pack_wire_preview_writes_nothing() -> Result<()> {
     let fixture = wire_fixture(true)?;
     let before = fixture.agent_tools()?;
     let previewed = fixture.wire(&["--preview"])?;
-    anyhow::ensure!(
+    assert!(
         fixture.agent_tools()? == before,
         "a preview changed the agent's Tools"
     );
     let wired = fixture.wire(&[])?;
-    anyhow::ensure!(
+    assert!(
         previewed["preview"] == true && wired["preview"] == false,
         "the preview flag is not reported: {previewed} {wired}"
     );
-    anyhow::ensure!(
+    assert!(
         previewed["report"] == wired["report"],
         "the preview report differs from the written one: {previewed} {wired}"
     );
@@ -656,13 +659,13 @@ fn pack_wire_remove_reverses_only_unreferenced() -> Result<()> {
     let before = fixture.agent_tools()?;
     fixture.wire(&["--targets-from", "fixture/dependee_fixture"])?;
     let wired = fixture.agent_tools()?;
-    anyhow::ensure!(
+    assert!(
         wired_plugin(&wired).is_some(),
         "the wire did not list the plugin: {wired}"
     );
     fixture.wire(&["--remove"])?;
     let after = fixture.agent_tools()?;
-    anyhow::ensure!(
+    assert!(
         wired_plugin(&after).is_none()
             && plugin_coordinates(&after) == plugin_coordinates(&before)
             && target_ids(&after) == target_ids(&before),
@@ -690,10 +693,10 @@ fn pack_wire_refuses_an_agent_without_a_tools_document() -> Result<()> {
                 .iter_mut()
                 .find(|c| c["context_id"] == context_id.as_str())
         })
-        .context("the agent's Context is not in the export")?;
+        .ok_or("the agent's Context is not in the export")?;
     context
         .as_object_mut()
-        .context("Context is not an object")?
+        .ok_or("Context is not an object")?
         .remove("tools_id");
     write_json_file(&path, &config)?;
     run_cli_json(
@@ -713,7 +716,7 @@ fn pack_wire_refuses_an_agent_without_a_tools_document() -> Result<()> {
             home_arg,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         refusal.contains(&format!("gents tools explain --agent {}", fixture.agent)),
         "the refusal does not name the next call: {refusal}"
     );
@@ -725,7 +728,8 @@ const JOB_PACK: &str = "fixture/job_plugin_fixture";
 /// An initialized offline home with the job pack built in the scratch
 /// directory and nothing installed.
 fn uninstalled_job_pack() -> Result<WireFixture> {
-    let tempdir = tempfile::tempdir().context("creating install tempdir")?;
+    let tempdir = tempfile::tempdir()
+        .map_err(|error| format!("creating install tempdir: {}", ErrorChain(&error)))?;
     let scratch = tempdir.path();
     let home = scratch.join("agent-home");
     let initialized = run_init_json(
@@ -734,7 +738,7 @@ fn uninstalled_job_pack() -> Result<WireFixture> {
     )?;
     let agent = initialized["default_agent_id"]
         .as_str()
-        .context("init output missing default_agent_id")?
+        .ok_or("init output missing default_agent_id")?
         .to_owned();
     let job_pack = scratch.join("job_plugin_fixture");
     copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &job_pack)?;
@@ -758,7 +762,7 @@ impl WireFixture {
         )?;
         Ok(shown["digest"]
             .as_str()
-            .context("pack show has no digest")?
+            .ok_or("pack show has no digest")?
             .to_owned())
     }
 
@@ -798,7 +802,7 @@ fn pack_install_expect_digest_match_installs() -> Result<()> {
     let fixture = uninstalled_job_pack()?;
     let digest = fixture.job_pack_digest()?;
     fixture.install_job_pack(&["--expect-digest", &digest])?;
-    anyhow::ensure!(
+    assert!(
         gents::pack::read_home_install(&fixture.home, JOB_PACK)?.is_some(),
         "a matching --expect-digest did not install the pack"
     );
@@ -812,9 +816,9 @@ fn pack_install_expect_digest_mismatch_writes_nothing() -> Result<()> {
     let wrong = format!("sha256:{}", "0".repeat(64));
     let stderr = fixture.install_job_pack_failure(&["--expect-digest", &wrong])?;
     for needle in [wrong.as_str(), digest.as_str(), "gents pack show"] {
-        anyhow::ensure!(stderr.contains(needle), "{needle} missing from: {stderr}");
+        assert!(stderr.contains(needle), "{needle} missing from: {stderr}");
     }
-    anyhow::ensure!(
+    assert!(
         gents::pack::read_home_install(&fixture.home, JOB_PACK)?.is_none()
             && gents::plugin::store::list_records(&fixture.home)?.is_empty(),
         "a refused digest left an install behind"
@@ -826,19 +830,19 @@ fn pack_install_expect_digest_mismatch_writes_nothing() -> Result<()> {
 fn pack_install_wire_wires_the_agent() -> Result<()> {
     let fixture = wire_fixture(true)?;
     let reviewed = wired_plugin(&fixture.tools("job-fixture-caller")?)
-        .context("the job pack's Tools does not list the plugin")?["job"]
+        .ok_or("the job pack's Tools does not list the plugin")?["job"]
         .clone();
     let digest = fixture.job_pack_digest()?;
     let printed =
         fixture.install_job_pack(&["--expect-digest", &digest, "--wire", &fixture.agent])?;
     let wired = &printed["wired"][0];
-    anyhow::ensure!(
+    assert!(
         wired["plugin"] == "fixture/job_fixture"
             && wired["agent"] == fixture.agent.as_str()
             && wired["report"]["job"] == reviewed,
         "install did not print the wired report for the reviewed block: {printed}"
     );
-    anyhow::ensure!(
+    assert!(
         wired_plugin(&fixture.agent_tools()?).is_some(),
         "the agent's Tools does not list the plugin"
     );
@@ -862,11 +866,11 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
     let tools = fixture.agent_tools()?;
 
     let stderr = fixture.install_job_pack_failure(&["--wire", &fixture.agent])?;
-    anyhow::ensure!(
+    assert!(
         stderr.contains("--grant-authority"),
         "the refusal does not name --grant-authority: {stderr}"
     );
-    anyhow::ensure!(
+    assert!(
         serde_json::to_value(gents::plugin::store::list_records(&fixture.home)?)? == records
             && fixture.agent_tools()? == tools,
         "a refused install changed the plugin store or the agent's Tools"
@@ -879,7 +883,8 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
 /// prints the wire report naming `--targets-from`.
 #[test]
 fn init_workflows_installs_and_wires_the_engine_offline() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating init workflows tempdir")?;
+    let tempdir = tempfile::tempdir()
+        .map_err(|error| format!("creating init workflows tempdir: {}", ErrorChain(&error)))?;
     let scratch = tempdir.path();
     let home = scratch.join("agent-home");
     let init_args = ["--node-name", "init-workflows", "--home", dir_arg(&home)];
@@ -921,14 +926,14 @@ fn init_workflows_installs_and_wires_the_engine_offline() -> Result<()> {
     let printed = run_init_json(scratch, &with_flag)?;
     let next_call = printed["workflows"]["wired"][0]["report"]["next_call"]
         .as_str()
-        .context("init --workflows printed no next_call for a pack without a job block")?;
-    anyhow::ensure!(
+        .ok_or("init --workflows printed no next_call for a pack without a job block")?;
+    assert!(
         next_call.contains("--targets-from"),
         "next_call does not name --targets-from: {next_call}"
     );
     let record = gents::pack::read_home_install(&home, "gents/rhai_workflows")?
-        .context("init --workflows did not install the engine pack")?;
-    anyhow::ensure!(
+        .ok_or("init --workflows did not install the engine pack")?;
+    assert!(
         record.installed_via == Some(gents::pack::home_install::InstalledVia::Operator),
         "the engine pack is not an operator install: {record:?}"
     );
@@ -941,8 +946,8 @@ async fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
     let sources = gents_server::packs::wire_sources(fixture.home.clone()).await?;
     let plugins = sources["plugins"]
         .as_array()
-        .context("wire_sources printed no plugins")?;
-    anyhow::ensure!(
+        .ok_or("wire_sources printed no plugins")?;
+    assert!(
         plugins.contains(&serde_json::json!({
             "plugin": "fixture/job_fixture",
             "pack": "fixture/job_plugin_fixture",
@@ -952,12 +957,12 @@ async fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
     );
     let target_packs = sources["target_packs"]
         .as_array()
-        .context("wire_sources printed no target_packs")?;
+        .ok_or("wire_sources printed no target_packs")?;
     for expected in [
         serde_json::json!({"pack": "fixture/dependee_fixture", "targets": ["wf-content"]}),
         serde_json::json!({"pack": "fixture/job_plugin_fixture", "targets": ["wf-fixture"]}),
     ] {
-        anyhow::ensure!(
+        assert!(
             target_packs.contains(&expected),
             "target_packs does not hold {expected}: {sources}"
         );

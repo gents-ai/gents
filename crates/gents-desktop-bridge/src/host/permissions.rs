@@ -169,7 +169,7 @@ async fn target(
     let record = super::approvals::peer(core, &request.node_did).await?;
     let support = gents_desktop_core::local_runtime::workspace_permission_support(&record)
         .await
-        .map_err(super::backend_error)?;
+        .map_err(|error| super::backend_error(error.into()))?;
     if record.operator_graphql().is_none() || record.local_node_home.is_none() {
         return Ok(Target::Unavailable(
             WorkspacePermissionsState::RemoteUnavailable { support },
@@ -181,7 +181,7 @@ async fn target(
         ));
     };
     let home = gents_desktop_core::local_runtime::hosted_runtime_home(&record)
-        .map_err(super::backend_error)?
+        .map_err(|error| super::backend_error(error.into()))?
         .to_owned();
     let requester = core.node_identity().did().to_owned();
     tokio::task::spawn_blocking(move || local_target(&home, &requester, &request, support))

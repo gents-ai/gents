@@ -7,7 +7,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
 use gents::config::ReasoningEffort;
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
@@ -17,6 +16,10 @@ use gents::document_config::{InferenceExecution, InferenceProfile, ToolServiceRe
 use gents::Collection;
 use serde_json::Value;
 use uuid::Uuid;
+
+use gents_protocol::error_chain::ErrorChain;
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 #[path = "../support/failure_artifacts.rs"]
 mod failure_artifacts;
@@ -77,8 +80,8 @@ async fn live_research_registry_matches_measured_loopback_endpoint() -> Result<(
         .await?;
     let registry: ToolServiceRegistry =
         serde_json::from_value(first_graphql_row(&registry_rows, "ToolServiceRegistry")?.clone())?;
-    anyhow::ensure!(registry.enabled && registry.hostname.is_none());
-    anyhow::ensure!(registry.lan_ip.as_deref() == Some("127.0.0.1"));
+    assert!(registry.enabled && registry.hostname.is_none());
+    assert!(registry.lan_ip.as_deref() == Some("127.0.0.1"));
     access
         .write(
             "test.web_research.health",
@@ -89,7 +92,7 @@ async fn live_research_registry_matches_measured_loopback_endpoint() -> Result<(
             ),
         )
         .await?;
-    anyhow::ensure!(
+    assert!(
         gents::tool_surface::measured_mcp_services_for_access(&access, node_did, &[registry])
             .await?
             == [SERVICE_ID]
@@ -114,7 +117,7 @@ async fn configure_live_research_inference_profile(
                     profile_id,
                 )
                 .await?
-                .context("initialized inference profile is missing")?;
+                .ok_or("initialized inference profile is missing")?;
                 let profile: InferenceProfile = serde_json::from_value(value)?;
                 let plan = live_research_inference_plan(profile)?;
                 apply_desired_state_plan(txn, &plan).await.map(|_| ())
@@ -165,20 +168,20 @@ fn live_research_plan_binds_initialized_profile_to_execution() -> Result<()> {
         .documents()
         .iter()
         .find(|doc| doc.collection == Collection::InferenceExecution)
-        .context("missing execution plan")?;
+        .ok_or("missing execution plan")?;
     let profile = plan
         .documents()
         .iter()
         .find(|doc| doc.collection == Collection::InferenceProfile)
-        .context("missing profile plan")?;
-    anyhow::ensure!(execution.add["node_did"] == profile.add["node_did"]);
-    anyhow::ensure!(execution.add["execution_id"] == profile.add["execution_id"]);
-    anyhow::ensure!(execution.add["max_turns"] == 64);
-    anyhow::ensure!(profile.add["profile_id"] == "initialized-profile");
-    anyhow::ensure!(profile.add["backend_id"] == "initialized-backend");
-    anyhow::ensure!(profile.add["model_name"] == "real-model");
-    anyhow::ensure!(profile.add["max_output_tokens"] == 8192);
-    anyhow::ensure!(profile.add["reasoning_effort"] == "low");
+        .ok_or("missing profile plan")?;
+    assert!(execution.add["node_did"] == profile.add["node_did"]);
+    assert!(execution.add["execution_id"] == profile.add["execution_id"]);
+    assert!(execution.add["max_turns"] == 64);
+    assert!(profile.add["profile_id"] == "initialized-profile");
+    assert!(profile.add["backend_id"] == "initialized-backend");
+    assert!(profile.add["model_name"] == "real-model");
+    assert!(profile.add["max_output_tokens"] == 8192);
+    assert!(profile.add["reasoning_effort"] == "low");
     Ok(())
 }
 
@@ -190,16 +193,22 @@ fn run_cli_json_with_env(home_dir: &Path, args: &[&str], envs: &[(&str, &str)]) 
         .current_dir(home_dir)
         .args(args)
         .output()
-        .with_context(|| format!("running gents {}", args.join(" ")))?;
-    anyhow::ensure!(
+        .map_err(|error| format!("running gents {}: {}", args.join(" "), ErrorChain(&error)))?;
+    assert!(
         output.status.success(),
         "gents {} failed\nstdout:\n{}\nstderr:\n{}",
         args.join(" "),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("parsing JSON from gents {}", args.join(" ")))
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        format!(
+            "parsing JSON from gents {}: {}",
+            args.join(" "),
+            ErrorChain(&error)
+        )
+        .into()
+    })
 }
 
 async fn wait_for_all_research_agents_runnable(
@@ -252,9 +261,10 @@ async fn wait_for_all_research_agents_runnable(
             return Ok(());
         }
         if Instant::now() >= deadline {
-            anyhow::bail!(
+            return Err(format!(
                 "runtime never made the default plus four research agents runnable: {response}"
-            );
+            )
+            .into());
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -288,20 +298,20 @@ async fn wait_for_runtime_mcp_health(
             .pointer("/data/ToolServiceHealthState/0")
             .filter(|row| row.get("status").and_then(Value::as_str) == Some("healthy"))
         {
-            anyhow::ensure!(
+            assert!(
                 row.get("endpoint")
                     .and_then(Value::as_str)
                     .is_some_and(|endpoint| endpoint == "http://127.0.0.1:19213/mcp"),
                 "runtime resolved the wrong MCP endpoint: {row}"
             );
-            anyhow::ensure!(
+            assert!(
                 row.get("tool_count").and_then(Value::as_i64) == Some(2),
                 "research gateway must expose exactly collect + stored-find, got: {row}"
             );
             return Ok(());
         }
         if Instant::now() >= deadline {
-            anyhow::bail!("runtime never marked {SERVICE_ID} healthy: {response}");
+            return Err(format!("runtime never marked {SERVICE_ID} healthy: {response}").into());
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -319,7 +329,7 @@ fn result_documents<'a>(result: &'a Value, name: &str) -> Result<&'a [Value]> {
         .and_then(|entry| entry.get("documents"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .with_context(|| format!("graph result is missing {name:?} documents: {result}"))
+        .ok_or_else(|| format!("graph result is missing {name:?} documents: {result}").into())
 }
 
 fn usage_value(watch: &Value, field: &str) -> i64 {
@@ -349,33 +359,46 @@ fn ledger_rows<'a>(ledger: &'a Value, collection: &str) -> Result<&'a [Value]> {
         .pointer(&format!("/data/{collection}"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
-        .with_context(|| format!("research ledger is missing {collection}: {ledger}"))
+        .ok_or_else(|| format!("research ledger is missing {collection}: {ledger}").into())
 }
 
 fn string_count(row: &Value, field: &str) -> Result<usize> {
-    string_field(row, field)?
-        .parse::<usize>()
-        .with_context(|| format!("ledger row has invalid count {field}: {row}"))
+    string_field(row, field)?.parse::<usize>().map_err(|error| {
+        format!(
+            "ledger row has invalid count {field}: {row}: {}",
+            ErrorChain(&error)
+        )
+        .into()
+    })
 }
 
 fn string_number(row: &Value, field: &str) -> Result<f64> {
-    string_field(row, field)?
-        .parse::<f64>()
-        .with_context(|| format!("ledger row has invalid number {field}: {row}"))
+    string_field(row, field)?.parse::<f64>().map_err(|error| {
+        format!(
+            "ledger row has invalid number {field}: {row}: {}",
+            ErrorChain(&error)
+        )
+        .into()
+    })
 }
 
 fn string_json_array(row: &Value, field: &str) -> Result<Vec<Value>> {
     serde_json::from_str::<Value>(string_field(row, field)?)
-        .with_context(|| format!("ledger row has invalid JSON {field}: {row}"))?
+        .map_err(|error| {
+            format!(
+                "ledger row has invalid JSON {field}: {row}: {}",
+                ErrorChain(&error)
+            )
+        })?
         .as_array()
         .cloned()
-        .with_context(|| format!("ledger row field {field} is not a JSON array: {row}"))
+        .ok_or_else(|| format!("ledger row field {field} is not a JSON array: {row}").into())
 }
 
 fn string_field<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
     row.get(field)
         .and_then(Value::as_str)
-        .with_context(|| format!("ledger row has no string {field}: {row}"))
+        .ok_or_else(|| format!("ledger row has no string {field}: {row}").into())
 }
 
 fn markdown_http_link_targets(markdown: &str) -> BTreeSet<&str> {
@@ -439,8 +462,8 @@ fn verify_exact_research_tool_surfaces(explanation: &Value) -> Result<()> {
     let measured = explanation
         .pointer("/runtime_availability/measured_available_mcp_service_ids")
         .and_then(Value::as_array)
-        .context("tool explanation is missing measured MCP services")?;
-    anyhow::ensure!(
+        .ok_or("tool explanation is missing measured MCP services")?;
+    assert!(
         measured.len() == 1 && measured[0].as_str() == Some(SERVICE_ID),
         "research gateway is not the sole measured MCP service: {explanation}"
     );
@@ -453,36 +476,50 @@ fn verify_exact_research_tool_surfaces(explanation: &Value) -> Result<()> {
                     agent.get("display_name").and_then(Value::as_str) == Some(display_name)
                 })
             })
-            .with_context(|| format!("tool explanation is missing {display_name}"))?;
-        anyhow::ensure!(
+            .map_err(|error| {
+                format!(
+                    "tool explanation is missing {display_name}: {}",
+                    ErrorChain(&error)
+                )
+            })?;
+        assert!(
             agent.get("tools_source").and_then(Value::as_str) == Some("document"),
             "{display_name} is not bound to its authored Tools document: {agent}"
         );
         let effective_mcp = agent
             .pointer("/surface/policy/effective/meta_mcp")
             .and_then(Value::as_array)
-            .context("research agent has no effective MCP policy trace")?
+            .ok_or("research agent has no effective MCP policy trace")?
             .iter()
-            .map(|value| value.as_str().context("invalid effective MCP policy trace"))
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| "invalid effective MCP policy trace".into())
+            })
             .collect::<Result<BTreeSet<_>>>()?;
         let expected_mcp = if expected_tools.contains(&"call_tool") {
             BTreeSet::from(["enabled:true", "services:only"])
         } else {
             BTreeSet::from(["enabled:false", "services:none"])
         };
-        anyhow::ensure!(
+        assert!(
             effective_mcp == expected_mcp,
             "{display_name} has an unexpected effective MCP scope: {agent}"
         );
         let actual = agent
             .pointer("/surface/tool_names")
             .and_then(Value::as_array)
-            .with_context(|| format!("{display_name} has no explained tool surface"))?
+            .map_err(|error| {
+                format!(
+                    "{display_name} has no explained tool surface: {}",
+                    ErrorChain(&error)
+                )
+            })?
             .iter()
             .filter_map(Value::as_str)
             .collect::<BTreeSet<_>>();
         let expected = expected_tools.iter().copied().collect::<BTreeSet<_>>();
-        anyhow::ensure!(
+        assert!(
             actual == expected,
             "{display_name} differs from its exact stage surface; expected {expected:?}, got {actual:?}"
         );
@@ -519,14 +556,14 @@ fn exact_research_surface_rejects_wider_mcp_policy_and_extra_tools() -> Result<(
     verify_exact_research_tool_surfaces(&explanation)?;
     explanation["agents"][0]["surface"]["policy"]["effective"]["meta_mcp"] =
         serde_json::json!(["enabled:true", "services:all"]);
-    anyhow::ensure!(verify_exact_research_tool_surfaces(&explanation).is_err());
+    assert!(verify_exact_research_tool_surfaces(&explanation).is_err());
     explanation["agents"][0]["surface"]["policy"]["effective"]["meta_mcp"] =
         serde_json::json!(["enabled:true", "services:only"]);
     explanation["agents"][0]["surface"]["tool_names"]
         .as_array_mut()
-        .context("synthetic tool surface is not an array")?
+        .ok_or("synthetic tool surface is not an array")?
         .push(Value::String("bash".to_owned()));
-    anyhow::ensure!(verify_exact_research_tool_surfaces(&explanation).is_err());
+    assert!(verify_exact_research_tool_surfaces(&explanation).is_err());
     Ok(())
 }
 
@@ -544,7 +581,7 @@ async fn wait_for_exact_research_tool_surfaces(
                 "tools",
                 "explain",
                 "--home",
-                home.to_str().context("live research home is not UTF-8")?,
+                home.to_str().ok_or("live research home is not UTF-8")?,
                 "--graphql",
                 graphql,
                 "--node-did",
@@ -558,9 +595,10 @@ async fn wait_for_exact_research_tool_surfaces(
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             Err(error) => {
-                return Err(error).context(format!(
-                    "runtime did not project exact research tool surfaces before timeout: {explanation}"
-                ));
+                return Err(format!(
+                    "runtime did not project exact research tool surfaces before timeout: {explanation}: {}",
+                    ErrorChain(&*error)
+                ).into());
             }
         }
     }
@@ -581,8 +619,8 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
 
 async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let endpoint = std::env::var("GENTS_WEB_RESEARCH_MCP_ENDPOINT")
-        .context("GENTS_WEB_RESEARCH_MCP_ENDPOINT must point at the real Docker fixture")?;
-    anyhow::ensure!(
+        .ok_or("GENTS_WEB_RESEARCH_MCP_ENDPOINT must point at the real Docker fixture")?;
+    assert!(
         endpoint == "http://127.0.0.1:19213/mcp",
         "live acceptance requires the real Docker fixture endpoint, got {endpoint:?}"
     );
@@ -591,12 +629,12 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     fs::create_dir_all(&home_dir)?;
     let home_arg = home_dir
         .to_str()
-        .context("live web research home path is not UTF-8")?;
+        .ok_or("live web research home path is not UTF-8")?;
 
     let model_endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .context("GENTS_CLI_E2E_MODEL_ENDPOINT must identify a real model endpoint")?;
+        .ok_or("GENTS_CLI_E2E_MODEL_ENDPOINT must identify a real model endpoint")?;
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .context("GENTS_CLI_E2E_MODEL_NAME must identify a real model")?;
+        .ok_or("GENTS_CLI_E2E_MODEL_NAME must identify a real model")?;
     let mut init_args = vec![
         "--home".to_string(),
         home_arg.to_string(),
@@ -621,7 +659,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let profile_id = init
         .get("inference_profile_id")
         .and_then(Value::as_str)
-        .context("init receipt is missing inference_profile_id")?;
+        .ok_or("init receipt is missing inference_profile_id")?;
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
@@ -633,7 +671,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
         artifacts.path(),
     )?;
     artifacts.attach_server(serve);
-    anyhow::ensure!(
+    assert!(
         readiness.get("status").and_then(Value::as_str) == Some("serving"),
         "Gents server did not become ready: {readiness}"
     );
@@ -653,7 +691,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
             SERVICE_ID,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         probe
             .pointer("/items/0/health_state")
             .and_then(Value::as_str)
@@ -695,7 +733,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
             ("GENTS_WEB_RESEARCH_ENDPOINT", model_endpoint.as_str()),
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         install.pointer("/install/revision_digest").is_some(),
         "web research graph installation failed: {install}"
     );
@@ -729,7 +767,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let run_id = run
         .get("run_id")
         .and_then(Value::as_str)
-        .context("graph run receipt is missing run_id")?
+        .ok_or("graph run receipt is missing run_id")?
         .to_string();
 
     let watch_text = run_cli_text(
@@ -748,7 +786,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
             "2000",
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         watch_text.contains("succeeded"),
         "live graph did not report success:\n{watch_text}"
     );
@@ -768,7 +806,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
             "json",
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         watch.pointer("/run/status").and_then(Value::as_str) == Some("succeeded"),
         "live graph watch was not terminal-successful: {watch}"
     );
@@ -776,8 +814,8 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let inference_calls = watch
         .pointer("/activity/inference_calls")
         .and_then(Value::as_array)
-        .context("watch output is missing inference calls")?;
-    anyhow::ensure!(
+        .ok_or("watch output is missing inference calls")?;
+    assert!(
         inference_calls.len() >= 10,
         "deep research used too few real model calls ({}): {watch}",
         inference_calls.len()
@@ -785,7 +823,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let total_tokens = usage_value(&watch, "reported_input_tokens")
         + usage_value(&watch, "reported_output_tokens")
         + usage_value(&watch, "estimated_input_tokens");
-    anyhow::ensure!(
+    assert!(
         total_tokens >= 20_000,
         "deep research did not clear the 20k real/estimated token acceptance floor: {watch}"
     );
@@ -793,13 +831,13 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let tool_calls = watch
         .pointer("/activity/tool_calls")
         .and_then(Value::as_array)
-        .context("watch output is missing tool calls")?;
+        .ok_or("watch output is missing tool calls")?;
     let gateway_calls = tool_calls
         .iter()
         .filter(|call| call.get("selected_service_id").and_then(Value::as_str) == Some(SERVICE_ID))
         .collect::<Vec<_>>();
     for call in &gateway_calls {
-        anyhow::ensure!(
+        assert!(
             matches!(
                 call.get("selected_tool_name").and_then(Value::as_str),
                 Some("web_collect_evidence" | "web_find_in_fetch")
@@ -825,7 +863,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
             })
             .count()
     };
-    anyhow::ensure!(
+    assert!(
         gateway_calls
             .iter()
             .filter(|call| {
@@ -841,21 +879,31 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
         .get("http://127.0.0.1:19213/metrics")
         .send()
         .await
-        .context("GET real web research gateway metrics")?
+        .map_err(|error| {
+            format!(
+                "GET real web research gateway metrics: {}",
+                ErrorChain(&error)
+            )
+        })?
         .error_for_status()
-        .context("real web research gateway metrics status")?
+        .ok_or("real web research gateway metrics status")?
         .text()
         .await
-        .context("read real web research gateway metrics")?;
-    anyhow::ensure!(
+        .map_err(|error| {
+            format!(
+                "read real web research gateway metrics: {}",
+                ErrorChain(&error)
+            )
+        })?;
+    assert!(
         gateway_tool_metric(&gateway_metrics, "web_search", "ok") >= 9,
         "bounded collections did not execute at least nine real SearXNG searches: {gateway_metrics}"
     );
-    anyhow::ensure!(
+    assert!(
         gateway_tool_metric(&gateway_metrics, "web_scrape_url", "ok") >= 8,
         "bounded collections did not execute at least eight real Firecrawl extractions: {gateway_metrics}"
     );
-    anyhow::ensure!(
+    assert!(
         gateway_tool_metric(&gateway_metrics, "web_verify_quote", "ok") >= 3,
         "bounded collections did not verify at least three exact stored excerpts: {gateway_metrics}"
     );
@@ -876,23 +924,23 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
             "json",
         ],
     )?;
-    anyhow::ensure!(result.get("status").and_then(Value::as_str) == Some("succeeded"));
-    anyhow::ensure!(result_documents(&result, "plan")?.len() == 1);
-    anyhow::ensure!(
+    assert!(result.get("status").and_then(Value::as_str) == Some("succeeded"));
+    assert!(result_documents(&result, "plan")?.len() == 1);
+    assert!(
         result_documents(&result, "sources")?.len() >= 8,
         "too few persisted fetched sources: {result}"
     );
     let claim_results = result_documents(&result, "claims")?;
-    anyhow::ensure!(
+    assert!(
         claim_results.len() >= 6,
         "too few persisted evidence claims: {result}"
     );
     let evidence_results = result_documents(&result, "evidence")?;
-    anyhow::ensure!(
+    assert!(
         evidence_results.len() >= claim_results.len(),
         "every claim needs at least one typed evidence link: {result}"
     );
-    anyhow::ensure!(
+    assert!(
         result_documents(&result, "verdicts")?.len() >= 6,
         "too few persisted adjudicated verdicts: {result}"
     );
@@ -916,7 +964,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     .await?;
 
     let plans = ledger_rows(&ledger, "WebResearchPlan")?;
-    anyhow::ensure!(
+    assert!(
         plans.len() == 1
             && string_field(&plans[0], "question")? == question
             && string_count(&plans[0], "assignment_count")? == 3,
@@ -927,7 +975,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
         .iter()
         .map(|row| string_field(row, "assignment_id"))
         .collect::<Result<BTreeSet<_>>>()?;
-    anyhow::ensure!(
+    assert!(
         assignments.len() == 3
             && assignment_ids.len() == 3
             && assignments
@@ -953,41 +1001,41 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     for source in sources {
         let source_id = string_field(source, "source_id")?;
         let assignment_id = string_field(source, "assignment_id")?;
-        anyhow::ensure!(
+        assert!(
             assignment_ids.contains(assignment_id),
             "orphan source: {source}"
         );
         for field in ["url", "fetch_id", "content_hash"] {
-            anyhow::ensure!(
+            assert!(
                 !string_field(source, field)?.trim().is_empty(),
                 "source lacks required provenance: {source}"
             );
         }
         for field in ["matched_query", "extraction_method"] {
-            anyhow::ensure!(
+            assert!(
                 !string_field(source, field)?.trim().is_empty(),
                 "source lacks retrieval-quality handoff field {field}: {source}"
             );
         }
-        anyhow::ensure!(
+        assert!(
             !string_json_array(source, "retrieval_queries")?.is_empty()
                 && !string_json_array(source, "search_engines")?.is_empty(),
             "source retrieval query and engine arrays must be non-empty: {source}"
         );
-        anyhow::ensure!(
+        assert!(
             string_number(source, "candidate_relevance_score")? >= 24.0
                 && string_number(source, "content_relevance_score")? >= 28.0,
             "source did not preserve the gateway relevance thresholds: {source}"
         );
-        anyhow::ensure!(
+        assert!(
             string_field(source, "content_integrity_verified")? == "true",
             "source was persisted without gateway content integrity: {source}"
         );
-        anyhow::ensure!(
+        assert!(
             matches!(string_field(source, "quote_verified")?, "true" | "false"),
             "source quote verification must be an explicit boolean string: {source}"
         );
-        anyhow::ensure!(
+        assert!(
             sources_by_id.insert(source_id, source).is_none(),
             "duplicate source ID: {source_id}"
         );
@@ -1000,15 +1048,15 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     for claim in claims {
         let claim_id = string_field(claim, "claim_id")?;
         let assignment_id = string_field(claim, "assignment_id")?;
-        anyhow::ensure!(
+        assert!(
             assignment_ids.contains(assignment_id),
             "orphan claim: {claim}"
         );
-        anyhow::ensure!(
+        assert!(
             !string_field(claim, "statement")?.trim().is_empty(),
             "claim has no statement: {claim}"
         );
-        anyhow::ensure!(
+        assert!(
             claims_by_id.insert(claim_id, claim).is_none(),
             "duplicate claim ID: {claim_id}"
         );
@@ -1024,32 +1072,38 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
         let assignment_id = string_field(link, "assignment_id")?;
         let claim_id = string_field(link, "claim_id")?;
         let source_id = string_field(link, "source_id")?;
-        let claim = claims_by_id
-            .get(claim_id)
-            .with_context(|| format!("evidence links an absent claim: {link}"))?;
-        let source = sources_by_id
-            .get(source_id)
-            .with_context(|| format!("evidence links an absent source: {link}"))?;
-        anyhow::ensure!(
+        let claim = claims_by_id.get(claim_id).map_err(|error| {
+            format!(
+                "evidence links an absent claim: {link}: {}",
+                ErrorChain(&error)
+            )
+        })?;
+        let source = sources_by_id.get(source_id).map_err(|error| {
+            format!(
+                "evidence links an absent source: {link}: {}",
+                ErrorChain(&error)
+            )
+        })?;
+        assert!(
             string_field(claim, "assignment_id")? == assignment_id
                 && string_field(source, "assignment_id")? == assignment_id,
             "cross-assignment evidence link: {link}"
         );
-        anyhow::ensure!(
+        assert!(
             matches!(
                 string_field(link, "relationship")?,
                 "supports" | "contradicts" | "context"
             ),
             "evidence relationship is outside the contract: {link}"
         );
-        anyhow::ensure!(
+        assert!(
             evidence_ids.insert(evidence_id),
             "duplicate evidence ID: {evidence_id}"
         );
         *evidence_counts.entry(assignment_id).or_default() += 1;
         *links_per_claim.entry(claim_id).or_default() += 1;
     }
-    anyhow::ensure!(
+    assert!(
         claims_by_id.keys().all(|claim_id| links_per_claim
             .get(claim_id)
             .copied()
@@ -1057,7 +1111,7 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
             >= 1),
         "at least one claim has no typed evidence link: {ledger}"
     );
-    anyhow::ensure!(
+    assert!(
         assignment_ids.iter().all(|assignment_id| {
             source_counts.get(assignment_id).copied().unwrap_or_default() >= 2
                 && (6..=8).contains(
@@ -1083,17 +1137,17 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
         .iter()
         .map(|row| string_field(row, "assignment_id"))
         .collect::<Result<BTreeSet<_>>>()?;
-    anyhow::ensure!(
+    assert!(
         investigations.len() == 3 && investigation_ids == assignment_ids,
         "investigation closure membership does not match assignments: {ledger}"
     );
     for closure in investigations {
-        anyhow::ensure!(
+        assert!(
             string_field(closure, "expected_total")? == "3"
                 && matches!(string_field(closure, "status")?, "complete" | "partial"),
             "investigation closure metadata is inconsistent: {closure}"
         );
-        anyhow::ensure!(
+        assert!(
             string_count(closure, "requested_source_count")? == 6
                 && string_count(closure, "candidate_count")? >= 2
                 && string_count(closure, "scrape_attempt_count")? <= 12
@@ -1112,10 +1166,13 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let mut verdict_claim_ids = BTreeSet::new();
     for verdict in verdicts {
         let claim_id = string_field(verdict, "claim_id")?;
-        let claim = claims_by_id
-            .get(claim_id)
-            .with_context(|| format!("verdict refers to absent claim: {verdict}"))?;
-        anyhow::ensure!(
+        let claim = claims_by_id.get(claim_id).map_err(|error| {
+            format!(
+                "verdict refers to absent claim: {verdict}: {}",
+                ErrorChain(&error)
+            )
+        })?;
+        assert!(
             string_field(verdict, "statement")? == string_field(claim, "statement")?,
             "verdict did not carry the exact claim statement: {verdict}"
         );
@@ -1125,44 +1182,49 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
             "evidence_summary",
             "quote_verification",
         ] {
-            anyhow::ensure!(
+            assert!(
                 !string_field(verdict, field)?.trim().is_empty(),
                 "verdict has an empty {field}: {verdict}"
             );
         }
         match string_field(verdict, "verdict")? {
             "supported" | "disputed" | "insufficient" => {}
-            other => anyhow::bail!("invalid verdict {other:?}: {verdict}"),
+            other => return Err(format!("invalid verdict {other:?}: {verdict}").into()),
         }
-        anyhow::ensure!(
+        assert!(
             verdict_claim_ids.insert(claim_id),
             "duplicate verdict: {verdict}"
         );
     }
-    anyhow::ensure!(
+    assert!(
         verdict_claim_ids == claims_by_id.keys().copied().collect(),
         "adjudication did not produce exactly one verdict per claim: {ledger}"
     );
     let drafts = ledger_rows(&ledger, "WebResearchDraft")?;
-    anyhow::ensure!(
+    assert!(
         drafts.len() == 1,
         "expected one adjudicated draft: {ledger}"
     );
 
     let reports = result_documents(&result, "report")?;
-    anyhow::ensure!(reports.len() == 1, "expected exactly one report: {result}");
+    assert!(reports.len() == 1, "expected exactly one report: {result}");
     let report = &reports[0];
     let report_markdown = string_field(report, "report_markdown")?;
-    anyhow::ensure!(
+    assert!(
         report_markdown.len() >= 1_500,
         "final report is not substantive: {report}"
     );
     let report_source_ledger: Value = serde_json::from_str(string_field(report, "sources_json")?)
-        .context("final report sources_json is not valid JSON")?;
+        .map_err(|error| {
+        format!(
+            "final report sources_json is not valid JSON: {}",
+            ErrorChain(&error)
+        )
+    })?;
     let report_sources = report_source_ledger
         .as_array()
-        .context("final report sources_json must be a JSON array")?;
-    anyhow::ensure!(
+        .ok_or("final report sources_json must be a JSON array")?;
+    assert!(
         report_sources.len() >= 3,
         "final report must cite at least three ledger-backed sources: {report}"
     );
@@ -1170,29 +1232,32 @@ async fn run_web_deep_research(artifacts: &mut FailureArtifacts) -> Result<()> {
     let mut cited_source_ids = BTreeSet::new();
     for cited in report_sources {
         let source_id = string_field(cited, "source_id")?;
-        let source = sources_by_id
-            .get(source_id)
-            .with_context(|| format!("report cites absent source {source_id:?}"))?;
+        let source = sources_by_id.get(source_id).map_err(|error| {
+            format!(
+                "report cites absent source {source_id:?}: {}",
+                ErrorChain(&error)
+            )
+        })?;
         for field in ["url", "fetch_id", "content_hash"] {
-            anyhow::ensure!(
+            assert!(
                 string_field(cited, field)? == string_field(source, field)?,
                 "report source provenance disagrees with persisted source: {cited}"
             );
         }
-        anyhow::ensure!(
+        assert!(
             cited_source_ids.insert(source_id),
             "report source ledger duplicates {source_id:?}"
         );
         cited_urls.insert(string_field(cited, "url")?);
     }
     let markdown_urls = markdown_http_link_targets(report_markdown);
-    anyhow::ensure!(
+    assert!(
         markdown_urls.len() >= 3 && markdown_urls.is_subset(&cited_urls),
         "Markdown contains citations absent from the validated source ledger; markdown={markdown_urls:?}, ledger={cited_urls:?}"
     );
 
     let (_stdout, stderr) = artifacts.captured_output()?;
-    anyhow::ensure!(
+    assert!(
         !stderr.contains("mock"),
         "live runtime unexpectedly referenced a mock service:\n{stderr}"
     );

@@ -6,6 +6,19 @@ use gents::{config_client::config_projection, Collection};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConfigBundleError {
+    #[error(transparent)]
+    DesiredState(#[from] desired_state::convert::DesiredStateError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("desired-state apply missing {collection_name} documents for ids: {ids}")]
+    MissingDocuments {
+        collection_name: String,
+        ids: String,
+    },
+}
+
 pub(crate) async fn build_config_export_bundle(
     access: &ConfigAccess,
     node_did: &str,
@@ -108,10 +121,13 @@ async fn read_owned_config_bundle(
 pub(crate) fn live_manifest_from_bundle(
     desired: &desired_state::DesiredStateManifest,
     live: &Option<ConfigExportBundle>,
-) -> Result<(
-    Option<desired_state::DesiredNode>,
-    desired_state::DesiredStateManifest,
-)> {
+) -> Result<
+    (
+        Option<desired_state::DesiredNode>,
+        desired_state::DesiredStateManifest,
+    ),
+    ConfigBundleError,
+> {
     if let Some(bundle) = live {
         let manifest = desired_state::manifest_from_export_bundle(bundle)?;
         Ok((Some(manifest.node.clone()), manifest))
@@ -134,7 +150,7 @@ pub(crate) fn select_apply_collection_docs(
     unique_field: &str,
     collection_name: &str,
     diff: &desired_state::DesiredStateCollectionDiff,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<Value>, ConfigBundleError> {
     let requested_ids = diff
         .create
         .iter()
@@ -166,10 +182,10 @@ pub(crate) fn select_apply_collection_docs(
         .cloned()
         .collect::<Vec<_>>();
     if !missing_ids.is_empty() {
-        anyhow::bail!(
-            "desired-state apply missing {collection_name} documents for ids: {}",
-            missing_ids.join(", ")
-        );
+        return Err(ConfigBundleError::MissingDocuments {
+            collection_name: collection_name.to_owned(),
+            ids: missing_ids.join(", "),
+        });
     }
 
     Ok(selected)

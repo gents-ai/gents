@@ -1,7 +1,7 @@
 use gents::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
@@ -217,7 +217,22 @@ fn compaction_query(node_did: &str, session_ids: &[String]) -> String {
     )
 }
 
-fn decode<T>(response: Value, label: &str) -> Result<T>
+#[derive(Debug, thiserror::Error)]
+enum SelfViewError {
+    #[error("{label} query response missing object data: {response}")]
+    MissingData {
+        label: &'static str,
+        response: Value,
+    },
+    #[error("decoding {label} query response")]
+    Decode {
+        label: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+fn decode<T>(response: Value, label: &'static str) -> Result<T, SelfViewError>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -225,8 +240,11 @@ where
         .get("data")
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| format!("{label} query response missing object data: {response}"))?;
-    serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
+        .ok_or_else(|| SelfViewError::MissingData {
+            label,
+            response: response.clone(),
+        })?;
+    serde_json::from_value(data).map_err(|source| SelfViewError::Decode { label, source })
 }
 
 fn build_agents(

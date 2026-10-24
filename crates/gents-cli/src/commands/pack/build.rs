@@ -29,11 +29,11 @@ impl gents::pack::authoring::PluginCompiler for CliPluginCompiler {
 pub(crate) fn dispatch(args: PackBuildArgs) -> Result<()> {
     if args.all {
         let reports = build_all(Path::new("packs"))?;
-        return crate::print_json(&json!({ "packs": reports }));
+        return Ok(crate::print_json(&json!({ "packs": reports }))?);
     }
     let dir = args.dir.unwrap_or_else(|| Path::new(".").to_path_buf());
     let report = build_pack(&dir, args.out.as_deref())?;
-    crate::print_json(&serde_json::to_value(report)?)
+    Ok(crate::print_json(&serde_json::to_value(report)?)?)
 }
 
 pub(crate) fn build_all(root: &Path) -> Result<Vec<BuildReport>> {

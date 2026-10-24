@@ -2,7 +2,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
 use gents::identity::NodeIdentity;
 use gents_desktop_core::client::{
     initialize_local_standard_peer, ClientCore, ClientCoreOptions, DesktopPaths,
@@ -15,7 +14,7 @@ use tokio::time::{sleep, Instant};
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
+async fn submit_request_does_not_create_runtime_projections() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
 
@@ -42,7 +41,7 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
         "projection query failed: {:?}",
         response.errors
     );
-    let data = response.data.context("projection query data")?;
+    let data = response.data.ok_or("projection query data")?;
     {
         let collection = "AgentSession";
         assert!(
@@ -58,7 +57,7 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()> {
+async fn submit_request_writes_request_as_the_only_durable_input() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
 
@@ -135,7 +134,7 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn resend_preserves_request_lineage_without_caller_inference_overrides() -> Result<()> {
+async fn resend_preserves_request_lineage_without_caller_inference_overrides() -> TestResult<()> {
     let tempdir = tempfile::tempdir()?;
     let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
 
@@ -210,7 +209,9 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
     Ok(())
 }
 
-async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientCore, String)> {
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+async fn start_core_with_local_route(root: &Path) -> TestResult<(ClientCore, ClientCore, String)> {
     let node_home = root.join("node-home");
     std::fs::create_dir_all(&node_home)?;
     let key_path = node_home.join("node.key");
@@ -239,7 +240,7 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
         &runtime_addr,
         &node_did,
         "http://127.0.0.1:1/api/v0/graphql",
-        node_home.to_str().context("node home path is not UTF-8")?,
+        node_home.to_str().ok_or("node home path is not UTF-8")?,
     )
     .await?;
     let client = ClientCore::start_with_paths_and_options(
@@ -251,13 +252,13 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
     Ok((runtime, client, node_did))
 }
 
-async fn query_single<T>(node: &defra_node::EmbeddedNode, query: &str, root: &str) -> Result<T>
+async fn query_single<T>(node: &defra_node::EmbeddedNode, query: &str, root: &str) -> TestResult<T>
 where
     T: for<'de> Deserialize<'de>,
 {
     let response = node.execute(query).await;
     if response.has_errors() {
-        bail!(
+        return Err(format!(
             "query {root} failed: {}",
             response
                 .errors
@@ -265,7 +266,8 @@ where
                 .map(|error| error.message.as_str())
                 .collect::<Vec<_>>()
                 .join("; ")
-        );
+        )
+        .into());
     }
 
     let row = response
@@ -275,11 +277,11 @@ where
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .with_context(|| format!("missing row for {root}"))?;
+        .ok_or_else(|| format!("missing row for {root}"))?;
     Ok(serde_json::from_value(row)?)
 }
 
-async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> Result<String> {
+async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> TestResult<String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let addrs = core.p2p().listen_addresses().await?;
@@ -290,7 +292,7 @@ async fn wait_for_connectable_iroh_addr(core: &ClientCore) -> Result<String> {
             return Ok(addr);
         }
         if Instant::now() >= deadline {
-            bail!("timed out waiting for desktop listen address");
+            return Err("timed out waiting for desktop listen address".into());
         }
         sleep(Duration::from_millis(100)).await;
     }

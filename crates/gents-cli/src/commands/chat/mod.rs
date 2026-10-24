@@ -3,9 +3,9 @@ mod interactive;
 pub(crate) mod streaming;
 
 use gents::config_client::GraphqlEndpoint;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::cli::args::ChatArgs;
@@ -20,6 +20,48 @@ use crate::{
 pub(crate) use streaming::{load_existing_tool_call_keys, stream_turn_progress, ApprovalHandling};
 use streaming::{sanitize_summary_text, SUMMARY_ARGUMENT_MAX_CHARS};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ChatError {
+    #[error(
+        "node DID is required; run `gents init`, start `gents server`, then retry `gents chat`, or pass --node-did explicitly"
+    )]
+    NodeDidRequired,
+    #[error("interactive chat only supports --output text")]
+    InteractiveNeedsText,
+    #[error("--output-file {} requires a one-shot message via MESSAGE or --message-file", path.display())]
+    OutputFileNeedsOneShot { path: PathBuf },
+    #[error("provide either MESSAGE or --message-file, not both")]
+    MessageAndFile,
+    #[error("reading chat message from {}", path.display())]
+    ReadMessage {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating output directory {}", path.display())]
+    CreateOutputDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing text output file {}", path.display())]
+    WriteOutputFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("use /approve <request-id> once|file|folder|deny with the displayed request ID")]
+    ApprovalCommandShape,
+    #[error("approval action must be once, file, folder, or deny")]
+    ApprovalAction,
+    #[error("no displayed approval is pending; wait for its request ID")]
+    NoDisplayedApproval,
+    #[error("approval ID does not match the displayed request; use /approve {displayed} once|file|folder|deny")]
+    ApprovalIdMismatch { displayed: String },
+    #[error("approval {id} is no longer pending; wait for the current request ID")]
+    ApprovalNotPending { id: String },
+}
+
 pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let runtime_state = crate::read_runtime_state(&home_dir)?;
@@ -32,9 +74,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         .or_else(|| init_config.as_ref().map(|config| config.node_did.clone()))
     {
         Some(node_did) => node_did,
-        None => bail!(
-            "node DID is required; run `gents init`, start `gents server`, then retry `gents chat`, or pass --node-did explicitly"
-        ),
+        None => return Err(ChatError::NodeDidRequired.into()),
     };
     let session_id = args
         .session_id
@@ -95,13 +135,13 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     }
 
     if args.output_format != OutputFormat::Text {
-        anyhow::bail!("interactive chat only supports --output text");
+        return Err(ChatError::InteractiveNeedsText.into());
     }
     if let Some(path) = args.output_file.as_deref() {
-        anyhow::bail!(
-            "--output-file {} requires a one-shot message via MESSAGE or --message-file",
-            path.display()
-        );
+        return Err(ChatError::OutputFileNeedsOneShot {
+            path: path.to_owned(),
+        }
+        .into());
     }
 
     let prompt_label = chat_prompt_label(&args, runtime_state.as_ref());
@@ -272,7 +312,7 @@ async fn submit_chat_turn_json(
 
 fn resolve_chat_message(message: &[String], message_file: Option<&Path>) -> Result<Option<String>> {
     if !message.is_empty() && message_file.is_some() {
-        anyhow::bail!("provide either MESSAGE or --message-file, not both");
+        return Err(ChatError::MessageAndFile.into());
     }
     if !message.is_empty() {
         return Ok(Some(
@@ -280,8 +320,10 @@ fn resolve_chat_message(message: &[String], message_file: Option<&Path>) -> Resu
         ));
     }
     if let Some(path) = message_file {
-        let message = std::fs::read_to_string(path)
-            .with_context(|| format!("reading chat message from {}", path.display()))?;
+        let message = std::fs::read_to_string(path).map_err(|source| ChatError::ReadMessage {
+            path: path.to_owned(),
+            source,
+        })?;
         return Ok(Some(
             require_non_empty("message-file", &message)?.to_string(),
         ));
@@ -289,13 +331,17 @@ fn resolve_chat_message(message: &[String], message_file: Option<&Path>) -> Resu
     Ok(None)
 }
 
-fn write_text_output_file(path: &Path, content: &str) -> Result<()> {
+fn write_text_output_file(path: &Path, content: &str) -> Result<(), ChatError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating output directory {}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|source| ChatError::CreateOutputDir {
+            path: parent.to_owned(),
+            source,
+        })?;
     }
-    std::fs::write(path, content)
-        .with_context(|| format!("writing text output file {}", path.display()))?;
+    std::fs::write(path, content).map_err(|source| ChatError::WriteOutputFile {
+        path: path.to_owned(),
+        source,
+    })?;
     Ok(())
 }
 

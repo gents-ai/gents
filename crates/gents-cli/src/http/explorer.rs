@@ -56,11 +56,13 @@ fn serve_file(path: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
     use super::*;
     use std::net::SocketAddr;
     use tokio::net::TcpListener;
 
-    async fn spawn(router: Router) -> anyhow::Result<SocketAddr> {
+    async fn spawn(router: Router) -> TestResult<SocketAddr> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         tokio::spawn(async move {
@@ -78,7 +80,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explorer_without_trailing_slash_redirects() -> anyhow::Result<()> {
+    async fn explorer_without_trailing_slash_redirects() -> TestResult<()> {
         let addr = spawn(explorer_router()).await?;
         let response = client()
             .get(format!("http://{addr}/explorer"))
@@ -96,7 +98,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explorer_index_serves_html() -> anyhow::Result<()> {
+    async fn explorer_index_serves_html() -> TestResult<()> {
         let addr = spawn(explorer_router()).await?;
         let response = client()
             .get(format!("http://{addr}/explorer/"))
@@ -122,7 +124,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explorer_serves_hashed_assets_with_types_and_caching() -> anyhow::Result<()> {
+    async fn explorer_serves_hashed_assets_with_types_and_caching() -> TestResult<()> {
         let assets = super::EXPLORER_DIST
             .get_dir("assets")
             .expect("vendored dist has an assets directory");
@@ -162,7 +164,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explorer_serves_public_svg() -> anyhow::Result<()> {
+    async fn explorer_serves_public_svg() -> TestResult<()> {
         let addr = spawn(explorer_router()).await?;
         let response = client()
             .get(format!("http://{addr}/explorer/defradb-logo-white.svg"))
@@ -180,7 +182,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explorer_unknown_path_is_not_found() -> anyhow::Result<()> {
+    async fn explorer_unknown_path_is_not_found() -> TestResult<()> {
         let addr = spawn(explorer_router()).await?;
         let response = client()
             .get(format!("http://{addr}/explorer/no-such-file.js"))

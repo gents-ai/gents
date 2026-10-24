@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
+
 use gents::graphql::escape_graphql_string;
 use gents::Collection;
 use serde_json::{json, Value};
+
+use super::ConfigCommandError;
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{ConfigListArgs, ConfigShowArgs};
@@ -71,11 +74,11 @@ pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) 
         &format!("config {} list", spec.noun),
         &[OutputFormat::Table, OutputFormat::Json],
     )? {
-        OutputFormat::Json => print_json(&json!({
+        OutputFormat::Json => Ok(print_json(&json!({
             "collection": spec.collection.graphql_type(),
             "count": rows.len(),
             "items": rows,
-        })),
+        }))?),
         OutputFormat::Table => {
             print_list_table(spec, &rows);
             Ok(())
@@ -110,7 +113,7 @@ pub(super) async fn config_show(spec: ConfigDocumentSpec, args: ConfigShowArgs) 
         .output
         .ensure_supported(&format!("config {} show", spec.noun), &[OutputFormat::Json])?
     {
-        OutputFormat::Json => print_json(&row),
+        OutputFormat::Json => Ok(print_json(&row)?),
         _ => unreachable!("ensure_supported restricts config show output formats"),
     }
 }
@@ -164,22 +167,22 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
         })
         .await?;
     match output {
-        OutputFormat::Json => print_json(&json!({
+        OutputFormat::Json => Ok(print_json(&json!({
             "collection": spec.collection.graphql_type(),
             "id": id,
             "deleted": deleted,
-        })),
+        }))?),
         _ => unreachable!("ensure_supported restricts config rm output formats"),
     }
 }
 
 fn resolve_config_id(spec: ConfigDocumentSpec, args: &ConfigShowArgs) -> Result<String> {
-    resolve_dual_id(
+    Ok(resolve_dual_id(
         spec.noun,
         "--id",
         args.id.as_deref(),
         args.id_flag.as_deref(),
-    )
+    )?)
 }
 
 async fn live_manifest_for_delete(
@@ -200,7 +203,7 @@ async fn live_manifest_for_delete(
             == Some(id)),
         "target configuration is absent from the selected owner"
     );
-    desired_state::manifest_from_export_bundle(&bundle)
+    Ok(desired_state::manifest_from_export_bundle(&bundle)?)
 }
 
 pub(super) async fn query_collection(
@@ -275,10 +278,10 @@ fn remove_target(
     manifest: &mut desired_state::DesiredStateManifest,
     collection: Collection,
     id: &str,
-) -> Result<()> {
+) -> Result<(), ConfigCommandError> {
     let key = collection
         .dir_name()
-        .context("node deletion is not a config document removal")?;
+        .ok_or(ConfigCommandError::NodeRemovalNotDocument)?;
     let mut encoded = serde_json::to_value(&*manifest)?;
     if let Some(rows) = encoded.get_mut(key).and_then(Value::as_array_mut) {
         rows.retain(|row| row.get(collection.unique_field()).and_then(Value::as_str) != Some(id));

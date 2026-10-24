@@ -36,7 +36,7 @@ pub async fn request_status_enrollment(
     }
     let status = fetch_runtime_connection_payload(address)
         .await
-        .map_err(BridgeError::classify_transport_error)?;
+        .map_err(|error| BridgeError::classify_transport_error(&error))?;
     let server_label = status
         .get("node_name")
         .and_then(serde_json::Value::as_str)

@@ -1,7 +1,7 @@
 use gents::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents::tool_call_lifecycle::deadline_is_expired;
 use gents::{call_state_holds_backend_slot, UNKNOWN_PROBE_STATUS};
@@ -202,15 +202,25 @@ pub(crate) async fn load_fleet_slot_snapshot(
     Ok(build_fleet_slot_snapshot(generated_at, envelope))
 }
 
-fn decode_fleet_slot_query_response(response: Value) -> Result<FleetSlotQueryEnvelope> {
+#[derive(Debug, thiserror::Error)]
+enum FleetSlotError {
+    #[error("fleet slot snapshot query response missing object data: {response}")]
+    MissingData { response: Value },
+    #[error("decoding fleet slot snapshot query response")]
+    Decode(#[source] serde_json::Error),
+}
+
+fn decode_fleet_slot_query_response(
+    response: Value,
+) -> Result<FleetSlotQueryEnvelope, FleetSlotError> {
     let data = response
         .get("data")
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| {
-            format!("fleet slot snapshot query response missing object data: {response}")
+        .ok_or_else(|| FleetSlotError::MissingData {
+            response: response.clone(),
         })?;
-    serde_json::from_value(data).context("decoding fleet slot snapshot query response")
+    serde_json::from_value(data).map_err(FleetSlotError::Decode)
 }
 
 fn fleet_slot_snapshot_query() -> &'static str {

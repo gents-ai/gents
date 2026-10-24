@@ -1,4 +1,5 @@
-use anyhow::{bail, Context, Result};
+type TestError = Box<dyn std::error::Error + Send + Sync>;
+type Result<T = (), E = TestError> = std::result::Result<T, E>;
 use gents::NodeIdentity as _;
 use gents_protocol::request_admission::AgentRequestCreate;
 use serde::Deserialize;
@@ -66,13 +67,13 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
             .session_recovery_cases
             .iter()
             .find(|case| case.legal)
-            .context("legal retry witness")?;
+            .expect("legal retry witness");
         let pre = seed_session_recovery_pre_state(&core, recovery).await?;
         let captured = lean_contract_snapshot()
             .request_input_cases
             .iter()
             .find(|case| case["name"] == "capture-only-without-invented-prose")
-            .context("capture-only input witness")?;
+            .expect("capture-only input witness");
         let request_id = Uuid::new_v4().to_string();
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -93,7 +94,7 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
         ConfigAccess::write_local(
             &core.node_arc(),
             "test.capture_retry_parent",
-            &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+            &create.graphql_mutation()?,
         )
         .await?;
         force_request_state_for_test(
@@ -126,7 +127,7 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
                 .input,
             parent.input
         );
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), TestError>(())
     }
     .await;
     let shutdown = Arc::new(core).shutdown().await;
@@ -180,7 +181,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
         .and_then(|rows| rows.first())
         .and_then(|row| row.get("_docID"))
         .and_then(Value::as_str)
-        .context("mailbox item id")?;
+        .expect("mailbox item id");
 
     validate_mailbox_submission_cause(
         &node,
@@ -270,10 +271,12 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
 
             drive_session_recovery_case_with_core(&core, case)
                 .await
-                .with_context(|| format!("driving Lean SessionRecovery case {}", case.name))?;
+                .map_err(|error| {
+                    format!("driving Lean SessionRecovery case {}: {error:#}", case.name)
+                })?;
         }
 
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), TestError>(())
     }
     .await;
     let shutdown = Arc::new(core).shutdown().await;
@@ -355,7 +358,10 @@ async fn drive_session_recovery_case_with_core(
         Some(injection) => {
             retry_request_with_id_injection_for_test(core, &pre.parent, injection).await
         }
-        None => core.retry_request(&pre.parent).await,
+        None => core
+            .retry_request(&pre.parent)
+            .await
+            .map_err(TestError::from),
     };
 
     if case.legal {
@@ -436,7 +442,7 @@ async fn seed_session_recovery_pre_state(
         if failed_is_latest {
             failed_request_id.clone()
         } else {
-            existing_request_id.clone().with_context(|| {
+            existing_request_id.clone().ok_or_else(|| {
                 format!(
                     "Lean case {} expected an existing latest request",
                     case.name
@@ -547,7 +553,7 @@ async fn submit_recovery_seed_request(
     gents::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "test.seed_recovery_request",
-        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+        &create.graphql_mutation()?,
     )
     .await?;
     core.refresh_store().await?;
@@ -632,7 +638,7 @@ async fn delete_request_by_id_for_test(node: &EmbeddedNode, request_id: &str) ->
     );
     let resp = node.execute(&mutation).await;
     if resp.has_errors() {
-        bail!("delete request {request_id} failed: {:?}", resp.errors);
+        return Err(format!("delete request {request_id} failed: {:?}", resp.errors).into());
     }
     Ok(())
 }
@@ -861,7 +867,7 @@ fn injected_new_request_id(
     let new_request_id = if case.new_id == case.failed_id {
         pre.failed_request_id.clone()
     } else {
-        pre.existing_request_id.clone().with_context(|| {
+        pre.existing_request_id.clone().ok_or_else(|| {
             format!(
                 "Lean case {} needs an existing non-failed request id for new_id={}",
                 case.name, case.new_id
@@ -918,7 +924,7 @@ async fn request_from_store_for_test(
         }
     })
     .await
-    .with_context(|| format!("expected request {request_id} in desktop store"))?
+    .map_err(|error| format!("expected request {request_id} in desktop store: {error:#}"))?
 }
 
 async fn fetch_request_row_for_test(
@@ -1025,7 +1031,7 @@ where
 {
     let response = node.execute(query).await;
     if response.has_errors() {
-        bail!(
+        return Err(format!(
             "query {root} failed: {}",
             response
                 .errors
@@ -1033,7 +1039,8 @@ where
                 .map(|error| error.message.as_str())
                 .collect::<Vec<_>>()
                 .join("; ")
-        );
+        )
+        .into());
     }
 
     let row = response
@@ -1043,14 +1050,14 @@ where
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .with_context(|| format!("missing row for {root}"))?;
+        .ok_or_else(|| format!("missing row for {root}"))?;
     Ok(serde_json::from_value(row)?)
 }
 
 async fn query_row_count_for_test(node: &EmbeddedNode, query: &str, root: &str) -> Result<usize> {
     let response = node.execute(query).await;
     if response.has_errors() {
-        bail!(
+        return Err(format!(
             "query {root} count failed: {}",
             response
                 .errors
@@ -1058,7 +1065,8 @@ async fn query_row_count_for_test(node: &EmbeddedNode, query: &str, root: &str) 
                 .map(|error| error.message.as_str())
                 .collect::<Vec<_>>()
                 .join("; ")
-        );
+        )
+        .into());
     }
 
     Ok(response
@@ -1142,12 +1150,13 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         ))
         .await;
     if response.has_errors() {
-        bail!(
+        return Err(format!(
             "querying desktop requester routes failed: {:?}",
             response.errors
-        );
+        )
+        .into());
     }
-    let data = response.data.context("requester route query data")?;
+    let data = response.data.expect("requester route query data");
     {
         let collection = "AgentSession";
         assert!(
@@ -1166,7 +1175,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
             .get("AgentRequest")
             .and_then(serde_json::Value::as_array)
             .and_then(|rows| rows.first())
-            .context("missing AgentRequest row")?;
+            .expect("missing AgentRequest row");
         assert_eq!(
             row.get(field).and_then(serde_json::Value::as_str),
             Some(expected),
@@ -1177,7 +1186,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
         .get("AgentRequest")
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
-        .context("missing AgentRequest row")?;
+        .expect("missing AgentRequest row");
     assert_eq!(
         row.get("caused_by_trigger_kind")
             .and_then(serde_json::Value::as_str),
@@ -1238,7 +1247,7 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let data = response.data.context("goal-backed submission query data")?;
+    let data = response.data.expect("goal-backed submission query data");
     for collection in ["AgentRequest", "Goal", "GoalCreationClaim"] {
         assert_eq!(
             data[collection].as_array().map(Vec::len),
@@ -1279,6 +1288,7 @@ async fn force_request_state_for_test(
     gents::config_client::ConfigAccess::write_local(node, "force_request_state_for_test", &mutation)
         .await
         .map(|_| ())
+        .map_err(TestError::from)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1308,7 +1318,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         .iter()
         .find(|row| row.request_id == original.request_id)
         .cloned()
-        .context("expected submitted parent request in desktop store")?;
+        .expect("expected submitted parent request in desktop store");
 
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(
@@ -1402,7 +1412,7 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
             ConfigAccess::write_local(
                 &core.node_arc(),
                 "test.goal_retry_parent",
-                &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+                &create.graphql_mutation()?,
             )
             .await?;
             force_retry_parent_eligible_for_test(
@@ -1444,7 +1454,7 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
                 "the signed source is immutable"
             );
         }
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), TestError>(())
     }
     .await;
     let shutdown = Arc::new(core).shutdown().await;
@@ -1492,7 +1502,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
     gents::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "test.seed_typed_retry_parent",
-        &create.graphql_mutation().map_err(anyhow::Error::msg)?,
+        &create.graphql_mutation()?,
     )
     .await?;
     let original = SubmittedRequest {
@@ -1629,6 +1639,7 @@ async fn force_retry_parent_eligible_for_test(
     )
     .await
     .map(|_| ())
+    .map_err(TestError::from)
 }
 
 async fn seed_duplicate_request_id_for_test(
@@ -1665,6 +1676,7 @@ async fn seed_duplicate_request_id_for_test(
     )
     .await
     .map(|_| ())
+    .map_err(TestError::from)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1681,7 +1693,7 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
         .session_recovery_cases
         .iter()
         .find(|case| case.legal)
-        .context("legal retry witness")?;
+        .expect("legal retry witness");
     let pre = seed_session_recovery_pre_state(&core, case).await?;
     let node = escape_graphql_string(core.node_identity().did());
     let session = escape_graphql_string(&pre.session_id);

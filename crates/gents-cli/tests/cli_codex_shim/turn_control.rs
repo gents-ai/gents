@@ -1,5 +1,6 @@
 use super::*;
 use crate::support::mocks::fake_llm::{ChatAction, FakeLlm};
+use crate::support::TestResult;
 use std::sync::Arc;
 
 fn has_exact_user_text(request: &Value, text: &str) -> bool {
@@ -17,7 +18,7 @@ fn has_exact_user_text(request: &Value, text: &str) -> bool {
 async fn wait_for_main_provider_request(
     captures: impl Fn() -> Vec<Value>,
     prompt: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     tokio::time::timeout(Duration::from_secs(30), async {
         while !captures()
             .iter()
@@ -27,12 +28,12 @@ async fn wait_for_main_provider_request(
         }
     })
     .await
-    .context("initial main provider request was not held")
+    .map_err(|error| format!("initial main provider request was not held: {error:#}").into())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error:#}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -83,7 +84,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error:#}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
@@ -240,8 +241,8 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_interrupt_completes_with_running_background_tool() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error:#}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -292,7 +293,7 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error:#}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
@@ -333,7 +334,9 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
         read_background_command_started(&mut ws, &tool_call_key),
     )
     .await
-    .context("timed out waiting for shim to project running background tool")??;
+    .map_err(|error| {
+        format!("timed out waiting for shim to project running background tool: {error:#}")
+    })??;
     assert_eq!(started_process, tool_call_key);
 
     send_client_request(
@@ -352,7 +355,9 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
         read_interrupt_response_and_completed_turn(&mut ws, request_id(221)),
     )
     .await
-    .context("timed out waiting for interrupted turn with running background tool")??;
+    .map_err(|error| {
+        format!("timed out waiting for interrupted turn with running background tool: {error:#}")
+    })??;
     assert_eq!(interrupted_turn.status, codex::TurnStatus::Interrupted);
 
     wait_for_request_lifecycle_state(
@@ -387,14 +392,16 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
         read_typed_response(&mut ws, request_id(222)),
     )
     .await
-    .context("shim stopped answering after interrupting background-tool turn")??;
+    .map_err(|error| {
+        format!("shim stopped answering after interrupting background-tool turn: {error:#}")
+    })??;
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error:#}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -470,7 +477,7 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error:#}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
@@ -572,15 +579,15 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         escape_graphql_string(&node_did), escape_graphql_string(&thread_id), escape_graphql_string(&initial_request_id), escape_graphql_string(&steering_request_id))).await?;
     let rows = rows["data"]["AgentRequest"]
         .as_array()
-        .context("request rows")?;
+        .ok_or("request rows")?;
     let active = rows
         .iter()
         .find(|row| row["request_id"] == initial_request_id)
-        .context("original active request")?;
+        .ok_or("original active request")?;
     let consumed = rows
         .iter()
         .find(|row| row["request_id"] == steering_request_id)
-        .context("consumed steering request")?;
+        .ok_or("consumed steering request")?;
     assert_eq!(active["lifecycle_state"], "completed");
     assert_eq!(consumed["lifecycle_state"], "superseded");
     assert_eq!(consumed["failure_reason"], gents::lifecycle::FOLDED_REASON);
@@ -588,7 +595,7 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     let captures = graphql_query(&graphql, &format!(r#"{{ RenderedRequest(filter: {{ request_id: {{_in:["{}","{}"]}} }}) {{ request_id request_doc_id }} }}"#, escape_graphql_string(&initial_request_id), escape_graphql_string(&steering_request_id))).await?;
     let captures = captures["data"]["RenderedRequest"]
         .as_array()
-        .context("rendered requests")?;
+        .ok_or("rendered requests")?;
     assert!(captures.len() >= 2);
     assert!(
         captures
@@ -640,8 +647,8 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().map_err(|error| format!("creating tempdir: {error:#}"))?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -692,7 +699,7 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
                 .await
-                .context("connecting to codex-shim websocket")
+                .map_err(|error| format!("connecting to codex-shim websocket: {error:#}").into())
         })
         .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
@@ -757,7 +764,9 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
         read_typed_response(&mut ws, request_id(231)),
     )
     .await
-    .context("timed out waiting for the caused-thread interrupt response")??;
+    .map_err(|error| {
+        format!("timed out waiting for the caused-thread interrupt response: {error:#}")
+    })??;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
@@ -791,7 +800,7 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
             );
             break;
         }
-        anyhow::ensure!(
+        assert!(
             tokio::time::Instant::now() < deadline,
             "caused thread's own request was never interrupted: {rows:?}"
         );

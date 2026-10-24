@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
+use crate::support::TestResult;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::{routing::post, Json, Router};
@@ -13,7 +13,7 @@ pub struct SpeechService {
 }
 
 impl SpeechService {
-    pub async fn start() -> Result<Self> {
+    pub async fn start() -> TestResult<Self> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let port = listener.local_addr()?.port();
         let calls = Arc::new(Mutex::new(Vec::new()));

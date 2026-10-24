@@ -34,6 +34,129 @@ use gents_protocol::row::{
     ProjectedNodeReadinessSummary,
 };
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ServeError {
+    #[error("runtime readiness never reached an admissible durable generation: {observation}")]
+    ReadinessDeadline { observation: String },
+    #[error("--apply-root is not a directory: {}", root.display())]
+    ApplyRootNotDirectory { root: PathBuf },
+    #[error("applied pack has no default agent")]
+    AppliedPackNoDefaultAgent,
+    #[error("pack apply did not converge for {} (status={status})", root.display())]
+    PackNotConverged { root: PathBuf, status: String },
+    #[error("serializing pack apply report")]
+    SerializePackReport(#[source] serde_json::Error),
+    #[error("serializing durable node readiness")]
+    SerializeNodeReadiness(#[source] serde_json::Error),
+    #[error("read app-server token from {env_name}")]
+    ReadAppServerToken {
+        env_name: String,
+        #[source]
+        source: std::env::VarError,
+    },
+    #[error("app-server token in {env_name} is empty")]
+    AppServerTokenEmpty { env_name: String },
+    #[error("invalid --codex-shim-public-url {raw:?}")]
+    InvalidCodexShimPublicUrl {
+        raw: String,
+        #[source]
+        source: axum::http::uri::InvalidUri,
+    },
+    #[error("--codex-shim-public-url must use wss://")]
+    CodexShimPublicUrlScheme,
+    #[error("--codex-shim-public-url must include a host")]
+    CodexShimPublicUrlHost,
+    #[error("--codex-shim-public-url must not contain credentials")]
+    CodexShimPublicUrlCredentials,
+    #[error("--codex-shim-public-url must include an explicit port")]
+    CodexShimPublicUrlPort,
+    #[error("--codex-shim-public-url must point to the root path without a query")]
+    CodexShimPublicUrlPath,
+    #[error("--codex-shim-public-url requires --codex-shim-auth-token-env")]
+    CodexShimPublicUrlNeedsAuthToken,
+    #[error("embedded HTTP listener cannot bind to {addr}; if another Gents runtime is serving there, stop it or pass --http-port")]
+    EmbeddedHttpBind {
+        addr: SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("building embedded HTTP readiness client")]
+    BuildReadinessClient(#[source] reqwest::Error),
+    #[error("reading embedded HTTP readiness response")]
+    ReadReadinessResponse(#[source] reqwest::Error),
+    #[error("embedded HTTP listener at {addr} answered the instance-specific readiness probe with status {status} and an unexpected body; another service may own the configured address")]
+    HttpListenerUnexpected {
+        addr: SocketAddr,
+        status: reqwest::StatusCode,
+    },
+    #[error(
+        "embedded HTTP listener did not become ready at {addr} within 5 seconds: {last_error}"
+    )]
+    HttpListenerNotReady {
+        addr: SocketAddr,
+        last_error: reqwest::Error,
+    },
+    #[cfg(not(unix))]
+    #[error("--grok-shim requires Unix; omit it to run the server on this platform")]
+    GrokShimRequiresUnix,
+    #[error("creating data directory {}", path.display())]
+    CreateDataDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("--http-port 0 is not supported: the embedded HTTP server does not expose its ephemeral bound port; choose an explicit non-zero port")]
+    HttpPortZero,
+    #[error("--node-name {explicit} does not match initialized home node {configured}")]
+    NodeNameMismatch {
+        explicit: String,
+        configured: String,
+    },
+    #[error("identity {did} has no exportable private key, so it cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity to serve it")]
+    IdentityNotExportable { did: String },
+    #[error("runtime activation probe was initialized twice")]
+    ActivationProbeInitialized,
+    #[error(
+        "runtime published changed configuration without advancing generation: {before} -> {after}"
+    )]
+    GenerationNotAdvanced { before: u64, after: u64 },
+    #[error("initialized home node DID {config_did} does not match loaded identity DID {resolved_did}; repair init.json or use the correct --key-path")]
+    InitializedDidMismatch {
+        config_did: String,
+        resolved_did: String,
+    },
+    #[error("initialized home node DID {did} requires identity key {} to already exist; restore the configured key, pass --key-path for the matching key, or bootstrap the host identity backend first", key_path.display())]
+    InitializedKeyMissing { did: String, key_path: PathBuf },
+    #[error("creating P2P key directory {}", path.display())]
+    CreateP2pKeyDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("--p2p-max-pending-dags must be > 0")]
+    P2pMaxPendingDagsZero,
+    #[error("--p2p-max-pending-dags must be <= {MAX_P2P_METRICS_GAUGE} (metrics gauge limit)")]
+    P2pMaxPendingDagsTooLarge,
+    #[error("--p2p-max-concurrent-push-tasks must be > 0")]
+    P2pPushTasksZero,
+    #[error("--p2p-max-concurrent-push-tasks must be <= {MAX_P2P_SEMAPHORE_PERMITS} (tokio Semaphore::MAX_PERMITS)")]
+    P2pPushTasksTooLarge,
+    #[error("--p2p-max-concurrent-dag-fetches must be > 0")]
+    P2pDagFetchesZero,
+    #[error("--p2p-max-concurrent-dag-fetches must be <= {MAX_P2P_SEMAPHORE_PERMITS} (tokio Semaphore::MAX_PERMITS)")]
+    P2pDagFetchesTooLarge,
+    #[error("--p2p-rate-limit-burst must be > 0")]
+    P2pRateBurstZero,
+    #[error("--p2p-rate-limit-rate must be a finite value > 0")]
+    P2pRateRateInvalid,
+    #[error("P2P transport was requested but is not available on the embedded node")]
+    P2pTransportUnavailable,
+    #[error("joining Codex shim task: {error}")]
+    JoinCodexShimTask { error: tokio::task::JoinError },
+    #[error("unable to determine a default tool root for local tools")]
+    DefaultToolRootUnavailable,
+}
+
 pub(crate) struct CliReadyObserver {
     pub(crate) tx: watch::Sender<ProcessLifecycleState>,
 }
@@ -154,10 +277,10 @@ async fn wait_for_live_node_readiness(
                 Err(error) => error.to_string(),
             };
         if Instant::now() >= deadline {
-            anyhow::bail!(
-                "runtime readiness never reached an admissible durable generation: \
-                 {last_observation}"
-            );
+            return Err(ServeError::ReadinessDeadline {
+                observation: last_observation,
+            }
+            .into());
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -252,7 +375,10 @@ async fn apply_pack_after_ready(
     use crate::config_writes::ConfigAccess;
 
     if !root.is_dir() {
-        anyhow::bail!("--apply-root is not a directory: {}", root.display());
+        return Err(ServeError::ApplyRootNotDirectory {
+            root: root.to_path_buf(),
+        }
+        .into());
     }
 
     tracing::info!(
@@ -288,7 +414,7 @@ async fn apply_pack_after_ready(
         .node
         .default_agent_id
         .clone()
-        .context("applied pack has no default agent")?;
+        .ok_or(ServeError::AppliedPackNoDefaultAgent)?;
     let expected_agent_ids = bound
         .manifest
         .agents
@@ -315,15 +441,15 @@ async fn apply_pack_after_ready(
         report.node_did
     );
     if !report.ok {
-        anyhow::bail!(
-            "pack apply did not converge for {} (status={})",
-            root.display(),
-            report.status
-        );
+        return Err(ServeError::PackNotConverged {
+            root: root.to_path_buf(),
+            status: report.status.to_string(),
+        }
+        .into());
     }
 
     Ok(AppliedPack {
-        report: serde_json::to_value(&report).context("serializing pack apply report")?,
+        report: serde_json::to_value(&report).map_err(ServeError::SerializePackReport)?,
         expected_default_agent_id,
         expected_agent_ids,
     })
@@ -409,43 +535,48 @@ fn spawn_codex_shim_supervisor(
     });
 }
 
-fn read_codex_shim_auth_token(env_name: Option<&str>) -> Result<Option<String>> {
+fn read_codex_shim_auth_token(env_name: Option<&str>) -> Result<Option<String>, ServeError> {
     env_name
         .map(|name| read_codex_shim_auth_token_with(name, |name| std::env::var(name)))
         .transpose()
 }
 
-fn read_codex_shim_auth_token_with<F>(env_name: &str, read: F) -> Result<String>
+fn read_codex_shim_auth_token_with<F>(env_name: &str, read: F) -> Result<String, ServeError>
 where
     F: FnOnce(&str) -> std::result::Result<String, std::env::VarError>,
 {
-    let token =
-        read(env_name).with_context(|| format!("reading app-server token from {env_name}"))?;
+    let token = read(env_name).map_err(|source| ServeError::ReadAppServerToken {
+        env_name: env_name.to_owned(),
+        source,
+    })?;
     let token = token.trim();
     if token.is_empty() {
-        anyhow::bail!("app-server token in {env_name} is empty");
+        return Err(ServeError::AppServerTokenEmpty {
+            env_name: env_name.to_owned(),
+        });
     }
     Ok(token.to_string())
 }
 
-fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
+fn normalize_codex_shim_public_url(raw: &str) -> Result<String, ServeError> {
     let uri = raw
         .parse::<Uri>()
-        .with_context(|| format!("invalid --codex-shim-public-url {raw:?}"))?;
+        .map_err(|source| ServeError::InvalidCodexShimPublicUrl {
+            raw: raw.to_owned(),
+            source,
+        })?;
     if uri.scheme_str() != Some("wss") {
-        anyhow::bail!("--codex-shim-public-url must use wss://");
+        return Err(ServeError::CodexShimPublicUrlScheme);
     }
-    let authority = uri
-        .authority()
-        .ok_or_else(|| anyhow::anyhow!("--codex-shim-public-url must include a host"))?;
+    let authority = uri.authority().ok_or(ServeError::CodexShimPublicUrlHost)?;
     if authority.as_str().contains('@') {
-        anyhow::bail!("--codex-shim-public-url must not contain credentials");
+        return Err(ServeError::CodexShimPublicUrlCredentials);
     }
     if authority.port_u16().is_none() {
-        anyhow::bail!("--codex-shim-public-url must include an explicit port");
+        return Err(ServeError::CodexShimPublicUrlPort);
     }
     if uri.path() != "/" || uri.query().is_some() {
-        anyhow::bail!("--codex-shim-public-url must point to the root path without a query");
+        return Err(ServeError::CodexShimPublicUrlPath);
     }
     Ok(format!("wss://{authority}/"))
 }
@@ -480,12 +611,10 @@ async fn wait_for_shutdown_signal() {
     }
 }
 
-async fn preflight_embedded_http_bind(addr: SocketAddr) -> Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| {
-        format!(
-            "embedded HTTP listener cannot bind to {addr}; if another Gents runtime is serving there, stop it or pass --http-port"
-        )
-    })?;
+async fn preflight_embedded_http_bind(addr: SocketAddr) -> Result<(), ServeError> {
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|source| ServeError::EmbeddedHttpBind { addr, source })?;
     drop(listener);
     Ok(())
 }
@@ -515,7 +644,7 @@ async fn wait_for_embedded_http_bind(
     addr: SocketAddr,
     path: &str,
     expected_token: &str,
-) -> Result<()> {
+) -> Result<(), ServeError> {
     let probe_addr = embedded_http_probe_addr(addr);
     let url = format!("http://{probe_addr}{path}");
     let client = reqwest::Client::builder()
@@ -523,7 +652,7 @@ async fn wait_for_embedded_http_bind(
         .connect_timeout(Duration::from_millis(250))
         .timeout(Duration::from_millis(500))
         .build()
-        .context("building embedded HTTP readiness client")?;
+        .map_err(ServeError::BuildReadinessClient)?;
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut last_error;
 
@@ -534,24 +663,17 @@ async fn wait_for_embedded_http_bind(
                 let body = response
                     .text()
                     .await
-                    .context("reading embedded HTTP readiness response")?;
+                    .map_err(ServeError::ReadReadinessResponse)?;
                 if status.is_success() && body == expected_token {
                     return Ok(());
                 }
-                anyhow::bail!(
-                    "embedded HTTP listener at {addr} answered the instance-specific readiness \
-                     probe with status {status} and an unexpected body; another service may own \
-                     the configured address"
-                );
+                return Err(ServeError::HttpListenerUnexpected { addr, status });
             }
             Err(error) => last_error = error,
         }
 
         if Instant::now() >= deadline {
-            anyhow::bail!(
-                "embedded HTTP listener did not become ready at {addr} within 5 seconds: \
-                 {last_error}"
-            );
+            return Err(ServeError::HttpListenerNotReady { addr, last_error });
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -559,10 +681,9 @@ async fn wait_for_embedded_http_bind(
 
 async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle) -> Result<()> {
     #[cfg(not(unix))]
-    anyhow::ensure!(
-        !args.grok_shim,
-        "--grok-shim requires Unix; omit it to run the server on this platform"
-    );
+    if args.grok_shim {
+        return Err(ServeError::GrokShimRequiresUnix.into());
+    }
     args.codex_shim_public_url = args
         .codex_shim_public_url
         .as_deref()
@@ -574,15 +695,17 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
         read_codex_shim_auth_token(args.codex_shim_auth_token_env.as_deref())?
     };
     if args.codex_shim_public_url.is_some() && codex_shim_auth_token.is_none() {
-        anyhow::bail!("--codex-shim-public-url requires --codex-shim-auth-token-env");
+        return Err(ServeError::CodexShimPublicUrlNeedsAuthToken.into());
     }
     let home_dir = resolve_home_dir(args.home.as_deref());
     let data_dir = args
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
-    fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    fs::create_dir_all(&data_dir).map_err(|source| ServeError::CreateDataDir {
+        path: data_dir.clone(),
+        source,
+    })?;
     let store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
     crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
     let http_ip = args
@@ -598,10 +721,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
     }
     let http_addr = SocketAddr::new(http_ip, http_port);
     if http_port == 0 {
-        anyhow::bail!(
-            "--http-port 0 is not supported: the embedded HTTP server does not expose its \
-             ephemeral bound port; choose an explicit non-zero port"
-        );
+        return Err(ServeError::HttpPortZero.into());
     }
     let graphql_url = format!(
         "http://{}:{}/api/v0/graphql",
@@ -611,11 +731,11 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
     let init_config = read_init_config(&home_dir)?;
     if let (Some(explicit), Some(config)) = (args.node_name.as_deref(), init_config.as_ref()) {
         if explicit != config.node_name {
-            anyhow::bail!(
-                "--node-name {} does not match initialized home node {}",
-                explicit,
-                config.node_name
-            );
+            return Err(ServeError::NodeNameMismatch {
+                explicit: explicit.to_owned(),
+                configured: config.node_name.clone(),
+            }
+            .into());
         }
     }
 
@@ -741,10 +861,12 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
     ))
     .merge(crate::http::explorer::explorer_router());
     if let Some(node_identity_did) = server_identity.node_identity_did.as_deref() {
-        anyhow::ensure!(
-            gents::identity::can_mint_defradb_bearer(node_identity_did),
-            "identity {node_identity_did} has no exportable private key, so it cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity to serve it"
-        );
+        if !gents::identity::can_mint_defradb_bearer(node_identity_did) {
+            return Err(ServeError::IdentityNotExportable {
+                did: node_identity_did.to_owned(),
+            }
+            .into());
+        }
     }
     let mut node_builder = crate::persistent_node_builder(&home_dir, &data_dir)
         .await?
@@ -832,7 +954,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
         let runtime_configuration_probe = agent.clone();
         activation_runtime
             .set(agent.clone())
-            .map_err(|_| anyhow::anyhow!("runtime activation probe was initialized twice"))?;
+            .map_err(|_| ServeError::ActivationProbeInitialized)?;
 
         let signal_tx = runtime.shutdown_tx.clone();
         tokio::spawn(async move {
@@ -1055,11 +1177,11 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                         Err(error) => return Err(error),
                     };
                     if published.generation <= configuration_before_apply.generation {
-                        anyhow::bail!(
-                            "runtime published changed configuration without advancing generation: {} -> {}",
-                            configuration_before_apply.generation,
-                            published.generation,
-                        );
+                        return Err(ServeError::GenerationNotAdvanced {
+                            before: configuration_before_apply.generation,
+                            after: published.generation,
+                        }
+                        .into());
                     }
                 }
             }
@@ -1102,7 +1224,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                 "degraded"
             };
             let node_readiness = serde_json::to_value(&readiness.snapshot)
-                .context("serializing durable node readiness")?;
+                .map_err(ServeError::SerializeNodeReadiness)?;
             let pack_apply = applied_pack.map(|outcome| outcome.report);
 
             write_runtime_state(
@@ -1239,7 +1361,7 @@ async fn serve_foreground(mut args: ServeArgs, executor: tokio::runtime::Handle)
                     result = handle => {
                         match result {
                             Ok(result) => result.context("Codex shim task failed"),
-                            Err(error) => Err(anyhow::anyhow!("joining Codex shim task: {error}")),
+                            Err(error) => Err(ServeError::JoinCodexShimTask { error }.into()),
                         }
                     }
                 }
@@ -1472,11 +1594,11 @@ fn ensure_identity_matches_init_config(
         return Ok(());
     };
     if has_node_did(&config.node_did) && config.node_did.trim() != resolved_did {
-        anyhow::bail!(
-            "initialized home node DID {} does not match loaded identity DID {}; repair init.json or use the correct --key-path",
-            config.node_did,
-            resolved_did
-        );
+        return Err(ServeError::InitializedDidMismatch {
+            config_did: config.node_did.clone(),
+            resolved_did: resolved_did.to_owned(),
+        }
+        .into());
     }
     Ok(())
 }
@@ -1489,11 +1611,11 @@ fn ensure_key_path_exists_for_initialized_did(
         return Ok(());
     };
     if has_node_did(&config.node_did) && !key_path.exists() {
-        anyhow::bail!(
-            "initialized home node DID {} requires identity key {} to already exist; restore the configured key, pass --key-path for the matching key, or bootstrap the host identity backend first",
-            config.node_did,
-            key_path.display()
-        );
+        return Err(ServeError::InitializedKeyMissing {
+            did: config.node_did.clone(),
+            key_path: key_path.to_path_buf(),
+        }
+        .into());
     }
     Ok(())
 }
@@ -1542,8 +1664,10 @@ fn resolve_server_p2p_config(
         .clone()
         .unwrap_or_else(|| default_p2p_secret_key_path(home_dir));
     if let Some(parent) = secret_key_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating P2P key directory {}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|source| ServeError::CreateP2pKeyDir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     Ok(Some(defra_node::P2PConfig {
         port: args.p2p_port.unwrap_or(0),
@@ -1595,34 +1719,28 @@ fn validate_p2p_admission_config(
     rate_limit_rate: f64,
 ) -> Result<()> {
     if max_pending_dags == 0 {
-        anyhow::bail!("--p2p-max-pending-dags must be > 0");
+        return Err(ServeError::P2pMaxPendingDagsZero.into());
     }
     if max_pending_dags > MAX_P2P_METRICS_GAUGE {
-        anyhow::bail!(
-            "--p2p-max-pending-dags must be <= {MAX_P2P_METRICS_GAUGE} (metrics gauge limit)"
-        );
+        return Err(ServeError::P2pMaxPendingDagsTooLarge.into());
     }
     if max_concurrent_push_tasks == 0 {
-        anyhow::bail!("--p2p-max-concurrent-push-tasks must be > 0");
+        return Err(ServeError::P2pPushTasksZero.into());
     }
     if max_concurrent_push_tasks > MAX_P2P_SEMAPHORE_PERMITS {
-        anyhow::bail!(
-            "--p2p-max-concurrent-push-tasks must be <= {MAX_P2P_SEMAPHORE_PERMITS} (tokio Semaphore::MAX_PERMITS)"
-        );
+        return Err(ServeError::P2pPushTasksTooLarge.into());
     }
     if max_concurrent_dag_fetches == 0 {
-        anyhow::bail!("--p2p-max-concurrent-dag-fetches must be > 0");
+        return Err(ServeError::P2pDagFetchesZero.into());
     }
     if max_concurrent_dag_fetches > MAX_P2P_SEMAPHORE_PERMITS {
-        anyhow::bail!(
-            "--p2p-max-concurrent-dag-fetches must be <= {MAX_P2P_SEMAPHORE_PERMITS} (tokio Semaphore::MAX_PERMITS)"
-        );
+        return Err(ServeError::P2pDagFetchesTooLarge.into());
     }
     if rate_limit_burst == 0 {
-        anyhow::bail!("--p2p-rate-limit-burst must be > 0");
+        return Err(ServeError::P2pRateBurstZero.into());
     }
     if !rate_limit_rate.is_finite() || rate_limit_rate <= 0.0 {
-        anyhow::bail!("--p2p-rate-limit-rate must be a finite value > 0");
+        return Err(ServeError::P2pRateRateInvalid.into());
     }
     Ok(())
 }
@@ -1664,11 +1782,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = gents::identity::node_p2p(node).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "P2P transport was requested but is not available on the embedded node"
-                )
-            })?;
+            let p2p = gents::identity::node_p2p(node).ok_or(ServeError::P2pTransportUnavailable)?;
             let peer_id = p2p
                 .local_peer_id()
                 .await
@@ -1709,7 +1823,7 @@ async fn wait_for_p2p_listen_addresses(
     }
 }
 
-fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
+fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf, ServeError> {
     if let Some(path) = explicit {
         return Ok(path.to_path_buf());
     }
@@ -1717,7 +1831,7 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
     std::env::current_dir()
         .ok()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
+        .ok_or(ServeError::DefaultToolRootUnavailable)
 }
 
 fn display_shim_host(host: IpAddr) -> String {

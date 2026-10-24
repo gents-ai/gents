@@ -1,5 +1,10 @@
 #![allow(dead_code, unused_imports)]
 
+use gents_protocol::error_chain::ErrorChain;
+
+pub type TestError = Box<dyn std::error::Error + Send + Sync>;
+pub type TestResult<T = ()> = Result<T, TestError>;
+
 #[path = "../../src/desired_state/document_handle.rs"]
 mod document_handle;
 pub mod fs;
@@ -53,10 +58,8 @@ pub async fn initialized_node(
     cwd: &std::path::Path,
     node_home: &std::path::Path,
     node_name: &str,
-) -> anyhow::Result<gents::defra_node::EmbeddedNode> {
-    use anyhow::Context as _;
-
-    let home = node_home.to_str().context("node home utf8")?;
+) -> TestResult<gents::defra_node::EmbeddedNode> {
+    let home = node_home.to_str().ok_or("node home utf8")?;
     let init = run_init_json(
         cwd,
         &["--identity-only", "--node-name", node_name, "--home", home],
@@ -65,9 +68,9 @@ pub async fn initialized_node(
     let key_path = init
         .get("key_path")
         .and_then(serde_json::Value::as_str)
-        .context("identity-only init output missing key_path")?;
+        .ok_or("identity-only init output missing key_path")?;
     let _identity = gents::KeyIdentity::load_or_create(key_path, None)
-        .context("loading initialized node identity")?;
+        .map_err(|error| format!("loading initialized node identity: {}", ErrorChain(&error)))?;
 
     let data = node_home.join("data");
     gents::store_key::open_home_store_key(node_home, &data)
@@ -80,27 +83,27 @@ pub async fn initialized_node(
         .with_node_identity_did(&node_did)
         .build()
         .await
-        .context("opening initialized embedded node")
+        .map_err(|error| format!("opening initialized embedded node: {error:#}").into())
 }
 
-pub fn node_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
+pub fn node_did_from_init(init: &serde_json::Value) -> TestResult<String> {
     let node_did = init
         .get("node_did")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("init output missing node_did: {init}"))?;
-    anyhow::ensure!(
+        .ok_or_else(|| format!("init output missing node_did: {init}"))?;
+    assert!(
         !node_did.starts_with("did:test:"),
         "init returned a name-derived DID placeholder: {node_did}"
     );
     Ok(node_did.to_string())
 }
 
-pub fn identity_from_init(init: &serde_json::Value) -> anyhow::Result<gents::KeyIdentity> {
-    use anyhow::Context as _;
-
+pub fn identity_from_init(init: &serde_json::Value) -> TestResult<gents::KeyIdentity> {
     let key_path = init
         .get("key_path")
         .and_then(serde_json::Value::as_str)
-        .context("init output missing key_path")?;
-    gents::KeyIdentity::load_or_create(key_path, None).context("loading initialized node identity")
+        .ok_or("init output missing key_path")?;
+    gents::KeyIdentity::load_or_create(key_path, None).map_err(|error| {
+        format!("loading initialized node identity: {}", ErrorChain(&error)).into()
+    })
 }

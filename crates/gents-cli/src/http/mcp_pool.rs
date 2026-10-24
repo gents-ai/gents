@@ -1,7 +1,7 @@
 use gents::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
@@ -118,13 +118,23 @@ fn mcp_pool_query(node_did: &str) -> String {
     )
 }
 
-fn decode_mcp_pool_response(response: Value) -> Result<McpPoolEnvelope> {
+#[derive(Debug, thiserror::Error)]
+enum McpPoolError {
+    #[error("mcp pool query response missing object data: {response}")]
+    MissingData { response: Value },
+    #[error("decoding mcp pool query response")]
+    Decode(#[source] serde_json::Error),
+}
+
+fn decode_mcp_pool_response(response: Value) -> Result<McpPoolEnvelope, McpPoolError> {
     let data = response
         .get("data")
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| format!("mcp pool query response missing object data: {response}"))?;
-    serde_json::from_value(data).context("decoding mcp pool query response")
+        .ok_or_else(|| McpPoolError::MissingData {
+            response: response.clone(),
+        })?;
+    serde_json::from_value(data).map_err(McpPoolError::Decode)
 }
 
 fn build_mcp_pool_snapshot(

@@ -3,6 +3,7 @@ use gents::document_config::SkillDocument;
 use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
+use super::ConfigCommandError;
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::{extract_mutation_doc_id, print_json, EXPORT_SKILL_FIELDS};
@@ -59,7 +60,7 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<St
         }}"#
     );
     let response = access.write("cli.config.skill.upsert", &mutation).await?;
-    extract_mutation_doc_id(&response, "Skill")
+    Ok(extract_mutation_doc_id(&response, "Skill")?)
 }
 
 pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
@@ -305,7 +306,7 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
     Ok(())
 }
 
-fn render_skill_md(skill: &Value) -> Result<String> {
+fn render_skill_md(skill: &Value) -> Result<String, ConfigCommandError> {
     #[derive(serde::Serialize)]
     struct Frontmatter<'a> {
         name: &'a str,
@@ -330,7 +331,7 @@ fn render_skill_md(skill: &Value) -> Result<String> {
     Ok(format!("---\n{frontmatter}---\n\n{instructions}\n"))
 }
 
-fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
+fn render_openai_yaml(skill: &Value) -> Result<Option<String>, ConfigCommandError> {
     #[derive(serde::Serialize)]
     struct Tool {
         #[serde(rename = "type")]
@@ -365,7 +366,8 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
         .filter(|value| !value.trim().is_empty())
     {
         Some(raw) => {
-            let json: Value = serde_json::from_str(raw).context("parsing stored interface_json")?;
+            let json: Value =
+                serde_json::from_str(raw).map_err(ConfigCommandError::InterfaceJson)?;
             Some(serde_yaml::to_value(&json)?)
         }
         None => skill

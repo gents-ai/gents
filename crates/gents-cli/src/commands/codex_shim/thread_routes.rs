@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::session::{fork, ForkBoundary, ForkError, ForkParams};
 use gents_codex_protocol as codex;
 use serde_json::{json, Value};
@@ -14,6 +14,17 @@ use super::thread_projection::{
     load_codex_thread, store_forked_codex_thread, thread_response_json, CodexThreadRecord,
 };
 use super::{ShimState, JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS};
+
+#[derive(Debug, thiserror::Error)]
+enum ThreadRoutesError {
+    #[error("thread user-turn count omitted messages")]
+    UserTurnMessagesMissing,
+    #[error("user turn count exceeds u32")]
+    UserTurnCountOverflow {
+        #[source]
+        source: std::num::TryFromIntError,
+    },
+}
 
 #[derive(Debug)]
 pub(super) struct ThreadRouteError {
@@ -320,7 +331,7 @@ async fn count_user_messages(state: &ShimState, thread_id: &str) -> Result<u32> 
     let rows = response
         .pointer("/data/AgentMessage")
         .and_then(Value::as_array)
-        .context("thread user-turn count omitted messages")?;
+        .ok_or(ThreadRoutesError::UserTurnMessagesMissing)?;
     let count = rows
         .iter()
         .map(gents::session::is_user_turn)
@@ -328,7 +339,8 @@ async fn count_user_messages(state: &ShimState, thread_id: &str) -> Result<u32> 
         .into_iter()
         .filter(|is_user| *is_user)
         .count();
-    u32::try_from(count).context("user turn count exceeds u32")
+    Ok(u32::try_from(count)
+        .map_err(|source| ThreadRoutesError::UserTurnCountOverflow { source })?)
 }
 
 fn resolve_cwd(source_cwd: &std::path::Path, cwd: &str) -> PathBuf {

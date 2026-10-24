@@ -1,5 +1,5 @@
 use super::{fake_llm, Attachment, ChatAction};
-use anyhow::{ensure, Context, Result};
+use crate::support::TestResult;
 use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
 use serde_json::{json, Value};
@@ -47,10 +47,10 @@ pub async fn verify(
     node: &str,
     session: &str,
     author: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-retry-ui.json"))?)?;
     let before = requests(access, node, session).await?;
-    ensure!(
+    assert!(
         before.len() == 3,
         "retry must retain the initial turn and admit only one successor"
     );
@@ -58,43 +58,40 @@ pub async fn verify(
         .iter()
         .filter(|row| row.content.as_deref() == Some(PROMPT))
         .collect::<Vec<_>>();
-    ensure!(
+    assert!(
         retried.len() == 2,
         "the failed input must have exactly one retry"
     );
     let parent = retried
         .iter()
         .find(|row| row.lifecycle_state == Some(RequestLifecycleState::Failed))
-        .context("failed retry parent")?;
+        .expect("failed retry parent");
     let child = retried
         .iter()
         .find(|row| row.lifecycle_state == Some(RequestLifecycleState::Completed))
-        .context("completed retry successor")?;
+        .expect("completed retry successor");
     for row in &before {
         gents::verify_request_receipt_signature(row)?;
-        ensure!(
+        assert!(
             row.admission_signer_did.as_deref() == Some(author)
                 && row.requester_did.as_deref() == Some(author),
             "the retry escaped the enrolled client authority"
         );
     }
-    ensure!(
+    assert!(
         child.retry_parent_request.as_deref() == Some(parent.request_id.as_str())
             && child.retry_parent_request_doc_id == parent.doc_id
             && child.retry_root_request.as_deref() == Some(parent.request_id.as_str())
             && child.input == parent.input,
         "the retry must preserve exact signed ancestry and typed input"
     );
-    let input = parent
-        .input
-        .as_ref()
-        .context("original typed retry input")?;
-    ensure!(
+    let input = parent.input.as_ref().expect("original typed retry input");
+    assert!(
         input.captured_context.len() == 1,
         "original retry capture count"
     );
     let capture = serde_json::to_value(&input.captured_context[0])?;
-    ensure!(
+    assert!(
         capture["content"] == CAPTURED
             && capture["uri"] == ui["contextUri"]
             && capture["kind"] == "selection"
@@ -111,7 +108,7 @@ pub async fn verify(
         )
         .await?;
     *id += 1;
-    ensure!(
+    assert!(
         repeated["requestId"] == child.request_id
             && repeated["sessionId"] == session
             && repeated["nodeDid"] == node,
@@ -131,13 +128,13 @@ pub async fn verify(
             )
             .await;
         *id += 1;
-        ensure!(
+        assert!(
             refusal.is_err(),
             "retry accepted a wrong scope or completed parent"
         );
     }
     let after = requests(access, node, session).await?;
-    ensure!(
+    assert!(
         after.len() == before.len(),
         "refused or repeated retry admitted extra work"
     );
@@ -147,7 +144,7 @@ pub async fn verify(
         .filter(|request| is_retry_input(request))
         .collect::<Vec<_>>();
     let provider_attempts = attempts.len();
-    ensure!(
+    assert!(
         provider_attempts == 2,
         "retry must make exactly one additional provider attempt"
     );
@@ -160,12 +157,12 @@ pub async fn verify(
             .filter_map(|message| message["content"].as_array())
             .filter(|parts| parts.iter().any(|part| part["text"] == PROMPT))
             .collect::<Vec<_>>();
-        ensure!(
+        assert!(
             inputs.len() == 1,
             "provider input duplicated the authored retry input"
         );
         let parts = inputs[0];
-        ensure!(
+        assert!(
             parts.len() == 2 && parts[0]["text"] == PROMPT,
             "provider retry input shape"
         );
@@ -176,8 +173,8 @@ pub async fn verify(
                     "Editor context (captured text; URI identifies its editor location):\n",
                 )
             })
-            .context("provider retry context")?;
-        ensure!(
+            .expect("provider retry context");
+        assert!(
             serde_json::from_str::<Value>(context)? == capture,
             "provider received a different retry snapshot"
         );
@@ -196,7 +193,7 @@ async fn requests(
     access: &ConfigAccess,
     node: &str,
     session: &str,
-) -> Result<Vec<AgentRequestRow>> {
+) -> TestResult<Vec<AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
         gents::graphql::escape_graphql_string(node),

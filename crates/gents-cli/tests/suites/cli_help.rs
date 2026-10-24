@@ -1,11 +1,12 @@
 use crate::support::*;
 
-use anyhow::{Context, Result};
 use std::fs;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[test]
-fn top_level_help_shows_quickstart_workflow() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn top_level_help_shows_quickstart_workflow() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -31,8 +32,8 @@ fn top_level_help_shows_quickstart_workflow() -> Result<()> {
 }
 
 #[test]
-fn status_without_runtime_suggests_init_and_server() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn status_without_runtime_suggests_init_and_server() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let port = allocate_port()?;
@@ -56,8 +57,8 @@ fn status_without_runtime_suggests_init_and_server() -> Result<()> {
 }
 
 #[test]
-fn server_help_requires_authentication_for_remote_app_server_bind() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+fn server_help_requires_authentication_for_remote_app_server_bind() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 

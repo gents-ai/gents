@@ -2,7 +2,6 @@ use crate::support::*;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use gents::adapter_projection::{
     adapter_projection_eval_jsonl_records, adapter_projection_jsonl_records,
     build_external_adapter_projection,
@@ -15,7 +14,10 @@ use gents::{
     import_external_adapter_capture_to_derived_view, validate_adapter_projection_contract,
     AdapterProjectionEnvelope, ExternalAdapterCapture, ProjectionContext, ProjectionRedactionMode,
 };
+use gents_protocol::error_chain::ErrorChain;
 use serde_json::{json, Value};
+
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
 const FIXTURE_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES";
 const LEGACY_FIXTURE_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_FIXTURES";
@@ -32,7 +34,7 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
     };
     let root = resolve_fixture_root(root);
     let files = collect_json_files(&root)?;
-    anyhow::ensure!(
+    assert!(
         !files.is_empty(),
         "{}={} did not contain JSON fixture files",
         FIXTURE_ROOT_ENV,
@@ -43,16 +45,22 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
         .map(PathBuf::from)
         .map(resolve_fixture_root);
     if let Some(export_root) = export_root.as_ref() {
-        std::fs::create_dir_all(export_root)
-            .with_context(|| format!("creating {}", export_root.display()))?;
+        std::fs::create_dir_all(export_root).map_err(|error| {
+            format!("creating {}: {}", export_root.display(), ErrorChain(&error))
+        })?;
     }
 
     let mut imported_count = 0usize;
     for path in files {
         let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let capture = serde_json::from_str::<ExternalAdapterCapture>(&raw)
-            .with_context(|| format!("parsing {} as external adapter capture", path.display()))?;
+            .map_err(|error| format!("reading {}: {}", path.display(), ErrorChain(&error)))?;
+        let capture = serde_json::from_str::<ExternalAdapterCapture>(&raw).map_err(|error| {
+            format!(
+                "parsing {} as external adapter capture: {}",
+                path.display(),
+                ErrorChain(&error)
+            )
+        })?;
         if capture.mapping.is_none() {
             eprintln!(
                 "skipping {}: capture has no Gents import mapping",
@@ -71,7 +79,7 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
                 continue;
             }
             Err(error) => {
-                return Err(error).with_context(|| format!("importing {}", path.display()))
+                return Err(format!("importing {}: {}", path.display(), ErrorChain(&error)).into())
             }
         };
         imported_count += 1;
@@ -87,12 +95,17 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
         let envelope = build_external_adapter_projection(&capture, &context)?;
         let json_output = serde_json::to_string_pretty(&envelope)?;
         let projection = serde_json::to_value(&envelope)?;
-        assert_projection_matches_import(&projection, &capture, &import.view)
-            .with_context(|| format!("validating imported projection for {}", path.display()))?;
+        assert_projection_matches_import(&projection, &capture, &import.view).map_err(|error| {
+            format!(
+                "validating imported projection for {}: {}",
+                path.display(),
+                ErrorChain(&*error)
+            )
+        })?;
         let jsonl_output = serialize_jsonl(adapter_projection_jsonl_records(&envelope))?;
         let eval_jsonl_output = serialize_jsonl(adapter_projection_eval_jsonl_records(&envelope))?;
-        anyhow::ensure!(!jsonl_output.trim().is_empty(), "empty JSONL export");
-        anyhow::ensure!(
+        assert!(!jsonl_output.trim().is_empty(), "empty JSONL export");
+        assert!(
             !eval_jsonl_output.trim().is_empty(),
             "empty eval JSONL export"
         );
@@ -103,22 +116,41 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .unwrap_or("external-adapter-capture");
-            std::fs::write(export_root.join(format!("{stem}.gents.json")), json_output)
-                .with_context(|| format!("writing JSON export for {}", path.display()))?;
+            std::fs::write(export_root.join(format!("{stem}.gents.json")), json_output).map_err(
+                |error| {
+                    format!(
+                        "writing JSON export for {}: {}",
+                        path.display(),
+                        ErrorChain(&error)
+                    )
+                },
+            )?;
             std::fs::write(
                 export_root.join(format!("{stem}.gents.jsonl")),
                 jsonl_output,
             )
-            .with_context(|| format!("writing JSONL export for {}", path.display()))?;
+            .map_err(|error| {
+                format!(
+                    "writing JSONL export for {}: {}",
+                    path.display(),
+                    ErrorChain(&error)
+                )
+            })?;
             std::fs::write(
                 export_root.join(format!("{stem}.gents.eval-jsonl")),
                 eval_jsonl_output,
             )
-            .with_context(|| format!("writing eval JSONL export for {}", path.display()))?;
+            .map_err(|error| {
+                format!(
+                    "writing eval JSONL export for {}: {}",
+                    path.display(),
+                    ErrorChain(&error)
+                )
+            })?;
         }
     }
 
-    anyhow::ensure!(
+    assert!(
         imported_count > 0,
         "no external adapter captures with supported Gents import mappings were found in {}",
         root.display()
@@ -288,33 +320,41 @@ async fn negative_external_capture_imports_reject_bad_mappings_without_partial_r
     ];
 
     for (name, value, expected_error) in cases {
-        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+        let tempdir = tempfile::tempdir()
+            .map_err(|error| format!("creating tempdir: {}", ErrorChain(&error)))?;
         let data_dir = tempdir.path().join("data");
         let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("node.key"), None)
-            .context("creating node identity")?;
+            .map_err(|error| format!("creating node identity: {}", ErrorChain(&error)))?;
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
             .with_storage_backend(StorageBackend::Regolith)
             .with_node_identity_did(gents::NodeIdentity::did(&identity))
             .build()
             .await
-            .with_context(|| format!("opening embedded node for {name}"))?;
+            .map_err(|error| format!("opening embedded node for {name}: {}", ErrorChain(&error)))?;
         ensure_runtime_schemas(&node)
             .await
-            .with_context(|| format!("creating runtime schemas for {name}"))?;
+            .map_err(|error| format!("creating runtime schemas for {name}: {error:#}"))?;
 
-        let capture = serde_json::from_value::<ExternalAdapterCapture>(value)
-            .with_context(|| format!("parsing negative capture case {name}"))?;
+        let capture = serde_json::from_value::<ExternalAdapterCapture>(value).map_err(|error| {
+            format!(
+                "parsing negative capture case {name}: {}",
+                ErrorChain(&error)
+            )
+        })?;
         let error = import_external_adapter_capture_to_derived_view(&capture)
             .expect_err("negative capture import unexpectedly succeeded");
-        let error_text = format!("{error:#}");
+        let error_text = ErrorChain(&error).to_string();
         assert!(
             error_text.contains(expected_error),
             "{name} produced unexpected error:\nexpected substring: {expected_error}\nactual: {error_text}"
         );
-        assert_no_timeline_rows(&node)
-            .await
-            .with_context(|| format!("checking rejected import left no rows for {name}"))?;
+        assert_no_timeline_rows(&node).await.map_err(|error| {
+            format!(
+                "checking rejected import left no rows for {name}: {}",
+                ErrorChain(&*error)
+            )
+        })?;
     }
     Ok(())
 }
@@ -350,12 +390,14 @@ fn collect_json_files_into(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> 
         }
         return Ok(());
     }
-    anyhow::ensure!(
+    assert!(
         path.is_dir(),
         "adapter interop fixture path is neither file nor directory: {}",
         path.display()
     );
-    for entry in std::fs::read_dir(path).with_context(|| format!("reading {}", path.display()))? {
+    for entry in std::fs::read_dir(path)
+        .map_err(|error| format!("reading {}: {}", path.display(), ErrorChain(&error)))?
+    {
         let entry = entry?;
         if entry.file_name() == "gents-exports" {
             continue;
@@ -498,10 +540,11 @@ async fn assert_no_timeline_rows(node: &EmbeddedNode) -> Result<()> {
             .execute(&format!("{{ {collection} {{ _docID }} }}"))
             .await;
         if response.has_errors() {
-            anyhow::bail!(
+            return Err(format!(
                 "GraphQL query for {collection} failed: {:?}",
                 response.errors
-            );
+            )
+            .into());
         }
         let row_count = response
             .data
@@ -510,7 +553,7 @@ async fn assert_no_timeline_rows(node: &EmbeddedNode) -> Result<()> {
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or_default();
-        anyhow::ensure!(
+        assert!(
             row_count == 0,
             "rejected import left {row_count} row(s) in {collection}"
         );
@@ -535,9 +578,20 @@ fn validate_cli_exports(
     validate_records: bool,
 ) -> Result<()> {
     let envelope = serde_json::from_value::<AdapterProjectionEnvelope>(projection.clone())
-        .with_context(|| format!("deserializing JSON projection for {}", path.display()))?;
-    validate_adapter_projection_contract(&envelope)
-        .with_context(|| format!("validating JSON projection contract for {}", path.display()))?;
+        .map_err(|error| {
+            format!(
+                "deserializing JSON projection for {}: {}",
+                path.display(),
+                ErrorChain(&error)
+            )
+        })?;
+    validate_adapter_projection_contract(&envelope).map_err(|error| {
+        format!(
+            "validating JSON projection contract for {}: {}",
+            path.display(),
+            ErrorChain(&error)
+        )
+    })?;
     let kind = envelope.output.kind();
     assert_json_schema_valid(
         &adapter_projection_json_schema(kind),
@@ -551,7 +605,7 @@ fn validate_cli_exports(
 
     let jsonl_schema = adapter_projection_jsonl_record_schema(kind);
     let jsonl_records = parse_jsonl(jsonl_output, &format!("{} JSONL", path.display()))?;
-    anyhow::ensure!(
+    assert!(
         !jsonl_records.is_empty(),
         "{} produced no JSONL records",
         path.display()
@@ -566,7 +620,7 @@ fn validate_cli_exports(
 
     let eval_schema = adapter_projection_eval_jsonl_record_schema(kind);
     let eval_records = parse_jsonl(eval_jsonl_output, &format!("{} eval JSONL", path.display()))?;
-    anyhow::ensure!(
+    assert!(
         !eval_records.is_empty(),
         "{} produced no eval JSONL records",
         path.display()
@@ -598,7 +652,7 @@ fn assert_projection_matches_import(
             projection
                 .get("projection_id")
                 .and_then(Value::as_str)
-                .context("projection_id")?
+                .ok_or("projection_id")?
         )
     );
     if projection
@@ -615,14 +669,14 @@ fn assert_multi_agent_projection_matches_import(
     projection: &Value,
     capture: &ExternalAdapterCapture,
 ) -> Result<()> {
-    let mapping = capture.mapping.as_ref().context("capture mapping")?;
+    let mapping = capture.mapping.as_ref().ok_or("capture mapping")?;
     let participants = projection
         .pointer("/output/projection/participants")
         .and_then(Value::as_array)
-        .context("participants")?;
+        .ok_or("participants")?;
     for expected in &mapping.participants {
         let role = expected.role.as_str();
-        anyhow::ensure!(
+        assert!(
             participants
                 .iter()
                 .any(|participant| participant.get("role").and_then(Value::as_str) == Some(role)),
@@ -632,7 +686,7 @@ fn assert_multi_agent_projection_matches_import(
 
     let serialized_projection = serde_json::to_string(projection)?;
     for message in native_message_contents(capture) {
-        anyhow::ensure!(
+        assert!(
             serialized_projection.contains(&message),
             "projection missing native message content {message:?}: {projection:#}"
         );
@@ -641,9 +695,9 @@ fn assert_multi_agent_projection_matches_import(
     let delegations = projection
         .pointer("/output/projection/delegations")
         .and_then(Value::as_array)
-        .context("delegations")?;
+        .ok_or("delegations")?;
     for expected in &mapping.delegations {
-        anyhow::ensure!(
+        assert!(
             delegations.iter().any(|delegation| {
                 delegation.get("parent_request_id").and_then(Value::as_str)
                     == Some(expected.parent_request_id.as_str())

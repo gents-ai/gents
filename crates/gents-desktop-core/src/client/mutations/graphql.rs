@@ -1,7 +1,14 @@
-use anyhow::{Context, Result};
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GraphqlError {
+    #[error("{field} must not be empty")]
+    EmptyField { field: &'static str },
+}
 
-pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a str> {
-    normalize_optional_string(Some(value)).with_context(|| format!("{field} must not be empty"))
+pub(super) fn normalize_required<'a>(
+    field: &'static str,
+    value: &'a str,
+) -> Result<&'a str, GraphqlError> {
+    normalize_optional_string(Some(value)).ok_or(GraphqlError::EmptyField { field })
 }
 
 pub(super) fn normalize_optional_string(value: Option<&str>) -> Option<&str> {

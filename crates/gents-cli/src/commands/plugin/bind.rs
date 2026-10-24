@@ -30,7 +30,9 @@ pub(super) async fn bind(args: PluginBindArgs) -> Result<()> {
         .await
         .with_context(|| format!("profile {:?} cannot serve {coordinate}", binding.profile_id))?;
     let record = set_model_binding(&home, &coordinate, Some(binding))?;
-    crate::print_json(&json!({ "bound": record.model_binding, "plugin": coordinate }))
+    Ok(crate::print_json(
+        &json!({ "bound": record.model_binding, "plugin": coordinate }),
+    )?)
 }
 
 pub(super) fn unbind(args: PluginUnbindArgs) -> Result<()> {
@@ -38,7 +40,9 @@ pub(super) fn unbind(args: PluginUnbindArgs) -> Result<()> {
     let coordinate = format!("{namespace}/{name}");
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     set_model_binding(&home, &coordinate, None)?;
-    crate::print_json(&json!({ "bound": null, "plugin": coordinate }))
+    Ok(crate::print_json(
+        &json!({ "bound": null, "plugin": coordinate }),
+    )?)
 }
 
 #[cfg(test)]

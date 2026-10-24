@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -10,6 +9,14 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde_json::Value;
 use tokio::sync::{oneshot, Notify};
+
+#[derive(Debug, thiserror::Error)]
+pub enum FakeLlmError {
+    #[error("mock fake-llm server failed to bind a port")]
+    Bind(#[source] std::sync::mpsc::RecvError),
+}
+
+type Result<T, E = FakeLlmError> = std::result::Result<T, E>;
 
 pub enum ChatAction {
     Sse(String),
@@ -104,9 +111,7 @@ impl FakeLlm {
             });
         });
 
-        let port = port_rx
-            .recv()
-            .context("mock fake-llm server failed to bind a port")?;
+        let port = port_rx.recv().map_err(FakeLlmError::Bind)?;
 
         Ok(Self {
             endpoint: format!("http://127.0.0.1:{port}/v1"),

@@ -1,7 +1,7 @@
 use gents::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::{decode_node_readiness_snapshot, AgentRequestRow, NodeReadinessRow};
@@ -58,13 +58,23 @@ fn fleet_query() -> String {
     )
 }
 
-fn decode_fleet_response(response: Value) -> Result<FleetEnvelope> {
+#[derive(Debug, thiserror::Error)]
+enum FleetError {
+    #[error("fleet query response missing object data: {response}")]
+    MissingData { response: Value },
+    #[error("decoding fleet query response")]
+    Decode(#[source] serde_json::Error),
+}
+
+fn decode_fleet_response(response: Value) -> Result<FleetEnvelope, FleetError> {
     let data = response
         .get("data")
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| format!("fleet query response missing object data: {response}"))?;
-    serde_json::from_value(data).context("decoding fleet query response")
+        .ok_or_else(|| FleetError::MissingData {
+            response: response.clone(),
+        })?;
+    serde_json::from_value(data).map_err(FleetError::Decode)
 }
 
 fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) -> FleetSnapshot {

@@ -1,11 +1,56 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::args::{P2pDiscoveryArg, P2pRelayModeArg, ServeArgs, ServiceNetworkArgs};
-use crate::native_service::{CommandRunner, NativeServiceManager};
+use crate::native_service::{
+    AtomicWriteError, CommandRunner, NativeServiceError, NativeServiceManager,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum NetworkSettingsError {
+    #[error("reading network settings {}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("decoding network settings {}", path.display())]
+    Decode {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("network settings {}", path.display())]
+    Invalid {
+        path: PathBuf,
+        #[source]
+        source: Box<NetworkSettingsError>,
+    },
+    #[error("removing network settings {}", path.display())]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("encoding network settings")]
+    Encode(#[source] serde_json::Error),
+    #[error("writing network settings {}", path.display())]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: AtomicWriteError,
+    },
+    #[error("refusing to bind the service HTTP listener on unspecified address {addr}; bind loopback or a specific interface, such as this host's tailnet address, instead")]
+    UnspecifiedHttpAddr { addr: IpAddr },
+    #[error("HTTP port 0 is not supported; choose an explicit non-zero port")]
+    HttpPortZero,
+    #[error(transparent)]
+    Service(#[from] NativeServiceError),
+}
+
+type Result<T, E = NetworkSettingsError> = std::result::Result<T, E>;
 
 /// Listen settings `gents server` applies for each flag it is not given. The
 /// native service definition stays `gents server --home <HOME>`, so the
@@ -39,16 +84,19 @@ impl NetworkSettings {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default())
             }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("reading network settings {}", path.display()))
-            }
+            Err(source) => return Err(NetworkSettingsError::Read { path, source }),
         };
-        let settings: Self = serde_json::from_slice(&bytes)
-            .with_context(|| format!("decoding network settings {}", path.display()))?;
+        let settings: Self =
+            serde_json::from_slice(&bytes).map_err(|source| NetworkSettingsError::Decode {
+                path: path.clone(),
+                source,
+            })?;
         settings
             .validate()
-            .with_context(|| format!("network settings {}", path.display()))?;
+            .map_err(|source| NetworkSettingsError::Invalid {
+                path,
+                source: Box::new(source),
+            })?;
         Ok(settings)
     }
 
@@ -62,13 +110,13 @@ impl NetworkSettings {
         let path = network_settings_path(home);
         if *self == Self::default() {
             std::fs::remove_file(&path)
-                .with_context(|| format!("removing network settings {}", path.display()))?;
+                .map_err(|source| NetworkSettingsError::Remove { path, source })?;
         } else {
             let mut contents =
-                serde_json::to_vec_pretty(self).context("encoding network settings")?;
+                serde_json::to_vec_pretty(self).map_err(NetworkSettingsError::Encode)?;
             contents.push(b'\n');
             crate::native_service::atomic_write(&path, &contents)
-                .with_context(|| format!("writing network settings {}", path.display()))?;
+                .map_err(|source| NetworkSettingsError::Write { path, source })?;
         }
         Ok(true)
     }
@@ -79,12 +127,10 @@ impl NetworkSettings {
     /// names loopback or one interface rather than every interface.
     pub(crate) fn validate(&self) -> Result<()> {
         if let Some(addr) = self.http_addr.filter(IpAddr::is_unspecified) {
-            bail!(
-                "refusing to bind the service HTTP listener on unspecified address {addr}; bind loopback or a specific interface, such as this host's tailnet address, instead"
-            );
+            return Err(NetworkSettingsError::UnspecifiedHttpAddr { addr });
         }
         if self.http_port == Some(0) {
-            bail!("HTTP port 0 is not supported; choose an explicit non-zero port");
+            return Err(NetworkSettingsError::HttpPortZero);
         }
         Ok(())
     }
@@ -198,7 +244,11 @@ mod tests {
     }
 
     impl CommandRunner for StoppedSupervisor {
-        fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
+        fn run(
+            &self,
+            program: &OsStr,
+            args: &[OsString],
+        ) -> std::result::Result<CommandOutput, NativeServiceError> {
             let args: Vec<String> = args
                 .iter()
                 .map(|arg| arg.to_string_lossy().into_owned())

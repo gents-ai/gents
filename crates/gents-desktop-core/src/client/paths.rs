@@ -1,9 +1,17 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
-
 pub const DESKTOP_HOME_ENV: &str = "GENTS_DESKTOP_HOME";
+
+#[derive(Debug, thiserror::Error)]
+pub enum PathsError {
+    #[error("unable to resolve a local application data directory")]
+    DataDirectory,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+type Result<T, E = PathsError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopPaths {
@@ -28,7 +36,7 @@ impl DesktopPaths {
         }
 
         let root = dirs::data_local_dir()
-            .ok_or_else(|| anyhow!("unable to resolve a local application data directory"))?
+            .ok_or(PathsError::DataDirectory)?
             .join("gents")
             .join("desktop");
 

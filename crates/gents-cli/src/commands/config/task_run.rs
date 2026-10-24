@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+
 use gents::graphql::escape_graphql_string;
 use gents::template::{render_template, task_node_ctx, TemplateScope};
 use gents_protocol::request_input::RequestInput;
@@ -6,6 +7,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::ConfigCommandError;
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::{
@@ -293,15 +295,13 @@ fn resolve_invocation_key(
     task_id: &str,
     goal_backed: bool,
     stable_key: Option<&str>,
-) -> Result<String> {
+) -> Result<String, ConfigCommandError> {
     match stable_key {
-        Some(key) => {
-            anyhow::ensure!(!key.trim().is_empty(), "--session-id must not be empty");
-            Ok(key.to_owned())
-        }
-        None if goal_backed => anyhow::bail!(
-            "Task {task_id} declares a durable goal; pass --session-id with a stable invocation identity so retries converge"
-        ),
+        Some(key) if key.trim().is_empty() => Err(ConfigCommandError::SessionIdBlank),
+        Some(key) => Ok(key.to_owned()),
+        None if goal_backed => Err(ConfigCommandError::GoalSessionIdRequired {
+            task_id: task_id.to_owned(),
+        }),
         None => Ok(uuid::Uuid::new_v4().to_string()),
     }
 }
@@ -409,21 +409,21 @@ pub(crate) fn resolve_task_id_for(
     command: &str,
     positional: Option<&str>,
     flag: Option<&str>,
-) -> Result<String> {
+) -> Result<String, ConfigCommandError> {
     let positional = positional.filter(|value| !value.trim().is_empty());
     let flag = flag.filter(|value| !value.trim().is_empty());
     match (positional, flag) {
         (Some(positional), Some(flag)) if positional != flag => {
-            anyhow::bail!(
-                "conflicting task ids provided: positional={} and --task-id={}\nNext:\n  1. Pass the task id once: `gents task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`, but not both",
-                positional,
-                flag
-            );
+            Err(ConfigCommandError::ConflictingTaskIds {
+                positional: positional.to_owned(),
+                flag: flag.to_owned(),
+                command: command.to_owned(),
+            })
         }
         (Some(task_id), _) | (_, Some(task_id)) => Ok(task_id.to_string()),
-        (None, None) => anyhow::bail!(
-            "missing task id\nNext:\n  1. Pass it positionally: `gents task {command} TASK_ID`\n  2. Or use `--task-id TASK_ID`"
-        ),
+        (None, None) => Err(ConfigCommandError::MissingTaskId {
+            command: command.to_owned(),
+        }),
     }
 }
 

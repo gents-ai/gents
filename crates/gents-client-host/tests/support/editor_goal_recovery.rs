@@ -1,5 +1,5 @@
 use super::{fake_llm, ChatAction};
-use anyhow::{ensure, Context, Result};
+use crate::support::{TestError, TestResult};
 use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
 use serde_json::{json, Value};
@@ -74,7 +74,7 @@ pub async fn wait_for_source_blocked(
     access: &ConfigAccess,
     node: &str,
     session: &str,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let node = gents::graphql::escape_graphql_string(node);
     let session = gents::graphql::escape_graphql_string(session);
     let query = format!(
@@ -116,12 +116,12 @@ pub async fn wait_for_source_blocked(
                     .iter()
                     .filter_map(|row| row["request_doc_id"].as_str())
                     .collect();
-                ensure!(
+                assert!(
                     requests.len() == 3,
                     "blocked audits did not span three physical requests: {value}"
                 );
                 for index in 1..=3 {
-                    ensure!(
+                    assert!(
                         calls
                             .iter()
                             .filter(
@@ -132,13 +132,13 @@ pub async fn wait_for_source_blocked(
                         "blocked audit {index} was missing or replayed: {value}"
                     );
                 }
-                return Ok::<_, anyhow::Error>(value);
+                return Ok::<_, TestError>(value);
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .context("three source goal audits did not settle")?
+    .expect("three source goal audits did not settle")
 }
 
 pub async fn verify(
@@ -149,7 +149,7 @@ pub async fn verify(
     session: &str,
     author: &str,
     observation: Value,
-) -> Result<Value> {
+) -> TestResult<Value> {
     let query = format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} Goal(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{ {} }} }}"#,
         gents::graphql::escape_graphql_string(node),
@@ -176,25 +176,25 @@ pub async fn verify(
                         })
                     });
             if settled {
-                return Ok::<_, anyhow::Error>(value);
+                return Ok::<_, TestError>(value);
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .context("budget wrap-up did not settle through the native owner")??;
+    .expect("budget wrap-up did not settle through the native owner")?;
     let ui: Value =
         serde_json::from_slice(&std::fs::read(root.join("editor-goal-recovery-ui.json"))?)?;
-    ensure!(
+    assert!(
         ui["sessionId"] == session,
         "goal recovery evidence crossed sessions"
     );
-    ensure!(
+    assert!(
         ui["sourceBlockedReasonObserved"] == true,
         "the editor did not acknowledge the source audit reason"
     );
     let captured = provider.captured_chat_requests();
-    ensure!(
+    assert!(
         captured
             .iter()
             .all(|request| !request.to_string().contains(DRAFT)
@@ -202,11 +202,11 @@ pub async fn verify(
         "goal resume submitted the composer draft or pending capture"
     );
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value["data"]["AgentRequest"].clone())?;
-    ensure!(
+    assert!(
         rows.len() == 7,
         "initial request, three audited continuations, two explicit resumes and one budget wrap-up required: {value}"
     );
-    ensure!(
+    assert!(
         captured
             .iter()
             .filter(|request| is_goal_input(request))
@@ -214,17 +214,17 @@ pub async fn verify(
             == 10,
         "goal recovery admitted an extra provider attempt"
     );
-    let goal = value["data"]["Goal"].as_array().context("goal rows")?;
-    ensure!(goal.len() == 1, "goal recovery replaced the canonical goal");
+    let goal = value["data"]["Goal"].as_array().expect("goal rows");
+    assert!(goal.len() == 1, "goal recovery replaced the canonical goal");
     let goal = &goal[0];
-    ensure!(
+    assert!(
         goal["status"] == "budget_limited"
             && goal["token_budget"] == 1
             && goal["wrapup_requested"] == true
             && goal["wrapup_completed"] == true,
         "budget recovery did not retain its terminal native outcome: {goal}"
     );
-    ensure!(
+    assert!(
         observation["goal"]["goalId"] == goal["goal_id"],
         "goal observation crossed its native scope"
     );
@@ -232,7 +232,7 @@ pub async fn verify(
     let mut wrapups = 0;
     for row in &rows {
         gents::verify_request_receipt_signature(row)?;
-        ensure!(
+        assert!(
             row.requester_did.as_deref() == Some(author),
             "goal recovery changed its requester"
         );
@@ -241,25 +241,25 @@ pub async fn verify(
             .as_ref()
             .and_then(|input| input.goal_continuation.as_ref())
         {
-            ensure!(
+            assert!(
                 row.admission_signer_did.as_deref() == Some(node),
                 "continuation bypassed native signing"
             );
-            ensure!(
+            assert!(
                 row.caused_by_trigger_id.as_deref() == goal["goal_id"].as_str(),
                 "continuation belongs to a different goal"
             );
             let parent = rows
                 .iter()
                 .find(|parent| parent.doc_id == row.caused_by_parent_request_doc_id)
-                .context("physical continuation predecessor")?;
-            ensure!(
+                .expect("physical continuation predecessor");
+            assert!(
                 parent.request_id != row.request_id,
                 "goal continuation points to itself"
             );
             wrapups += usize::from(facts.wrapup);
         } else {
-            ensure!(
+            assert!(
                 row.admission_signer_did.as_deref() == Some(author),
                 "initial goal request lost its client signature"
             );
@@ -267,13 +267,13 @@ pub async fn verify(
         if row.lifecycle_state == Some(RequestLifecycleState::Failed) {
             failed += 1;
         } else {
-            ensure!(
+            assert!(
                 row.lifecycle_state == Some(RequestLifecycleState::Completed),
                 "goal work still running"
             );
         }
     }
-    ensure!(
+    assert!(
         failed == 1 && wrapups == 1,
         "usage failure or bounded budget wrap-up missing"
     );

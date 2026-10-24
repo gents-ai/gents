@@ -55,7 +55,7 @@ fn local_identity(home: Option<&std::path::Path>) -> Result<Arc<dyn NodeIdentity
             home_dir.display()
         )
     })?;
-    load_initialized_home_identity(&home_dir, &config)
+    Ok(load_initialized_home_identity(&home_dir, &config)?)
 }
 
 async fn submit_agent(
@@ -74,7 +74,7 @@ async fn submit_agent(
         &Default::default(),
     )
     .await?;
-    print_json(&serde_json::from_str::<Value>(&result)?)
+    Ok(print_json(&serde_json::from_str::<Value>(&result)?)?)
 }
 
 fn optional_update(value: Option<String>) -> StringUpdate {
@@ -308,7 +308,7 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
     if let Value::Object(ref mut map) = row {
         map.insert("resolved".to_string(), resolved);
     }
-    print_json(&row)
+    Ok(print_json(&row)?)
 }
 
 #[cfg(test)]

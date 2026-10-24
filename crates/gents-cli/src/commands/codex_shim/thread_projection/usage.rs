@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
+
+use super::CodexShimProjectionError;
 use gents::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_protocol::row::AgentRequestRow;
@@ -80,7 +82,7 @@ pub(in crate::commands::codex_shim) async fn submitted_token_usage(
         agent_id: request
             .agent_id
             .as_deref()
-            .context("committed request missing agent")?,
+            .ok_or(CodexShimProjectionError::CommittedRequestMissingAgent)?,
     };
     if let Some(ids) = turn_request_ids {
         latest_requests_token_usage_scoped(state, ids, scope).await
@@ -220,21 +222,20 @@ async fn scoped_request_doc_ids(
     for row in rows::<Value>(&response, "AgentRequest")? {
         let id = row["request_id"]
             .as_str()
-            .context("usage request missing logical ID")?;
+            .ok_or(CodexShimProjectionError::UsageRequestMissingLogicalId)?;
         let physical = row["_docID"]
             .as_str()
-            .context("usage request missing physical ID")?;
-        anyhow::ensure!(
-            resolved
-                .insert(id.to_owned(), physical.to_owned())
-                .is_none(),
-            "ambiguous scoped usage request"
-        );
+            .ok_or(CodexShimProjectionError::UsageRequestMissingPhysicalId)?;
+        if resolved
+            .insert(id.to_owned(), physical.to_owned())
+            .is_some()
+        {
+            return Err(CodexShimProjectionError::AmbiguousScopedUsageRequest.into());
+        }
     }
-    anyhow::ensure!(
-        ids.iter().all(|id| resolved.contains_key(*id)),
-        "usage request is absent from exact requester scope"
-    );
+    if !ids.iter().all(|id| resolved.contains_key(*id)) {
+        return Err(CodexShimProjectionError::UsageRequestOutOfScope.into());
+    }
     Ok(resolved.into_values().collect())
 }
 
@@ -413,7 +414,7 @@ fn token_breakdown(totals: TokenTotals) -> codex::TokenUsageBreakdown {
     }
 }
 
-fn rows<T>(response: &Value, name: &str) -> Result<Vec<T>>
+fn rows<T>(response: &Value, name: &str) -> std::result::Result<Vec<T>, CodexShimProjectionError>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -421,11 +422,13 @@ where
         .pointer(&format!("/data/{name}"))
         .and_then(Value::as_array)
         .cloned()
-        .with_context(|| format!("usage query omitted {name} rows"))?
+        .ok_or_else(|| CodexShimProjectionError::UsageRowsMissing {
+            name: name.to_owned(),
+        })?
         .into_iter()
         .map(serde_json::from_value)
         .collect::<serde_json::Result<Vec<_>>>()
-        .map_err(Into::into)
+        .map_err(CodexShimProjectionError::DecodeUsageRows)
 }
 
 fn nonnegative_i64(value: i64) -> Option<i64> {

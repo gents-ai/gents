@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use gents_protocol::goal_control::STATUS_GOAL_STOP_CONTRACT_FIELD;
 use gents_protocol::request_input::{RequestInput, STATUS_INPUT_CONTRACT_FIELD};
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
@@ -6,7 +5,7 @@ use serde_json::Value;
 
 use crate::client::PeerRecord;
 
-use super::{http::peer_status, serving_runtime};
+use super::{http::peer_status, serving_runtime, LocalRuntimeError, Result};
 
 pub(crate) async fn ensure_request_input_supported(
     record: Option<&PeerRecord>,
@@ -19,42 +18,45 @@ pub(crate) async fn ensure_request_input_supported(
     {
         return Ok(());
     }
-    anyhow::ensure!(
-        input
-            .captured_context
-            .iter()
-            .all(|context| context.is_well_formed()),
-        "The attached context is invalid. Remove it and capture it again."
-    );
+    if !input
+        .captured_context
+        .iter()
+        .all(|context| context.is_well_formed())
+    {
+        return Err(LocalRuntimeError::InvalidAttachedContext);
+    }
     let Some(record) = record else {
         return Ok(());
     };
-    let status = peer_status(record).await?.context(
-        "Cannot verify request input support. Reconnect this runtime through its HTTP address.",
-    )?;
+    let status = peer_status(record)
+        .await?
+        .ok_or(LocalRuntimeError::RequestInputUnverifiable)?;
     decode(&status, &record.node_did, input)
 }
 
 fn decode(status: &Value, expected_did: &str, input: &RequestInput) -> Result<()> {
-    anyhow::ensure!(
-        matches!(
-            serving_runtime(status, expected_did)?,
-            ObservedServeLifecycle::Ready
-        ),
-        "The runtime is not ready. Reconnect it before sending this message."
-    );
-    anyhow::ensure!(
-        input.goal_assignment_compatible(status.get(STATUS_GOAL_STOP_CONTRACT_FIELD).and_then(Value::as_u64)),
-        "The extension and runtime use different goal controls. Update them together, then reconnect."
-    );
-    anyhow::ensure!(
-        input.captured_input_compatible(
-            status
-                .get(STATUS_INPUT_CONTRACT_FIELD)
-                .and_then(Value::as_u64)
-        ),
-        "This runtime does not support this attachment input. Update the runtime and reconnect."
-    );
+    if !matches!(
+        serving_runtime(status, expected_did)?,
+        ObservedServeLifecycle::Ready
+    ) {
+        return Err(LocalRuntimeError::RuntimeNotReady {
+            action: "sending this message",
+        });
+    }
+    if !input.goal_assignment_compatible(
+        status
+            .get(STATUS_GOAL_STOP_CONTRACT_FIELD)
+            .and_then(Value::as_u64),
+    ) {
+        return Err(LocalRuntimeError::GoalControlContractMismatch);
+    }
+    if !input.captured_input_compatible(
+        status
+            .get(STATUS_INPUT_CONTRACT_FIELD)
+            .and_then(Value::as_u64),
+    ) {
+        return Err(LocalRuntimeError::InputContractUnsupported);
+    }
     Ok(())
 }
 

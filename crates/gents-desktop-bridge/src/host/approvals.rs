@@ -239,8 +239,9 @@ pub(super) async fn peer(
 async fn local_home(core: &ClientCore, node_did: &str) -> Result<PathBuf, BridgeError> {
     let record = peer(core, node_did).await?;
     gents_desktop_core::local_runtime::hosted_runtime_home(&record)
-        .and_then(|home| home.canonicalize().map_err(Into::into))
-        .map_err(|_| {
+        .ok()
+        .and_then(|home| home.canonicalize().ok())
+        .ok_or_else(|| {
             BridgeError::new(
                 BridgeErrorCode::Unsupported,
                 "access requests require a connected local runtime home",

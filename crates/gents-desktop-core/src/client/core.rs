@@ -1,5 +1,6 @@
 mod bootstrap;
 mod enrollment;
+mod error;
 mod file_review;
 mod goal;
 mod observation_scope;
@@ -39,6 +40,7 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
+pub(crate) use error::ClientCoreError;
 pub use observation_scope::ClientObservationAttachment;
 pub use sync_state::RuntimeSchemaObservation;
 pub use writes::RefreshedRequestProjection;
@@ -482,7 +484,7 @@ impl ClientCore {
     }
 
     pub fn observe_all_nodes(&self) -> Result<ClientObservationAttachment> {
-        self.observation_scope.attach()
+        Ok(self.observation_scope.attach()?)
     }
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {

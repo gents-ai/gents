@@ -77,7 +77,7 @@ pub(crate) async fn import(args: PackImportArgs) -> Result<()> {
     .context("writing README.md")?;
 
     let check = super::check::check_dir(&out).await;
-    crate::print_json(&json!({
+    Ok(crate::print_json(&json!({
         "pack": name,
         "dir": out,
         "from": format!("{from:?}"),
@@ -85,7 +85,7 @@ pub(crate) async fn import(args: PackImportArgs) -> Result<()> {
         "needs_port": report.needs_port,
         "dropped": report.dropped,
         "check": check.problems,
-    }))
+    }))?)
 }
 
 fn is_git_url(source: &str) -> bool {

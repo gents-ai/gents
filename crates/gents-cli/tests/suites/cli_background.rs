@@ -1,13 +1,14 @@
 use crate::support::*;
 
-use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::ensure_runtime_schemas;
 use serde_json::Value;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test]
-async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let node_home = tempdir.path().join("node-home");
 
     {
@@ -17,7 +18,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
         node.shutdown().await;
     }
 
-    let node_home = node_home.to_str().context("node home utf8")?;
+    let node_home = node_home.to_str().expect("node home utf8");
     let output = run_cli_json(
         tempdir.path(),
         &[
@@ -39,8 +40,8 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     let items = output
         .get("items")
         .and_then(Value::as_array)
-        .context("background list output must include items")?;
-    let row = items.first().context("expected one background row")?;
+        .expect("background list output must include items");
+    let row = items.first().expect("expected one background row");
     assert_eq!(
         row.get("tool_call_id").and_then(Value::as_str),
         Some("call-background-running")
@@ -105,7 +106,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     let fallback_items = status_fallback_output
         .get("items")
         .and_then(Value::as_array)
-        .context("status fallback output must include items")?;
+        .expect("status fallback output must include items");
     assert_eq!(
         fallback_items
             .first()
@@ -140,7 +141,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     Ok(())
 }
 
-async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
+async fn seed_background_tool_calls(node: &EmbeddedNode) -> TestResult<()> {
     exec(
         node,
         r#"mutation {
@@ -242,10 +243,10 @@ async fn seed_background_tool_calls(node: &EmbeddedNode) -> Result<()> {
     .await
 }
 
-async fn exec(node: &EmbeddedNode, query: &str) -> Result<()> {
+async fn exec(node: &EmbeddedNode, query: &str) -> TestResult<()> {
     let response = node.execute(query).await;
     if response.has_errors() {
-        anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
+        return Err(format!("GraphQL mutation failed: {:?}", response.errors).into());
     }
     Ok(())
 }

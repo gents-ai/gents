@@ -27,7 +27,9 @@ pub fn lock_store() -> anyhow::Result<gents_desktop_core::home_reset::BrowserSto
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     });
-    gents_desktop_core::home_reset::lock_browser_store(isolated.as_deref())
+    Ok(gents_desktop_core::home_reset::lock_browser_store(
+        isolated.as_deref(),
+    )?)
 }
 
 pub fn check_to_receipt(receipt: &Path) -> anyhow::Result<()> {

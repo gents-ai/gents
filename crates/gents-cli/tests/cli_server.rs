@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::process::Command;
 
-use anyhow::{anyhow, Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use gents::default_agent_id_for_node;
 use gents::NodeIdentity as _;
 use serde_json::{json, Value};
@@ -25,14 +25,14 @@ fn find_snapshot_row<'a>(
     key: &str,
     expected: &str,
 ) -> Result<&'a Value> {
-    snapshot
+    Ok(snapshot
         .get(collection)
         .and_then(Value::as_array)
         .and_then(|rows| {
             rows.iter()
                 .find(|row| row.get(key).and_then(Value::as_str) == Some(expected))
         })
-        .ok_or_else(|| anyhow!("missing {collection} row with {key}={expected}: {snapshot}"))
+        .ok_or_else(|| format!("missing {collection} row with {key}={expected}: {snapshot}"))?)
 }
 
 async fn wait_for_inference_call_state(
@@ -73,10 +73,8 @@ async fn wait_for_inference_call_state(
         }
 
         if Instant::now() >= deadline {
-            return Err(anyhow!(
-                "timed out waiting for InferenceCall request_id={request_id} call_state={expected_state}; last rows={}",
-                Value::Array(rows)
-            ));
+            return Err(format!("timed out waiting for InferenceCall request_id={request_id} call_state={expected_state}; last rows={}",
+                Value::Array(rows)).into());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -137,14 +135,15 @@ fn wait_for_server_exit(
 ) -> Result<std::process::ExitStatus> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(status) = serve.child.try_wait().context("checking server exit")? {
+        if let Some(status) = serve.child.try_wait().expect("checking server exit") {
             return Ok(status);
         }
         if Instant::now() >= deadline {
             let (stdout, stderr) = serve.captured_output()?;
-            return Err(anyhow!(
+            return Err(format!(
                 "server did not exit within {timeout:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            ));
+            )
+            .into());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -155,7 +154,7 @@ fn wait_for_server_exit(
 async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
     use std::os::unix::process::ExitStatusExt as _;
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let agent_name = format!("cli-sigterm-{}", Uuid::new_v4().simple());
@@ -184,7 +183,7 @@ async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
     let signal = Command::new("kill")
         .args(["-TERM", &pid.to_string()])
         .status()
-        .context("sending SIGTERM to the exact gents server fixture PID")?;
+        .expect("sending SIGTERM to the exact gents server fixture PID");
     assert!(signal.success(), "kill -TERM {pid} failed: {signal}");
 
     let status = wait_for_server_exit(&mut serve, Duration::from_secs(15))?;
@@ -212,7 +211,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
     };
     use std::process::Stdio;
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let agent_name = format!("cli-broken-stdout-{}", Uuid::new_v4().simple());
@@ -230,7 +229,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
     let node_did = node_did_from_init(&init)?;
 
     let port = allocate_port()?;
-    let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
+    let stderr_log = tempfile::NamedTempFile::new().expect("creating gents stderr log");
     let mut command = Command::new(cli_bin());
     command
         .env("HOME", &home_dir)
@@ -240,10 +239,10 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
         .args(["--no-codex-shim", "--p2p-transport", "none"])
         .stdout(Stdio::piped())
         .stderr(Stdio::from(
-            stderr_log.reopen().context("opening gents stderr log")?,
+            stderr_log.reopen().expect("opening gents stderr log"),
         ));
     support::process::configure_foreground_server_env(&mut command, &[]);
-    let mut child = command.spawn().context("spawning gents server")?;
+    let mut child = command.spawn().expect("spawning gents server");
     drop(child.stdout.take());
     let mut serve = ServeProcess {
         child,
@@ -273,7 +272,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
         )
         .build()
         .await
-        .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
+        .map_err(|error| format!("opening embedded node at {}: {error}", data_dir.display()))?;
     let response = node
         .execute(&format!(
             r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -283,7 +282,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
         ))
         .await;
     node.shutdown().await;
-    anyhow::ensure!(
+    assert!(
         !response.has_errors(),
         "reading agent readiness: {:?}",
         response.errors
@@ -292,10 +291,10 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
         .data
         .as_ref()
         .and_then(|data| data["NodeReadiness"].get(0).cloned())
-        .context("server left no agent readiness row")?;
+        .expect("server left no agent readiness row");
     let row: NodeReadinessRow = serde_json::from_value(row)?;
     let snapshot = decode_node_readiness_snapshot(&row, &node_did)
-        .map_err(|reason| anyhow!("undecodable agent readiness: {reason:?}"))?;
+        .map_err(|reason| format!("undecodable agent readiness: {reason:?}"))?;
     assert_eq!(
         snapshot.process_state,
         NodeReadinessProcessState::Shutdown,
@@ -310,7 +309,7 @@ const SERVER_REJECTION_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -333,7 +332,7 @@ async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Res
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -353,7 +352,7 @@ async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
     )?;
 
     let listener =
-        std::net::TcpListener::bind(("127.0.0.1", 0)).context("reserving occupied HTTP port")?;
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserving occupied HTTP port");
     let port = listener.local_addr()?.port();
     let mut serve = spawn_server(&home_dir, port)?;
     let status = wait_for_server_exit(&mut serve, SERVER_REJECTION_EXIT_TIMEOUT)?;
@@ -375,7 +374,7 @@ async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ready_json_recovers_when_a_foreign_listener_holds_the_allocated_port() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -395,8 +394,7 @@ async fn ready_json_recovers_when_a_foreign_listener_holds_the_allocated_port() 
     )?;
 
     let stolen = allocate_port()?;
-    let thief =
-        std::net::TcpListener::bind(("127.0.0.1", stolen)).context("holding the test port")?;
+    let thief = std::net::TcpListener::bind(("127.0.0.1", stolen)).expect("holding the test port");
 
     let (_serve, bound, readiness) = spawn_server_with_ready_json_recovering(
         &home_dir,
@@ -421,7 +419,7 @@ async fn ready_json_recovers_when_a_foreign_listener_holds_the_allocated_port() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ready_json_without_recovery_still_fails_on_a_held_port() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -441,12 +439,11 @@ async fn ready_json_without_recovery_still_fails_on_a_held_port() -> Result<()> 
     )?;
 
     let held = allocate_port()?;
-    let thief =
-        std::net::TcpListener::bind(("127.0.0.1", held)).context("holding the test port")?;
+    let thief = std::net::TcpListener::bind(("127.0.0.1", held)).expect("holding the test port");
 
     let error = spawn_server_with_ready_json(&home_dir, held, &["--p2p-transport", "none"], &[])
         .err()
-        .ok_or_else(|| anyhow!("the non-recovering spawn must fail while the port is held"))?;
+        .ok_or("the non-recovering spawn must fail while the port is held")?;
 
     let message = format!("{error:#}");
     assert!(
@@ -459,7 +456,7 @@ async fn ready_json_without_recovery_still_fails_on_a_held_port() -> Result<()> 
 
 #[test]
 fn server_refuses_a_secure_enclave_home_before_building_a_node() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let gents_home = home_dir.join(".gents");
     fs::create_dir_all(&gents_home)?;
@@ -498,7 +495,7 @@ fn server_refuses_a_secure_enclave_home_before_building_a_node() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
     let model_name = format!("mock-nac-model-{}", Uuid::new_v4().simple());
@@ -534,14 +531,14 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         gents::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(&graphql))
             .write("test.nac.signed", &mutation)
             .await
-            .with_context(|| format!("{phase}: principal-signed HTTP write"))?;
+            .map_err(|error| format!("{phase}: principal-signed HTTP write: {error}"))?;
         let replicators = run_cli_json(&home_dir, &["p2p", "admin", "replicators", "list"])
-            .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
+            .map_err(|error| format!("{phase}: CLI P2P administration over HTTP: {error}"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
         let anonymous_rows = gents::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
             .await
-            .with_context(|| format!("{phase}: anonymous HTTP read"))?;
+            .map_err(|error| format!("{phase}: anonymous HTTP read: {error}"))?;
         assert!(
             anonymous_rows
                 .pointer("/data/CompactionEntry")
@@ -554,7 +551,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         )
         .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
         .await
-        .with_context(|| format!("{phase}: principal HTTP read"))?;
+        .map_err(|error| format!("{phase}: principal HTTP read: {error}"))?;
         assert!(
             owner_rows["data"]["CompactionEntry"]
                 .as_array()
@@ -604,7 +601,7 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
 async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
     const GROK_BEHAVIOR: &str = "port-live";
     const APPLIED_BACKEND: &str = "fresh-applied-grok-backend";
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("pack");
     fs::create_dir_all(&home_dir)?;
@@ -636,7 +633,7 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
     }
     config["inference_backends"]
         .as_array_mut()
-        .context("inference_backends is not an array")?
+        .expect("inference_backends is not an array")
         .push(backend);
     let mut profile = config["inference_profiles"][0].clone();
     let applied_profile = format!("{APPLIED_BACKEND}:profile");
@@ -644,14 +641,14 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
     profile["backend_id"] = Value::String(APPLIED_BACKEND.to_string());
     config["inference_profiles"]
         .as_array_mut()
-        .context("inference_profiles is not an array")?
+        .expect("inference_profiles is not an array")
         .push(profile);
     let mut agent = config["agents"][0].clone();
     agent["agent_id"] = Value::String(GROK_BEHAVIOR.to_string());
     agent["inference_profile_id"] = Value::String(applied_profile);
     config["agents"]
         .as_array_mut()
-        .context("agents is not an array")?
+        .expect("agents is not an array")
         .push(agent);
     write_json_file(&config_path, &config)?;
     let port = allocate_port()?;
@@ -663,10 +660,10 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
             "--p2p-transport",
             "none",
             "--apply-root",
-            root.to_str().context("pack root path is not UTF-8")?,
+            root.to_str().expect("pack root path is not UTF-8"),
             "--grok-shim",
             "--grok-shim-socket-path",
-            socket_path.to_str().context("socket path is not UTF-8")?,
+            socket_path.to_str().expect("socket path is not UTF-8"),
             "--grok-shim-agent-id",
             GROK_BEHAVIOR,
         ],
@@ -695,7 +692,7 @@ async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -729,7 +726,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/version"))
         .send()
         .await
-        .context("fetching /version")?;
+        .expect("fetching /version");
     assert!(
         version_response.status().is_success(),
         "unexpected /version status: {version_response:?}"
@@ -737,7 +734,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let version: Value = version_response
         .json()
         .await
-        .context("reading /version body")?;
+        .expect("reading /version body");
     assert_eq!(
         version.get("service").and_then(Value::as_str),
         Some("gents")
@@ -760,15 +757,12 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/healthz"))
         .send()
         .await
-        .context("fetching /healthz")?;
+        .expect("fetching /healthz");
     assert!(
         health_response.status().is_success(),
         "unexpected /healthz status: {health_response:?}"
     );
-    let health: Value = health_response
-        .json()
-        .await
-        .context("reading /healthz body")?;
+    let health: Value = health_response.json().await.expect("reading /healthz body");
     assert_eq!(health.get("ok").and_then(Value::as_bool), Some(true));
     assert_eq!(health.get("status").and_then(Value::as_str), Some("ok"));
     assert_eq!(health.get("service").and_then(Value::as_str), Some("gents"));
@@ -792,15 +786,12 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/status"))
         .send()
         .await
-        .context("fetching /status")?;
+        .expect("fetching /status");
     assert!(
         status_response.status().is_success(),
         "unexpected /status response: {status_response:?}"
     );
-    let status: Value = status_response
-        .json()
-        .await
-        .context("reading /status body")?;
+    let status: Value = status_response.json().await.expect("reading /status body");
     assert_eq!(
         status.get("node_name").and_then(Value::as_str),
         Some(agent_name.as_str())
@@ -863,7 +854,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     ] {
         graphql_query(&graphql, &mutation)
             .await
-            .context("seeding self-view fixtures")?;
+            .expect("seeding self-view fixtures");
     }
 
     use gents::session::canonical_rows::{
@@ -882,7 +873,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     .await?;
     let request_doc_id = first_graphql_row(&request, "AgentRequest")?["_docID"]
         .as_str()
-        .context("self-budget request physical ID")?;
+        .expect("self-budget request physical ID");
     let access = gents::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
@@ -996,22 +987,19 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     ] {
         graphql_query(&graphql, &mutation)
             .await
-            .context("seeding foreign-principal fences")?;
+            .expect("seeding foreign-principal fences");
     }
 
     let status_response = client
         .get(format!("http://127.0.0.1:{port}/status"))
         .send()
         .await
-        .context("fetching /status after seeding context fixtures")?;
+        .expect("fetching /status after seeding context fixtures");
     assert!(
         status_response.status().is_success(),
         "unexpected /status response: {status_response:?}"
     );
-    let status: Value = status_response
-        .json()
-        .await
-        .context("reading /status body")?;
+    let status: Value = status_response.json().await.expect("reading /status body");
     let agents = status
         .get("agents")
         .and_then(Value::as_array)
@@ -1114,7 +1102,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/healthz"))
         .send()
         .await
-        .context("fetching /healthz after seeding foreign fences")?;
+        .expect("fetching /healthz after seeding foreign fences");
     assert!(
         health_response.status().is_success(),
         "unexpected /healthz status after foreign seeds: {health_response:?}"
@@ -1122,7 +1110,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let health: Value = health_response
         .json()
         .await
-        .context("reading /healthz body after foreign seeds")?;
+        .expect("reading /healthz body after foreign seeds");
     assert_eq!(
         health
             .pointer("/checks/runtime/ready")
@@ -1154,18 +1142,17 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/sessions?limit=1"))
         .send()
         .await
-        .context("fetching /sessions")?;
+        .expect("fetching /sessions");
     let sessions_status = sessions_response.status();
     let sessions_body = sessions_response
         .text()
         .await
-        .context("reading /sessions body")?;
+        .expect("reading /sessions body");
     assert!(
         sessions_status.is_success(),
         "unexpected /sessions response: {sessions_status}: {sessions_body}"
     );
-    let sessions: Value =
-        serde_json::from_str(&sessions_body).context("decoding /sessions body")?;
+    let sessions: Value = serde_json::from_str(&sessions_body).expect("decoding /sessions body");
     assert_eq!(
         sessions.get("node_did").and_then(Value::as_str),
         Some(node_did.as_str())
@@ -1196,12 +1183,12 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/fleet"))
         .send()
         .await
-        .context("fetching /fleet")?;
+        .expect("fetching /fleet");
     assert!(
         fleet_response.status().is_success(),
         "unexpected /fleet response: {fleet_response:?}"
     );
-    let fleet: Value = fleet_response.json().await.context("reading /fleet body")?;
+    let fleet: Value = fleet_response.json().await.expect("reading /fleet body");
     assert!(
         fleet
             .get("agents")
@@ -1251,14 +1238,14 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     ] {
         graphql_query(&graphql, &mutation)
             .await
-            .context("seeding MCP pool fixtures")?;
+            .expect("seeding MCP pool fixtures");
     }
 
     let mcp_pool_response = client
         .get(format!("http://127.0.0.1:{port}/mcp/pool"))
         .send()
         .await
-        .context("fetching /mcp/pool")?;
+        .expect("fetching /mcp/pool");
     assert!(
         mcp_pool_response.status().is_success(),
         "unexpected /mcp/pool response: {mcp_pool_response:?}"
@@ -1266,7 +1253,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let mcp_pool: Value = mcp_pool_response
         .json()
         .await
-        .context("reading /mcp/pool body")?;
+        .expect("reading /mcp/pool body");
     assert_eq!(
         mcp_pool.get("node_did").and_then(Value::as_str),
         Some(node_did.as_str())
@@ -1324,7 +1311,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/mcp"))
         .send()
         .await
-        .context("probing /mcp")?;
+        .expect("probing /mcp");
     assert_eq!(
         mcp_off.status(),
         reqwest::StatusCode::NOT_FOUND,
@@ -1335,7 +1322,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .get(format!("http://127.0.0.1:{port}/metrics"))
         .send()
         .await
-        .context("fetching /metrics")?;
+        .expect("fetching /metrics");
     assert!(
         response.status().is_success(),
         "unexpected status: {response:?}"
@@ -1350,7 +1337,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         content_type.starts_with("text/plain"),
         "unexpected content-type: {content_type}"
     );
-    let body = response.text().await.context("reading /metrics body")?;
+    let body = response.text().await.expect("reading /metrics body");
     assert!(
         body.contains("# HELP gents_up"),
         "expected gents_up help text in metrics body:\n{body}"
@@ -1401,7 +1388,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -1431,7 +1418,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .ok_or_else(|| format!("init output missing backend_id: {init}"))?
         .to_string();
     let default_agent_id = init
         .pointer("/init/default_agent_id")
@@ -1460,7 +1447,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     let request_id = submitted
         .get("request_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("request submit output missing request_id: {submitted}"))?
+        .ok_or_else(|| format!("request submit output missing request_id: {submitted}"))?
         .to_string();
     wait_for_request_lifecycle_state(
         &graphql,
@@ -1485,12 +1472,12 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
             .get(format!("http://127.0.0.1:{port}/fleet/slots"))
             .send()
             .await
-            .context("fetching /fleet/slots")?;
+            .expect("fetching /fleet/slots");
         assert!(
             response.status().is_success(),
             "unexpected /fleet/slots response: {response:?}"
         );
-        let snapshot: Value = response.json().await.context("reading /fleet/slots body")?;
+        let snapshot: Value = response.json().await.expect("reading /fleet/slots body");
         let active_calls = active_inference_calls_for_backend(&graphql, &backend_id).await?;
         let backend_running = count_inference_calls(&active_calls, None, "running");
         let backend_queued = count_inference_calls(&active_calls, None, "queued");
@@ -1507,10 +1494,8 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
             );
         }
         if Instant::now() >= stable_deadline {
-            return Err(anyhow!(
-                "fleet slot snapshot did not stabilize with active inference calls; snapshot={snapshot}; active_calls={}",
-                Value::Array(active_calls)
-            ));
+            return Err(format!("fleet slot snapshot did not stabilize with active inference calls; snapshot={snapshot}; active_calls={}",
+                Value::Array(active_calls)).into());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
@@ -1610,7 +1595,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_env = tempdir.path().join("home-env");
     let agent_home = home_env.join(".gents");
     fs::create_dir_all(&agent_home)?;
@@ -1653,7 +1638,7 @@ async fn server_rejects_real_initialized_did_without_key_path() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejects_macos_keychain_identity_without_label() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_env = tempdir.path().join("home-env");
     let agent_home = home_env.join(".gents");
     fs::create_dir_all(&agent_home)?;
@@ -1698,7 +1683,7 @@ async fn server_rejects_macos_keychain_identity_without_label() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejects_real_initialized_did_with_missing_key_file_without_creating_it(
 ) -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_env = tempdir.path().join("home-env");
     let agent_home = home_env.join(".gents");
     let key_path = agent_home.join("keys").join("missing.key");
@@ -1750,7 +1735,7 @@ async fn server_rejects_real_initialized_did_with_missing_key_file_without_creat
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -1821,15 +1806,12 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         .get(format!("http://127.0.0.1:{port}/status"))
         .send()
         .await
-        .context("fetching /status")?;
+        .expect("fetching /status");
     assert!(
         status_response.status().is_success(),
         "unexpected /status response: {status_response:?}"
     );
-    let status: Value = status_response
-        .json()
-        .await
-        .context("reading /status body")?;
+    let status: Value = status_response.json().await.expect("reading /status body");
     assert_eq!(
         status.get("node_did").and_then(Value::as_str),
         Some(node_did.as_str())
@@ -1870,7 +1852,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -1906,7 +1888,7 @@ async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
     let listen = readiness
         .get("p2p_listen_addresses")
         .and_then(Value::as_array)
-        .context("readiness lists P2P listen addresses")?;
+        .expect("readiness lists P2P listen addresses");
     assert!(
         listen
             .iter()
@@ -1919,7 +1901,7 @@ async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -1978,7 +1960,7 @@ async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()>
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -2003,7 +1985,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .ok_or_else(|| format!("init output missing backend_id: {init}"))?
         .to_string();
 
     let mut warm_server = spawn_server(&home_dir, warm_port)?;
@@ -2026,15 +2008,15 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
         ),
     )
     .await
-    .context("seeding an unavailable backend observation")?;
+    .expect("seeding an unavailable backend observation");
     warm_server
         .child
         .kill()
-        .context("stopping warm server after backend downgrade")?;
+        .expect("stopping warm server after backend downgrade");
     warm_server
         .child
         .wait()
-        .context("waiting for warm server shutdown")?;
+        .expect("waiting for warm server shutdown");
 
     let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
     wait_for_port(port, &mut serve)?;
@@ -2058,7 +2040,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     let unavailable = readiness
         .get("unavailable_agents")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("readiness missing unavailable_agents: {readiness}"))?;
+        .ok_or_else(|| format!("readiness missing unavailable_agents: {readiness}"))?;
     assert_eq!(unavailable.len(), 1);
     let reason = unavailable
         .first()
@@ -2091,7 +2073,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
     let status_unavailable = status
         .get("unavailable_agents")
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("status output missing unavailable_agents: {status}"))?;
+        .ok_or_else(|| format!("status output missing unavailable_agents: {status}"))?;
     assert_eq!(status_unavailable.len(), 1);
     let status_reason = status_unavailable
         .values()
@@ -2109,7 +2091,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -2147,7 +2129,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .ok_or_else(|| format!("init output missing backend_id: {init}"))?
         .to_string();
     let tools_id = generated_tools_id_for_agent(&node_did);
 
@@ -2196,7 +2178,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn query_command_reconstructs_a_trace() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -2231,7 +2213,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         ),
     )
     .await
-    .context("seeding trace request")?;
+    .expect("seeding trace request");
     let request_doc_id =
         gents_protocol::graphql::extract_mutation_doc_id(&request_response, "AgentRequest")?;
 
@@ -2243,7 +2225,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         ),
     )
     .await
-    .context("seeding trace tool call")?;
+    .expect("seeding trace tool call");
 
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
@@ -2353,7 +2335,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         }),
     )
     .await
-    .context("stamping trace terminal selection")?;
+    .expect("stamping trace terminal selection");
 
     let request = run_cli_json(
         &home_dir,
@@ -2435,7 +2417,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     .await?;
     let request_row_value = first_graphql_row(&request_response, "AgentRequest")?.clone();
     let request_row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(request_row_value).context("decoding canonical AgentRequest row")?;
+        serde_json::from_value(request_row_value).expect("decoding canonical AgentRequest row");
     assert_eq!(
         request_row.session_id.as_deref(),
         Some("trace-session"),
@@ -2444,7 +2426,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     assert_eq!(
         request_row
             .lifecycle_state
-            .context("request row lost lifecycle_state")?
+            .expect("request row lost lifecycle_state")
             .as_str(),
         "completed"
     );
@@ -2574,7 +2556,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     assert_eq!(inventory["discovery"], Value::Bool(true), "{inventory}");
     let field_names: Vec<&str> = inventory["fields"]
         .as_array()
-        .context("discovery fields array")?
+        .expect("discovery fields array")
         .iter()
         .filter_map(|f| f["name"].as_str())
         .collect();
@@ -2593,7 +2575,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
     use rmcp::ServiceExt;
 
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -2633,15 +2615,15 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     ] {
         graphql_query(&graphql, &mutation)
             .await
-            .context("seeding mcp trace")?;
+            .expect("seeding mcp trace");
     }
 
     let config =
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"));
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
-    let mcp = ().serve(transport).await.context("MCP client handshake with /mcp")?;
+    let mcp = ().serve(transport).await.expect("MCP client handshake with /mcp");
 
-    let tools = mcp.peer().list_tools(None).await.context("list_tools")?;
+    let tools = mcp.peer().list_tools(None).await.expect("list_tools");
     assert!(
         tools.tools.iter().any(|tool| tool.name.as_ref() == "query"),
         "expected defra_query in advertised tools: {:?}",
@@ -2661,14 +2643,14 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         .peer()
         .call_tool(params)
         .await
-        .context("call_tool defra_query fields")?;
+        .expect("call_tool defra_query fields");
     let text = result
         .content
         .iter()
         .filter_map(|content| content.raw.as_text().map(|t| t.text.clone()))
         .collect::<Vec<_>>()
         .join("");
-    let payload: Value = serde_json::from_str(&text).context("MCP field inventory is JSON")?;
+    let payload: Value = serde_json::from_str(&text).expect("MCP field inventory is JSON");
     assert_eq!(payload["discovery"], true, "{payload}");
     assert!(
         payload["fields"]
@@ -2890,14 +2872,14 @@ async fn owner_reads_job_fields() -> Result<()> {
         .await?;
     let rows = found["data"]["AgentToolCall"]
         .as_array()
-        .context("owner read returns AgentToolCall rows")?;
+        .expect("owner read returns AgentToolCall rows");
     assert_eq!(rows.len(), 1, "{found}");
     let row = &rows[0];
     let read_progress: JobProgress = serde_json::from_value(row["job_progress"].clone())
-        .context("job_progress decodes as JobProgress")?;
+        .expect("job_progress decodes as JobProgress");
     assert_eq!(read_progress, progress);
     let read_pin: JobPin =
-        serde_json::from_value(row["job_pin"].clone()).context("job_pin decodes as JobPin")?;
+        serde_json::from_value(row["job_pin"].clone()).expect("job_pin decodes as JobPin");
     assert_eq!(read_pin, pin);
     assert_eq!(row["job_step_state"], step_state);
 
@@ -2910,7 +2892,7 @@ async fn owner_reads_job_fields() -> Result<()> {
         .await?;
     let mut ids: Vec<&str> = children["data"]["AgentRequest"]
         .as_array()
-        .context("owner read returns AgentRequest rows")?
+        .expect("owner read returns AgentRequest rows")
         .iter()
         .filter_map(|child| child["request_id"].as_str())
         .collect();
@@ -2933,9 +2915,9 @@ struct McpGraphHome {
 
 impl McpGraphHome {
     async fn start(label: &str, serve_flags: &[&str]) -> Result<Self> {
-        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+        let tempdir = tempfile::tempdir().expect("creating tempdir");
         let home = tempdir.path().join("agent-home");
-        let home_arg = home.to_str().context("home path is not UTF-8")?.to_owned();
+        let home_arg = home.to_str().expect("home path is not UTF-8").to_owned();
         let init = run_init_json(
             tempdir.path(),
             &["--node-name", label, "--home", home_arg.as_str()],
@@ -2946,7 +2928,7 @@ impl McpGraphHome {
         let mut serve = vec!["--home", home_arg.as_str()];
         serve.extend_from_slice(serve_flags);
         let (server, readiness) = spawn_server_with_ready_json(&home, port, &serve, &[])?;
-        anyhow::ensure!(
+        assert!(
             readiness.get("status").and_then(Value::as_str) == Some("serving"),
             "server did not become ready: {readiness}"
         );
@@ -2976,23 +2958,19 @@ impl McpGraphHome {
             self.port
         ));
         if let Some(bearer) = bearer {
-            config = config.auth_header(bearer.strip_prefix("Bearer ").context("bearer prefix")?);
+            config = config.auth_header(bearer.strip_prefix("Bearer ").expect("bearer prefix"));
         }
         ().serve(rmcp::transport::StreamableHttpClientTransport::from_config(
             config,
         ))
         .await
-        .context("MCP handshake with /mcp")
+        .map_err(|error| format!("MCP handshake with /mcp: {error}").into())
     }
 }
 
 async fn start_prepared_graph_run(served: &McpGraphHome) -> Result<String> {
     let root = served.tempdir.path();
-    let utf8 = |path: &std::path::Path| {
-        path.to_str()
-            .map(str::to_owned)
-            .context("path is not UTF-8")
-    };
+    let utf8 = |path: &std::path::Path| path.to_str().map(str::to_owned).ok_or("path is not UTF-8");
     let home = utf8(&served.home)?;
     let pack_dir = root.join("prepared_graph");
     copy_dir_all(&fixture_pack_dir("prepared_graph"), &pack_dir)?;
@@ -3038,8 +3016,8 @@ async fn start_prepared_graph_run(served: &McpGraphHome) -> Result<String> {
             ])
             .args(args)
             .output()
-            .context("running git")?;
-        anyhow::ensure!(
+            .expect("running git");
+        assert!(
             output.status.success(),
             "git {args:?}: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -3075,7 +3053,7 @@ async fn start_prepared_graph_run(served: &McpGraphHome) -> Result<String> {
         .get("run_id")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .with_context(|| format!("graph run printed no run_id: {receipt}"))
+        .ok_or_else(|| format!("graph run printed no run_id: {receipt}").into())
 }
 
 async fn advertised(
@@ -3114,9 +3092,7 @@ async fn call_mcp_tool(
     Ok(match outcome {
         Err(error) => Err(error.to_string()),
         Ok(result) if result.is_error == Some(true) => Err(text(&result)),
-        Ok(result) => {
-            Ok(serde_json::from_str(&text(&result)).context("graph read result is JSON")?)
-        }
+        Ok(result) => Ok(serde_json::from_str(&text(&result)).expect("graph read result is JSON")),
     })
 }
 
@@ -3135,7 +3111,7 @@ async fn mcp_graph_tools_refuse_a_request_without_authorization() -> Result<()> 
             json!({"run_id": "any"})
         };
         let refused = call_mcp_tool(&client, tool, args).await?;
-        anyhow::ensure!(
+        assert!(
             matches!(&refused, Err(message) if message.contains("caller-signed DefraDB Bearer")),
             "{tool}: {refused:?}"
         );
@@ -3154,7 +3130,7 @@ async fn mcp_graph_tools_refuse_a_bearer_for_another_audience() -> Result<()> {
     )?;
     let client = served.client(Some(&bearer)).await?;
     let refused = call_mcp_tool(&client, "list_graphs", json!({})).await?;
-    anyhow::ensure!(
+    assert!(
         matches!(&refused, Err(message) if message.contains("another host:port")),
         "{refused:?}"
     );
@@ -3167,8 +3143,8 @@ async fn mcp_graph_tools_are_absent_without_the_flag() -> Result<()> {
     let served = McpGraphHome::start("mcp-graph-off", &["--enable-mcp"]).await?;
     let client = served.client(None).await?;
     let names = advertised(&client).await?;
-    anyhow::ensure!(names.iter().any(|name| name == "query"), "{names:?}");
-    anyhow::ensure!(
+    assert!(names.iter().any(|name| name == "query"), "{names:?}");
+    assert!(
         !names.iter().any(|name| name.contains("graph")),
         "graph tools must not be advertised without --mcp-graph-tools: {names:?}"
     );
@@ -3185,19 +3161,19 @@ async fn mcp_graph_tools_offer_only_the_read_tools() -> Result<()> {
     let client = served.client(Some(&bearer)).await?;
     let names = advertised(&client).await?;
     for name in MCP_GRAPH_READ_TOOLS {
-        anyhow::ensure!(
+        assert!(
             names.iter().any(|advertised| advertised == name),
             "{name} missing from {names:?}"
         );
     }
     for absent in ["run_graph", "cancel_graph_run", "preview_graph", "config"] {
-        anyhow::ensure!(
+        assert!(
             !names.iter().any(|name| name == absent),
             "{absent} must not be offered over /mcp: {names:?}"
         );
     }
     let refused = call_mcp_tool(&client, "run_graph", json!({"package": "any"})).await?;
-    anyhow::ensure!(refused.is_err(), "run_graph has no /mcp route: {refused:?}");
+    assert!(refused.is_err(), "run_graph has no /mcp route: {refused:?}");
     let _ = client.cancel().await;
     Ok(())
 }
@@ -3213,29 +3189,29 @@ async fn mcp_graph_tools_read_a_cli_started_run_with_the_owner_bearer() -> Resul
 
     let listed = call_mcp_tool(&owner, "list_graphs", json!({}))
         .await?
-        .map_err(|refusal| anyhow::anyhow!("list_graphs refused the owner: {refusal}"))?;
-    let graphs = listed["graphs"].as_array().context("graphs array")?;
-    anyhow::ensure!(
+        .map_err(|refusal| format!("list_graphs refused the owner: {refusal}"))?;
+    let graphs = listed["graphs"].as_array().expect("graphs array");
+    assert!(
         graphs
             .iter()
             .any(|graph| graph["active_plan"]["package"]["name"] == "prepared_graph"),
         "{listed}"
     );
-    anyhow::ensure!(
+    assert!(
         graphs.iter().all(|graph| graph.get("run_with").is_none()),
         "/mcp offers no run tool, so the listing names none: {listed}"
     );
     let observed = call_mcp_tool(&owner, "get_graph_run", json!({"run_id": run_id}))
         .await?
-        .map_err(|refusal| anyhow::anyhow!("get_graph_run refused the owner: {refusal}"))?;
-    anyhow::ensure!(
+        .map_err(|refusal| format!("get_graph_run refused the owner: {refusal}"))?;
+    assert!(
         observed["run_id"] == run_id.as_str() && observed["owner_did"] == served.owner_did.as_str(),
         "{observed}"
     );
     let result = call_mcp_tool(&owner, "get_graph_result", json!({"run_id": run_id}))
         .await?
-        .map_err(|refusal| anyhow::anyhow!("get_graph_result refused the owner: {refusal}"))?;
-    anyhow::ensure!(result["run_id"] == run_id.as_str(), "{result}");
+        .map_err(|refusal| format!("get_graph_result refused the owner: {refusal}"))?;
+    assert!(result["run_id"] == run_id.as_str(), "{result}");
     let _ = owner.cancel().await;
     Ok(())
 }
@@ -3253,8 +3229,8 @@ async fn mcp_graph_tools_take_the_subject_did_from_the_bearer() -> Result<()> {
     let owner = served.client(Some(&owner_bearer)).await?;
     let owner_listing = call_mcp_tool(&owner, "list_graphs", json!({}))
         .await?
-        .map_err(|refusal| anyhow::anyhow!("owner graph listing was refused: {refusal}"))?;
-    anyhow::ensure!(
+        .map_err(|refusal| format!("owner graph listing was refused: {refusal}"))?;
+    assert!(
         owner_listing["node_did"] == served.owner_did
             && owner_listing["graphs"].as_array().is_some_and(|graphs| {
                 graphs
@@ -3269,11 +3245,11 @@ async fn mcp_graph_tools_take_the_subject_did_from_the_bearer() -> Result<()> {
     let client = served.client(Some(&bearer)).await?;
     let listed = call_mcp_tool(&client, "list_graphs", json!({})).await?;
     match listed {
-        Err(refusal) => anyhow::ensure!(
+        Err(refusal) => assert!(
             !refusal.contains(&run_id) && !refusal.contains("prepared_graph"),
             "foreign listing refusal disclosed the owner's graph: {refusal}"
         ),
-        Ok(listing) => anyhow::ensure!(
+        Ok(listing) => assert!(
             listing["node_did"] == other.did()
                 && listing["graphs"].as_array().is_some_and(|graphs| {
                     graphs
@@ -3285,7 +3261,7 @@ async fn mcp_graph_tools_take_the_subject_did_from_the_bearer() -> Result<()> {
     }
     for tool in ["get_graph_run", "get_graph_result"] {
         let refused = call_mcp_tool(&client, tool, json!({"run_id": run_id})).await?;
-        anyhow::ensure!(
+        assert!(
             refused.is_err() || refused.as_ref().is_ok_and(|view| view["run_id"] != run_id),
             "{tool}: foreign bearer saw the owner run: {refused:?}"
         );

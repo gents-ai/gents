@@ -1,6 +1,6 @@
 mod support;
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 
 use support::{
@@ -16,11 +16,11 @@ fn required_str<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
     for segment in path {
         current = current
             .get(*segment)
-            .with_context(|| format!("missing JSON path {} in {value}", path.join(".")))?;
+            .ok_or_else(|| format!("missing JSON path {} in {value}", path.join(".")))?;
     }
     current
         .as_str()
-        .with_context(|| format!("JSON path {} is not a string", path.join(".")))
+        .ok_or_else(|| format!("JSON path {} is not a string", path.join(".")).into())
 }
 
 fn dir_arg(path: &std::path::Path) -> &str {
@@ -31,7 +31,7 @@ fn dir_arg(path: &std::path::Path) -> &str {
 fn the_binary_embeds_no_packs() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let listed = run_cli_json(temp.path(), &["pack", "list"])?;
-    anyhow::ensure!(listed["packs"] == serde_json::json!([]), "{listed}");
+    assert!(listed["packs"] == serde_json::json!([]), "{listed}");
     let denial = run_cli_failure_stderr(
         temp.path(),
         &[
@@ -42,7 +42,7 @@ fn the_binary_embeds_no_packs() -> Result<()> {
             UNROUTABLE_REGISTRY,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("is not in the pack store of") && denial.contains("could not be reached"),
         "{denial}"
     );
@@ -53,7 +53,7 @@ fn the_binary_embeds_no_packs() -> Result<()> {
 fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("node");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().expect("path");
     run_init_json(
         temp.path(),
         &["--node-name", "pack-installer", "--home", home_arg],
@@ -68,7 +68,7 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
         "--force-rebind-concrete-did",
     ];
     let first = run_cli_json(temp.path(), &args)?;
-    anyhow::ensure!(first["apply"]["counts"]["Agent"] == 1, "{first}");
+    assert!(first["apply"]["counts"]["Agent"] == 1, "{first}");
     let before_root = temp.path().join("before");
     run_cli_text(
         temp.path(),
@@ -78,12 +78,12 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
             "--home",
             home_arg,
             "--root",
-            before_root.to_str().context("export path")?,
+            before_root.to_str().expect("export path"),
         ],
     )?;
     let before = support::read_json_file(&before_root.join("pack_config.json"))?;
     let second = run_cli_json(temp.path(), &args)?;
-    anyhow::ensure!(
+    assert!(
         second["apply"]["counts"] == first["apply"]["counts"]
             && second["apply"]["created"] == serde_json::json!([])
             && second["apply"]["replaced"] == first["apply"]["created"]
@@ -99,10 +99,10 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
             "--home",
             home_arg,
             "--root",
-            after_root.to_str().context("export path")?,
+            after_root.to_str().expect("export path"),
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         before == support::read_json_file(&after_root.join("pack_config.json"))?,
         "reinstall changed canonical configuration"
     );
@@ -111,9 +111,9 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
 
 #[test]
 fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating graph install tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating graph install tempdir");
     let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("graph home path is not UTF-8")?;
+    let home_arg = home.to_str().expect("graph home path is not UTF-8");
     let initialized = run_init_json(
         tempdir.path(),
         &["--node-name", "graph-reviewer", "--home", home_arg],
@@ -122,7 +122,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
-    anyhow::ensure!(
+    assert!(
         readiness.get("status").and_then(Value::as_str) == Some("serving"),
         "server did not become ready: {readiness}"
     );
@@ -149,12 +149,12 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     ];
     let first = run_cli_json(tempdir.path(), &install_args)?;
     let second = run_cli_json(tempdir.path(), &install_args)?;
-    anyhow::ensure!(
+    assert!(
         first.get("install") == second.get("install"),
         "repeated install changed its durable receipt\nfirst: {first}\nsecond: {second}"
     );
     let revision = required_str(&first, &["install", "revision_digest"])?;
-    anyhow::ensure!(
+    assert!(
         required_str(&first, &["activation", "active_digest"])? == revision,
         "install did not activate its exact immutable revision: {first}"
     );
@@ -172,7 +172,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
             wrong_actor,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("package owner node is missing"),
         "wrong-owner install did not fail at the identity boundary: {denial}"
     );
@@ -189,7 +189,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
             &owner_did,
         ],
     )?;
-    anyhow::ensure!(disabled.get("enabled") == Some(&Value::Bool(false)));
+    assert!(disabled.get("enabled") == Some(&Value::Bool(false)));
     let enabled = run_cli_json(
         tempdir.path(),
         &[
@@ -202,7 +202,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
             &owner_did,
         ],
     )?;
-    anyhow::ensure!(enabled.get("enabled") == Some(&Value::Bool(true)));
+    assert!(enabled.get("enabled") == Some(&Value::Bool(true)));
     Ok(())
 }
 
@@ -212,9 +212,9 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
 /// `pack fetch --store` first, so the whole install runs with no registry.
 #[test]
 fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating pack install tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating pack install tempdir");
     let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("pack home path is not UTF-8")?;
+    let home_arg = home.to_str().expect("pack home path is not UTF-8");
     let initialized = run_init_json(
         tempdir.path(),
         &["--node-name", "port-installer", "--home", home_arg],
@@ -255,7 +255,7 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
     let install_args_ref: Vec<&str> = install_args.iter().map(String::as_str).collect();
 
     let installed = run_cli_json(tempdir.path(), &install_args_ref)?;
-    anyhow::ensure!(
+    assert!(
         installed["dependencies"] == serde_json::json!(["fixture/review_graph"])
             && installed["owner"] == owner_did.as_str(),
         "pack install did not report its graph dependency: {installed}"
@@ -272,13 +272,13 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
             &owner_did,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         enabled.get("enabled") == Some(&Value::Bool(true)),
         "the graph dependency was not installed: {enabled}"
     );
     let record = gents::pack::read_home_install(&home, "fixture/dependent_fixture")?
-        .context("the dependent pack wrote no home record")?;
-    anyhow::ensure!(
+        .expect("the dependent pack wrote no home record");
+    assert!(
         record.dependency_assets.len() == 1
             && record.dependency_assets[0].0 == "fixture/review_graph"
             && home
@@ -290,7 +290,7 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
 
     let _held = gents::home::lock_store(&home, &gents::home::default_data_dir(&home))?;
     let denial = run_cli_failure_stderr(tempdir.path(), &install_args_ref)?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("another Gents runtime")
             && denial.contains(&format!("process {}", std::process::id())),
         "a second holder of the home was not refused: {denial}"
@@ -315,7 +315,7 @@ fn dependent_on_review_graph(parent: &std::path::Path) -> Result<std::path::Path
 fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("assets-home");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().expect("path");
     let pack = fixture_pack_dir("assets_fixture");
 
     let install = run_cli_json(
@@ -323,12 +323,12 @@ fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> 
         &["pack", "install", dir_arg(&pack), "--home", home_arg],
     )?;
     let installed_assets = std::path::Path::new(required_str(&install, &["installed_assets"])?);
-    anyhow::ensure!(installed_assets.is_dir(), "{install}");
-    anyhow::ensure!(
+    assert!(installed_assets.is_dir(), "{install}");
+    assert!(
         installed_assets.join("data/nested.json").is_file(),
         "{install}"
     );
-    anyhow::ensure!(
+    assert!(
         !home.join("data").exists(),
         "an assets-only install never opens a node"
     );
@@ -343,16 +343,16 @@ fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> 
             home_arg,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         removed["removed"]["assets"]
             .as_array()
-            .context("assets")?
+            .expect("assets")
             .len()
             == 1,
         "{removed}"
     );
-    anyhow::ensure!(!installed_assets.exists(), "the cache version was removed");
-    anyhow::ensure!(
+    assert!(!installed_assets.exists(), "the cache version was removed");
+    assert!(
         !home.join("data").exists(),
         "removal never opened a node either"
     );
@@ -367,15 +367,15 @@ fn an_assets_pack_removes_completely_from_an_uninitialized_home() -> Result<()> 
             home_arg,
         ],
     )?;
-    anyhow::ensure!(again.contains("is not installed"), "{again}");
+    assert!(again.contains("is not installed"), "{again}");
     Ok(())
 }
 
 #[test]
 fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating graph remove tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating graph remove tempdir");
     let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().expect("path");
     let initialized = run_init_json(
         tempdir.path(),
         &["--node-name", "graph-remover", "--home", home_arg],
@@ -402,10 +402,8 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
         tempdir.path(),
         &["pack", "remove", "fixture/review_graph", "--home", home_arg],
     )?;
-    let retained = removed["removed"]["retained"]
-        .as_array()
-        .context("retained")?;
-    anyhow::ensure!(
+    let retained = removed["removed"]["retained"].as_array().expect("retained");
+    assert!(
         retained.iter().any(|entry| entry["item"]
             .as_str()
             .unwrap_or_default()
@@ -425,7 +423,7 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
             &owner_did,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("package graph is not installed"),
         "{denial}"
     );
@@ -436,9 +434,9 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
 
 #[test]
 fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating dependency remove tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating dependency remove tempdir");
     let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().expect("path");
     let initialized = run_init_json(
         tempdir.path(),
         &["--node-name", "dep-remover", "--home", home_arg],
@@ -484,7 +482,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
         tempdir.path(),
         &["pack", "remove", "fixture/review_graph", "--home", home_arg],
     )?;
-    anyhow::ensure!(denial.contains("fixture/dependent_fixture"), "{denial}");
+    assert!(denial.contains("fixture/dependent_fixture"), "{denial}");
 
     let removed = run_cli_json(
         tempdir.path(),
@@ -496,7 +494,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
             home_arg,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         removed["removed"]["dependencies"][0]["pack"] == "fixture/review_graph",
         "{removed}"
     );
@@ -513,7 +511,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
             &owner_did,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("package graph is not installed"),
         "{denial}"
     );
@@ -555,7 +553,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
             &owner_did,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         enabled.get("enabled") == Some(&Value::Bool(true)),
         "an explicit install of the dependency must survive removing its dependent: {enabled}"
     );
@@ -564,9 +562,9 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
 
 #[test]
 fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating graph run tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating graph run tempdir");
     let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().expect("path");
     let initialized = run_init_json(
         tempdir.path(),
         &["--node-name", "graph-runner", "--home", home_arg],
@@ -575,7 +573,7 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
-    anyhow::ensure!(
+    assert!(
         readiness.get("status").and_then(Value::as_str) == Some("serving"),
         "server did not become ready: {readiness}"
     );
@@ -617,7 +615,7 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
             &owner_did,
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("gents/review_graph") && denial.contains("has no installation record"),
         "a bare-namespace run must be refused by its own coordinate, not the installed one: {denial}"
     );
@@ -640,15 +638,15 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
             &owner_did,
         ],
     )?;
-    anyhow::ensure!(denial.contains("graph is not installed"), "{denial}");
+    assert!(denial.contains("graph is not installed"), "{denial}");
     Ok(())
 }
 
 #[test]
 fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating schema validation tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating schema validation tempdir");
     let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().expect("path");
     let initialized = run_init_json(
         tempdir.path(),
         &["--node-name", "schema-runner", "--home", home_arg],
@@ -657,7 +655,7 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
-    anyhow::ensure!(
+    assert!(
         readiness.get("status").and_then(Value::as_str) == Some("serving"),
         "server did not become ready: {readiness}"
     );
@@ -713,7 +711,7 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
             "repository=NOT VALID",
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("does not satisfy its schema"),
         "a value violating the pattern must be refused before any run starts: {denial}"
     );
@@ -722,9 +720,9 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
 
 #[test]
 fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating graph-id run tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating graph-id run tempdir");
     let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().expect("path");
     let initialized = run_init_json(
         tempdir.path(),
         &["--node-name", "graph-id-runner", "--home", home_arg],
@@ -733,7 +731,7 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
-    anyhow::ensure!(
+    assert!(
         readiness.get("status").and_then(Value::as_str) == Some("serving"),
         "server did not become ready: {readiness}"
     );
@@ -784,7 +782,7 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
     ];
     args.extend(scope);
     let denial = run_cli_failure_stderr(tempdir.path(), &args)?;
-    anyhow::ensure!(
+    assert!(
         denial.contains(&format!("is active at revision {digest}")),
         "a digest that is not the active revision must be refused before any run starts: {denial}"
     );
@@ -805,12 +803,12 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .collect();
-    anyhow::ensure!(
+    assert!(
         lines.len() == 1,
         "ndjson prints exactly one receipt line: {printed}"
     );
-    let receipt: Value = serde_json::from_str(lines[0]).context("the receipt line is JSON")?;
-    anyhow::ensure!(
+    let receipt: Value = serde_json::from_str(lines[0]).expect("the receipt line is JSON");
+    assert!(
         required_str(&receipt, &["graph_id"])? == graph_id
             && required_str(&receipt, &["revision_digest"])? == digest,
         "{receipt}"
@@ -824,9 +822,9 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
 
 #[tokio::test]
 async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating prepare tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating prepare tempdir");
     let home = tempdir.path().join("agent-home");
-    let home_arg = home.to_str().context("path")?;
+    let home_arg = home.to_str().expect("path");
     let initialized = run_init_json(
         tempdir.path(),
         &["--node-name", "prepare-runner", "--home", home_arg],
@@ -835,7 +833,7 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
-    anyhow::ensure!(
+    assert!(
         readiness.get("status").and_then(Value::as_str) == Some("serving"),
         "server did not become ready: {readiness}"
     );
@@ -886,8 +884,8 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
             ])
             .args(args)
             .output()
-            .context("running git")?;
-        anyhow::ensure!(
+            .expect("running git");
+        assert!(
             output.status.success(),
             "git {args:?}: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -921,7 +919,7 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
             "head=NOT VALID",
         ],
     )?;
-    anyhow::ensure!(
+    assert!(
         denial.contains("does not satisfy its schema"),
         "an invalid head must be refused before any host step runs: {denial}"
     );
@@ -944,17 +942,17 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
             &format!("repository={}", dir_arg(&repo)),
         ],
     )?;
-    anyhow::ensure!(receipt.get("run_id").is_some(), "{receipt}");
+    assert!(receipt.get("run_id").is_some(), "{receipt}");
 
     let evidence = graphql_query(&graphql, "{ FixtureEvidence { head_ref note } }").await?;
     let row = first_graphql_row(&evidence, "FixtureEvidence")?;
-    anyhow::ensure!(
+    assert!(
         row["head_ref"] == head.as_str() && row["note"] == "prepared",
         "the plugin must have seen the repository's head {head}: {evidence}"
     );
     let jobs = graphql_query(&graphql, "{ FixtureJob { head_ref summary } }").await?;
     let job = first_graphql_row(&jobs, "FixtureJob")?;
-    anyhow::ensure!(
+    assert!(
         job["head_ref"] == head.as_str()
             && job["summary"] == format!("prepared at {head}").as_str(),
         "the run must start on the plugin's input: {jobs}"

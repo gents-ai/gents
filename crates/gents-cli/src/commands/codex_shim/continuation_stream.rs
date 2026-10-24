@@ -147,6 +147,21 @@ async fn watch_loaded_root_continuations(
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum ContinuationError {
+    #[error("background continuation AgentRequest missing session_id")]
+    MissingSessionId,
+    #[error("background continuation AgentRequest missing node_did")]
+    MissingNodeDid,
+    #[error("continuation has no physical request")]
+    NoPhysicalRequest,
+    #[error("decoding background completion AgentRequest row")]
+    DecodeRow {
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
 async fn project_background_continuation(
     connection: &ConnectionState,
     state: &ShimState,
@@ -157,11 +172,11 @@ async fn project_background_continuation(
     let session_id = request
         .session_id
         .clone()
-        .context("background continuation AgentRequest missing session_id")?;
+        .ok_or(ContinuationError::MissingSessionId)?;
     let node_did = request
         .node_did
         .clone()
-        .context("background continuation AgentRequest missing node_did")?;
+        .ok_or(ContinuationError::MissingNodeDid)?;
     let turn_id = request.request_id.clone();
     let started_at = request.created_at.as_deref().and_then(timestamp_seconds);
     if baseline_turn.is_none() {
@@ -197,9 +212,7 @@ async fn project_background_continuation(
         session_id: session_id.clone(),
         node_did,
         agent_id: request.agent_id,
-        request_doc_id: request
-            .doc_id
-            .context("continuation has no physical request")?,
+        request_doc_id: request.doc_id.ok_or(ContinuationError::NoPhysicalRequest)?,
         requester_did: request.requester_did,
         input: request.input,
         created_at: request.created_at,
@@ -249,13 +262,13 @@ async fn project_background_continuation(
                     Some(message),
                 )
                 .await?;
-            send_thread_status_changed(
+            Ok(send_thread_status_changed(
                 &connection.outbound,
                 state,
                 &session_id,
                 codex::ThreadStatus::SystemError,
             )
-            .await
+            .await?)
         }
     }
 }
@@ -298,13 +311,13 @@ async fn load_background_continuation_requests(
         .into_iter()
         .map(|value| {
             let row = serde_json::from_value::<AgentRequestRow>(value)
-                .context("decoding background completion AgentRequest row")?;
+                .map_err(|source| ContinuationError::DecodeRow { source })?;
             row.session_id
                 .as_deref()
-                .context("background continuation AgentRequest missing session_id")?;
+                .ok_or(ContinuationError::MissingSessionId)?;
             row.node_did
                 .as_deref()
-                .context("background continuation AgentRequest missing node_did")?;
+                .ok_or(ContinuationError::MissingNodeDid)?;
             Ok(row)
         })
         .collect::<Result<Vec<_>>>()

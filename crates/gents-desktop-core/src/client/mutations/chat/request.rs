@@ -15,8 +15,52 @@ use uuid::Uuid;
 
 use crate::client::store::ClientStore;
 
-use super::super::graphql::{escape_graphql_string, normalize_optional_string, normalize_required};
+use super::super::graphql::{
+    escape_graphql_string, normalize_optional_string, normalize_required, GraphqlError,
+};
 use super::binding::resolve_agent_binding;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ChatMutationError {
+    #[error(transparent)]
+    Graphql(#[from] GraphqlError),
+    #[error("content must not be empty")]
+    EmptyContent,
+    #[error("AgentSession session agent mismatch: existing={existing} requested={requested}")]
+    AgentMismatch { existing: String, requested: String },
+    #[error("no agent is bound to this session and Node {node_did} has no default_agent_id")]
+    NoAgentBound { node_did: String },
+    #[error("session {session_id} not found")]
+    SessionNotFound { session_id: String },
+    #[error("{reason}")]
+    CreateMutation { reason: &'static str },
+    #[error("retry parent request must have a lifecycle_state")]
+    RetryParentLifecycleMissing,
+    #[error("retry parent request must be failed, got lifecycle_state={lifecycle_state}")]
+    RetryParentNotFailed {
+        lifecycle_state: RequestLifecycleState,
+    },
+    #[error(
+        "client retry parent request must be interactive, got execution_origin={execution_origin}"
+    )]
+    RetryParentNotInteractive { execution_origin: String },
+    #[error("retry parent request exhausted retry budget: retry_count={retry_count} max_retries={max_retries}")]
+    RetryBudgetExhausted { retry_count: i64, max_retries: i64 },
+    #[error("retry parent request has invalid deadline {deadline:?}")]
+    InvalidDeadline {
+        deadline: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("retry parent request deadline is closed: deadline={deadline}")]
+    RetryDeadlineClosed { deadline: String },
+    #[error("retry parent request has invalid created_at {created_at:?}")]
+    InvalidCreatedAt {
+        created_at: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+}
 
 /// The durable submission receipt. Replica observation may still be pending;
 /// callers must not replay the mutation when a subsequent refresh fails.
@@ -38,11 +82,13 @@ pub struct SubmitRequestOptions {
     pub retry_key: Option<String>,
 }
 
-fn normalize_authored_content<'a>(input: &RequestInput, content: &'a str) -> Result<&'a str> {
-    anyhow::ensure!(
-        input.has_authored_input(content),
-        "content must not be empty"
-    );
+fn normalize_authored_content<'a>(
+    input: &RequestInput,
+    content: &'a str,
+) -> Result<&'a str, ChatMutationError> {
+    if !input.has_authored_input(content) {
+        return Err(ChatMutationError::EmptyContent);
+    }
     Ok(content.trim())
 }
 
@@ -200,7 +246,7 @@ pub(crate) async fn prepare_request_submission(
     let node_did = normalize_required("node_did", node_did)?;
     let requester_did = normalize_required("requester_did", requester_did)?;
     let content = normalize_authored_content(&options.input, content)?.to_owned();
-    let (content, options) = prepare_prompt_submission(&content, options)?;
+    let (content, options) = prepare_prompt_submission(&content, options);
     let request_id = request_id
         .map(str::to_owned)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -349,14 +395,14 @@ async fn validate_mailbox_submission_cause(
 fn prepare_prompt_submission(
     content: &str,
     mut options: SubmitRequestOptions,
-) -> Result<(String, SubmitRequestOptions)> {
+) -> (String, SubmitRequestOptions) {
     let selection = prompt_slash_skill_selection(content);
     if selection.selected_skill_ids.is_empty() {
-        return Ok((content.to_string(), options));
+        return (content.to_string(), options);
     }
 
     options.input.selected_skill_ids = selection.selected_skill_ids;
-    Ok((selection.prompt, options))
+    (selection.prompt, options)
 }
 
 pub async fn retry_request(
@@ -520,8 +566,12 @@ async fn retry_request_in_txn(
         RequestSigner::Identity(signer),
     )
     .await?;
-    txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-        .await?;
+    txn.execute(
+        &create
+            .graphql_mutation()
+            .map_err(|reason| ChatMutationError::CreateMutation { reason })?,
+    )
+    .await?;
 
     Ok(SubmittedRequest {
         request_id: candidate_request_id.to_string(),
@@ -731,36 +781,39 @@ fn ensure_retry_parent_eligible(
     parent_retry_count: i64,
     max_retries: i64,
     execution_origin: &str,
-) -> Result<()> {
+) -> Result<(), ChatMutationError> {
     // The Lean `.released` admission predicate is not persisted on
     // `AgentRequestRow`; it is represented here by requiring the parent to be
     // terminal failed.
     let lifecycle_state = parent
         .lifecycle_state
-        .context("retry parent request must have a lifecycle_state")?;
+        .ok_or(ChatMutationError::RetryParentLifecycleMissing)?;
 
     if lifecycle_state != RequestLifecycleState::Failed {
-        bail!("retry parent request must be failed, got lifecycle_state={lifecycle_state}");
+        return Err(ChatMutationError::RetryParentNotFailed { lifecycle_state });
     }
     if execution_origin != "interactive" {
-        bail!(
-            "client retry parent request must be interactive, got execution_origin={execution_origin}"
-        );
+        return Err(ChatMutationError::RetryParentNotInteractive {
+            execution_origin: execution_origin.to_owned(),
+        });
     }
     if parent_retry_count >= max_retries {
-        bail!(
-            "retry parent request exhausted retry budget: retry_count={parent_retry_count} max_retries={max_retries}"
-        );
+        return Err(ChatMutationError::RetryBudgetExhausted {
+            retry_count: parent_retry_count,
+            max_retries,
+        });
     }
     if let Some(deadline) = normalize_optional_string(parent.deadline.as_deref()) {
-        let deadline = DateTime::parse_from_rfc3339(deadline)
-            .with_context(|| format!("retry parent request has invalid deadline {deadline:?}"))?
+        let parsed = DateTime::parse_from_rfc3339(deadline)
+            .map_err(|source| ChatMutationError::InvalidDeadline {
+                deadline: deadline.to_owned(),
+                source,
+            })?
             .with_timezone(&Utc);
-        if Utc::now() > deadline {
-            bail!(
-                "retry parent request deadline is closed: deadline={}",
-                deadline.to_rfc3339()
-            );
+        if Utc::now() > parsed {
+            return Err(ChatMutationError::RetryDeadlineClosed {
+                deadline: parsed.to_rfc3339(),
+            });
         }
     }
 
@@ -992,7 +1045,9 @@ async fn fetch_retry_lineage(
     })
 }
 
-fn canonical_request_created_at_after(parent_created_at: Option<&str>) -> Result<String> {
+fn canonical_request_created_at_after(
+    parent_created_at: Option<&str>,
+) -> Result<String, ChatMutationError> {
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now = DateTime::parse_from_rfc3339(&now)
         .expect("UTC RFC3339 seconds formatter must parse")
@@ -1000,8 +1055,9 @@ fn canonical_request_created_at_after(parent_created_at: Option<&str>) -> Result
     let created_at = match normalize_optional_string(parent_created_at) {
         Some(parent_created_at) => {
             let parent = DateTime::parse_from_rfc3339(parent_created_at)
-                .with_context(|| {
-                    format!("retry parent request has invalid created_at {parent_created_at:?}")
+                .map_err(|source| ChatMutationError::InvalidCreatedAt {
+                    created_at: parent_created_at.to_owned(),
+                    source,
                 })?
                 .with_timezone(&Utc);
             now.max(parent + chrono::Duration::seconds(1))

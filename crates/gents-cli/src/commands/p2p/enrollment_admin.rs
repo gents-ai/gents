@@ -22,7 +22,7 @@ pub(crate) fn resolve_home_identity(
             home_dir.display()
         )
     })?;
-    load_initialized_home_identity(&home_dir, &config)
+    Ok(load_initialized_home_identity(&home_dir, &config)?)
 }
 
 pub(super) async fn decide_enrollment(
@@ -45,7 +45,7 @@ pub(super) async fn decide_enrollment(
         },
     )
     .await?;
-    print_json(&body)
+    Ok(print_json(&body)?)
 }
 
 pub(crate) async fn submit_enrollment_decision(
@@ -142,5 +142,5 @@ pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown error")
     );
-    print_json(&body)
+    Ok(print_json(&body)?)
 }

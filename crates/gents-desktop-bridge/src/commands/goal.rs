@@ -113,7 +113,7 @@ pub async fn control_goal(
             input,
         )
         .await
-        .map_err(BridgeError::classify_transport_error)?;
+        .map_err(|error| BridgeError::classify_transport_error(error.as_ref()))?;
     goal_control_result(session_id, receipt.outcome)
 }
 
@@ -178,8 +178,8 @@ mod tests {
 
     #[test]
     fn goal_control_transport_lookalike_is_not_a_confirmed_rejection() {
-        let error = BridgeError::classify_transport_error(anyhow::anyhow!(
-            "Runtime rejected goal control: wait for this session to finish before starting a goal"
+        let error = BridgeError::classify_transport_error(&std::io::Error::other(
+            "Runtime rejected goal control: wait for this session to finish before starting a goal",
         ));
         assert_eq!(error.code, BridgeErrorCode::Unknown);
     }

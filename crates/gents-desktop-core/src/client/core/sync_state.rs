@@ -12,7 +12,10 @@ use gents_protocol::peer_schema::{
 };
 use serde_json::Value;
 
-use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
+use super::{
+    p2p_health_materially_changed, ClientCoreError, ClientPeerStatus, ClientSyncStateSnapshot,
+    P2PHealth,
+};
 use crate::client::peer_directory::RemovalCause;
 use crate::client::{PeerDirectory, PeerRecord};
 
@@ -141,11 +144,12 @@ impl ClientSyncStateOwner {
     pub(super) async fn prune_retired_enrollments(
         &self,
         authority_server_peers: &BTreeSet<String>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ClientCoreError> {
         let mut directory = self.directory.write().await;
         directory
             .prune_retired_enrollments(authority_server_peers)
             .await
+            .map_err(ClientCoreError::from)
     }
 
     pub(super) async fn clear_ephemeral_pairing_readiness(&self) -> anyhow::Result<()> {

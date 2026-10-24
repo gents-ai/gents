@@ -2,7 +2,7 @@ use crate::support::*;
 
 use std::fs;
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -53,7 +53,7 @@ fn write_config(root: &std::path::Path, config: &Value) -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_validate_accepts_canonical_config() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home = tempdir.path().join("home");
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;

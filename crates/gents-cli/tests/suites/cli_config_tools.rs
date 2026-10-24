@@ -2,13 +2,13 @@ use crate::support::*;
 
 use std::{fs, time::Duration};
 
-use anyhow::{Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_set_persists_canonical_nested_policy() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home = tempdir.path().join("home");
     fs::create_dir_all(&home)?;
     let model = format!("tools-model-{}", Uuid::new_v4().simple());
@@ -131,7 +131,7 @@ async fn tools_set_persists_host_root_and_export_round_trips_it() -> Result<()> 
         .unwrap()
         .iter()
         .find(|tools| tools["tools_id"] == "rooted-tools")
-        .context("exported rooted Tools")?;
+        .expect("exported rooted Tools");
     assert_eq!(rooted["host"]["root"], scoped_root.to_str().unwrap());
     Ok(())
 }
@@ -147,12 +147,12 @@ fn nested_json(row: &Value, field: &str) -> Result<Value> {
 fn explained_tool_names(explanation: &Value, agent_id: &str) -> Result<Vec<String>> {
     explanation["agents"]
         .as_array()
-        .context("explanation has no agents")?
+        .expect("explanation has no agents")
         .iter()
         .find(|agent| agent["agent_id"] == agent_id)
         .and_then(|agent| agent.pointer("/surface/tool_names"))
         .and_then(Value::as_array)
-        .with_context(|| format!("{agent_id} has no explained surface: {explanation}"))
+        .ok_or_else(|| format!("{agent_id} has no explained surface: {explanation}").into())
         .map(|names| {
             names
                 .iter()
@@ -179,7 +179,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
             "--tool-package",
             "write",
             "--tool-root",
-            workspace.to_str().context("utf-8 tool root")?,
+            workspace.to_str().expect("utf-8 tool root"),
         ],
     )?;
     let owner = node_did_from_init(&init)?;
@@ -223,7 +223,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home, &graphql, Duration::from_secs(30)).await?;
     let resolved_root = fs::canonicalize(&workspace)?;
-    let resolved_root = resolved_root.to_str().context("utf-8 resolved root")?;
+    let resolved_root = resolved_root.to_str().expect("utf-8 resolved root");
 
     let live = run_cli_json(&home, &["tools", "explain"])?;
     assert_eq!(
@@ -249,7 +249,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
     );
 
     let owner_home = home.join(".gents");
-    let owner_home = owner_home.to_str().context("utf-8 owner home")?;
+    let owner_home = owner_home.to_str().expect("utf-8 owner home");
     let remote = run_cli_json(
         &elsewhere,
         &[
@@ -351,7 +351,7 @@ async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result
             "--tool-ceiling",
             "readonly",
             "--tool-root",
-            dangling.to_str().context("utf-8 dangling root")?,
+            dangling.to_str().expect("utf-8 dangling root"),
         ],
         &[],
     )?;
@@ -374,7 +374,7 @@ async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Res
     for dir in [&cwd, &other] {
         fs::create_dir_all(dir)?;
     }
-    let home_arg = home.to_str().context("utf-8 home")?;
+    let home_arg = home.to_str().expect("utf-8 home");
     let quoted_home = format!("'{home_arg}'");
     let owner = node_did_from_init(&run_init_json(
         &cwd,

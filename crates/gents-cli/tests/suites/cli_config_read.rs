@@ -3,13 +3,13 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use serde_json::Value;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
     fs::create_dir_all(&home_dir)?;
@@ -48,7 +48,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
             let agent_id = config["node"]
                 .get("default_agent_id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("missing default_agent_id after export"))?
+                .ok_or("missing default_agent_id after export")?
                 .to_string();
 
             let task_id = format!("{agent_name}-task");

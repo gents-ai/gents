@@ -3,13 +3,14 @@ use crate::support::*;
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn runtime_state_reset_is_explicit() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn runtime_state_reset_is_explicit() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -31,7 +32,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
 
     let runtime_home = home_dir.join(".gents");
     let runtime_state = runtime_home.join("runtime.json");
-    fs::write(&runtime_state, r#"{"status":"stale"}"#).context("writing stale runtime state")?;
+    fs::write(&runtime_state, r#"{"status":"stale"}"#).expect("writing stale runtime state");
 
     let rerun = run_init_json(
         &home_dir,
@@ -77,7 +78,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
     );
 
     fs::write(&runtime_state, r#"{"status":"stale-again"}"#)
-        .context("rewriting stale runtime state")?;
+        .expect("rewriting stale runtime state");
     let reset = run_cli_json(&home_dir, &["reset"])?;
     assert_eq!(reset.get("status").and_then(Value::as_str), Some("reset"));
     assert_eq!(reset.get("cleared").and_then(Value::as_bool), Some(true));
@@ -90,8 +91,8 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop() -> TestResult<()> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -124,7 +125,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let tools_id = init
         .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
+        .ok_or_else(|| format!("init output missing tools_id: {init}"))?
         .to_string();
     let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
@@ -205,7 +206,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            anyhow!("request submit result did not include response content: {result}")
+            format!("request submit result did not include response content: {result}")
         })?;
     assert_eq!(response, token);
 
@@ -225,7 +226,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
                         && system.contains("read_file")
                 })
         })
-        .ok_or_else(|| anyhow!("missing initial chat completion request"))?;
+        .ok_or("missing initial chat completion request")?;
     let tool_result_request = captured_requests
         .iter()
         .find(|request| {
@@ -235,7 +236,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
                         && system.contains("read_file")
                 })
         })
-        .ok_or_else(|| anyhow!("missing follow-up chat completion request with tool result"))?;
+        .ok_or("missing follow-up chat completion request with tool result")?;
 
     assert_eq!(
         initial_request.get("model").and_then(Value::as_str),

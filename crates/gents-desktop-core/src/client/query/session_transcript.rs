@@ -1073,7 +1073,7 @@ async fn load_session_compaction_entries_with_access(
 }}"#
     );
     let data = access.execute(&query, "session compactions").await?;
-    parse_query_rows(&data, COMPACTION_ENTRY_NAME)
+    parse_query_rows(&data, COMPACTION_ENTRY_NAME).map_err(anyhow::Error::from)
 }
 
 pub async fn load_session_diagnostics_store(

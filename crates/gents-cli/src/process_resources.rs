@@ -1,4 +1,20 @@
-use anyhow::Result;
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ProcessResourcesError {
+    #[cfg(target_os = "macos")]
+    #[error("read process Keychain UI policy")]
+    KeychainUiPolicy(#[source] security_framework::base::Error),
+    #[cfg(target_os = "macos")]
+    #[error("disable process Keychain access dialogs")]
+    DisableKeychainDialogs(#[source] security_framework::base::Error),
+    #[cfg(unix)]
+    #[error("read process open-file limit")]
+    ReadOpenFileLimit(#[source] std::io::Error),
+    #[cfg(unix)]
+    #[error("raise process open-file limit; set ulimit -Sn in this terminal before retrying")]
+    RaiseOpenFileLimit(#[source] std::io::Error),
+}
+
+type Result<T, E = ProcessResourcesError> = std::result::Result<T, E>;
 
 /// macOS applies this setting to the process, not a Keychain item or its ACL.
 /// The CLI owns this guard from before credential loading until server exit;
@@ -7,17 +23,17 @@ use anyhow::Result;
 pub(crate) fn prevent_keychain_prompts(
     prevent: bool,
 ) -> Result<Option<security_framework::os::macos::keychain::KeychainUserInteractionLock>> {
-    use anyhow::Context;
     use security_framework::os::macos::keychain::SecKeychain;
 
     if !prevent
-        || !SecKeychain::user_interaction_allowed().context("read process Keychain UI policy")?
+        || !SecKeychain::user_interaction_allowed()
+            .map_err(ProcessResourcesError::KeychainUiPolicy)?
     {
         return Ok(None);
     }
     SecKeychain::disable_user_interaction()
         .map(Some)
-        .context("disable process Keychain access dialogs")
+        .map_err(ProcessResourcesError::DisableKeychainDialogs)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -30,14 +46,15 @@ pub(crate) fn prevent_keychain_prompts(_prevent: bool) -> Result<()> {
 /// limit, retaining the hard limit and system policy.
 #[cfg(unix)]
 pub(crate) fn prepare() -> Result<()> {
-    use anyhow::Context;
     let mut limits = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
     };
     // SAFETY: limits points to initialized storage for one rlimit value.
     if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("read process open-file limit");
+        return Err(ProcessResourcesError::ReadOpenFileLimit(
+            std::io::Error::last_os_error(),
+        ));
     }
     let target = 65_536.min(limits.rlim_max);
     let previous = limits.rlim_cur;
@@ -45,9 +62,9 @@ pub(crate) fn prepare() -> Result<()> {
         limits.rlim_cur = target;
         // SAFETY: limits is a valid rlimit; only the soft limit increases.
         if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) } != 0 {
-            return Err(std::io::Error::last_os_error()).context(
-                "raise process open-file limit; set ulimit -Sn in this terminal before retrying",
-            );
+            return Err(ProcessResourcesError::RaiseOpenFileLimit(
+                std::io::Error::last_os_error(),
+            ));
         }
         tracing::info!(previous, current = target, "raised process open-file limit");
     }

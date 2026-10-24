@@ -2,6 +2,16 @@ use gents::{BackendProviderKind, Collection, OpenAiWireApi};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SharedError {
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("canonical configuration {key} is not a document array")]
+    NotDocumentArray { key: &'static str },
+}
+
+type Result<T, E = SharedError> = std::result::Result<T, E>;
+
 use crate::desired_state;
 
 use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
@@ -227,14 +237,14 @@ pub(crate) struct ConfigExportBundle {
 }
 
 impl ConfigExportBundle {
-    pub(crate) fn docs_for_collection(&self, collection: Collection) -> anyhow::Result<Vec<Value>> {
+    pub(crate) fn docs_for_collection(&self, collection: Collection) -> Result<Vec<Value>> {
         let config = serde_json::to_value(&self.config)?;
         match collection.dir_name() {
             None => Ok(vec![config["node"].clone()]),
             Some(key) => match config.get(key) {
                 None | Some(Value::Null) => Ok(Vec::new()),
                 Some(Value::Array(rows)) => Ok(rows.clone()),
-                Some(_) => anyhow::bail!("canonical configuration {key} is not a document array"),
+                Some(_) => Err(SharedError::NotDocumentArray { key }),
             },
         }
     }
@@ -259,7 +269,7 @@ impl Serialize for ConfigApplyCounts {
 }
 
 impl ConfigApplyCounts {
-    pub(crate) fn from_config(config: &gents::document_config::PackConfig) -> anyhow::Result<Self> {
+    pub(crate) fn from_config(config: &gents::document_config::PackConfig) -> Result<Self> {
         let value = serde_json::to_value(config)?;
         let mut counts = Self::default();
         for collection in Collection::ALL {

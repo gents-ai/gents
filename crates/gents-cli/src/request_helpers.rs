@@ -1,7 +1,7 @@
 use gents::config_client::GraphqlEndpoint;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -17,26 +17,95 @@ use serde_json::Value;
 
 use crate::{post_graphql, require_non_empty};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RequestHelpersError {
+    #[error(transparent)]
+    Home(#[from] crate::home_state::HomeStateError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("initialized home {} is required to sign a local request", home.display())]
+    HomeNotInitialized { home: PathBuf },
+    #[error("local-self request target {target} does not match initialized home node {node_did}")]
+    TargetMismatch { target: String, node_did: String },
+    #[error("receipt has no physical identity")]
+    ReceiptWithoutPhysicalIdentity,
+    #[error("receipt has no session")]
+    ReceiptWithoutSession,
+    #[error("receipt has no node_did")]
+    ReceiptWithoutNodeDid,
+    #[error("request output omitted physical request identity")]
+    OutputOmittedPhysicalIdentity,
+    #[error("request output omitted node_did")]
+    OutputOmittedNodeDid,
+    #[error("request output omitted session")]
+    OutputOmittedSession,
+    #[error("request output omitted lifecycle state")]
+    OutputOmittedLifecycleState,
+    #[error("superseded request has no physical output target")]
+    SupersededWithoutPhysicalTarget,
+    #[error("superseded request targets itself")]
+    SupersededTargetsItself,
+    #[error("conflicting {noun} ids provided: positional={positional} and {flag_name}={flag}")]
+    ConflictingIds {
+        noun: String,
+        positional: String,
+        flag_name: String,
+        flag: String,
+    },
+    #[error("missing {noun} id")]
+    MissingId { noun: String },
+    #[error("creating output directory {}", path.display())]
+    CreateOutputDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("encoding JSON output for output file")]
+    EncodeOutputFile(#[source] serde_json::Error),
+    #[error("writing JSON output file {}", path.display())]
+    WriteOutputFile {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("encoding JSON report")]
+    EncodeReport(#[source] serde_json::Error),
+    #[error("writing JSON report to stdout")]
+    WriteReport(#[source] io::Error),
+    #[error("writing NDJSON record to stdout")]
+    WriteNdjson(#[source] io::Error),
+    #[error("duration must not be empty")]
+    EmptyDuration,
+    #[error("invalid duration number in {raw}")]
+    InvalidDurationNumber {
+        raw: String,
+        #[source]
+        source: std::num::ParseIntError,
+    },
+    #[error("duration overflow")]
+    DurationOverflow,
+    #[error("unknown duration suffix {suffix:?} (use s, m, h, d)")]
+    UnknownDurationSuffix { suffix: String },
+    #[error("duration too large")]
+    DurationTooLarge(#[source] std::num::TryFromIntError),
+}
+
 pub(crate) fn ensure_local_request_signer(
     home: Option<&Path>,
     target_node_did: &str,
-) -> Result<()> {
+) -> Result<(), RequestHelpersError> {
     if gents::identity::RegisteredIdentity::from_registered_did(target_node_did, None).is_ok() {
         return Ok(());
     }
     let home = crate::resolve_home_dir(home);
-    let config = crate::read_init_config(&home)?.with_context(|| {
-        format!(
-            "initialized home {} is required to sign a local request",
-            home.display()
-        )
-    })?;
-    anyhow::ensure!(
-        config.node_did.trim() == target_node_did.trim(),
-        "local-self request target {} does not match initialized home node {}",
-        target_node_did,
-        config.node_did
-    );
+    let config = crate::read_init_config(&home)?
+        .ok_or_else(|| RequestHelpersError::HomeNotInitialized { home: home.clone() })?;
+    if config.node_did.trim() != target_node_did.trim() {
+        return Err(RequestHelpersError::TargetMismatch {
+            target: target_node_did.to_owned(),
+            node_did: config.node_did.clone(),
+        });
+    }
     crate::load_initialized_home_identity(&home, &config)?;
     Ok(())
 }
@@ -215,26 +284,26 @@ fn cli_presentation(value: gents::session::CanonicalPresentation) -> CliOutputPr
 pub(crate) fn request_output_envelope(
     request: &AgentRequestRow,
     output: gents::session::CanonicalRequestOutput,
-) -> Result<RequestOutputEnvelope> {
+) -> Result<RequestOutputEnvelope, RequestHelpersError> {
     let request = CliRequestMetadata {
         request_doc_id: request
             .doc_id
             .clone()
-            .context("request output omitted physical request identity")?,
+            .ok_or(RequestHelpersError::OutputOmittedPhysicalIdentity)?,
         request_id: request.request_id.clone(),
         node_did: request
             .node_did
             .clone()
-            .context("request output omitted node_did")?,
+            .ok_or(RequestHelpersError::OutputOmittedNodeDid)?,
         requester_did: request.requester_did.clone(),
         agent_id: request.agent_id.clone(),
         session_id: request
             .session_id
             .clone()
-            .context("request output omitted session")?,
+            .ok_or(RequestHelpersError::OutputOmittedSession)?,
         lifecycle_state: request
             .lifecycle_state
-            .context("request output omitted lifecycle state")?,
+            .ok_or(RequestHelpersError::OutputOmittedLifecycleState)?,
         failure_reason: request.failure_reason.clone(),
         terminalized_at: request.terminalized_at.clone(),
     };
@@ -547,7 +616,7 @@ pub(crate) async fn submit_prepared_agent_request_committed(
     let row = matching_prepared_receipt(graphql, &prepared.create)
         .await?
         .context("committed signed request receipt missing")?;
-    submitted_from_receipt(row)
+    Ok(submitted_from_receipt(row)?)
 }
 
 async fn committed_submitted_request(
@@ -557,18 +626,22 @@ async fn committed_submitted_request(
     let row = read_submitted_receipt(graphql, create)
         .await?
         .context("committed signed request receipt is missing")?;
-    submitted_from_receipt(row)
+    Ok(submitted_from_receipt(row)?)
 }
 
-fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
+fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest, RequestHelpersError> {
     Ok(SubmittedRequest {
         request_doc_id: row
             .doc_id
             .filter(|id| !id.is_empty())
-            .context("receipt has no physical identity")?,
+            .ok_or(RequestHelpersError::ReceiptWithoutPhysicalIdentity)?,
         request_id: row.request_id,
-        session_id: row.session_id.context("receipt has no session")?,
-        node_did: row.node_did.context("receipt has no node_did")?,
+        session_id: row
+            .session_id
+            .ok_or(RequestHelpersError::ReceiptWithoutSession)?,
+        node_did: row
+            .node_did
+            .ok_or(RequestHelpersError::ReceiptWithoutNodeDid)?,
         requester_did: row.requester_did,
         agent_id: row.agent_id,
         input: row.input,
@@ -772,7 +845,9 @@ fn wait_progress_marker(
     }
 }
 
-fn successor_output_target(row: &AgentRequestRow) -> Result<Option<(String, String)>> {
+fn successor_output_target(
+    row: &AgentRequestRow,
+) -> Result<Option<(String, String)>, RequestHelpersError> {
     let Some(logical) =
         gents::lifecycle::folded_into(row).or_else(|| gents::lifecycle::replaced_by(row))
     else {
@@ -782,11 +857,10 @@ fn successor_output_target(row: &AgentRequestRow) -> Result<Option<(String, Stri
         .superseded_by_request_doc_id
         .as_deref()
         .filter(|id| !id.trim().is_empty())
-        .context("superseded request has no physical output target")?;
-    anyhow::ensure!(
-        row.doc_id.as_deref() != Some(physical),
-        "superseded request targets itself"
-    );
+        .ok_or(RequestHelpersError::SupersededWithoutPhysicalTarget)?;
+    if row.doc_id.as_deref() == Some(physical) {
+        return Err(RequestHelpersError::SupersededTargetsItself);
+    }
     Ok(Some((logical.to_owned(), physical.to_owned())))
 }
 
@@ -965,7 +1039,7 @@ where
                 ),
                 gents::session::CanonicalRequestOutput::TerminalNoMessage
                 | gents::session::CanonicalRequestOutput::TerminalMessage { .. } => {
-                    return request_output_envelope(request, output)
+                    return Ok(request_output_envelope(request, output)?)
                 }
                 gents::session::CanonicalRequestOutput::Absent
                 | gents::session::CanonicalRequestOutput::Live(_)
@@ -998,19 +1072,29 @@ pub(crate) fn resolve_dual_id(
     flag_name: &str,
     positional: Option<&str>,
     flag: Option<&str>,
-) -> Result<String> {
+) -> Result<String, RequestHelpersError> {
     let positional = positional.map(str::trim).filter(|value| !value.is_empty());
     let flag = flag.map(str::trim).filter(|value| !value.is_empty());
     match (positional, flag) {
-        (Some(positional), Some(flag)) if positional != flag => anyhow::bail!(
-            "conflicting {noun} ids provided: positional={positional} and {flag_name}={flag}"
-        ),
+        (Some(positional), Some(flag)) if positional != flag => {
+            Err(RequestHelpersError::ConflictingIds {
+                noun: noun.to_owned(),
+                positional: positional.to_owned(),
+                flag_name: flag_name.to_owned(),
+                flag: flag.to_owned(),
+            })
+        }
         (Some(request_id), _) | (_, Some(request_id)) => Ok(request_id.to_string()),
-        (None, None) => anyhow::bail!("missing {noun} id"),
+        (None, None) => Err(RequestHelpersError::MissingId {
+            noun: noun.to_owned(),
+        }),
     }
 }
 
-pub(crate) fn resolve_request_id(positional: Option<&str>, flag: Option<&str>) -> Result<String> {
+pub(crate) fn resolve_request_id(
+    positional: Option<&str>,
+    flag: Option<&str>,
+) -> Result<String, RequestHelpersError> {
     resolve_dual_id("request", "--request-id", positional, flag)
 }
 
@@ -1035,15 +1119,24 @@ pub(crate) fn resolve_request_content(
     }
 }
 
-pub(crate) fn write_json_output_file(path: &Path, value: &Value) -> Result<()> {
+pub(crate) fn write_json_output_file(
+    path: &Path,
+    value: &Value,
+) -> Result<(), RequestHelpersError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating output directory {}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|source| {
+            RequestHelpersError::CreateOutputDirectory {
+                path: parent.to_path_buf(),
+                source,
+            }
+        })?;
     }
     let contents =
-        serde_json::to_vec_pretty(value).context("encoding JSON output for output file")?;
-    fs::write(path, contents)
-        .with_context(|| format!("writing JSON output file {}", path.display()))?;
+        serde_json::to_vec_pretty(value).map_err(RequestHelpersError::EncodeOutputFile)?;
+    fs::write(path, contents).map_err(|source| RequestHelpersError::WriteOutputFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(())
 }
 
@@ -1053,12 +1146,12 @@ tokio::task_local! {
     static CAPTURED_REPORT: std::cell::RefCell<Option<Value>>;
 }
 
-pub(crate) fn print_json<T>(value: &T) -> Result<()>
+pub(crate) fn print_json<T>(value: &T) -> Result<(), RequestHelpersError>
 where
     T: serde::Serialize + ?Sized,
 {
     if CAPTURED_REPORT.try_with(|_| ()).is_ok() {
-        let value = serde_json::to_value(value).context("encoding JSON report")?;
+        let value = serde_json::to_value(value).map_err(RequestHelpersError::EncodeReport)?;
         CAPTURED_REPORT.with(|report| *report.borrow_mut() = Some(value));
         return Ok(());
     }
@@ -1067,10 +1160,10 @@ where
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "{}", serde_json::to_string_pretty(value)?)
         .and_then(|()| stdout.flush())
-        .context("writing JSON report to stdout")
+        .map_err(RequestHelpersError::WriteReport)
 }
 
-pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
+pub(crate) fn print_ndjson(value: &Value) -> Result<(), RequestHelpersError> {
     if CAPTURED_REPORT
         .try_with(|report| *report.borrow_mut() = Some(value.clone()))
         .is_ok()
@@ -1080,7 +1173,7 @@ pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "{}", serde_json::to_string(value)?)
         .and_then(|()| stdout.flush())
-        .context("writing NDJSON record to stdout")
+        .map_err(RequestHelpersError::WriteNdjson)
 }
 
 pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
@@ -1097,33 +1190,50 @@ where
         .await
 }
 
-pub(crate) fn parse_duration_suffix(raw: &str) -> Result<Duration> {
+pub(crate) fn parse_duration_suffix(raw: &str) -> Result<Duration, RequestHelpersError> {
     let s = raw.trim();
     if s.is_empty() {
-        anyhow::bail!("duration must not be empty");
+        return Err(RequestHelpersError::EmptyDuration);
     }
     let split = s.find(|c: char| c.is_alphabetic()).unwrap_or(s.len());
     let (num_part, suffix) = s.split_at(split);
-    let n: u64 = num_part
-        .parse()
-        .with_context(|| format!("invalid duration number in {raw}"))?;
+    let n: u64 =
+        num_part
+            .parse::<u64>()
+            .map_err(|source| RequestHelpersError::InvalidDurationNumber {
+                raw: raw.to_owned(),
+                source,
+            })?;
     let secs = match suffix {
         "" | "s" => n,
-        "m" => n.checked_mul(60).context("duration overflow")?,
-        "h" => n.checked_mul(3600).context("duration overflow")?,
-        "d" => n.checked_mul(86400).context("duration overflow")?,
-        other => anyhow::bail!("unknown duration suffix {other:?} (use s, m, h, d)"),
+        "m" => n
+            .checked_mul(60)
+            .ok_or(RequestHelpersError::DurationOverflow)?,
+        "h" => n
+            .checked_mul(3600)
+            .ok_or(RequestHelpersError::DurationOverflow)?,
+        "d" => n
+            .checked_mul(86400)
+            .ok_or(RequestHelpersError::DurationOverflow)?,
+        other => {
+            return Err(RequestHelpersError::UnknownDurationSuffix {
+                suffix: other.to_owned(),
+            })
+        }
     };
     Ok(Duration::from_secs(secs))
 }
 
-pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTime<Utc>>> {
+pub(crate) fn parse_valid_until_flag(
+    raw: Option<&str>,
+) -> Result<Option<DateTime<Utc>>, RequestHelpersError> {
     match raw.map(str::trim) {
         None => Ok(Some(Utc::now() + chrono::Duration::minutes(5))),
         Some("") | Some("none") | Some("0") => Ok(None),
         Some(value) => {
             let dur = parse_duration_suffix(value)?;
-            let secs = i64::try_from(dur.as_secs()).context("duration too large")?;
+            let secs =
+                i64::try_from(dur.as_secs()).map_err(RequestHelpersError::DurationTooLarge)?;
             Ok(Some(Utc::now() + chrono::Duration::seconds(secs)))
         }
     }
@@ -1203,7 +1313,7 @@ mod tests {
     /// delayedPhase before terminalization; a source retraction is not a request terminal.
     #[tokio::test]
     async fn terminal_wait_survives_active_retraction_and_preserves_later_failure(
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter, SourceClose};
         use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1333,8 +1443,8 @@ mod tests {
                 .swap(false, std::sync::atomic::Ordering::SeqCst)
             {
                 // The durable write happened, then the response body failed.
-                // reqwest retains this decode/transport error in the anyhow
-                // cause chain, which recovery must classify before querying
+                // reqwest retains this decode/transport error in its source
+                // chain, which recovery must classify before querying
                 // the stable request id.
                 let body = Body::from_stream(stream::once(async {
                     Err::<Bytes, std::io::Error>(std::io::Error::other(
@@ -1505,7 +1615,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_wait_follows_only_exact_same_scope_successor_output_owner(
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         for (cross_scope, reason) in [
             (false, gents::lifecycle::FOLDED_REASON),
             (true, gents::lifecycle::FOLDED_REASON),

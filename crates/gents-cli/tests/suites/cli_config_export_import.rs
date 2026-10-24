@@ -2,7 +2,7 @@ use crate::support::*;
 
 use std::fs;
 
-use anyhow::Result;
+type Result<T = (), E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

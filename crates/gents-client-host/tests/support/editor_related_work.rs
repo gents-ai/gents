@@ -1,5 +1,5 @@
 use super::{fake_llm, ChatAction};
-use anyhow::{Context, Result};
+use crate::support::TestResult;
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
@@ -76,7 +76,7 @@ impl Provider {
         }
         Some(ChatAction::Sse(fake_llm::completion_text_sse(REPLY)))
     }
-    pub async fn release_when_requested(&self, root: &Path) -> Result<()> {
+    pub async fn release_when_requested(&self, root: &Path) -> TestResult<()> {
         for (index, gate) in self.gates.iter().enumerate() {
             tokio::time::timeout(Duration::from_secs(90), async {
                 while !root.join(format!("release-related-{index}")).is_file() {
@@ -84,19 +84,19 @@ impl Provider {
                 }
             })
             .await
-            .context("editor did not release the related worker")?;
+            .expect("editor did not release the related worker");
             gate.add_permits(1);
         }
         Ok(())
     }
 }
 
-pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> Result<()> {
+pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> TestResult<()> {
     access.transact_write("test.editor.related_work.configure", |txn| {
         Box::pin(async move {
             let (_, tools) = load_agent_context_and_tools_in_txn(txn, node, agent).await?;
-            let mut tools = tools.context("fixture agent tools")?;
-            let (_, base) = gents::config_client::read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.context("fixture agent")?;
+            let mut tools = tools.expect("fixture agent tools");
+            let (_, base) = gents::config_client::read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.expect("fixture agent");
             let mut documents = Vec::new();
             let targets: Vec<_> = (0..2).map(|index| format!("related-worker-{index}")).collect();
             for target in &targets {
@@ -111,7 +111,8 @@ pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> Result
             apply_desired_state_plan(txn, &plan).await?;
             Ok(())
         })
-    }).await
+    }).await?;
+    Ok(())
 }
 pub async fn verify(
     access: &ConfigAccess,
@@ -120,8 +121,7 @@ pub async fn verify(
     author: &str,
     root: &Path,
     fail_history: bool,
-) -> Result<Value> {
-    use anyhow::ensure;
+) -> TestResult<Value> {
     use gents::graphql::escape_graphql_string as escape;
     use gents_protocol::row::AgentRequestRow;
     let response = access
@@ -137,13 +137,13 @@ pub async fn verify(
         .iter()
         .filter(|row| row.content.as_deref() == Some(PROMPT))
         .collect();
-    ensure!(
+    assert!(
         parents.len() == 1,
         "related-work input must be admitted once"
     );
     let parent = parents[0];
     gents::verify_request_receipt_signature(parent)?;
-    ensure!(
+    assert!(
         parent.session_id.as_deref() == Some(session)
             && parent.requester_did.as_deref() == Some(author),
         "parent input scope changed"
@@ -158,7 +158,7 @@ pub async fn verify(
             })
         })
         .collect();
-    ensure!(
+    assert!(
         children.len() == 2,
         "two tool calls must admit exactly two related requests: {children:?}"
     );
@@ -175,29 +175,29 @@ pub async fn verify(
             gents_protocol::request_lifecycle::RequestLifecycleState::Completed
         };
         gents::verify_request_receipt_signature(child)?;
-        ensure!(
+        assert!(
             child.caused_by_parent_request_doc_id == parent.doc_id
                 && child.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
                 && child.requester_did.as_deref() == Some(node)
                 && child.lifecycle_state == Some(expected),
             "related request lost its signed physical ancestry or completion: {child:?}"
         );
-        ensure!(
+        assert!(
             child.caused_by_parent_tool_call_doc_id.is_some(),
             "related request has no physical tool cause"
         );
-        ensure!(
+        assert!(
             child.session_id != parent.session_id,
             "related work reused the parent session"
         );
-        ensure!(
+        assert!(
             sessions.insert(child.session_id.clone()),
             "two starts reused one session"
         );
     }
     let ui: Value =
         serde_json::from_slice(&std::fs::read(root.join("editor-related-work-ui.json"))?)?;
-    ensure!(
+    assert!(
         ui["concurrentWorkers"] == 2
             && ui["independentlyObservedCompletion"] == true
             && ui["reloadPreservedRowsAndMarkers"] == true

@@ -51,7 +51,7 @@ async fn background_list(args: BackgroundListArgs) -> Result<()> {
         "background list",
         &[OutputFormat::Table, OutputFormat::Json],
     )? {
-        OutputFormat::Json => print_json(&serde_json::to_value(output)?),
+        OutputFormat::Json => Ok(print_json(&serde_json::to_value(output)?)?),
         OutputFormat::Table => {
             print_background_table(&output.items, output.active_native_executors_available);
             Ok(())

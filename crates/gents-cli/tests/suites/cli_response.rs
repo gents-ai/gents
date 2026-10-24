@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -16,6 +15,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use crate::support::graphql::graphql_mutation_with_variables;
 use crate::support::*;
 
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 struct ResponseTestRuntime {
     _tempdir: tempfile::TempDir,
     home_dir: PathBuf,
@@ -25,8 +26,8 @@ struct ResponseTestRuntime {
     node_did: String,
 }
 
-async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+async fn start_response_runtime(label: &str) -> TestResult<ResponseTestRuntime> {
+    let tempdir = tempfile::tempdir().expect("creating tempdir");
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
 
@@ -75,7 +76,7 @@ async fn create_fixture_request(
     request_id: &str,
     session_id: &str,
     lifecycle_state: RequestLifecycleState,
-) -> Result<String> {
+) -> TestResult<String> {
     let now = chrono::Utc::now().to_rfc3339();
     let request = graphql_query(
         &runtime.graphql,
@@ -100,7 +101,7 @@ async fn stamp_terminal_message(
     request_doc_id: &str,
     message_doc_id: &str,
     lifecycle_state: RequestLifecycleState,
-) -> Result<()> {
+) -> TestResult<()> {
     use gents::config_client::ConfigAccess;
 
     let selection = serde_json::to_value(TerminalOutput::Message {
@@ -129,7 +130,7 @@ async fn stamp_terminal_message(
 async fn insert_materialized_response(
     runtime: &ResponseTestRuntime,
     fixture: MaterializedResponse<'_>,
-) -> Result<String> {
+) -> TestResult<String> {
     use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
         output_segment_create_variables, transcript_message_create_variables,
@@ -272,7 +273,7 @@ async fn insert_materialized_response(
     Ok(message_doc_id)
 }
 
-fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Value> {
+fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> TestResult<Value> {
     run_cli_json(
         &runtime.home_dir,
         &[
@@ -285,7 +286,7 @@ fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Valu
     )
 }
 
-fn response_wait(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Value> {
+fn response_wait(runtime: &ResponseTestRuntime, request_id: &str) -> TestResult<Value> {
     run_cli_json(
         &runtime.home_dir,
         &[
@@ -306,7 +307,7 @@ fn response_wait_failure(
     runtime: &ResponseTestRuntime,
     request_id: &str,
     timeout_secs: &str,
-) -> Result<String> {
+) -> TestResult<String> {
     run_cli_failure_stderr(
         &runtime.home_dir,
         &[
@@ -326,7 +327,7 @@ fn response_wait_failure(
 async fn assert_invalid_terminal_selection(
     runtime: &ResponseTestRuntime,
     request_id: &str,
-) -> Result<()> {
+) -> TestResult<()> {
     let shown = response_show(runtime, request_id)?;
     assert_eq!(
         shown.pointer("/output/kind").and_then(Value::as_str),
@@ -347,7 +348,7 @@ async fn assert_invalid_terminal_selection(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn response_show_hydrates_materialized_content_like_response_wait() -> Result<()> {
+async fn response_show_hydrates_materialized_content_like_response_wait() -> TestResult<()> {
     let runtime = start_response_runtime("hydrate").await?;
     let request_id = format!("response-hydrate-{}", Uuid::new_v4().simple());
     let session_id = format!("session-hydrate-{}", Uuid::new_v4().simple());
@@ -452,7 +453,7 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
+async fn response_show_diagnoses_missing_materialized_message() -> TestResult<()> {
     let runtime = start_response_runtime("missing").await?;
 
     let loading_request_id = format!("response-loading-{}", Uuid::new_v4().simple());

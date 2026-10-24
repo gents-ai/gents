@@ -7,9 +7,10 @@ use gents::eval::report::load_runs;
 use gents::eval::runner::{request_cancel, run_dir, run_finished, running_elsewhere, slots_owed};
 use gents::eval::{invalidate_run, load_run, load_trials};
 use gents::ConfigAccess;
+use gents_protocol::error_chain::ErrorChain;
 
 use super::render::human_bytes;
-use super::EvalContext;
+use super::{EvalCommandError, EvalContext};
 use crate::cli::{EvalGcArgs, EvalInvalidateArgs, EvalRmArgs, EvalRunIdArgs};
 
 /// The marker needs no database, so it is written first: the process
@@ -241,7 +242,7 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
         let size = match dir_size(&dir) {
             Ok(size) => size,
             Err(error) => {
-                writeln!(out, "kept {}: {error:#}", record.run_id)?;
+                writeln!(out, "kept {}: {}", record.run_id, ErrorChain(&error))?;
                 continue;
             }
         };
@@ -400,7 +401,7 @@ async fn gc_jobs(
         let size = match dir_size(&dir) {
             Ok(size) => size,
             Err(error) => {
-                writeln!(out, "kept job {}: {error:#}", job.job_id)?;
+                writeln!(out, "kept job {}: {}", job.job_id, ErrorChain(&error))?;
                 continue;
             }
         };
@@ -445,31 +446,43 @@ pub(crate) fn job_dir_in_this_home(
     ))
 }
 
-pub(crate) fn dir_size(path: &Path) -> Result<u64> {
+pub(crate) fn dir_size(path: &Path) -> Result<u64, EvalCommandError> {
     let metadata =
-        std::fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
+        std::fs::symlink_metadata(path).map_err(|source| EvalCommandError::ReadPath {
+            path: path.to_owned(),
+            source,
+        })?;
     if !metadata.is_dir() {
         return Ok(metadata.len());
     }
+    let entries = std::fs::read_dir(path).map_err(|source| EvalCommandError::ListPath {
+        path: path.to_owned(),
+        source,
+    })?;
     let mut total = 0;
-    for entry in std::fs::read_dir(path).with_context(|| format!("listing {}", path.display()))? {
+    for entry in entries {
         total += below(entry.map(|entry| entry.path()))?;
     }
     Ok(total)
 }
 
-fn below(entry: std::io::Result<PathBuf>) -> Result<u64> {
-    let gone = |error: &anyhow::Error| {
-        error
-            .chain()
-            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-            .any(|error| error.kind() == std::io::ErrorKind::NotFound)
+fn below(entry: std::io::Result<PathBuf>) -> Result<u64, EvalCommandError> {
+    let measured = match entry {
+        Ok(path) => dir_size(&path),
+        Err(error) => Err(EvalCommandError::Io(error)),
     };
-    match entry
-        .map_err(anyhow::Error::from)
-        .and_then(|path| dir_size(&path))
-    {
-        Err(error) if gone(&error) => Ok(0),
+    match measured {
+        Err(error) if is_not_found(&error) => Ok(0),
         other => other,
     }
+}
+
+fn is_not_found(error: &EvalCommandError) -> bool {
+    matches!(
+        error,
+        EvalCommandError::Io(source)
+            | EvalCommandError::ReadPath { source, .. }
+            | EvalCommandError::ListPath { source, .. }
+            if source.kind() == std::io::ErrorKind::NotFound
+    )
 }
