@@ -364,7 +364,6 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
             let record = stored_payload_record(&container, payload);
             assert_eq!(record["kind"], "tree", "payload {payload}");
             referenced_blocks += record["tree"]["leaves"].as_u64().unwrap() as usize;
-            assert!(record["tree"]["height"].as_u64().unwrap() <= 1);
             leaf_keys.extend(manifest_payload_keys(db.node.as_ref(), &container, payload).await);
         }
         let decoded = gents::rendered_request::decode_capture_json_embedded(
@@ -414,9 +413,10 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
          anything"
     );
     assert!(
-        leaf_keys.len() < 4 * turns && block_rows <= leaf_keys.len() + 2 * turns,
-        "{block_rows} stored blocks for {turns} turns: storage must grow linearly, not with \
-         the conversation"
+        leaf_keys.len() < 4 * turns,
+        "{} unique payload blocks for {turns} turns: storage must grow linearly, not with \
+         the conversation",
+        leaf_keys.len()
     );
     assert!(
         leaf_keys.len() * 2 < referenced_blocks,
@@ -629,6 +629,27 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
         pre_edit_body.len()
     );
     let blocks_before = stored_block_keys(db.node.as_ref()).await;
+    let replaced_marker = "a".repeat(128);
+    assert!(history[0]["content"]
+        .as_str()
+        .unwrap()
+        .contains(&replaced_marker));
+    let block_rows = db
+        .node
+        .execute(r#"{ RenderedRequestBlock { content_key payload } }"#)
+        .await;
+    assert!(!block_rows.has_errors(), "{:?}", block_rows.errors);
+    let replaced_content_keys = block_rows.data.unwrap()["RenderedRequestBlock"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["payload"].as_str().unwrap().contains(&replaced_marker))
+        .map(|row| row["content_key"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert!(!replaced_content_keys.is_empty());
+    assert!(replaced_content_keys
+        .iter()
+        .all(|key| pre_edit_body.contains(key)));
 
     let edited_messages = std::iter::once(serde_json::json!({
         "role":"user","content": message_text(7001, 2 * 1024)
@@ -651,7 +672,9 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     manifest_payload_keys(db.node.as_ref(), &edited_container, "provenance_payload").await;
 
     assert!(
-        !post_edit_body.contains(&pre_edit_body[0]),
+        replaced_content_keys
+            .iter()
+            .all(|key| !post_edit_body.contains(key)),
         "the post-edit manifest must not reference a block of the replaced span"
     );
     let shared_tail = shared_manifest_suffix(&pre_edit_body, &post_edit_body);

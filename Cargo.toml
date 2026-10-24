@@ -189,7 +189,7 @@ iroh-relay = { git = "https://github.com/n0-computer/iroh", rev = "26dfe1d469e27
 # This pin also preserves prompt_cache_key through the typed Responses serializer.
 # Cargo patches the dependency's original crates.io source, not a git source
 # introduced by another patch entry.
-rig-core = { git = "https://github.com/jackzampolin/rig", rev = "e12f875ea5b28ec5dfbb6d7c668309a288198f27" }
+rig-core = { git = "https://github.com/jackzampolin/rig", rev = "b12a51c9c544e1b0f5b3961e0293cf8868868730" }
 # Keep the two endpoint Drop paths from
 # aborting the process when an earlier driver panic poisons their mutex.
 # See third_party/README.md, defradb.rs#1090, and gents#634.

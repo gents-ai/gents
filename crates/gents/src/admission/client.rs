@@ -34,6 +34,7 @@ pub(crate) struct AdmittedCompletionModel<M> {
     connection: Arc<str>,
     pub(crate) model_name: Option<String>,
     pub(crate) profile_id: Option<String>,
+    pub(crate) separate_reasoning: bool,
 }
 
 impl<M> AdmittedCompletionModel<M> {
@@ -48,6 +49,7 @@ impl<M> AdmittedCompletionModel<M> {
             connection: connection.into(),
             model_name: None,
             profile_id: None,
+            separate_reasoning: false,
         }
     }
 
