@@ -680,6 +680,71 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.workspace_path_capability_cases,
         ),
         (
+            "file_inventory_refusal_cases",
+            "FileInventoryRefusalCases",
+            &snapshot.file_inventory_refusal_cases,
+        ),
+        (
+            "file_inventory_reply_journal_cases",
+            "FileInventoryReplyJournalCases",
+            &snapshot.file_inventory_reply_journal_cases,
+        ),
+        (
+            "file_inventory_operator_owner_cases",
+            "FileInventoryOperatorOwnerCases",
+            &snapshot.file_inventory_operator_owner_cases,
+        ),
+        (
+            "file_inventory_client_scope_cases",
+            "FileInventoryClientScopeCases",
+            &snapshot.file_inventory_client_scope_cases,
+        ),
+        (
+            "file_inventory_client_progress_cases",
+            "FileInventoryClientProgressCases",
+            &snapshot.file_inventory_client_progress_cases,
+        ),
+        (
+            "file_inventory_preparation_cases",
+            "FileInventoryPreparationCases",
+            &snapshot.file_inventory_preparation_cases,
+        ),
+        (
+            "file_inventory_completion_cases",
+            "FileInventoryCompletionCases",
+            &snapshot.file_inventory_completion_cases,
+        ),
+        (
+            "file_inventory_page_grant_cases",
+            "FileInventoryPageGrantCases",
+            &snapshot.file_inventory_page_grant_cases,
+        ),
+        (
+            "file_inventory_demand_cases",
+            "FileInventoryDemandCases",
+            &snapshot.file_inventory_demand_cases,
+        ),
+        (
+            "file_inventory_issuance_cases",
+            "FileInventoryIssuanceCases",
+            &snapshot.file_inventory_issuance_cases,
+        ),
+        (
+            "file_inventory_fork_cases",
+            "FileInventoryForkCases",
+            &snapshot.file_inventory_fork_cases,
+        ),
+        (
+            "file_inventory_source_projection_cases",
+            "FileInventorySourceProjectionCases",
+            &snapshot.file_inventory_source_projection_cases,
+        ),
+        (
+            "file_inventory_receiver_cases",
+            "FileInventoryReceiverCases",
+            &snapshot.file_inventory_receiver_cases,
+        ),
+        (
             "file_image_hydration_cases",
             "FileImageHydrationCases",
             &snapshot.file_image_hydration_cases,

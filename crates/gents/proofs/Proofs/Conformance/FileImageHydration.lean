@@ -135,9 +135,7 @@ private def predicateJson (predicate : ScopeTemplates.CollectionPredicate) :=
     ",\"value\":" ++ jsonString clause.value ++ "}") ++ "}"
 
 private def routeCaseJson (direction : ScopeTemplates.RouteDirection)
-    (requester owner : String) :=
-  let demandCollection := "FileImageHydrationRequest"
-  let imageCollection := "ToolFileChange"
+    (requester owner demandCollection imageCollection : String) :=
   let filters := ScopeTemplates.clientRouteFilters direction requester owner
   let expected := filters.find? (fun predicate => predicate.collection == demandCollection)
   "{\"direction\":" ++ jsonString (match direction with
@@ -151,8 +149,10 @@ private def routeCaseJson (direction : ScopeTemplates.RouteDirection)
 
 def routeCasesJson := jsonArray (
   ([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
-    [routeCaseJson direction "requester-1" "node-1",
-     routeCaseJson direction "requester-\"quoted" "node-\\path"])
+    [routeCaseJson direction "requester-1" "node-1" "FileImageHydrationRequest" "ToolFileChange",
+     routeCaseJson direction "requester-\"quoted" "node-\\path" "FileImageHydrationRequest" "ToolFileChange",
+     routeCaseJson direction "requester-1" "node-1" "FileInventoryRequest" "FileInventoryPage",
+     routeCaseJson direction "requester-\"quoted" "node-\\path" "FileInventoryRequest" "FileInventoryPage"])
 
 def subscriptionCasesJson := jsonArray (
   (ScopeTemplates.explicitDeliveryCollections ++ ScopeTemplates.transcriptCollections).map fun collection =>

@@ -41,7 +41,7 @@ pub async fn ensure_migrations_with_registry(
     let file_image_owner = register_file_image_policy(node, registry).await?;
     register_baseline(node, registry, &mut report).await?;
     if let Some(owner) = file_image_owner.filter(|_| manages_file_images(registry)) {
-        register_file_image_owner(node, owner).await?;
+        register_file_image_owner(node, owner, registry).await?;
     }
     let baseline_ready = Instant::now();
     apply_steps(node, registry, &mut report).await?;
@@ -92,10 +92,20 @@ pub async fn ensure_migrations_with_registry(
     Ok(report)
 }
 
+const FILE_COLLECTION_POLICIES: &[(&str, bool)] = &[
+    (gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, true),
+    (gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME, true),
+    (gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME, false),
+    (gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME, false),
+    (gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME, true),
+];
+
 fn manages_file_images(registry: &Registry<'_>) -> bool {
-    registry
-        .managed_names()
-        .any(|name| name == gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
+    registry.managed_names().any(|name| {
+        FILE_COLLECTION_POLICIES
+            .iter()
+            .any(|(collection, _)| *collection == name)
+    })
 }
 
 async fn register_file_image_policy<'n>(
@@ -109,11 +119,13 @@ async fn register_file_image_policy<'n>(
     {
         return Ok(None);
     }
-    if let Some(collection) = node
-        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
-        .map_err(|error| Error::Node(error.into()))?
-    {
-        validate_file_image_policy(&collection, true)?;
+    for (name, branchable) in FILE_COLLECTION_POLICIES {
+        if let Some(collection) = node
+            .get_collection(name)
+            .map_err(|error| Error::Node(error.into()))?
+        {
+            validate_file_image_policy(&collection, *branchable)?;
+        }
     }
     if let Some(collection) = node
         .get_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_RECEIPT_NAME)
@@ -156,38 +168,47 @@ fn validate_file_image_policy(collection: &CollectionVersion, branchable: bool) 
 
 /// DefraDB's branchable read guard falls back to the collection object when a
 /// document has no local ACP registration. That fallback must remain private.
-async fn register_file_image_owner(node: &EmbeddedNode, owner: &str) -> Result<()> {
+async fn register_file_image_owner(
+    node: &EmbeddedNode,
+    owner: &str,
+    registry: &Registry<'_>,
+) -> Result<()> {
     let owner = owner
         .parse()
         .map_err(|error| Error::Node(anyhow::anyhow!("invalid image owner DID: {error}")))?;
-    let collection = node
-        .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
-        .map_err(|error| Error::Node(error.into()))?
-        .ok_or_else(|| Error::CollectionMissing {
-            collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.into(),
-        })?;
-    validate_file_image_policy(&collection, true)?;
-    let acp = node.document_acp();
-    let policy = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID;
-    let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;
-    if acp
-        .is_doc_registered(policy, resource, &collection.collection_id)
-        .await
-        .map_err(|error| Error::Node(error.into()))?
-    {
-        let existing_owner = acp
-            .get_doc_owner(policy, resource, &collection.collection_id)
-            .await
-            .map_err(|error| Error::Node(error.into()))?;
-        if existing_owner.as_ref() != Some(&owner) {
-            return Err(Error::Node(anyhow::anyhow!(
-                "retained file image collection belongs to a different node"
-            )));
+    for (name, branchable) in FILE_COLLECTION_POLICIES {
+        if !registry.managed_names().any(|managed| managed == *name) {
+            continue;
         }
-    } else {
-        acp.register_object(&owner, policy, resource, &collection.collection_id)
+        let collection = node
+            .get_collection(name)
+            .map_err(|error| Error::Node(error.into()))?
+            .ok_or_else(|| Error::CollectionMissing {
+                collection: (*name).into(),
+            })?;
+        validate_file_image_policy(&collection, *branchable)?;
+        let acp = node.document_acp();
+        let policy = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID;
+        let resource = gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE;
+        if acp
+            .is_doc_registered(policy, resource, &collection.collection_id)
             .await
-            .map_err(|error| Error::Node(error.into()))?;
+            .map_err(|error| Error::Node(error.into()))?
+        {
+            let existing_owner = acp
+                .get_doc_owner(policy, resource, &collection.collection_id)
+                .await
+                .map_err(|error| Error::Node(error.into()))?;
+            if existing_owner.as_ref() != Some(&owner) {
+                return Err(Error::Node(anyhow::anyhow!(
+                    "retained file image collection belongs to a different node"
+                )));
+            }
+        } else {
+            acp.register_object(&owner, policy, resource, &collection.collection_id)
+                .await
+                .map_err(|error| Error::Node(error.into()))?;
+        }
     }
     Ok(())
 }

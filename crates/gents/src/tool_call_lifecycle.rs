@@ -137,8 +137,10 @@ use defra_node::EmbeddedNode;
 
 pub(crate) mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
+pub(crate) mod file_inventory;
 mod file_review_access;
 pub(crate) mod query;
+pub(crate) use file_review_access::grant_source_file_read;
 pub use file_review_access::VerifiedFileImageReceipt;
 pub use query::{
     load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
@@ -619,12 +621,10 @@ impl ToolCallLifecycle {
         &self.tool_call_id
     }
 
-    #[cfg(test)]
     pub(crate) fn execution_generation(&self) -> Option<&str> {
         self.execution_generation.as_deref()
     }
 
-    #[cfg(test)]
     pub(crate) fn accepted_header_doc_id(&self) -> Option<&str> {
         self.accepted_header_doc_id.as_deref()
     }

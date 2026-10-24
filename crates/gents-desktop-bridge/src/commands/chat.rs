@@ -4,6 +4,16 @@ use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
+pub async fn session_file_inventory(
+    core: &ClientCore,
+    node_did: String,
+    session_id: String,
+    action: gents_protocol::file_inventory::FileInventoryReadAction,
+) -> Result<Option<gents_protocol::file_inventory::FileInventoryObservation>> {
+    core.session_file_inventory(&node_did, &session_id, action)
+        .await
+}
+
 pub async fn tool_file_changes(
     core: &ClientCore,
     node_did: String,
@@ -20,6 +30,17 @@ pub async fn tool_file_changes(
         retry_id.as_deref(),
     )
     .await
+}
+
+pub async fn inventory_file_change(
+    core: &ClientCore,
+    node_did: String,
+    session_id: String,
+    reference: gents_protocol::file_inventory::FileInventoryImageReference,
+    retry_id: Option<String>,
+) -> Result<Option<gents_protocol::file_inventory::FileInventoryImage>> {
+    core.inventory_file_change(&node_did, &session_id, &reference, retry_id.as_deref())
+        .await
 }
 
 pub async fn request_output(

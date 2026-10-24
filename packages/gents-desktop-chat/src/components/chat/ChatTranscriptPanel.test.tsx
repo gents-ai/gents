@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
+import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 
 import { ChatTranscriptPanel } from "./ChatTranscriptPanel.js";
 import type { OptimisticPendingTurn } from "../../chat-shell.js";
@@ -47,6 +48,62 @@ const pending: OptimisticPendingTurn = {
   origin: null,
   createdAt: null,
 };
+
+test("compacts invisible action separators before paging without losing the final turn attachment", () => {
+  const requestTurn = {
+    requestDocId: "physical",
+    requestId: "request",
+    settled: false,
+  };
+  const timelineItems: RenderedTimelineItem[] = Array.from(
+    { length: 1000 },
+    (_, index) => [
+      {
+        kind: "toolGroup" as const,
+        itemKey: `group-${index}`,
+        tools: [
+          {
+            itemKey: `action-${index}`,
+            toolName: "fixture",
+            statusKind: index >= 998 ? "running" : "success",
+            requestTurn,
+            reconstruction: { state: "ready" as const },
+            presentation: {
+              kind: "generic" as const,
+              summary: null,
+              input: null,
+              output: null,
+            },
+          },
+        ],
+      },
+      {
+        kind: "assistantMessage" as const,
+        itemKey: `empty-${index}`,
+        content: "",
+        requestTurn,
+        reconstruction: { state: "ready" as const },
+      },
+    ],
+  ).flat();
+  const html = renderToStaticMarkup(
+    <ChatTranscriptPanel
+      selectedSessionId="session"
+      session={{ ...session, timelineItems }}
+      compactTools
+      activity={null}
+      renderAfterItem={(item) =>
+        item.itemKey === "empty-999" ? (
+          <section>Completed change attachment</section>
+        ) : null
+      }
+    />,
+  );
+  expect(html.match(/class="tool-activity-row/g)).toHaveLength(3);
+  expect(html).toContain("Ran 998 actions");
+  expect(html).toContain("Completed change attachment");
+  expect(html).not.toContain("Load older messages");
+});
 
 test("renders host activity after the pending input without a second thinking card", () => {
   const html = renderToStaticMarkup(

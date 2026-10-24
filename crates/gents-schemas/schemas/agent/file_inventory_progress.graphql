@@ -1,0 +1,6 @@
+type FileInventoryProgress @policy(id: "2e14bb0746cf90a5e955db6b9bb5d9098f6aa0776849c8bcb68db4dd1e67ea82", resource: "file_images") {
+  progress_key: String @index(unique: true) @immutable
+  client_did: String @index @immutable
+  scope_key: String @index @immutable
+  progress: JSON
+}

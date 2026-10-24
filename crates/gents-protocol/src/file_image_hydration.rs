@@ -5,6 +5,23 @@ use sha2::{Digest, Sha256};
 use crate::enrollment::canonical_domain_payload;
 use crate::session_hydration::HydrationRequest;
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct FileImageScope {
+    pub requester_did: String,
+    pub node_did: String,
+    pub session_id: String,
+}
+
+impl FileImageScope {
+    pub fn matches(&self, request: &HydrationRequest) -> bool {
+        self.requester_did == request.requester_did
+            && self.node_did == request.node_did
+            && self.session_id == request.session_id
+    }
+}
+
 pub const FILE_IMAGE_RECEIPT_VERSION: u8 = 2;
 const KEY_DOMAIN: &str = "gents-file-image-demand-v1";
 const RETRY_KEY_DOMAIN: &str = "gents-file-image-retry-v1";

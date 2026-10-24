@@ -104,6 +104,10 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
           , { field := "node_did", value := ownerDid } ] }
+    , { collection := "FileInventoryRequest"
+      , clauses :=
+          [ { field := "requester_did", value := requesterDid }
+          , { field := "node_did", value := ownerDid } ] }
     , { collection := "AgentSessionInputEdit"
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
@@ -576,10 +580,31 @@ theorem file_image_demand_conjoins_requester_and_destination
   cases direction <;> simp [clientRouteFilters, clientTranscriptPredicates,
     clientTranscriptCollections, transcriptCollections]
 
+theorem file_inventory_demand_conjoins_requester_and_destination
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    (clientRouteFilters direction requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "FileInventoryRequest") =
+      some { collection := "FileInventoryRequest", clauses :=
+        [ { field := "requester_did", value := requesterDid }
+        , { field := "node_did", value := ownerDid } ] } := by
+  cases direction <;> simp [clientRouteFilters, clientTranscriptPredicates,
+    clientTranscriptCollections, transcriptCollections]
+
+theorem file_inventory_pages_are_not_ordinary_replication :
+    "FileInventoryPage" ∉ clientCollections ∧
+    "FileInventoryPage" ∉ conversationCollections ∧
+    "FileInventoryPage" ∉ clientToRuntimeCollections := by decide
+
 theorem file_images_are_not_ordinary_replication :
     "ToolFileChange" ∉ clientCollections ∧
     "ToolFileChange" ∉ conversationCollections ∧
     "ToolFileChange" ∉ clientToRuntimeCollections := by
+  decide
+
+theorem file_inventory_is_not_ordinary_replication :
+    "ToolFileInventory" ∉ clientCollections ∧
+    "ToolFileInventory" ∉ conversationCollections ∧
+    "ToolFileInventory" ∉ clientToRuntimeCollections := by
   decide
 
 end ScopeTemplates

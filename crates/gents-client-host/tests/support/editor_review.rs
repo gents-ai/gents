@@ -260,6 +260,10 @@ pub async fn verify_permission_recovery(
         "review peer differs from enrollment"
     );
     verify_model_receipt(verifier, &original, &demand).await?;
+    let inventory =
+        super::editor_inventory_permissions::InventoryPermissions::capture(client, id, &demand)
+            .await
+            .context("initial inventory permission capture")?;
     let args = json!({
         "nodeDid": demand.admission.node_did, "sessionId": demand.admission.session_id,
         "requestId": baseline["requestId"], "toolCallDocId": physical,
@@ -334,6 +338,11 @@ pub async fn verify_permission_recovery(
         );
     }
 
+    let revoked_inventory = inventory
+        .revoked(client, id)
+        .await
+        .context("retained inventory after revocation")?;
+
     let status_url = field(
         &serde_json::from_slice::<Value>(&std::fs::read(node_home.join("runtime.json"))?)?,
         "graphql",
@@ -356,7 +365,11 @@ pub async fn verify_permission_recovery(
         "reenrollment reused the revoked request"
     );
     wait_enrollment_arrival(access, next_request).await?;
-    enrollment_decision(root, node_home, "approve", next_request).await?;
+    enrollment_decision(root, node_home, "approve", next_request)
+        .await
+        .with_context(|| {
+            format!("reenrollment approval after retained-inventory checks: {revoked_inventory}")
+        })?;
     wait_review_route(client, id, &demand.admission.node_did, true).await?;
     let mut restored_args = args.clone();
     restored_args["retryId"] = json!(RESTORED_RETRY);
@@ -424,7 +437,12 @@ pub async fn verify_permission_recovery(
         std::fs::read_to_string(root.join(FILE))? == LATER,
         "permission recovery changed the working copy"
     );
+    let restored_inventory = inventory
+        .restored(client, id, access, verifier)
+        .await
+        .context("inventory after reenrollment")?;
     Ok(json!({
+        "inventoryRevoked":revoked_inventory, "inventoryRestored":restored_inventory,
         "baseline":baseline, "revokedRequest":old_request, "restoredRequest":next_request,
         "revokedFreshReviewRefused":true, "revokedReadError":error.message,
         "cachedImageReadableAfterRevocation":true, "servedRetryReadableAfterRevocation":true,
@@ -440,7 +458,7 @@ fn field<'a>(row: &'a Value, name: &str) -> Result<&'a str> {
         .with_context(|| format!("review fixture omitted {name}"))
 }
 
-async fn review_receipts(access: &ConfigAccess, physical: &str) -> Result<Vec<Value>> {
+pub(super) async fn review_receipts(access: &ConfigAccess, physical: &str) -> Result<Vec<Value>> {
     let response = access
         .execute(&format!(
             r#"{{ FileImageHydrationRequest(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{
@@ -522,7 +540,7 @@ async fn wait_enrollment_arrival(access: &ConfigAccess, request: &str) -> Result
     .context("runtime did not observe reenrollment")?
 }
 
-async fn verify_model_receipt(
+pub(super) async fn verify_model_receipt(
     verifier: &dyn gents::NodeIdentity,
     row: &Value,
     demand: &gents_protocol::file_image_hydration::FileImageDemand,

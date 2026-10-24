@@ -1,5 +1,6 @@
 pub(crate) mod enrollment;
 pub(crate) mod explorer;
+pub(crate) mod file_inventory;
 pub(crate) mod fleet;
 pub(crate) mod fleet_slots;
 pub(crate) mod healthz;

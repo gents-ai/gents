@@ -18,6 +18,8 @@ use super::ClientCore;
 
 const DEMAND_FIELDS: &str = "_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature";
 
+mod inventory;
+
 impl ClientCore {
     pub async fn tool_file_changes(
         &self,
@@ -103,6 +105,16 @@ impl ClientCore {
     /// subscription waits for the exact image's local merge. Dropping this read
     /// cancels the wait without changing the durable demand or its authority.
     async fn remote_file_images(&self, demand: FileImageDemand) -> Result<Option<ToolFileChanges>> {
+        Ok(self
+            .remote_file_observation(demand)
+            .await?
+            .map(|(_, changes)| changes))
+    }
+
+    async fn remote_file_observation(
+        &self,
+        demand: FileImageDemand,
+    ) -> Result<Option<(String, ToolFileChanges)>> {
         let mut changes = gents::subscribe_collections(
             &self.node,
             ["FileImageHydrationRequest", "ToolFileChange"],
@@ -157,7 +169,7 @@ impl ClientCore {
                                         &document_id == document,
                                         "file review observation differs from the signed receipt"
                                     );
-                                        return Ok(Some(changes));
+                                        return Ok(Some((document_id, changes)));
                                     }
                                     ToolFileChangeRead::Unsupported => {
                                         anyhow::bail!("local file-image collection is unavailable")

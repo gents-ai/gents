@@ -33,6 +33,7 @@ serde.workspace = true
 windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
+rapidhash.workspace = true
 bs58 = "0.5"
 axum = "0.8"
 futures-util = "0.3"

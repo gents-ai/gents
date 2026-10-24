@@ -10,7 +10,8 @@ use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRe
 use crate::graphql::{created_doc_id, escape_graphql_string};
 use crate::session::canonical_rows::{
     decode_scoped_request_output_segments, output_segment_create_variables,
-    request_output_segments_query, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 
 use super::{ToolCallLifecycle, ToolCallState};
@@ -325,14 +326,15 @@ pub(super) async fn arguments_in_txn(
     internal_id: &str,
     name: &str,
 ) -> Result<(PayloadRef, String)> {
-    let response = txn
-        .execute(&request_output_segments_query(&binding.request_doc_id))
+    let rows = txn
+        .cursor_rows(
+            "AgentOutputSegment",
+            AGENT_OUTPUT_SEGMENT_FIELDS,
+            &request_output_segments_filter(&binding.request_doc_id),
+        )
         .await?;
-    let rows = response["data"]["AgentOutputSegment"]
-        .as_array()
-        .context("plugin arguments lookup omitted segments")?;
     arguments_from_rows(
-        rows,
+        &rows,
         &binding.node_did,
         &binding.session_id,
         binding.requester_did.as_deref(),

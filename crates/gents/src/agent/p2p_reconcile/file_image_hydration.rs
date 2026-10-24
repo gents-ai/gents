@@ -1,26 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use super::session_hydration::{
-    decide_hydration, HydrationCatalog, HydrationRequest, HydrationVerdict,
+use super::session_hydration::{decide_hydration, HydrationCatalog, HydrationVerdict};
+
+pub use gents_protocol::file_image_hydration::{
+    FileImageDemand, FileImageScope, FileImageSelection,
 };
-
-pub use gents_protocol::file_image_hydration::{FileImageDemand, FileImageSelection};
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileImageScope {
-    pub requester_did: String,
-    pub node_did: String,
-    pub session_id: String,
-}
-
-impl FileImageScope {
-    fn matches(&self, request: &HydrationRequest) -> bool {
-        self.requester_did == request.requester_did
-            && self.node_did == request.node_did
-            && self.session_id == request.session_id
-    }
-}
 
 /// Acceptance and lifecycle observations must come from the physical tool's
 /// canonical admission reader, not from a client's demand document.

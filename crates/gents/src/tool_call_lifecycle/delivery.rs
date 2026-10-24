@@ -64,28 +64,56 @@ async fn retain_file_changes(
         "requester_did": requester_did, "file_changes": changes,
     });
     let existing = txn.execute(&format!(
-        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
+        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(tool_call_doc_id),
     )).await?;
     let rows = existing["data"]["ToolFileChange"]
         .as_array()
         .context("file change lookup omitted observations")?;
-    if !rows.is_empty() {
+    let observation_doc_id = if let [row] = rows.as_slice() {
+        let mut observed = row.clone();
+        let id = observed
+            .as_object_mut()
+            .context("file observation is not an object")?
+            .remove("_docID")
+            .context("file observation omitted physical identity")?;
         anyhow::ensure!(
-            rows.len() == 1 && rows[0] == input,
+            observed == input,
             "file changes conflict with an existing observation"
         );
-        return Ok(());
-    }
-    let result = txn.execute_with_variables(
-        "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
-        &serde_json::json!({"input": input}),
-    ).await?;
-    anyhow::ensure!(
-        crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
-            .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some()),
-        "file change observation was not retained"
-    );
+        id.as_str()
+            .context("file observation identity is not a string")?
+            .to_owned()
+    } else {
+        anyhow::ensure!(rows.is_empty(), "file changes have multiple observations");
+        let result = txn.execute_with_variables(
+            "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
+            &serde_json::json!({"input": input}),
+        ).await?;
+        let rows = crate::graphql::mutation_documents(&result, "create_ToolFileChange")?
+            .context("file change observation was not retained")?;
+        anyhow::ensure!(
+            rows.len() == 1,
+            "file capture must retain exactly one observation"
+        );
+        rows[0]["_docID"]
+            .as_str()
+            .context("file capture omitted its observation identity")?
+            .to_owned()
+    };
+    super::file_inventory::retain_inventory(
+        txn,
+        &observation_doc_id,
+        tool_call_doc_id,
+        request_doc_id,
+        &crate::session_origin::SessionScope {
+            node_did: node_did.to_owned(),
+            session_id: session_id.to_owned(),
+            requester_did: requester_did.map(str::to_owned),
+        },
+        changes,
+    )
+    .await?;
     Ok(())
 }
 

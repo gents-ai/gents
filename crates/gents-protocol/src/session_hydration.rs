@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::enrollment::canonical_domain_payload;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct HydrationRequest {
     pub request_key: String,
     pub peer_id: String,

@@ -27,6 +27,10 @@ impl Serialize for FileChanges {
 }
 
 impl FileChanges {
+    pub(crate) fn metadata(&self) -> Vec<gents_protocol::file_inventory::FileChangeMetadata> {
+        self.0.changes.iter().map(Into::into).collect()
+    }
+
     pub(crate) fn belongs_to(&self, tool_call_doc_id: &str) -> bool {
         self.0.tool_call_doc_id == tool_call_doc_id
     }

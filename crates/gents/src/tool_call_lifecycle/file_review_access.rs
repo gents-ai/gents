@@ -51,62 +51,89 @@ impl VerifiedFileImageReceipt {
         let FileImageSelection::Selected { document } = &self.0.selection else {
             return Ok(false);
         };
-        let document = document.clone();
-        let scope = self.0.demand.admission.clone();
-        anyhow::ensure!(
-            node.node_identity_did() == Some(scope.requester_did.as_str()),
-            "file review receipt does not authorize this client"
-        );
-        ConfigAccess::local(node)
-            .run_local_owned(move |node| async move {
-                let collection = node
-                    .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)?
-                    .context("local file-image collection is unavailable")?;
-                let policy = collection
-                    .policy
-                    .context("file-image storage has no document policy")?;
-                anyhow::ensure!(
-                    policy.id == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID
-                        && policy.resource_name
-                            == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
-                    "file-image storage has an unexpected document policy"
-                );
-                let acp = node.document_acp();
-                let Some(owner) = acp
-                    .get_doc_owner(&policy.id, &policy.resource_name, &document)
-                    .await?
-                else {
-                    return Ok(false);
-                };
-                anyhow::ensure!(
-                    owner.as_str() == scope.node_did,
-                    "file review receipt signer does not own the retained observation"
-                );
-                let reader = defra_node::AcpIdentity::Authenticated(scope.requester_did.parse()?);
-                if acp
-                    .check_doc_access(
-                        &reader,
-                        defra_node::DocumentPermission::Read,
-                        &policy.id,
-                        &policy.resource_name,
-                        &document,
-                    )
-                    .await?
-                {
-                    return Ok(true);
-                }
-                node.add_dac_actor_relationship(
-                    &scope.node_did,
-                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
-                    &document,
-                    "reader",
-                    &scope.requester_did,
-                )
-                .await?;
-                Ok(true)
-            })
-            .await
+        let scope = &self.0.demand.admission;
+        grant_source_file_read(
+            node,
+            gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+            &scope.node_did,
+            &scope.requester_did,
+            document,
+        )
+        .await
     }
+}
+
+pub(crate) async fn grant_source_file_read(
+    node: Arc<EmbeddedNode>,
+    collection_name: &'static str,
+    source_did: &str,
+    requester_did: &str,
+    document: &str,
+) -> Result<bool> {
+    anyhow::ensure!(
+        matches!(
+            collection_name,
+            gents_protocol::schemas::TOOL_FILE_CHANGE_NAME
+                | gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME
+        ),
+        "unsupported file-read collection"
+    );
+    let document = document.to_owned();
+    let source_did = source_did.to_owned();
+    let requester_did = requester_did.to_owned();
+    anyhow::ensure!(
+        node.node_identity_did() == Some(requester_did.as_str()),
+        "file review receipt does not authorize this client"
+    );
+    ConfigAccess::local(node)
+        .run_local_owned(move |node| async move {
+            let collection = node
+                .get_collection(collection_name)?
+                .context("local file-image collection is unavailable")?;
+            let policy = collection
+                .policy
+                .context("file-image storage has no document policy")?;
+            anyhow::ensure!(
+                policy.id == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID
+                    && policy.resource_name
+                        == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
+                "file-image storage has an unexpected document policy"
+            );
+            let acp = node.document_acp();
+            let Some(owner) = acp
+                .get_doc_owner(&policy.id, &policy.resource_name, &document)
+                .await?
+            else {
+                return Ok(false);
+            };
+            anyhow::ensure!(
+                owner.as_str() == source_did,
+                "file review receipt signer does not own the retained observation"
+            );
+            let reader = defra_node::AcpIdentity::Authenticated(requester_did.parse()?);
+            if acp
+                .check_doc_access(
+                    &reader,
+                    defra_node::DocumentPermission::Read,
+                    &policy.id,
+                    &policy.resource_name,
+                    &document,
+                )
+                .await?
+            {
+                return Ok(true);
+            }
+            node.add_dac_actor_relationship(
+                &source_did,
+                collection_name,
+                &document,
+                "reader",
+                &requester_did,
+            )
+            .await?;
+            Ok(true)
+        })
+        .await
 }
 
 #[cfg(test)]

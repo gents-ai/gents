@@ -28,6 +28,7 @@ import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.FileImageHydration
+import Proofs.Conformance.FileInventory
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
@@ -538,6 +539,32 @@ def snapshotJson : String :=
       ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
+    ++ "\"file_inventory_refusal_cases\":"
+      ++ Conformance.FileInventoryContracts.refusalCasesJson ++ ","
+    ++ "\"file_inventory_reply_journal_cases\":"
+      ++ Conformance.FileInventoryContracts.replyJournalCasesJson ++ ","
+    ++ "\"file_inventory_operator_owner_cases\":"
+      ++ Conformance.FileInventoryContracts.operatorOwnerCasesJson ++ ","
+    ++ "\"file_inventory_client_progress_cases\":"
+      ++ Conformance.FileInventoryContracts.clientProgressCasesJson ++ ","
+    ++ "\"file_inventory_client_scope_cases\":"
+      ++ Conformance.FileInventoryContracts.clientScopeCasesJson ++ ","
+    ++ "\"file_inventory_preparation_cases\":"
+      ++ Conformance.FileInventoryContracts.preparationCasesJson ++ ","
+    ++ "\"file_inventory_completion_cases\":"
+      ++ Conformance.FileInventoryContracts.completionCasesJson ++ ","
+    ++ "\"file_inventory_page_grant_cases\":"
+      ++ Conformance.FileInventoryContracts.pageGrantCasesJson ++ ","
+    ++ "\"file_inventory_demand_cases\":"
+      ++ Conformance.FileInventoryContracts.demandCasesJson ++ ","
+    ++ "\"file_inventory_issuance_cases\":"
+      ++ Conformance.FileInventoryContracts.issuanceCasesJson ++ ","
+    ++ "\"file_inventory_fork_cases\":"
+      ++ Conformance.FileInventoryContracts.forkCasesJson ++ ","
+    ++ "\"file_inventory_source_projection_cases\":"
+      ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
+    ++ "\"file_inventory_receiver_cases\":"
+      ++ Conformance.FileInventoryContracts.receiverCasesJson ++ ","
     ++ "\"file_image_hydration_cases\":"
       ++ Conformance.FileImageHydrationContracts.casesJson ++ ","
     ++ "\"file_image_hydration_route_cases\":"
