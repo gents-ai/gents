@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use chrono::Utc;
+use gents::config_client::ConfigClientError;
 use gents::document_config::ToolServiceRegistry;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
@@ -13,6 +14,16 @@ use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 use super::util::BridgeCommandError;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum McpRegistryError {
+    #[error(transparent)]
+    Graphql(#[from] ConfigClientError),
+    #[error("no enabled ToolServiceRegistry row for service_id={service_id}")]
+    NoEnabledRow { service_id: String },
+    #[error(transparent)]
+    DecodeRow(#[from] serde_json::Error),
+}
 
 pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPServiceHealthView>> {
     let Some(node_did) = core.selected_node_did() else {
@@ -197,7 +208,7 @@ async fn load_registry_entry(
     core: &ClientCore,
     node_did: &str,
     service_id: &str,
-) -> Result<ToolServiceRegistry> {
+) -> Result<ToolServiceRegistry, McpRegistryError> {
     let escaped = escape_graphql_string(service_id);
     let escaped_node = escape_graphql_string(node_did);
     let query = format!(
@@ -232,8 +243,10 @@ async fn load_registry_entry(
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .ok_or_else(|| anyhow!("no enabled ToolServiceRegistry row for service_id={service_id}"))?;
-    serde_json::from_value(row).map_err(Into::into)
+        .ok_or_else(|| McpRegistryError::NoEnabledRow {
+            service_id: service_id.to_owned(),
+        })?;
+    Ok(serde_json::from_value(row)?)
 }
 
 #[cfg(test)]

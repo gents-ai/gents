@@ -154,11 +154,15 @@ mod tests {
             Some(ConflictSource::StructuredCode)
         );
         assert_eq!(
-            classified_transaction_conflict(&anyhow::Error::from(typed)),
+            classified_transaction_conflict(&Box::<dyn std::error::Error + Send + Sync>::from(
+                typed
+            )),
             Some(ConflictSource::StructuredCode)
         );
         assert_eq!(
-            classified_transaction_conflict(&anyhow::anyhow!("transaction conflict; please retry")),
+            classified_transaction_conflict(&Box::<dyn std::error::Error + Send + Sync>::from(
+                "transaction conflict; please retry"
+            )),
             None
         );
     }
