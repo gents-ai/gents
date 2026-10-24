@@ -288,7 +288,10 @@ fn usage_fields(
             observed.cached_input_tokens = Some(tokens)
         }
     }
-    observed.validate()?;
+    if let Err(error) = observed.validate() {
+        tracing::warn!(%error, ?observed, "provider usage is invalid; retaining incomplete evidence");
+    }
+    let observed = observed.for_storage();
     let field = |name: &str, value: Option<u64>| {
         value
             .map(|value| format!("{name}: {value},"))
