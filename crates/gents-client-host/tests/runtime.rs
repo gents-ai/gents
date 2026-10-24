@@ -1582,6 +1582,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 serde_json::to_vec_pretty(&observations)?,
             )
             .await?;
+            #[cfg(feature = "editor-e2e")]
             copy_editor_evidence(root, "editor-inventory-failure.json")?;
         }
         editor?;
@@ -1921,7 +1922,7 @@ async fn exercise_message_edit(
     let client_did = snapshot["client"]["clientDid"]
         .as_str()
         .context("missing native client identity")?;
-    let child_session_id = uuid::Uuid::new_v4().to_string();
+    let child_session_id = format!("retained-edit-child-{id}");
     let message = before["timelineItems"]
         .as_array()
         .and_then(|items| items.iter().find(|item| item["kind"] == "userMessage"))
@@ -1952,18 +1953,23 @@ async fn exercise_message_edit(
         "clientDid": client_did, "childSessionId": child_session_id
     }});
     client.send(json!({"kind":"call", "id":*id, "command":{"name":"desktop_session_fork_before_message", "args":args}})).await;
-    loop {
-        let response = client.next().await;
-        if response["kind"] == "response" && response["id"] == *id {
-            ensure!(
-                response["error"].is_null(),
-                "fork failed before reply interception: {}",
-                response["error"]
-            );
-            drop(response);
-            break;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let response = client.next().await;
+            if response["kind"] == "response" && response["id"] == *id {
+                ensure!(
+                    response["error"].is_null(),
+                    "fork failed before reply interception: {}",
+                    response["error"]
+                );
+                drop(response);
+                break;
+            }
         }
-    }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("intercepting the committed fork reply")??;
     *id += 1;
     let query = format!("{{ AgentSession(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}) {{ _docID session_id provenance }} AgentMessage(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}, order: {{sequence: ASC}}) {{_docID message_key sequence}} }}",
         gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(&child_session_id),

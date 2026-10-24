@@ -24,6 +24,7 @@ use crate::session_origin::SessionScope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditForkBinding {
+    client_did: String,
     parent: SessionScope,
     child: SessionScope,
     message_key: String,
@@ -129,7 +130,7 @@ pub async fn fork_on(
         .transact_write("session.fork", |txn| {
             let child = child.clone();
             let params = params.clone();
-            Box::pin(async move { fork_in_txn(txn, &params, &child).await })
+            Box::pin(async move { fork_in_txn(txn, &params, &child, None).await })
         })
         .await
         .map_err(fork_error)
@@ -142,13 +143,14 @@ pub async fn fork_edit_on(
     access: &ConfigAccess,
     params: ForkParams<'_>,
     child: &str,
+    client_did: &str,
 ) -> Result<String, ForkError> {
     let ForkBoundary::BeforeMessageKey(message_key) = params.boundary else {
         return Err(fork_error(anyhow::anyhow!(
             "an edit fork requires a canonical message key"
         )));
     };
-    if child.trim().is_empty() || params.target_agent_id.is_some() {
+    if child.trim().is_empty() || client_did.trim().is_empty() || params.target_agent_id.is_some() {
         return Err(fork_error(anyhow::anyhow!(
             "an edit fork requires a retained destination and the source agent"
         )));
@@ -160,6 +162,7 @@ pub async fn fork_edit_on(
         session_id: params.source_session_id.to_owned(),
     };
     let requested = EditForkBinding {
+        client_did: client_did.to_owned(),
         child: SessionScope {
             session_id: child.clone(),
             ..parent.clone()
@@ -185,16 +188,18 @@ pub async fn fork_edit_on(
                                 .and_then(|provenance| provenance.fork)
                                 .and_then(|fork| {
                                     fork.before_message_key
-                                        .map(|key| (fork.source_session_id, key))
+                                        .zip(fork.edit_client_did)
+                                        .map(|(key, client)| (fork.source_session_id, key, client))
                                 }) {
                                 None => ExistingEditFork::Unbound,
-                                Some((source, key)) => {
+                                Some((source, key, client)) => {
                                     let scope = SessionScope {
                                         node_did: session.node_did,
                                         session_id: session.session_id,
                                         requester_did: session.requester_did,
                                     };
                                     ExistingEditFork::Bound(EditForkBinding {
+                                        client_did: client,
                                         parent: SessionScope {
                                             session_id: source,
                                             ..scope.clone()
@@ -208,7 +213,11 @@ pub async fn fork_edit_on(
                     };
                 match decide_edit_fork(&requested, &retained) {
                     EditForkDecision::Create => {
-                        Ok(fork_in_txn(txn, &params, &child).await?.session_id)
+                        Ok(
+                            fork_in_txn(txn, &params, &child, Some(&requested.client_did))
+                                .await?
+                                .session_id,
+                        )
                     }
                     EditForkDecision::Reuse => Ok(child),
                     EditForkDecision::Refuse => {
@@ -344,6 +353,7 @@ async fn fork_in_txn(
     txn: &ConfigApplyTxn<'_>,
     params: &ForkParams<'_>,
     child: &str,
+    edit_client_did: Option<&str>,
 ) -> Result<ForkOutcome> {
     let parent = load_agent_session_row_in_txn(
         txn,
@@ -544,6 +554,7 @@ async fn fork_in_txn(
                         ForkBoundary::BeforeMessageKey(key) => Some(key.to_owned()),
                         ForkBoundary::UserTurn(_) => None,
                     },
+                    edit_client_did: edit_client_did.map(str::to_owned),
                 }),
                 ..Default::default()
             }),
@@ -642,6 +653,7 @@ mod tests {
         }
         fn binding(value: &Value) -> EditForkBinding {
             EditForkBinding {
+                client_did: value["client"].as_u64().unwrap().to_string(),
                 parent: scope(&value["parent"]),
                 child: scope(&value["child"]),
                 message_key: value["message_key"].as_str().unwrap().to_owned(),

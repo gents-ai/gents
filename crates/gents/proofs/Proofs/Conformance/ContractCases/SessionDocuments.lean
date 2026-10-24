@@ -180,12 +180,13 @@ structure EditForkCase where
   requested : EditForkBinding
   retained : ExistingEditFork
 
-def editForkBinding : EditForkBinding := ⟨scope, child, "origin-4"⟩
+def editForkBinding : EditForkBinding := ⟨7, scope, child, "origin-4"⟩
 
 def editForkCases : List EditForkCase :=
   [ ⟨"new_destination", editForkBinding, .missing⟩
   , ⟨"lost_reply_reuses_child", editForkBinding, .bound editForkBinding⟩
   , ⟨"preexisting_unbound_child", editForkBinding, .unbound⟩
+  , ⟨"changed_native_client", { editForkBinding with client := 99 }, .bound editForkBinding⟩
   , ⟨"changed_anchor", { editForkBinding with messageKey := "origin-1" },
       .bound editForkBinding⟩
   , ⟨"changed_source", { editForkBinding with parent := { scope with session := 99 } },

@@ -256,6 +256,7 @@ existing AgentSession owner persists its exact source-message binding with the
 child, in the same transaction as prefix publication. This is a creation fact,
 not an authorization grant or a second operation journal. -/
 structure EditForkBinding where
+  client : Nat
   parent : AgentSession.Scope
   child : AgentSession.Scope
   messageKey : String

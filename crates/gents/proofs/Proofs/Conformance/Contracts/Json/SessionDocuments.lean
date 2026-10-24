@@ -189,7 +189,7 @@ private def forkJson (name : String) (source : SessionFork.History)
       historyJson |>.getD Json.null)]
 
 private def editForkBindingJson (binding : SessionFork.EditForkBinding) : Json := Json.mkObj
-  [("parent", scopeJson binding.parent), ("child", scopeJson binding.child),
+  [("client", toJson binding.client), ("parent", scopeJson binding.parent), ("child", scopeJson binding.child),
    ("message_key", toJson binding.messageKey)]
 
 private def editForkJson (witness : EditForkCase) : Json := Json.mkObj

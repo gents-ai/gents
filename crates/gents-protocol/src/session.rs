@@ -121,6 +121,11 @@ pub struct SessionFork {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub before_message_key: Option<String>,
+    /// Native DID that authored the retained fork, independent of a shared
+    /// runtime operator requester scope. This records creation, not a grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub edit_client_did: Option<String>,
 }
 
 fn provenance_is_empty(value: &Option<SessionProvenance>) -> bool {

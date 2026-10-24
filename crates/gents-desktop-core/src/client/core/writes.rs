@@ -1099,6 +1099,7 @@ impl ClientCore {
                 target_agent_id: None,
             },
             child_session_id,
+            client_did,
         )
         .await
         .map_err(Into::into)

@@ -885,7 +885,11 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
         target_agent_id: None,
     };
     let access = crate::config_client::ConfigAccess::local(node.clone());
-    drop(fork_edit_on(&access, params.clone(), CHILD).await.unwrap());
+    drop(
+        fork_edit_on(&access, params.clone(), CHILD, "native-client")
+            .await
+            .unwrap(),
+    );
     crate::config_client::ConfigAccess::write_local(&node, "test.disable_fork_agent",
         r#"mutation { update_Agent(filter: {node_did: {_eq: "did:test:retained-edit-fork"}, agent_id: {_eq: "retained-fork"}}, input: {enabled: false}) { _docID } }"#).await.unwrap();
     let before = session_rewrite_rows(&node).await;
@@ -899,7 +903,9 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
     ensure_runtime_schemas(&node).await.unwrap();
     let access = crate::config_client::ConfigAccess::local(node.clone());
     assert_eq!(
-        fork_edit_on(&access, params.clone(), CHILD).await.unwrap(),
+        fork_edit_on(&access, params.clone(), CHILD, "native-client")
+            .await
+            .unwrap(),
         CHILD
     );
     assert_eq!(session_rewrite_rows(&node).await, before);
@@ -921,16 +927,26 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
             ..params.clone()
         },
     ] {
-        assert!(fork_edit_on(&access, changed, CHILD).await.is_err());
+        assert!(fork_edit_on(&access, changed, CHILD, "native-client")
+            .await
+            .is_err());
         assert_eq!(session_rewrite_rows(&node).await, before);
     }
+    assert!(
+        fork_edit_on(&access, params.clone(), CHILD, "another-native-client")
+            .await
+            .is_err()
+    );
+    assert_eq!(session_rewrite_rows(&node).await, before);
     create_session_with_agent_id(&node, "unbound-child", NODE, "retained-fork")
         .await
         .unwrap();
     let unbound_before = session_rewrite_rows(&node).await;
-    assert!(fork_edit_on(&access, params, "unbound-child")
-        .await
-        .is_err());
+    assert!(
+        fork_edit_on(&access, params, "unbound-child", "native-client")
+            .await
+            .is_err()
+    );
     assert_eq!(session_rewrite_rows(&node).await, unbound_before);
     drop(access);
     node.shutdown().await;
