@@ -137,7 +137,7 @@ pub fn remove_local<P>(
         match store::read_record(home, namespace, &plugin.name) {
             Ok(existing) => previous.push(existing),
             Err(error) if store::is_not_found(&error) => {}
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
     }
     let result = (|| {

@@ -2,6 +2,8 @@ use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
+type Result<T, E = LifecycleError> = std::result::Result<T, E>;
+
 const CLAIM_QUEUE_PAGE_SIZE: usize = 64;
 
 #[derive(serde::Deserialize)]
@@ -52,7 +54,7 @@ pub(super) async fn request_view(
 pub(super) async fn claim_queue_allows(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
-) -> Result<bool> {
+) -> anyhow::Result<bool> {
     let owner = escape_graphql_string(&request.node_did);
     let nonterminal = RequestLifecycleState::graphql_list(
         RequestLifecycleState::ALL
@@ -103,10 +105,9 @@ pub(super) async fn claim_queue_allows(
         let (mut page, next) = cursor_page::<AgentRequestRow>(&response, "AgentRequest")?;
         session_requests.append(&mut page);
         let Some(next) = next else { break };
-        anyhow::ensure!(
-            after.as_deref() != Some(next.as_str()),
-            "claim session cursor did not advance"
-        );
+        if after.as_deref() == Some(next.as_str()) {
+            return Err(LifecycleError::ClaimSessionCursorStalled.into());
+        }
         after = Some(next);
     }
 
@@ -180,10 +181,9 @@ pub(super) async fn claim_queue_allows(
             let Some(next_request) = next_request else {
                 break;
             };
-            anyhow::ensure!(
-                after_request.as_deref() != Some(next_request.as_str()),
-                "claim request cursor did not advance"
-            );
+            if after_request.as_deref() == Some(next_request.as_str()) {
+                return Err(LifecycleError::ClaimRequestCursorStalled.into());
+            }
             after_request = Some(next_request);
         }
     }
@@ -249,10 +249,9 @@ async fn claim_receipts_for_request_ids(
                 receipts.insert(receipt.request_id.clone(), receipt);
             }
             let Some(next) = next else { break };
-            anyhow::ensure!(
-                after.as_deref() != Some(next.as_str()),
-                "claim receipt cursor did not advance"
-            );
+            if after.as_deref() == Some(next.as_str()) {
+                return Err(LifecycleError::ClaimReceiptCursorStalled);
+            }
             after = Some(next);
         }
     }

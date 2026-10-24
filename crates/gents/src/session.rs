@@ -1,12 +1,87 @@
+use crate::config_client::{ConfigClientError, TransactionFailure};
+use crate::graphql::GraphqlResponseError;
 use crate::llm::message::Message;
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
+type Result<T, E = SessionError> = std::result::Result<T, E>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] GraphqlResponseError),
+    #[error("session_id must be non-empty")]
+    SessionIdBlank,
+    #[error("node_did must be non-empty")]
+    NodeDidBlank,
+    #[error("agent_id must be non-empty")]
+    AgentIdBlank,
+    #[error("requester_did must be non-empty when present")]
+    RequesterDidBlank,
+    #[error("invalid session created_at")]
+    InvalidCreatedAt(#[source] chrono::ParseError),
+    #[error("invalid session closed_at")]
+    InvalidClosedAt(#[source] chrono::ParseError),
+    #[error("AgentSession query omitted rows")]
+    AgentSessionRowsOmitted,
+    #[error("session create found duplicate AgentSession rows for session_id={session_id}")]
+    CreateDuplicateRows { session_id: String },
+    #[error("duplicate AgentSession rows for session_id={session_id}")]
+    DuplicateRowsForSession { session_id: String },
+    #[error("duplicate AgentSession rows for one label")]
+    DuplicateAgentSessionRows,
+    #[error("AgentSession scope mismatch: existing session_id={existing} requested={requested}")]
+    SessionIdMismatch { existing: String, requested: String },
+    #[error("AgentSession scope mismatch: existing node_did={existing} requested={requested}")]
+    NodeDidMismatch { existing: String, requested: String },
+    #[error("AgentSession requester scope mismatch: existing={existing} requested={requested}")]
+    RequesterMismatch { existing: String, requested: String },
+    #[error(
+        "AgentSession requester scope mismatch: existing requester scope {existing} does not match absent scope"
+    )]
+    RequesterExistingOnly { existing: String },
+    #[error(
+        "AgentSession requester scope mismatch: existing absent scope does not match requester {requested}"
+    )]
+    RequesterRequestedOnly { requested: String },
+    #[error(
+        "AgentSession requester scope mismatch: existing absent scope does not match a requester"
+    )]
+    RequesterAbsentMismatch,
+    #[error("AgentSession agent mismatch: existing={existing} requested={requested}")]
+    AgentMismatch { existing: String, requested: String },
+    #[error("session create omitted data")]
+    CreateOmittedData,
+    #[error("AgentSession scope mismatch raced with a concurrent create")]
+    CreateRaced,
+    #[error("session create matched no document")]
+    CreateNoDocument,
+    #[error("reopening session: no AgentSession for session_id={session_id}")]
+    ReopenMissing { session_id: String },
+    #[error("closing session: no AgentSession for session_id={session_id}")]
+    CloseMissing { session_id: String },
+    #[error("session patch matched no document")]
+    PatchNoDocument,
+    #[error("message sequence query omitted rows")]
+    SequenceRowsOmitted,
+    #[error("message sequence is invalid")]
+    SequenceInvalid,
+    #[error("message sequence exceeds u32")]
+    SequenceOverflow(#[source] std::num::TryFromIntError),
+    #[error("loading session for completion: no AgentSession for session_id={session_id}")]
+    AgentSessionMissing { session_id: String },
+    #[error("session stop-latch query omitted rows")]
+    StopLatchRowsOmitted,
+    #[error("session stop-latch scope is ambiguous")]
+    StopLatchAmbiguous,
+    #[error("session stop-latch query omitted stopped_at")]
+    StopLatchOmitted,
+    #[error("session stopped_at is malformed")]
+    StopLatchMalformed,
     #[error("session {field} is invalid")]
     InvalidTimestamp {
         field: &'static str,
@@ -62,6 +137,16 @@ pub enum SessionError {
     IncomingScopeMismatch,
 }
 
+impl TransactionFailure for SessionError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => TransactionFailure::config_client_error(error),
+            _ => None,
+        }
+    }
+}
+
 pub mod canonical_rows;
 mod compaction_entries;
 mod control;
@@ -93,6 +178,7 @@ pub(crate) use compaction_entries::{
     save_compaction_entry, save_compaction_entry_with_requester_did,
 };
 pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
+pub(crate) use control::SessionControlError;
 pub use control::{resume_session, stop_session, SessionStopReceipt};
 pub use fork::{
     fork, fork_on, fork_via_http, is_user_turn, ForkBoundary, ForkError, ForkOutcome, ForkParams,

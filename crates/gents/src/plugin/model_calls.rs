@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -50,8 +50,27 @@ impl std::fmt::Debug for ModelEndpoint {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ModelCallError {
+    #[error("the backend of profile {profile:?} is disabled")]
+    BackendDisabled { profile: String },
+    #[error("profile {profile:?} needs an OpenAI-compatible backend on the chat completions wire")]
+    WireNotChatCompletions { profile: String },
+    #[error(transparent)]
+    Auth(#[from] crate::backend_registry::BackendRegistryError),
+    #[error("the backend of profile {profile:?} allows no requests")]
+    NoRequests { profile: String },
+    #[error("building the model client")]
+    BuildClient(#[source] reqwest::Error),
+}
+
+type Result<T, E = ModelCallError> = std::result::Result<T, E>;
+
 pub trait ModelResolver: Send + Sync {
-    fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>>;
+    fn resolve<'a>(
+        &'a self,
+        binding: &'a ModelBinding,
+    ) -> BoxFuture<'a, anyhow::Result<ModelEndpoint>>;
 }
 
 pub struct AccessModels<A>(pub A);
@@ -60,7 +79,10 @@ impl<A> ModelResolver for AccessModels<A>
 where
     A: std::borrow::Borrow<ConfigAccess> + Send + Sync,
 {
-    fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
+    fn resolve<'a>(
+        &'a self,
+        binding: &'a ModelBinding,
+    ) -> BoxFuture<'a, anyhow::Result<ModelEndpoint>> {
         Box::pin(async move {
             let owner = binding.node_did.as_str();
             let profile_id = binding.profile_id.as_str();
@@ -99,7 +121,7 @@ where
                     })
                 })
                 .await?;
-            endpoint_for(&profile, &backend)
+            Ok(endpoint_for(&profile, &backend)?)
         })
     }
 }
@@ -109,29 +131,25 @@ pub fn endpoint_for(
     backend: &InferenceBackend,
 ) -> Result<ModelEndpoint> {
     use crate::backend_provider::BackendProviderKind::{OpenAiCompatible, OpenRouter};
-    anyhow::ensure!(
-        backend.enabled,
-        "the backend of profile {:?} is disabled",
-        profile.profile_id
-    );
-    anyhow::ensure!(
-        matches!(backend.provider_kind, OpenAiCompatible | OpenRouter)
-            && OpenAiWireApi::effective_for_provider(
-                backend.provider_kind,
-                backend.openai_wire_api
-            ) == OpenAiWireApi::ChatCompletions,
-        "profile {:?} needs an OpenAI-compatible backend on the chat completions wire",
-        profile.profile_id
-    );
+    if !backend.enabled {
+        return Err(ModelCallError::BackendDisabled {
+            profile: profile.profile_id.clone(),
+        });
+    }
+    if !(matches!(backend.provider_kind, OpenAiCompatible | OpenRouter)
+        && OpenAiWireApi::effective_for_provider(backend.provider_kind, backend.openai_wire_api)
+            == OpenAiWireApi::ChatCompletions)
+    {
+        return Err(ModelCallError::WireNotChatCompletions {
+            profile: profile.profile_id.clone(),
+        });
+    }
     let api_key = backend.auth.resolve_api_key()?;
     let max_concurrent = usize::try_from(backend.effective_max_concurrent())
         .ok()
         .filter(|limit| *limit > 0)
-        .with_context(|| {
-            format!(
-                "the backend of profile {:?} allows no requests",
-                profile.profile_id
-            )
+        .ok_or_else(|| ModelCallError::NoRequests {
+            profile: profile.profile_id.clone(),
         })?;
     let connect = backend
         .connect_timeout_secs
@@ -303,7 +321,7 @@ impl Session {
             .connect_timeout(endpoint.connect_timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .context("building the model client")?;
+            .map_err(ModelCallError::BuildClient)?;
         Ok(Self {
             limiter: limiter(&endpoint),
             endpoint,

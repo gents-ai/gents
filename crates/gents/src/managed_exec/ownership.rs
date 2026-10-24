@@ -4,6 +4,24 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ManagedExecError {
+    #[error("cannot inspect process ownership records: {error}")]
+    InspectRecords { error: std::io::Error },
+    #[error("cannot enumerate process ownership records: {error}")]
+    EnumerateRecords { error: std::io::Error },
+    #[error("cannot read process ownership record {}: {error}", path.display())]
+    ReadRecord {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    #[error("cannot decode process ownership record {}: {error}", path.display())]
+    DecodeRecord {
+        path: PathBuf,
+        error: serde_json::Error,
+    },
+}
+
 // Process-group ids are reused; termination requires the recorded leader's OS start identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProcessObservation {
@@ -312,7 +330,7 @@ where
             .collect()
     }
 
-    pub(crate) fn try_list(&self) -> anyhow::Result<Vec<R>> {
+    pub(crate) fn try_list(&self) -> Result<Vec<R>, ManagedExecError> {
         let dir = match self {
             Self::Volatile(records) => {
                 return Ok(Self::volatile(records).values().cloned().collect())
@@ -322,18 +340,12 @@ where
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(anyhow::anyhow!(
-                    "cannot inspect process ownership records: {error}"
-                ))
-            }
+            Err(error) => return Err(ManagedExecError::InspectRecords { error }),
         };
         let mut records = Vec::new();
         for entry in entries {
             let path = entry
-                .map_err(|error| {
-                    anyhow::anyhow!("cannot enumerate process ownership records: {error}")
-                })?
+                .map_err(|error| ManagedExecError::EnumerateRecords { error })?
                 .path();
             if !path
                 .extension()
@@ -341,17 +353,15 @@ where
             {
                 continue;
             }
-            let bytes = std::fs::read(&path).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot read process ownership record {}: {error}",
-                    path.display()
-                )
+            let bytes = std::fs::read(&path).map_err(|error| ManagedExecError::ReadRecord {
+                path: path.clone(),
+                error,
             })?;
             records.push(serde_json::from_slice::<R>(&bytes).map_err(|error| {
-                anyhow::anyhow!(
-                    "cannot decode process ownership record {}: {error}",
-                    path.display()
-                )
+                ManagedExecError::DecodeRecord {
+                    path: path.clone(),
+                    error,
+                }
             })?);
         }
         Ok(records)

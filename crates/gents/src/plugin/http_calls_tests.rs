@@ -313,7 +313,7 @@ fn granting_a_network_allow_list_needs_grant_authority() {
     );
     let error = store::grant_on_install(home.path(), &record.namespace, &record.declaration, false)
         .unwrap_err();
-    let error = format!("{}", ErrorChain(error.as_ref()));
+    let error = format!("{}", ErrorChain(&error));
     assert!(
         error.contains("HTTP to api.example.com") && error.contains("--grant-authority"),
         "{error}"

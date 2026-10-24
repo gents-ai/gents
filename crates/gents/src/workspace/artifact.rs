@@ -1,13 +1,106 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
+use super::adapter::AdapterError;
+use crate::config_client::ConfigClientError;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::watcher::AgentRequest;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ArtifactError {
+    #[error("artifact directory must be absolute")]
+    NotAbsolute,
+    #[error("artifact directory has noncanonical components")]
+    NoncanonicalComponents,
+    #[error("inspecting artifact directory {}", path.display())]
+    InspectDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("artifact directory component is not a real directory: {}", path.display())]
+    NotRealDirectory { path: PathBuf },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("artifact directory identity requires a supported host")]
+    UnsupportedHost,
+    #[error("creating private artifacts {}", path.display())]
+    CreatePrivateDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating private artifacts {}", path.display())]
+    ExistingParent {
+        path: PathBuf,
+        #[source]
+        source: Box<ArtifactError>,
+    },
+    #[error("artifact grant requires an actual linked Git worktree")]
+    NotLinkedWorktree,
+    #[error("invalid worktree Git directory pointer")]
+    InvalidGitPointer,
+    #[error("worktree Git directory traverses a symlink")]
+    GitDirSymlink,
+    #[error("artifact root cannot be inside source")]
+    RootInsideSource,
+    #[error("worktree Git backlink is a symlink")]
+    BacklinkSymlink,
+    #[error("worktree Git directory does not point back to the bound source")]
+    BacklinkMismatch,
+    #[error("workspace identity marker is a symlink")]
+    IdentityMarkerSymlink,
+    #[error("artifact placement workspace identity mismatch")]
+    IdentityMismatch,
+    #[error("artifact owner must match signed workspace scope")]
+    OwnerMismatch,
+    #[error("artifact grant requires workspace identity")]
+    MissingWorkspaceId,
+    #[error("artifact grant requires execution generation")]
+    MissingExecutionGeneration,
+    #[error("artifact parent is not private to the Git worktree owner")]
+    ParentNotPrivate,
+    #[error("artifact directory identity changed")]
+    DirectoryIdentityChanged,
+    #[error("artifact Git placement changed")]
+    GitPlacementChanged,
+    #[error(transparent)]
+    Adapter(#[from] AdapterError),
+    #[error("artifact source no longer matches its seal")]
+    SourceSealMismatch,
+    #[error(transparent)]
+    GraphQl(#[from] ConfigClientError),
+    #[error("missing artifact query data")]
+    MissingQueryData,
+    #[error("missing artifact {name} rows")]
+    MissingRows { name: &'static str },
+    #[error("artifact {name} identity missing or ambiguous")]
+    AmbiguousRows { name: &'static str },
+    #[error("artifact execution owner is no longer current and live")]
+    ExecutionOwnerNotLive,
+    #[error("artifact owner has no lease deadline")]
+    MissingLeaseDeadline,
+    #[error(transparent)]
+    Timestamp(#[from] chrono::ParseError),
+    #[error("artifact execution lease has expired")]
+    LeaseExpired,
+    #[error("missing artifact bindings")]
+    MissingBindings,
+    #[error("artifact requires one current active ReadOnly binding")]
+    ReadOnlyBindingCount,
+    #[error("artifact workspace is no longer sealed under its admitted owner")]
+    WorkspaceNotSealed,
+    #[error("artifact workspace placement or seal changed")]
+    PlacementChanged,
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+}
+
+type Result<T, E = ArtifactError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct ArtifactGrant(Arc<ArtifactOwner>);
@@ -48,7 +141,7 @@ struct DirectoryIdentity {
 
 fn checked_directory(path: &Path) -> Result<DirectoryIdentity> {
     if !path.is_absolute() {
-        bail!("artifact directory must be absolute");
+        return Err(ArtifactError::NotAbsolute);
     }
     let mut prefix = PathBuf::new();
     for component in path.components() {
@@ -56,16 +149,19 @@ fn checked_directory(path: &Path) -> Result<DirectoryIdentity> {
             component,
             std::path::Component::ParentDir | std::path::Component::CurDir
         ) {
-            bail!("artifact directory has noncanonical components");
+            return Err(ArtifactError::NoncanonicalComponents);
         }
         prefix.push(component.as_os_str());
-        let metadata = std::fs::symlink_metadata(&prefix)
-            .with_context(|| format!("inspecting artifact directory {}", prefix.display()))?;
+        let metadata = std::fs::symlink_metadata(&prefix).map_err(|source| {
+            ArtifactError::InspectDirectory {
+                path: prefix.clone(),
+                source,
+            }
+        })?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            bail!(
-                "artifact directory component is not a real directory: {}",
-                prefix.display()
-            );
+            return Err(ArtifactError::NotRealDirectory {
+                path: prefix.clone(),
+            });
         }
     }
     let metadata = std::fs::metadata(path)?;
@@ -80,7 +176,7 @@ fn checked_directory(path: &Path) -> Result<DirectoryIdentity> {
     #[cfg(not(unix))]
     {
         let _ = metadata;
-        bail!("artifact directory identity requires a supported host");
+        Err(ArtifactError::UnsupportedHost)
     }
 }
 
@@ -92,13 +188,19 @@ fn create_private_directory(path: &Path) -> Result<()> {
         builder.mode(0o700);
         builder
             .create(path)
-            .with_context(|| format!("creating private artifacts {}", path.display()))
+            .map_err(|source| ArtifactError::CreatePrivateDirectory {
+                path: path.to_owned(),
+                source,
+            })
     }
     #[cfg(not(unix))]
     {
-        std::fs::DirBuilder::new()
-            .create(path)
-            .with_context(|| format!("creating private artifacts {}", path.display()))
+        std::fs::DirBuilder::new().create(path).map_err(|source| {
+            ArtifactError::CreatePrivateDirectory {
+                path: path.to_owned(),
+                source,
+            }
+        })
     }
 }
 
@@ -107,13 +209,13 @@ fn checked_worktree_git_dir(source: &Path, workspace_id: &str) -> Result<PathBuf
     let pointer = source.join(".git");
     let metadata = std::fs::symlink_metadata(&pointer)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        bail!("artifact grant requires an actual linked Git worktree");
+        return Err(ArtifactError::NotLinkedWorktree);
     }
     let contents = std::fs::read_to_string(&pointer)?;
     let raw = contents
         .trim()
         .strip_prefix("gitdir: ")
-        .ok_or_else(|| anyhow!("invalid worktree Git directory pointer"))?;
+        .ok_or(ArtifactError::InvalidGitPointer)?;
     let path = Path::new(raw);
     let git_dir = if path.is_absolute() {
         path.to_owned()
@@ -126,32 +228,32 @@ fn checked_worktree_git_dir(source: &Path, workspace_id: &str) -> Result<PathBuf
     for component in git_dir.components() {
         prefix.push(component.as_os_str());
         if std::fs::symlink_metadata(&prefix)?.file_type().is_symlink() {
-            bail!("worktree Git directory traverses a symlink");
+            return Err(ArtifactError::GitDirSymlink);
         }
     }
     let git_dir = std::fs::canonicalize(git_dir)?;
     checked_directory(&git_dir)?;
     if git_dir.starts_with(source) {
-        bail!("artifact root cannot be inside source");
+        return Err(ArtifactError::RootInsideSource);
     }
     let backlink = git_dir.join("gitdir");
     if std::fs::symlink_metadata(&backlink)?
         .file_type()
         .is_symlink()
     {
-        bail!("worktree Git backlink is a symlink");
+        return Err(ArtifactError::BacklinkSymlink);
     }
     let backlink = std::fs::read_to_string(backlink)?;
     if std::fs::canonicalize(backlink.trim())? != pointer {
-        bail!("worktree Git directory does not point back to the bound source");
+        return Err(ArtifactError::BacklinkMismatch);
     }
     let marker = git_dir.join("gents-workspace-identity.json");
     if std::fs::symlink_metadata(&marker)?.file_type().is_symlink() {
-        bail!("workspace identity marker is a symlink");
+        return Err(ArtifactError::IdentityMarkerSymlink);
     }
     let identity: Value = serde_json::from_slice(&std::fs::read(marker)?)?;
     if identity["workspace_id"].as_str() != Some(workspace_id) {
-        bail!("artifact placement workspace identity mismatch");
+        return Err(ArtifactError::IdentityMismatch);
     }
     Ok(git_dir)
 }
@@ -178,24 +280,26 @@ impl ArtifactGrant {
         owner_node_did: &str,
         seal_hash: &str,
     ) -> Result<Self> {
-        anyhow::ensure!(
-            Some(owner_node_did) == request.workspace_owner_node_did.as_deref(),
-            "artifact owner must match signed workspace scope"
-        );
+        if Some(owner_node_did) != request.workspace_owner_node_did.as_deref() {
+            return Err(ArtifactError::OwnerMismatch);
+        }
         let workspace_id = request
             .workspace_id
             .as_deref()
             .filter(|id| !id.is_empty())
-            .ok_or_else(|| anyhow!("artifact grant requires workspace identity"))?;
+            .ok_or(ArtifactError::MissingWorkspaceId)?;
         if execution_generation.is_empty() {
-            bail!("artifact grant requires execution generation");
+            return Err(ArtifactError::MissingExecutionGeneration);
         }
         let git_dir = checked_worktree_git_dir(source_root, workspace_id)?;
         let parent = git_dir.join("gents-artifacts");
         match create_private_directory(&parent) {
             Ok(()) => (),
-            Err(error) if parent.exists() => {
-                checked_directory(&parent).context(error)?;
+            Err(_) if parent.exists() => {
+                checked_directory(&parent).map_err(|source| ArtifactError::ExistingParent {
+                    path: parent.clone(),
+                    source: Box::new(source),
+                })?;
             }
             Err(error) => return Err(error),
         }
@@ -205,7 +309,7 @@ impl ArtifactGrant {
             let metadata = std::fs::metadata(&parent)?;
             if metadata.uid() != std::fs::metadata(&git_dir)?.uid() || metadata.mode() & 0o077 != 0
             {
-                bail!("artifact parent is not private to the Git worktree owner");
+                return Err(ArtifactError::ParentNotPrivate);
             }
         }
         // Never reopen a prior request's artifact directory or derive authority
@@ -250,18 +354,18 @@ impl ArtifactGrant {
         let owner = &self.0;
         for (path, expected) in &owner.identities {
             if &checked_directory(path)? != expected {
-                bail!("artifact directory identity changed");
+                return Err(ArtifactError::DirectoryIdentityChanged);
             }
         }
         if checked_worktree_git_dir(&owner.source_root, &owner.workspace_id)? != owner.git_dir {
-            bail!("artifact Git placement changed");
+            return Err(ArtifactError::GitPlacementChanged);
         }
         // Hash before observing the execution lease: on a large tree this may
         // take hundreds of milliseconds. Keep the generation/expiry observation
         // as close to launch as possible. Fresh hashing deliberately avoids a
         // cache whose invalidation would become another source-integrity premise.
         if super::adapter::working_tree_hash(&owner.source_root).await? != owner.seal_hash {
-            bail!("artifact source no longer matches its seal");
+            return Err(ArtifactError::SourceSealMismatch);
         }
         let doc = escape_graphql_string(&owner.request_doc_id);
         let workspace = escape_graphql_string(&owner.workspace_id);
@@ -291,10 +395,7 @@ impl ArtifactGrant {
         .await?;
         validate_launch_rows(
             owner,
-            value
-                .data
-                .as_ref()
-                .ok_or_else(|| anyhow!("missing artifact query data"))?,
+            value.data.as_ref().ok_or(ArtifactError::MissingQueryData)?,
             Utc::now(),
         )?;
         Ok(())
@@ -303,12 +404,12 @@ impl ArtifactGrant {
 
 fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<Utc>) -> Result<()> {
     let data = response.get("data").unwrap_or(response);
-    let one = |name: &str| -> Result<&Value> {
+    let one = |name: &'static str| -> Result<&Value> {
         let rows = data[name]
             .as_array()
-            .ok_or_else(|| anyhow!("missing artifact {name} rows"))?;
+            .ok_or(ArtifactError::MissingRows { name })?;
         if rows.len() != 1 {
-            bail!("artifact {name} identity missing or ambiguous");
+            return Err(ArtifactError::AmbiguousRows { name });
         }
         Ok(&rows[0])
     };
@@ -333,19 +434,19 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
             .and_then(|s| crate::toolset::WorkspaceAuthority::parse(s).ok())
             != Some(crate::toolset::WorkspaceAuthority::ReadOnly)
     {
-        bail!("artifact execution owner is no longer current and live");
+        return Err(ArtifactError::ExecutionOwnerNotLive);
     }
     let expiry = request["execution_lease_expires_at"]
         .as_str()
-        .ok_or_else(|| anyhow!("artifact owner has no lease deadline"))?;
+        .ok_or(ArtifactError::MissingLeaseDeadline)?;
     // Match the existing execution owner: the deadline millisecond is live;
     // expiry occurs strictly after it, with the same millisecond precision.
     if DateTime::parse_from_rfc3339(expiry)?.timestamp_millis() < now.timestamp_millis() {
-        bail!("artifact execution lease has expired");
+        return Err(ArtifactError::LeaseExpired);
     }
     let bindings = data["WorkspaceBinding"]
         .as_array()
-        .ok_or_else(|| anyhow!("missing artifact bindings"))?;
+        .ok_or(ArtifactError::MissingBindings)?;
     let valid = bindings
         .iter()
         .filter(|row| {
@@ -362,7 +463,7 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
         })
         .count();
     if valid != 1 {
-        bail!("artifact requires one current active ReadOnly binding");
+        return Err(ArtifactError::ReadOnlyBindingCount);
     }
     let workspace = one("IsolatedWorkspace")?;
     if workspace["owner_node_did"].as_str() != Some(&owner.owner_node_did)
@@ -371,7 +472,7 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
             workspace["lifecycle_state"].as_str().unwrap_or(""),
         ) != Some("sealed")
     {
-        bail!("artifact workspace is no longer sealed under its admitted owner");
+        return Err(ArtifactError::WorkspaceNotSealed);
     }
     let placement = one("WorkspacePlacement")?;
     if placement["workspace_id"].as_str() != Some(&owner.workspace_id)
@@ -379,7 +480,7 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
         || placement["host_path"].as_str().map(Path::new) != Some(owner.source_root.as_path())
         || placement["observed_tree_hash"].as_str() != Some(&owner.seal_hash)
     {
-        bail!("artifact workspace placement or seal changed");
+        return Err(ArtifactError::PlacementChanged);
     }
     Ok(())
 }

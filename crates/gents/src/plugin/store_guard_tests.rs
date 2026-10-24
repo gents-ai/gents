@@ -35,7 +35,7 @@ fn for_home_accepts_only_the_home_the_guard_was_taken_for() {
         .expect_err("a guard for one home must not pass for another");
 
     let error = guard.for_home(other.path()).unwrap_err();
-    let message = format!("{}", ErrorChain(error.as_ref()));
+    let message = format!("{}", ErrorChain(&error));
     assert!(message.contains("belongs to"), "{message}");
     assert!(message.contains(home.path().to_str().unwrap()), "{message}");
     assert!(
@@ -77,5 +77,5 @@ fn try_lock_store_reports_contention_without_waiting() {
         Ok(_) => panic!("the held lock must be reported busy"),
         Err(error) => error,
     };
-    assert!(format!("{}", ErrorChain(error.as_ref())).contains("store is busy"));
+    assert!(format!("{}", ErrorChain(&error)).contains("store is busy"));
 }

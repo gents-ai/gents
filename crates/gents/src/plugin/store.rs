@@ -1,8 +1,92 @@
 use std::collections::BTreeSet;
+use std::error::Error;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use gents_protocol::error_chain::find_source;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginStoreError {
+    #[error("invalid plugin digest {digest_hex:?}: expected 64 hex characters")]
+    InvalidDigest { digest_hex: String },
+    #[error("invalid plugin {kind} {value:?}: use letters, digits, underscore or hyphen")]
+    InvalidComponent { kind: &'static str, value: String },
+    #[error("{coordinate:?} is not a plugin; name it as namespace/name")]
+    NotACoordinate { coordinate: String },
+    #[error("{namespace}/{name} is already installed by pack {owner}; installing it from {pack_coordinate} would overwrite that pack's plugin. Remove {owner} first, or install it again to replace its own plugin.")]
+    OwnedByPack {
+        namespace: String,
+        name: String,
+        owner: String,
+        pack_coordinate: String,
+    },
+    #[error("reading existing plugin ownership")]
+    ReadOwnership(#[source] Box<PluginStoreError>),
+    #[error("reading plugin ownership before removal")]
+    ReadOwnershipForRemoval(#[source] Box<PluginStoreError>),
+    #[error("reading the existing plugin grant")]
+    ReadGrant(#[source] Box<PluginStoreError>),
+    #[error("plugin {name} asks for increased resource limits; install it with --grant-authority to allow that")]
+    LimitsNeedConsent { name: String },
+    #[error(transparent)]
+    Authority(#[from] crate::plugin::authority::AuthorityError),
+    #[error(transparent)]
+    Stage(#[from] crate::pack_registry::PackRegistryError),
+    #[error("reading the installed plugin bytes at {}", path.display())]
+    ReadBytes {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the plugin store lock in use belongs to {}, not {}", held.display(), home.display())]
+    LockBelongsTo { held: PathBuf, home: PathBuf },
+    #[error("{action} {}", path.display())]
+    Io {
+        action: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    DirEntry(#[from] std::io::Error),
+    #[error("plugin store is busy; retry this pack operation")]
+    Busy,
+    #[error("plugin byte digest {digest:?} has no sha256: prefix")]
+    NoSha256Prefix { digest: String },
+    #[error("installed-plugin record has no parent")]
+    RecordWithoutParent,
+    #[error("encoding the installed-plugin record")]
+    EncodeRecord(#[source] serde_json::Error),
+    #[error("writing the staged record")]
+    WriteStaged(#[source] std::io::Error),
+    #[error("{namespace}/{name} has no installed-plugin record at {}", path.display())]
+    NoRecord {
+        namespace: String,
+        name: String,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("parsing {}", path.display())]
+    ParseRecord {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+type Result<T, E = PluginStoreError> = std::result::Result<T, E>;
+
+fn io_at<'a>(
+    action: &'static str,
+    path: &'a Path,
+) -> impl FnOnce(std::io::Error) -> PluginStoreError + 'a {
+    move |source| PluginStoreError::Io {
+        action,
+        path: path.to_owned(),
+        source,
+    }
+}
 
 fn plugins_root(home: &Path) -> PathBuf {
     home.join(crate::home::PLUGINS_DIR_NAME)
@@ -17,10 +101,11 @@ fn installed_dir(home: &Path) -> PathBuf {
 }
 
 fn store_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
-    anyhow::ensure!(
-        digest_hex.len() == 64 && digest_hex.chars().all(|c| c.is_ascii_hexdigit()),
-        "invalid plugin digest {digest_hex:?}: expected 64 hex characters"
-    );
+    if digest_hex.len() != 64 || !digest_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(PluginStoreError::InvalidDigest {
+            digest_hex: digest_hex.to_owned(),
+        });
+    }
     Ok(store_dir(home).join(format!("{digest_hex}.afb")))
 }
 
@@ -31,21 +116,27 @@ pub fn artifact_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
     store_path(home, digest_hex)
 }
 
-fn checked_component(kind: &str, value: &str) -> Result<()> {
-    anyhow::ensure!(
-        !value.is_empty()
-            && value
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-        "invalid plugin {kind} {value:?}: use letters, digits, underscore or hyphen"
-    );
+fn checked_component(kind: &'static str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(PluginStoreError::InvalidComponent {
+            kind,
+            value: value.to_owned(),
+        });
+    }
     Ok(())
 }
 
 pub fn parse_coordinate(coordinate: &str) -> Result<(&str, &str)> {
-    let (namespace, name) = coordinate
-        .split_once('/')
-        .with_context(|| format!("{coordinate:?} is not a plugin; name it as namespace/name"))?;
+    let (namespace, name) =
+        coordinate
+            .split_once('/')
+            .ok_or_else(|| PluginStoreError::NotACoordinate {
+                coordinate: coordinate.to_owned(),
+            })?;
     checked_component("namespace", namespace)?;
     checked_component("name", name)?;
     Ok((namespace, name))
@@ -119,23 +210,24 @@ pub fn check_plugin_ownership(
     let existing = match read_record(home, namespace, name) {
         Ok(existing) => existing,
         Err(error) if is_not_found(&error) => return Ok(()),
-        Err(error) => return Err(error).context("reading existing plugin ownership"),
+        Err(error) => return Err(PluginStoreError::ReadOwnership(Box::new(error))),
     };
     match existing.owner_pack_coordinate {
-        Some(owner) if owner != pack_coordinate => Err(anyhow::anyhow!(
-            "{namespace}/{name} is already installed by pack {owner}; installing it from {pack_coordinate} \
-             would overwrite that pack's plugin. Remove {owner} first, or install it again to replace its own plugin."
-        )),
+        Some(owner) if owner != pack_coordinate => Err(PluginStoreError::OwnedByPack {
+            namespace: namespace.to_owned(),
+            name: name.to_owned(),
+            owner,
+            pack_coordinate: pack_coordinate.to_owned(),
+        }),
         _ => Ok(()),
     }
 }
 
-pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-    })
+pub(crate) fn is_not_found(error: &(dyn Error + 'static)) -> bool {
+    if let Some(PluginStoreError::DirEntry(io)) = error.downcast_ref::<PluginStoreError>() {
+        return io.kind() == std::io::ErrorKind::NotFound;
+    }
+    find_source::<std::io::Error>(error).is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
 }
 
 pub fn owns_plugin_record(
@@ -176,7 +268,7 @@ pub(crate) fn remove_record_if_owned_locked(
     let record = match read_record(home, namespace, name) {
         Ok(record) => record,
         Err(error) if is_not_found(&error) => return Ok(false),
-        Err(error) => return Err(error).context("reading plugin ownership before removal"),
+        Err(error) => return Err(PluginStoreError::ReadOwnershipForRemoval(Box::new(error))),
     };
     let owned = match record.owner_pack_coordinate.as_deref() {
         Some(owner) => owner == pack_coordinate,
@@ -186,7 +278,7 @@ pub(crate) fn remove_record_if_owned_locked(
         return Ok(false);
     }
     let path = record_path(home, namespace, name)?;
-    std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    std::fs::remove_file(&path).map_err(io_at("removing", &path))?;
     Ok(true)
 }
 
@@ -199,17 +291,17 @@ pub fn grant_on_install(
     let previous = match read_record(home, namespace, &plugin.name) {
         Ok(record) => Some(record),
         Err(error) if is_not_found(&error) => None,
-        Err(error) => return Err(error).context("reading the existing plugin grant"),
+        Err(error) => return Err(PluginStoreError::ReadGrant(Box::new(error))),
     };
     let previous_limits = previous
         .as_ref()
         .filter(|record| record.granted.is_some())
         .and_then(|record| record.declaration.limits.as_ref());
-    anyhow::ensure!(
-        super::authority::limits_consented(plugin.limits.as_ref(), previous_limits, consent),
-        "plugin {} asks for increased resource limits; install it with --grant-authority to allow that",
-        plugin.name
-    );
+    if !super::authority::limits_consented(plugin.limits.as_ref(), previous_limits, consent) {
+        return Err(PluginStoreError::LimitsNeedConsent {
+            name: plugin.name.clone(),
+        });
+    }
     let previous_ceiling = previous.as_ref().map(InstalledPlugin::ceiling);
     let granted = super::authority::grant_for(plugin, previous_ceiling.as_ref(), consent)?;
     Ok((granted != super::Manifold::sealed() || plugin.limits.is_some()).then_some(granted))
@@ -218,7 +310,7 @@ pub fn grant_on_install(
 pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     let path = store_path(home, digest_hex)?;
     let dir = store_dir(home);
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(io_at("creating", &dir))?;
     Ok(crate::pack_registry::stage_and_persist(&dir, &path, bytes)?)
 }
 
@@ -228,8 +320,7 @@ pub fn content_digest_hex(bytes: &[u8]) -> String {
 
 pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
     let path = store_path(home, digest_hex)?;
-    std::fs::read(&path)
-        .with_context(|| format!("reading the installed plugin bytes at {}", path.display()))
+    std::fs::read(&path).map_err(|source| PluginStoreError::ReadBytes { path, source })
 }
 
 pub struct StoreGuard {
@@ -240,12 +331,12 @@ pub struct StoreGuard {
 impl StoreGuard {
     /// Prevents a held lock for one home from authorizing mutations in another.
     pub fn for_home(&self, home: &Path) -> Result<()> {
-        anyhow::ensure!(
-            self.home.as_path() == home,
-            "the plugin store lock in use belongs to {}, not {}",
-            self.home.display(),
-            home.display()
-        );
+        if self.home.as_path() != home {
+            return Err(PluginStoreError::LockBelongsTo {
+                held: self.home.clone(),
+                home: home.to_owned(),
+            });
+        }
         Ok(())
     }
 }
@@ -255,8 +346,7 @@ impl StoreGuard {
 pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(io_at("creating", parent))?;
     }
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -264,13 +354,13 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
         .create(true)
         .truncate(false)
         .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .map_err(io_at("opening", &path))?;
     let lock = if exclusive {
         crate::file_lock::FileLock::exclusive(file)
     } else {
         crate::file_lock::FileLock::shared(file)
     }
-    .with_context(|| format!("locking {}", path.display()))?;
+    .map_err(io_at("locking", &path))?;
     Ok(StoreGuard {
         home: home.to_owned(),
         _lock: lock,
@@ -281,8 +371,7 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
 pub(crate) fn try_lock_store(home: &Path) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(io_at("creating", parent))?;
     }
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -290,15 +379,11 @@ pub(crate) fn try_lock_store(home: &Path) -> Result<StoreGuard> {
         .create(true)
         .truncate(false)
         .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .map_err(io_at("opening", &path))?;
     let lock = match crate::file_lock::FileLock::try_exclusive(file) {
         Ok(lock) => lock,
-        Err(std::fs::TryLockError::WouldBlock) => {
-            anyhow::bail!("plugin store is busy; retry this pack operation")
-        }
-        Err(std::fs::TryLockError::Error(error)) => {
-            return Err(error).with_context(|| format!("locking {}", path.display()));
-        }
+        Err(std::fs::TryLockError::WouldBlock) => return Err(PluginStoreError::Busy),
+        Err(std::fs::TryLockError::Error(error)) => return Err(io_at("locking", &path)(error)),
     };
     Ok(StoreGuard {
         home: home.to_owned(),
@@ -317,16 +402,17 @@ pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Re
         if referenced.contains(digest) {
             continue;
         }
-        let hex = digest
-            .strip_prefix("sha256:")
-            .with_context(|| format!("plugin byte digest {digest:?} has no sha256: prefix"))?;
+        let hex =
+            digest
+                .strip_prefix("sha256:")
+                .ok_or_else(|| PluginStoreError::NoSha256Prefix {
+                    digest: digest.clone(),
+                })?;
         let path = store_path(home, hex)?;
         match std::fs::remove_file(&path) {
             Ok(()) => released.push(digest.clone()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("removing {}", path.display()))
-            }
+            Err(error) => return Err(io_at("removing", &path)(error)),
         }
     }
     released.sort();
@@ -335,39 +421,36 @@ pub fn release_unreferenced_bytes(home: &Path, digests: &BTreeSet<String>) -> Re
 
 pub fn write_record(home: &Path, record: &InstalledPlugin) -> Result<()> {
     let path = record_path(home, &record.namespace, &record.name)?;
-    let parent = path
-        .parent()
-        .context("installed-plugin record has no parent")?;
-    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    let bytes =
-        serde_json::to_vec_pretty(record).context("encoding the installed-plugin record")?;
+    let parent = path.parent().ok_or(PluginStoreError::RecordWithoutParent)?;
+    std::fs::create_dir_all(parent).map_err(io_at("creating", parent))?;
+    let bytes = serde_json::to_vec_pretty(record).map_err(PluginStoreError::EncodeRecord)?;
     // Readers take no lock: each write stages a temporary file and renames
     // it into place, so a reader only ever observes a complete record.
     let mut staged = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("staging a plugin record in {}", parent.display()))?;
-    std::io::Write::write_all(&mut staged, &bytes).context("writing the staged record")?;
+        .map_err(io_at("staging a plugin record in", parent))?;
+    std::io::Write::write_all(&mut staged, &bytes).map_err(PluginStoreError::WriteStaged)?;
     staged
         .persist(&path)
         .map_err(|error| error.error)
-        .with_context(|| format!("writing {}", path.display()))?;
+        .map_err(io_at("writing", &path))?;
     Ok(())
 }
 
 pub fn read_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
     let path = record_path(home, namespace, name)?;
-    let bytes = std::fs::read(&path).with_context(|| {
-        format!(
-            "{namespace}/{name} has no installed-plugin record at {}",
-            path.display()
-        )
+    let bytes = std::fs::read(&path).map_err(|source| PluginStoreError::NoRecord {
+        namespace: namespace.to_owned(),
+        name: name.to_owned(),
+        path: path.clone(),
+        source,
     })?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    serde_json::from_slice(&bytes).map_err(|source| PluginStoreError::ParseRecord { path, source })
 }
 
 pub fn remove_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {
     let record = read_record(home, namespace, name)?;
     let path = record_path(home, namespace, name)?;
-    std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    std::fs::remove_file(&path).map_err(io_at("removing", &path))?;
     Ok(record)
 }
 
@@ -377,25 +460,26 @@ pub fn list_records(home: &Path) -> Result<Vec<InstalledPlugin>> {
         return Ok(Vec::new());
     }
     let mut records = Vec::new();
-    for namespace_entry in
-        std::fs::read_dir(&root).with_context(|| format!("reading {}", root.display()))?
-    {
+    for namespace_entry in std::fs::read_dir(&root).map_err(io_at("reading", &root))? {
         let namespace_path = namespace_entry?.path();
         if !namespace_path.is_dir() {
             continue;
         }
-        for record_entry in std::fs::read_dir(&namespace_path)
-            .with_context(|| format!("reading {}", namespace_path.display()))?
+        for record_entry in
+            std::fs::read_dir(&namespace_path).map_err(io_at("reading", &namespace_path))?
         {
             let path = record_entry?.path();
             if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
                 continue;
             }
-            let bytes =
-                std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+            let bytes = std::fs::read(&path).map_err(io_at("reading", &path))?;
             records.push(
-                serde_json::from_slice::<InstalledPlugin>(&bytes)
-                    .with_context(|| format!("parsing {}", path.display()))?,
+                serde_json::from_slice::<InstalledPlugin>(&bytes).map_err(|source| {
+                    PluginStoreError::ParseRecord {
+                        path: path.clone(),
+                        source,
+                    }
+                })?,
             );
         }
     }
@@ -492,7 +576,7 @@ mod tests {
         .unwrap();
 
         let error = check_plugin_ownership(home.path(), "acme", "echo", "acme/gadget").unwrap_err();
-        let message = format!("{}", ErrorChain(error.as_ref()));
+        let message = format!("{}", ErrorChain(&error));
         assert!(message.contains("acme/widget"), "{message}");
         assert!(message.contains("acme/gadget"), "{message}");
     }

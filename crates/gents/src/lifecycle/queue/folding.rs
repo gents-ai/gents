@@ -167,7 +167,8 @@ pub(crate) async fn fold_candidates(
         .filter(|row| row.doc_id.as_deref() != Some(head.doc_id.as_str()))
         .filter(|row| folds_into(head, row, now))
         .map(AgentRequest::try_from)
-        .collect()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 pub(crate) async fn select_fold_in_claim_txn(

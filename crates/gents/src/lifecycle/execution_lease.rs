@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -12,6 +11,66 @@ pub(crate) struct ExecutionGeneration(String);
 #[derive(Debug, thiserror::Error)]
 #[error("execution lease expired or ownership was revoked")]
 pub(crate) struct ExecutionOwnershipLost;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ExecutionLeaseError {
+    #[error(transparent)]
+    Lifecycle(#[from] LifecycleError),
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    DeadlineParse(#[from] chrono::ParseError),
+    #[error("missing execution expiry")]
+    MissingExpiry,
+    #[error("missing execution state")]
+    MissingState,
+    #[error("missing execution generation")]
+    MissingGeneration,
+    #[error("missing request document")]
+    MissingDocument,
+    #[error("missing request state")]
+    LifecycleMissing,
+    #[error("missing request agent")]
+    AgentMissing,
+    #[error("missing request session")]
+    SessionMissing,
+    #[error("execution request disappeared")]
+    ExecutionDisappeared,
+    #[error("execution request purpose missing")]
+    PurposeMissing,
+    #[error("auxiliary execution cannot select a transcript message")]
+    AuxiliarySelection,
+    #[error("request deadline expired before natural completion")]
+    DeadlineExpired,
+    #[error("only revocation may select output by metadata")]
+    MetadataSelectionForbidden,
+    #[error("revocation terminal header sequence is ambiguous")]
+    RevocationSequenceAmbiguous,
+    #[error("terminal selection lacks exact owned assistant header")]
+    ExactHeaderMissing,
+    #[error("NoMessage cannot replace an owned assistant header during revocation")]
+    NoMessageRevocation,
+    #[error("NoMessage cannot replace a reconstructable owned assistant header")]
+    NoMessageReplacement,
+    #[error("auxiliary source has no unique closure")]
+    AuxiliarySourceClosure,
+    #[error("natural completion lost execution ownership")]
+    NaturalCompletionLost,
+}
+
+impl crate::config_client::TransactionFailure for ExecutionLeaseError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Lifecycle(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
+}
+
+type LeaseResult<T, E = ExecutionLeaseError> = std::result::Result<T, E>;
 
 impl Drop for RequestLifecycle {
     fn drop(&mut self) {
@@ -47,7 +106,7 @@ async fn relinquish_execution_lease(
     request_doc_id: &str,
     generation: &str,
     now: DateTime<Utc>,
-) -> Result<()> {
+) -> LeaseResult<()> {
     let doc_id = escape_graphql_string(request_doc_id);
     let generation = escape_graphql_string(generation);
     let expired = escape_graphql_string(&(now - chrono::Duration::milliseconds(1)).to_rfc3339());
@@ -150,20 +209,22 @@ impl RequestExecutionLease {
         node: &EmbeddedNode,
         request_doc_id: &str,
         decide: fn(super::execution_policy::LeaseObservation<'_>, &str, i64) -> bool,
-    ) -> Result<Option<bool>> {
+    ) -> LeaseResult<Option<bool>> {
         let Some(row) = super::query::request_view(node, request_doc_id).await? else {
             return Ok(None);
         };
         let expiry = row
             .execution_lease_expires_at
             .as_deref()
-            .context("missing execution expiry")?;
+            .ok_or(ExecutionLeaseError::MissingExpiry)?;
         let observed = super::execution_policy::LeaseObservation {
-            request: row.lifecycle_state.context("missing execution state")?,
+            request: row
+                .lifecycle_state
+                .ok_or(ExecutionLeaseError::MissingState)?,
             generation: row
                 .execution_generation
                 .as_deref()
-                .context("missing execution generation")?,
+                .ok_or(ExecutionLeaseError::MissingGeneration)?,
             deadline_ms: DateTime::parse_from_rfc3339(expiry)?.timestamp_millis(),
         };
         Ok(Some(decide(
@@ -177,7 +238,7 @@ impl RequestExecutionLease {
         &self,
         node: &EmbeddedNode,
         request_doc_id: &str,
-    ) -> Result<bool> {
+    ) -> LeaseResult<bool> {
         Ok(self
             .decide_lease(node, request_doc_id, |observed, generation, now_ms| {
                 super::execution_policy::renewable_lifecycle(observed.request)
@@ -192,19 +253,19 @@ impl RequestLifecycle {
     async fn decide_lease(
         &self,
         decide: fn(super::execution_policy::LeaseObservation<'_>, &str, i64) -> bool,
-    ) -> Result<Option<bool>> {
+    ) -> LeaseResult<Option<bool>> {
         self.execution_lease
             .as_ref()
-            .context("request has no active execution generation")?
+            .ok_or(LifecycleError::NoActiveExecutionGeneration)?
             .decide_lease(&self.node, &self.request.doc_id, decide)
             .await
     }
 
-    pub(crate) async fn validate_owned_execution(&self) -> Result<()> {
+    pub(crate) async fn validate_owned_execution(&self) -> anyhow::Result<()> {
         if !self
             .decide_lease(super::execution_policy::authorize_producer_decision)
             .await?
-            .context("execution request disappeared")?
+            .ok_or(ExecutionLeaseError::ExecutionDisappeared)?
         {
             return Err(ExecutionOwnershipLost.into());
         }
@@ -221,10 +282,10 @@ impl RequestLifecycle {
     /// Whether this execution's generation still holds a live lease on its
     /// active request. A failure observed after the lease is lost belongs to
     /// the request's current owner, not to this execution.
-    pub(crate) async fn owns_execution(&self) -> Result<bool> {
+    pub(crate) async fn owns_execution(&self) -> LeaseResult<bool> {
         self.execution_lease
             .as_ref()
-            .context("request has no active execution generation")?
+            .ok_or(LifecycleError::NoActiveExecutionGeneration)?
             .owns_execution(&self.node, &self.request.doc_id)
             .await
     }
@@ -238,7 +299,7 @@ impl RequestLifecycle {
         &mut self,
         message_doc_id: &str,
         pending_request_doc_ids: &[String],
-    ) -> Result<bool> {
+    ) -> anyhow::Result<bool> {
         let generation = self.execution_generation()?.to_owned();
         let result = terminalize_execution_with_time(
             &self.node,
@@ -259,9 +320,7 @@ impl RequestLifecycle {
         match result {
             Err(error) if error.is::<PendingQueueChanged>() => Ok(false),
             Err(error) => Err(error),
-            Ok(TerminalizeResult::Lost) => {
-                anyhow::bail!("natural completion lost execution ownership")
-            }
+            Ok(TerminalizeResult::Lost) => Err(ExecutionLeaseError::NaturalCompletionLost.into()),
             Ok(_) => {
                 self.state = LocalLifecycleState::Completed;
                 Ok(true)
@@ -274,7 +333,7 @@ impl RequestLifecycle {
         outcome: RequestTerminalOutcome,
         selection: TerminalOutput,
         reason: Option<&str>,
-    ) -> Result<TerminalizeResult> {
+    ) -> anyhow::Result<TerminalizeResult> {
         let generation = self.execution_generation()?.to_string();
         let result = terminalize_execution(
             &self.node,
@@ -304,19 +363,21 @@ pub(crate) async fn revoke_execution_generation(
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
     reason: &str,
-) -> Result<TerminalizeResult> {
+) -> anyhow::Result<TerminalizeResult> {
     terminalize_execution(
         node,
-        row.doc_id.as_deref().context("missing request document")?,
+        row.doc_id
+            .as_deref()
+            .ok_or(ExecutionLeaseError::MissingDocument)?,
         TerminalAuthority::Revocation {
             generation: row
                 .execution_generation
                 .as_deref()
-                .context("missing execution generation")?,
+                .ok_or(ExecutionLeaseError::MissingGeneration)?,
             expiry: row
                 .execution_lease_expires_at
                 .as_deref()
-                .context("missing execution expiry")?,
+                .ok_or(ExecutionLeaseError::MissingExpiry)?,
         },
         outcome,
         Some(selection),
@@ -333,19 +394,21 @@ pub(crate) async fn revoke_execution_preserving_output(
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
-) -> Result<TerminalizeResult> {
+) -> anyhow::Result<TerminalizeResult> {
     terminalize_execution(
         node,
-        row.doc_id.as_deref().context("missing request document")?,
+        row.doc_id
+            .as_deref()
+            .ok_or(ExecutionLeaseError::MissingDocument)?,
         TerminalAuthority::Revocation {
             generation: row
                 .execution_generation
                 .as_deref()
-                .context("missing execution generation")?,
+                .ok_or(ExecutionLeaseError::MissingGeneration)?,
             expiry: row
                 .execution_lease_expires_at
                 .as_deref()
-                .context("missing execution expiry")?,
+                .ok_or(ExecutionLeaseError::MissingExpiry)?,
         },
         outcome,
         None,
@@ -363,17 +426,20 @@ pub(crate) async fn revoke_execution_preserving_output_at(
     expected_generation: &str,
     fresh_generation: &str,
     now: DateTime<Utc>,
-) -> Result<TerminalizeResult> {
+) -> anyhow::Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
         TerminalizeSpec {
-            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            request_doc_id: row
+                .doc_id
+                .as_deref()
+                .ok_or(ExecutionLeaseError::MissingDocument)?,
             authority: TerminalAuthority::Revocation {
                 generation: expected_generation,
                 expiry: row
                     .execution_lease_expires_at
                     .as_deref()
-                    .context("missing execution expiry")?,
+                    .ok_or(ExecutionLeaseError::MissingExpiry)?,
             },
             outcome,
             selection: None,
@@ -393,7 +459,7 @@ async fn terminalize_execution(
     outcome: RequestTerminalOutcome,
     selection: Option<TerminalOutput>,
     reason: &str,
-) -> Result<TerminalizeResult> {
+) -> anyhow::Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
         TerminalizeSpec {
@@ -418,7 +484,7 @@ pub(crate) async fn terminalize_owned_at(
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
     now: DateTime<Utc>,
-) -> Result<TerminalizeResult> {
+) -> anyhow::Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
         TerminalizeSpec {
@@ -449,7 +515,7 @@ struct TerminalizeSpec<'a> {
 async fn terminalize_execution_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
     spec: TerminalizeSpec<'_>,
-) -> Result<TerminalizeResult> {
+) -> anyhow::Result<TerminalizeResult> {
     let fresh_generation = spec
         .fixture_fresh_generation
         .map_or_else(ExecutionGeneration::fresh, |generation| {
@@ -472,20 +538,23 @@ pub(super) async fn stage_revoke_execution_preserving_output(
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
-) -> Result<TerminalizeResult> {
+) -> anyhow::Result<TerminalizeResult> {
     terminalize_execution_in_txn(
         txn,
         &TerminalizeSpec {
-            request_doc_id: row.doc_id.as_deref().context("missing request document")?,
+            request_doc_id: row
+                .doc_id
+                .as_deref()
+                .ok_or(ExecutionLeaseError::MissingDocument)?,
             authority: TerminalAuthority::Revocation {
                 generation: row
                     .execution_generation
                     .as_deref()
-                    .context("missing execution generation")?,
+                    .ok_or(ExecutionLeaseError::MissingGeneration)?,
                 expiry: row
                     .execution_lease_expires_at
                     .as_deref()
-                    .context("missing execution expiry")?,
+                    .ok_or(ExecutionLeaseError::MissingExpiry)?,
             },
             outcome,
             selection: None,
@@ -503,7 +572,7 @@ async fn terminalize_execution_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     spec: &TerminalizeSpec<'_>,
     fresh_generation: &ExecutionGeneration,
-) -> Result<TerminalizeResult> {
+) -> anyhow::Result<TerminalizeResult> {
     let request_doc_id = spec.request_doc_id;
     let authority = spec.authority;
     let outcome = spec.outcome;
@@ -526,22 +595,23 @@ async fn terminalize_execution_in_txn(
                 execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
             }} }}"#)).await?;
     let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
-        .context("execution request disappeared")?;
-    let purpose = row.purpose.context("execution request purpose missing")?;
+        .ok_or(ExecutionLeaseError::ExecutionDisappeared)?;
+    let purpose = row.purpose.ok_or(ExecutionLeaseError::PurposeMissing)?;
     let auxiliary = purpose.is_auxiliary();
-    if auxiliary {
-        anyhow::ensure!(
-            selection
-                .as_ref()
-                .is_none_or(|selected| *selected == TerminalOutput::NoMessage),
-            "auxiliary execution cannot select a transcript message"
-        );
+    if auxiliary
+        && !selection
+            .as_ref()
+            .is_none_or(|selected| *selected == TerminalOutput::NoMessage)
+    {
+        return Err(ExecutionLeaseError::AuxiliarySelection.into());
     }
     let owner = row
         .execution_generation
         .as_deref()
-        .context("missing execution generation")?;
-    let state = row.lifecycle_state.context("missing request state")?;
+        .ok_or(ExecutionLeaseError::MissingGeneration)?;
+    let state = row
+        .lifecycle_state
+        .ok_or(ExecutionLeaseError::LifecycleMissing)?;
     let effective_outcome = if outcome == RequestTerminalOutcome::Failed
         && row
             .interrupt_requested_at
@@ -567,7 +637,7 @@ async fn terminalize_execution_in_txn(
     let expiry = row
         .execution_lease_expires_at
         .as_deref()
-        .context("missing execution expiry")?;
+        .ok_or(ExecutionLeaseError::MissingExpiry)?;
     let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
     let now = fixture_now.unwrap_or_else(Utc::now);
     let observed = LeaseObservation {
@@ -599,16 +669,18 @@ async fn terminalize_execution_in_txn(
     if !authorized || row.terminal_output.is_some() {
         return Ok(TerminalizeResult::Lost);
     }
-    let agent = row.node_did.as_deref().context("missing request agent")?;
+    let agent = row
+        .node_did
+        .as_deref()
+        .ok_or(ExecutionLeaseError::AgentMissing)?;
     let session_id = row
         .session_id
         .as_deref()
-        .context("missing request session")?;
+        .ok_or(ExecutionLeaseError::SessionMissing)?;
     if let Some((expected, request_deadline)) = pending_fence {
-        anyhow::ensure!(
-            request_deadline.is_none_or(|deadline| Utc::now() < deadline),
-            "request deadline expired before natural completion"
-        );
+        if !request_deadline.is_none_or(|deadline| Utc::now() < deadline) {
+            return Err(ExecutionLeaseError::DeadlineExpired.into());
+        }
         let actual = super::queue::pending_ids_in_txn(txn, agent, session_id).await?;
         if actual != expected {
             return Err(PendingQueueChanged.into());
@@ -648,24 +720,23 @@ async fn terminalize_execution_in_txn(
     let selection = match selection.as_ref() {
         Some(explicit) => explicit,
         None => {
-            anyhow::ensure!(
-                matches!(authority, TerminalAuthority::Revocation { .. }),
-                "only revocation may select output by metadata"
-            );
+            if !matches!(authority, TerminalAuthority::Revocation { .. }) {
+                return Err(ExecutionLeaseError::MetadataSelectionForbidden.into());
+            }
             let latest = headers
                 .iter()
                 .filter(eligible)
                 .max_by_key(|header| header.message.sequence);
             if let Some(latest) = latest {
-                anyhow::ensure!(
-                    headers
-                        .iter()
-                        .filter(eligible)
-                        .filter(|header| header.message.sequence == latest.message.sequence)
-                        .count()
-                        == 1,
-                    "revocation terminal header sequence is ambiguous"
-                );
+                if headers
+                    .iter()
+                    .filter(eligible)
+                    .filter(|header| header.message.sequence == latest.message.sequence)
+                    .count()
+                    != 1
+                {
+                    return Err(ExecutionLeaseError::RevocationSequenceAmbiguous.into());
+                }
             }
             selected = latest.map_or(TerminalOutput::NoMessage, |header| {
                 TerminalOutput::Message {
@@ -675,10 +746,9 @@ async fn terminalize_execution_in_txn(
             &selected
         }
     };
-    anyhow::ensure!(
-        !auxiliary || *selection == TerminalOutput::NoMessage,
-        "auxiliary execution cannot select a transcript message"
-    );
+    if auxiliary && *selection != TerminalOutput::NoMessage {
+        return Err(ExecutionLeaseError::AuxiliarySelection.into());
+    }
     match selection {
         TerminalOutput::Message { message_doc_id } => {
             let matching = headers
@@ -686,24 +756,20 @@ async fn terminalize_execution_in_txn(
                 .filter(eligible)
                 .filter(|header| &header.doc_id == message_doc_id)
                 .collect::<Vec<_>>();
-            anyhow::ensure!(
-                matching.len() == 1,
-                "terminal selection lacks exact owned assistant header"
-            );
+            if matching.len() != 1 {
+                return Err(ExecutionLeaseError::ExactHeaderMissing.into());
+            }
             if !matches!(authority, TerminalAuthority::Revocation { .. }) {
                 reader.load_message(message_doc_id).await?;
             }
         }
         TerminalOutput::NoMessage => {
             for header in headers.iter().filter(eligible) {
-                anyhow::ensure!(
-                    !matches!(authority, TerminalAuthority::Revocation { .. }),
-                    "NoMessage cannot replace an owned assistant header during revocation"
-                );
+                if matches!(authority, TerminalAuthority::Revocation { .. }) {
+                    return Err(ExecutionLeaseError::NoMessageRevocation.into());
+                }
                 match reader.load_message(&header.doc_id).await {
-                    Ok(_) => anyhow::bail!(
-                        "NoMessage cannot replace a reconstructable owned assistant header"
-                    ),
+                    Ok(_) => return Err(ExecutionLeaseError::NoMessageReplacement.into()),
                     Err(error)
                         if error
                             .downcast_ref::<gents_protocol::output::ReconstructionError>()
@@ -793,7 +859,7 @@ pub(super) fn validate_auxiliary_sources_decided(
     request_doc_id: &str,
     records: &[crate::session::canonical_rows::OutputSegmentRow],
     purpose: gents_protocol::request_admission::RequestPurpose,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     use gents_protocol::output::reconstruction::ObservedSegment;
     use gents_protocol::output::{OutputSource, SourceClose};
     let mut sources = Vec::new();
@@ -826,7 +892,9 @@ pub(super) fn validate_auxiliary_sources_decided(
                 .into(),
             );
         }
-        anyhow::ensure!(closing.len() == 1, "auxiliary source has no unique closure");
+        if closing.len() != 1 {
+            return Err(ExecutionLeaseError::AuxiliarySourceClosure.into());
+        }
         let closing = closing[0];
         let close = closing.segment.close.as_ref().expect("closing checked");
         match close {

@@ -1568,6 +1568,7 @@ impl PackInstaller {
                             plugin,
                             false,
                         )
+                        .map_err(anyhow::Error::from)
                     });
                 result
                     .err()

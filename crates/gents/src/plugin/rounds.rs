@@ -1,18 +1,32 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
 use super::{
-    data, http_calls, job_calls, model_calls, tool_calls, PluginBudget, PluginOutcome,
+    data, http_calls, job_calls, model_calls, tool_calls, PluginBudget, PluginError, PluginOutcome,
     PluginVerdict,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum RoundsError {
+    #[error("a plugin the host serves requests for takes a JSON object as input")]
+    InputNotObject,
+    #[error("a driven plugin requires host services")]
+    NotDriven,
+    #[error("the plugin stopped unexpectedly")]
+    Stopped(#[source] tokio::task::JoinError),
+    #[error(transparent)]
+    Plugin(#[from] PluginError),
+}
+
+type Result<T, E = RoundsError> = std::result::Result<T, E>;
 
 pub const MAX_ROUNDS: u32 = 64;
 pub const FINAL_ROUND_RESERVE_DIVISOR: u32 = 8;
 
-pub(super) type Round = Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome> + Send + Sync>;
+pub(super) type Round =
+    Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome, PluginError> + Send + Sync>;
 
 #[derive(Default)]
 pub(super) struct HostCalls {
@@ -36,9 +50,7 @@ impl HostCalls {
         let mut base = match input {
             Value::Null => Map::new(),
             Value::Object(object) => object,
-            _ => {
-                anyhow::bail!("a plugin the host serves requests for takes a JSON object as input")
-            }
+            _ => return Err(RoundsError::InputNotObject),
         };
         base.remove("state");
         if self.model.is_some() {
@@ -129,7 +141,7 @@ pub(super) async fn drive(
     let mut deadline = started + budget.wall_clock;
     let reserve = budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
     let Value::Object(base) = calls.prepare_input(input)? else {
-        anyhow::bail!("a driven plugin requires host services");
+        return Err(RoundsError::NotDriven);
     };
     let mut next = Value::Object(base.clone());
     let mut fuel = 0u64;
@@ -162,7 +174,7 @@ pub(super) async fn drive(
         let run = round.clone();
         let outcome = tokio::task::spawn_blocking(move || run(next, budget))
             .await
-            .context("the plugin stopped unexpectedly")??;
+            .map_err(RoundsError::Stopped)??;
         fuel = fuel.saturating_add(outcome.fuel_used);
         if outcome.verdict != PluginVerdict::Success {
             return Ok(PluginOutcome {

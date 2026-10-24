@@ -431,11 +431,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            ErrorChain(error.as_ref())
-                .to_string()
-                .contains("--grant-authority"),
+            ErrorChain(&error).to_string().contains("--grant-authority"),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert!(store::list_records(home.path()).unwrap().is_empty());
 

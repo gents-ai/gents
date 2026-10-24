@@ -820,7 +820,7 @@ async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
     assert!(
         error.to_string().contains("active ReadOnly binding"),
         "unexpected validation failure: {}",
-        ErrorChain(error.as_ref())
+        ErrorChain(&error)
     );
 }
 
@@ -1094,10 +1094,13 @@ async fn artifact_alternate_owner(
     fx: &ArtifactTestFixture,
     name: &str,
     binding: &serde_json::Value,
-) -> anyhow::Result<(
-    crate::lifecycle::RequestLifecycle,
-    crate::lifecycle::ClaimOutcome,
-)> {
+) -> Result<
+    (
+        crate::lifecycle::RequestLifecycle,
+        crate::lifecycle::ClaimOutcome,
+    ),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     use crate::identity::NodeIdentity;
     let identity = crate::identity::KeyIdentity::load_or_create(
         fx._dir.path().join(if binding["owner_matches"] == false {

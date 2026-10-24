@@ -1,6 +1,5 @@
 use rapidhash::RapidHashMap;
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
@@ -8,6 +7,14 @@ use crate::graphql::escape_graphql_string;
 use super::action_plan::{CreationPolicy, WorkspaceAdapterKind};
 use super::executor::RepositoryPlacementRef;
 use super::LogicalWorkspaceIdentity;
+
+#[derive(Debug, thiserror::Error)]
+pub enum DocumentsError {
+    #[error("{message}")]
+    StoreRejected { message: String },
+}
+
+type Result<T, E = DocumentsError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepositoryPlacementError {

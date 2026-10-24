@@ -412,7 +412,7 @@ impl TaskHookExec for ManagedTaskHookExec {
                             HookCommandResult::LaunchFailed,
                             format!(
                                 "could not verify execution ownership before launch: {}",
-                                ErrorChain(error.as_ref())
+                                ErrorChain(&error)
                             ),
                         )),
                     }

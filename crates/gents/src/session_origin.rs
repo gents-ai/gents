@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::config_client::{ConfigAccess, ConfigRead};
+use crate::config_client::{ConfigAccess, ConfigClientError, ConfigRead};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::session::{
-    decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
+    decode_session_row, public_request_filter, session_scope_filter, SessionError,
+    AGENT_SESSION_FIELDS,
 };
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::AgentSession;
@@ -59,6 +59,32 @@ pub struct SessionLineage {
     pub sent: Vec<SessionLink>,
     pub received: Vec<SessionLink>,
     pub request_causes: Vec<SessionRequestCause>,
+}
+
+type Result<T, E = SessionOriginError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SessionOriginError {
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Session(#[from] SessionError),
+    #[error("session {session_id} is ambiguous")]
+    Ambiguous { session_id: String },
+    #[error("decoding AgentRequest row")]
+    DecodeRequest(#[source] serde_json::Error),
+}
+
+impl crate::config_client::TransactionFailure for SessionOriginError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Session(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
 }
 
 const SCOPE_FIELDS: &str = "_docID node_did session_id requester_did";
@@ -156,7 +182,11 @@ pub async fn load_session(
         ));
     }
     let mut rows = sessions(access, &filter).await?;
-    anyhow::ensure!(rows.len() <= 1, "session {session_id} is ambiguous");
+    if rows.len() > 1 {
+        return Err(SessionOriginError::Ambiguous {
+            session_id: session_id.to_owned(),
+        });
+    }
     Ok(rows.pop())
 }
 
@@ -248,7 +278,7 @@ pub async fn starting_request(
         row["opening_request_doc_id"] = opening.clone().map_or(Value::Null, Value::String);
     }
     opening_request(&rows, link)
-        .map(|row| serde_json::from_value(row).context("decoding AgentRequest row"))
+        .map(|row| serde_json::from_value(row).map_err(SessionOriginError::DecodeRequest))
         .transpose()
 }
 

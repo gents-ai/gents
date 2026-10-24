@@ -71,11 +71,11 @@ pub(crate) fn bound_slots(
     if graphql.is_some() {
         return Ok(Vec::new());
     }
-    gents::plugin::store::bound_to_profile(
+    Ok(gents::plugin::store::bound_to_profile(
         &crate::home_state::resolve_home_dir(home),
         node_did,
         profile_id,
-    )
+    )?)
 }
 
 async fn list_candidates(

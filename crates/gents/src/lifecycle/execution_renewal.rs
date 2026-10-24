@@ -1,13 +1,53 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
 use super::execution_policy::{authorize_renewal, is_live, renewable_lifecycle, LeaseObservation};
-use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::config_client::{ConfigClientError, TransactionFailure};
+use crate::graphql::{escape_graphql_string, response_has_documents, GraphqlResponseError};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ExecutionRenewalError {
+    #[error("execution lease expired before renewal commit admission")]
+    RenewalAdmissionExpired,
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] GraphqlResponseError),
+    #[error(transparent)]
+    DeadlineParse(#[from] chrono::ParseError),
+    #[error("missing execution lifecycle")]
+    MissingLifecycle,
+    #[error("missing execution generation")]
+    MissingGeneration,
+    #[error("missing execution deadline")]
+    MissingDeadline,
+    #[error("missing execution duration")]
+    MissingDuration,
+    #[error("execution duration overflow")]
+    DurationOverflow,
+    #[error("execution duration must be positive")]
+    NonPositiveDuration,
+    #[error("renewal date overflow")]
+    RenewalDateOverflow,
+    #[error("lease renewal lost deadline CAS")]
+    DeadlineCasLost,
+}
+
+type Result<T, E = ExecutionRenewalError> = std::result::Result<T, E>;
+
+impl TransactionFailure for ExecutionRenewalError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => TransactionFailure::config_client_error(error),
+            _ => None,
+        }
+    }
+}
 
 pub(super) struct RenewalTask {
     task: tokio::task::JoinHandle<()>,
@@ -168,14 +208,10 @@ async fn renew_once_with_time(
     )
     .await
     {
-        Err(error) if error.is::<RenewalAdmissionExpired>() => Ok(RenewalAttemptOutcome::Lost),
+        Err(ExecutionRenewalError::RenewalAdmissionExpired) => Ok(RenewalAttemptOutcome::Lost),
         result => result,
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("execution lease expired before renewal commit admission")]
-struct RenewalAdmissionExpired;
 
 pub(crate) async fn renew_in_transaction(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
@@ -193,25 +229,29 @@ pub(crate) async fn renew_in_transaction(
     let Some(row) = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")? else {
         return Ok(RenewalAttemptOutcome::Lost);
     };
-    let state = row.lifecycle_state.context("missing execution lifecycle")?;
+    let state = row
+        .lifecycle_state
+        .ok_or(ExecutionRenewalError::MissingLifecycle)?;
     if !renewable_lifecycle(state) || row.execution_generation.as_deref() != Some(generation) {
         return Ok(RenewalAttemptOutcome::Lost);
     }
     let owner = row
         .execution_generation
         .as_deref()
-        .context("missing execution generation")?;
+        .ok_or(ExecutionRenewalError::MissingGeneration)?;
     let expiry = row
         .execution_lease_expires_at
         .as_deref()
-        .context("missing execution deadline")?;
+        .ok_or(ExecutionRenewalError::MissingDeadline)?;
     let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
     let duration = row
         .execution_lease_secs
-        .context("missing execution duration")?
+        .ok_or(ExecutionRenewalError::MissingDuration)?
         .checked_mul(1000)
-        .context("execution duration overflow")?;
-    anyhow::ensure!(duration > 0, "execution duration must be positive");
+        .ok_or(ExecutionRenewalError::DurationOverflow)?;
+    if duration <= 0 {
+        return Err(ExecutionRenewalError::NonPositiveDuration);
+    }
     let now = fixture_now.unwrap_or_else(Utc::now).timestamp_millis();
     let observed = LeaseObservation {
         request: state,
@@ -236,7 +276,8 @@ pub(crate) async fn renew_in_transaction(
     let Some(next) = authorize_renewal(observed, generation, expected, duration, now) else {
         return Ok(RenewalAttemptOutcome::Skipped);
     };
-    let next = DateTime::<Utc>::from_timestamp_millis(next).context("renewal date overflow")?;
+    let next = DateTime::<Utc>::from_timestamp_millis(next)
+        .ok_or(ExecutionRenewalError::RenewalDateOverflow)?;
     let owner = escape_graphql_string(owner);
     let state = escape_graphql_string(state.as_str());
     let expiry = escape_graphql_string(expiry);
@@ -246,14 +287,14 @@ pub(crate) async fn renew_in_transaction(
                     execution_generation: {{ _eq: "{owner}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
                 input: {{ execution_lease_expires_at: "{next}" }}
             ) {{ _docID }} }}"#)).await?;
-    anyhow::ensure!(
-        result
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(response_has_documents),
-        "lease renewal lost deadline CAS"
-    );
+    if !result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentRequest"))
+        .is_some_and(response_has_documents)
+    {
+        return Err(ExecutionRenewalError::DeadlineCasLost);
+    }
     let recheck = renewal_recheck_time(fixture_now).timestamp_millis();
     if !is_live(observed, generation, recheck) {
         tracing::warn!(
@@ -262,7 +303,7 @@ pub(crate) async fn renew_in_transaction(
             elapsed_ms = started.elapsed().as_millis() as u64,
             "execution lease expired during renewal commit admission"
         );
-        return Err(RenewalAdmissionExpired.into());
+        return Err(ExecutionRenewalError::RenewalAdmissionExpired);
     }
     Ok(RenewalAttemptOutcome::Committed)
 }

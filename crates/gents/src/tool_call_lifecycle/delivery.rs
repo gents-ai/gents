@@ -20,6 +20,38 @@ use crate::session::canonical_rows::{
 use super::{CancelCause, FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
 
 #[derive(Debug, thiserror::Error)]
+pub(crate) enum DeliveryError {
+    #[error("raw tool output requires a running admitted lifecycle")]
+    RawOutputNotRunning,
+    #[error("raw tool output requires a physical tool row")]
+    RawOutputMissingToolRow,
+    #[error("raw tool output requires a request binding")]
+    RawOutputMissingRequest,
+    #[error("dispatch requires an accepted tool header binding")]
+    DispatchMissingHeader,
+    #[error("dispatch requires an accepted request binding")]
+    DispatchMissingRequest,
+    #[error("dispatch requires the accepted execution generation")]
+    DispatchMissingGeneration,
+    #[error("dispatch requires an accepted argument reference")]
+    DispatchMissingArguments,
+    #[error("dispatch requires a physical tool row")]
+    DispatchMissingToolRow,
+    #[error("background receipt requires an accepted direct background invocation")]
+    BackgroundReceiptNotDirect,
+    #[error("background receipt requires tool document")]
+    BackgroundReceiptMissingTool,
+    #[error("background receipt requires request document")]
+    BackgroundReceiptMissingRequest,
+    #[error("background receipt requires accepted header")]
+    BackgroundReceiptMissingHeader,
+    #[error("background receipt requires accepted arguments")]
+    BackgroundReceiptMissingArguments,
+    #[error("background receipt requires execution generation")]
+    BackgroundReceiptMissingGeneration,
+}
+
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum ToolDispatchRejection {
     #[error("dispatch lost exact request ownership or cancellation")]
     LostRequestOwnership,
@@ -635,52 +667,51 @@ impl ToolCallLifecycle {
         .await?
         .context("spawned admission created child could not be rehydrated by physical provenance")
     }
-    pub(crate) fn tool_output_binding(&self) -> Result<ToolOutputBinding> {
-        anyhow::ensure!(
-            self.state == ToolCallState::Running,
-            "raw tool output requires a running admitted lifecycle"
-        );
+    pub(crate) fn tool_output_binding(&self) -> Result<ToolOutputBinding, DeliveryError> {
+        if self.state != ToolCallState::Running {
+            return Err(DeliveryError::RawOutputNotRunning);
+        }
         Ok(ToolOutputBinding {
             node: self.node.clone(),
             tool_call_doc_id: self
                 .doc_id
                 .clone()
-                .context("raw tool output requires a physical tool row")?,
+                .ok_or(DeliveryError::RawOutputMissingToolRow)?,
             request_doc_id: self
                 .request_doc_id
                 .clone()
-                .context("raw tool output requires a request binding")?,
+                .ok_or(DeliveryError::RawOutputMissingRequest)?,
             session_id: self.session_id.clone(),
             node_did: self.node_did.clone(),
             requester_did: self.requester_did.clone(),
         })
     }
 
-    pub(crate) fn dispatch_start(&self) -> Result<DispatchStart> {
+    pub(crate) fn dispatch_start(&self) -> Result<DispatchStart, DeliveryError> {
         Ok(DispatchStart {
             header: self
                 .accepted_header_doc_id
                 .clone()
-                .context("dispatch requires an accepted tool header binding")?,
+                .ok_or(DeliveryError::DispatchMissingHeader)?,
             request: self
                 .request_doc_id
                 .clone()
-                .context("dispatch requires an accepted request binding")?,
+                .ok_or(DeliveryError::DispatchMissingRequest)?,
             generation: self
                 .execution_generation
                 .clone()
-                .context("dispatch requires the accepted execution generation")?,
+                .ok_or(DeliveryError::DispatchMissingGeneration)?,
             arguments: self
                 .arguments
                 .clone()
-                .context("dispatch requires an accepted argument reference")?,
+                .ok_or(DeliveryError::DispatchMissingArguments)?,
             agent: self.node_did.clone(),
             requester: self.requester_did.clone(),
             session: self.session_id.clone(),
             doc_id: self
                 .doc_id
                 .clone()
-                .context("dispatch requires a physical tool row")?,
+                .ok_or(DeliveryError::DispatchMissingToolRow)?,
             id: self.tool_call_id.clone(),
             call_id: self.call_id.clone(),
             message_sequence: self.message_sequence,
@@ -737,32 +768,33 @@ impl ToolCallLifecycle {
         .await
     }
 
-    pub(crate) fn background_receipt_binding(&self) -> Result<BackgroundReceiptBinding> {
-        anyhow::ensure!(
-            self.await_mode == super::AwaitMode::Background && !self.is_spawned_background(),
-            "background receipt requires an accepted direct background invocation"
-        );
+    pub(crate) fn background_receipt_binding(
+        &self,
+    ) -> Result<BackgroundReceiptBinding, DeliveryError> {
+        if self.await_mode != super::AwaitMode::Background || self.is_spawned_background() {
+            return Err(DeliveryError::BackgroundReceiptNotDirect);
+        }
         Ok(BackgroundReceiptBinding {
             tool_doc_id: self
                 .doc_id
                 .clone()
-                .context("background receipt requires tool document")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingTool)?,
             request_doc_id: self
                 .request_doc_id
                 .clone()
-                .context("background receipt requires request document")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingRequest)?,
             accepted_header_doc_id: self
                 .accepted_header_doc_id
                 .clone()
-                .context("background receipt requires accepted header")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingHeader)?,
             arguments: self
                 .arguments
                 .clone()
-                .context("background receipt requires accepted arguments")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingArguments)?,
             generation: self
                 .execution_generation
                 .clone()
-                .context("background receipt requires execution generation")?,
+                .ok_or(DeliveryError::BackgroundReceiptMissingGeneration)?,
             node_did: self.node_did.clone(),
             requester_did: self.requester_did.clone(),
             session_id: self.session_id.clone(),

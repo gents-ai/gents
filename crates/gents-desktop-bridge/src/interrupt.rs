@@ -130,7 +130,7 @@ pub async fn interrupt_request(
                 format!(
                     "interrupt readback of {} failed: {}",
                     req.request_id,
-                    ErrorChain(error.as_ref())
+                    ErrorChain(&error)
                 )
             })?;
     Ok(result(latched, false))

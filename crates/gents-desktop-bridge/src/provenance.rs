@@ -47,7 +47,9 @@ pub async fn session_provenance(
 ) -> Result<SessionProvenanceView, String> {
     let access = crate::snapshot::node_reads(core, &scope.node_did);
     let fail = |error: anyhow::Error| format!("session provenance: {}", ErrorChain(error.as_ref()));
-    let lineage = lineage(&access, &scope).await.map_err(fail)?;
+    let lineage = lineage(&access, &scope)
+        .await
+        .map_err(|error| fail(error.into()))?;
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
     let opening_request_id = match &lineage.started_by {
         Some(started_by) => opening_request(
@@ -117,7 +119,7 @@ async fn opening_request(
     access: &ConfigAccess,
     link: &SessionLink,
 ) -> anyhow::Result<Option<AgentRequestRow>> {
-    starting_request(access, link).await
+    Ok(starting_request(access, link).await?)
 }
 
 async fn caused_calls(

@@ -5,13 +5,22 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use afterburner_core::manifold::{Manifold, NetAccess};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use base64::Engine;
 use futures::future::BoxFuture;
 use futures::StreamExt;
+use gents_protocol::error_chain::find_source;
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Method, Url};
 use serde_json::{json, Map, Value};
+
+#[derive(Debug, thiserror::Error)]
+pub enum HttpCallError {
+    #[error("plugin {coordinate}'s network grant: {message}")]
+    Grant { coordinate: String, message: String },
+    #[error("building the plugin HTTP client")]
+    BuildClient(#[source] reqwest::Error),
+}
 
 pub const MAX_REQUESTS_PER_ROUND: usize = 16;
 pub const MAX_IN_FLIGHT: usize = 8;
@@ -474,7 +483,10 @@ impl Session {
         self.request_timeout.as_millis() as u64
     }
 
-    pub(super) fn for_grant(coordinate: &str, manifold: &Manifold) -> Result<Option<Self>> {
+    pub(super) fn for_grant(
+        coordinate: &str,
+        manifold: &Manifold,
+    ) -> std::result::Result<Option<Self>, HttpCallError> {
         Self::with_lookup(coordinate, manifold, Arc::new(SystemLookup))
     }
 
@@ -482,10 +494,11 @@ impl Session {
         coordinate: &str,
         manifold: &Manifold,
         lookup: Arc<dyn Lookup>,
-    ) -> Result<Option<Self>> {
-        let grant = net_grant(&manifold.net)
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("plugin {coordinate}'s network grant"))?;
+    ) -> std::result::Result<Option<Self>, HttpCallError> {
+        let grant = net_grant(&manifold.net).map_err(|message| HttpCallError::Grant {
+            coordinate: coordinate.to_owned(),
+            message,
+        })?;
         if grant == NetGrant::Sealed {
             return Ok(None);
         }
@@ -496,7 +509,7 @@ impl Session {
             .no_proxy()
             .dns_resolver(Arc::new(Guarded(lookup)))
             .build()
-            .context("building the plugin HTTP client")?;
+            .map_err(HttpCallError::BuildClient)?;
         let request_timeout = manifold.http_timeout_ms.map_or(REQUEST_TIMEOUT, |ms| {
             Duration::from_millis(ms).min(REQUEST_TIMEOUT)
         });
@@ -652,12 +665,8 @@ impl Session {
 }
 
 fn send_error(url: &Url, error: &reqwest::Error) -> String {
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
-    while let Some(cause) = source {
-        if let Some(internal) = cause.downcast_ref::<InternalAddress>() {
-            return internal.0.clone();
-        }
-        source = cause.source();
+    if let Some(internal) = find_source::<InternalAddress>(error) {
+        return internal.0.clone();
     }
     let host = url.host_str().unwrap_or_default();
     if error.is_timeout() {

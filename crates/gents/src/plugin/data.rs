@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::job::{
     DataCall, DataOp, DataQuery, DataQueryResponse, DataWrite, PluginDataDeclaration, RoundResult,
@@ -337,6 +337,18 @@ pub fn admit_write(
 
 /// Largest `limit` a `data_calls.query` may ask for (Lean `queryAdmitted`).
 const MAX_QUERY_LIMIT: u32 = 256;
+
+#[derive(Debug, thiserror::Error)]
+pub enum DataQueryError {
+    #[error("collection {collection:?} is outside the plugin's declared data grant; query only the declared data.collections")]
+    OutsideGrant { collection: String },
+    #[error("the plugin did not declare query in data.ops; declare it to read its collections")]
+    QueryNotDeclared,
+    #[error(
+        "limit {limit} is out of bounds; ask for 1 to {MAX_QUERY_LIMIT} rows and page with offset"
+    )]
+    LimitOutOfBounds { limit: u32 },
+}
 /// Queries one round may carry.
 const MAX_QUERIES_PER_ROUND: usize = 16;
 
@@ -497,17 +509,15 @@ impl Session {
         let query_granted = data.ops.iter().any(|op| op == "query");
         if !query_admitted(query.limit, in_own_sdl, runtime_or_protected, query_granted) {
             if !in_own_sdl || runtime_or_protected {
-                bail!(
-                    "collection {collection:?} is outside the plugin's declared data grant; query only the declared data.collections"
-                );
+                return Err(DataQueryError::OutsideGrant {
+                    collection: collection.to_owned(),
+                }
+                .into());
             }
             if !query_granted {
-                bail!("the plugin did not declare query in data.ops; declare it to read its collections");
+                return Err(DataQueryError::QueryNotDeclared.into());
             }
-            bail!(
-                "limit {} is out of bounds; ask for 1 to {MAX_QUERY_LIMIT} rows and page with offset",
-                query.limit
-            );
+            return Err(DataQueryError::LimitOutOfBounds { limit: query.limit }.into());
         }
         let mut filter = Value::Object(query.filter.clone());
         substitute_json(&mut filter, &self.caller.node_did);

@@ -68,6 +68,14 @@ fn access_error_in<'a>(
         .or_else(|| wrapped::<crate::oauth_credential::OAuthCredentialError>(cause))
         .or_else(|| wrapped::<crate::usage_observation::UsageObservationError>(cause))
         .or_else(|| wrapped::<crate::rendered_request::RenderedRequestError>(cause))
+        .or_else(|| wrapped::<crate::session::SessionError>(cause))
+        .or_else(|| wrapped::<crate::session::SessionControlError>(cause))
+        .or_else(|| wrapped::<crate::session_origin::SessionOriginError>(cause))
+        .or_else(|| wrapped::<crate::lifecycle::LifecycleError>(cause))
+        .or_else(|| wrapped::<crate::lifecycle::ExecutionLeaseError>(cause))
+        .or_else(|| wrapped::<crate::lifecycle::ExecutionRenewalError>(cause))
+        .or_else(|| wrapped::<crate::lifecycle::RecoveryError>(cause))
+        .or_else(|| wrapped::<crate::lifecycle::CanonicalRecoveryError>(cause))
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {

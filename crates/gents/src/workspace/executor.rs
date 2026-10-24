@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::action_plan::{
@@ -13,18 +12,100 @@ use super::adapter::{
     capture_instruction_manifest, capture_seal_snapshot, cleanup_workspace_tree, clone_artifacts,
     commit_exists, observe_dirty_base, observe_effect, observed_tree_hash,
     prepare_integrate_commit, provision, resolve_base_sha, write_identity, write_seal_marker,
-    ObservedEffect,
+    AdapterError, ObservedEffect,
 };
 use super::binding::release_binding;
 use super::documents::{
-    integrator_receipt_id, new_isolated_workspace, writer_receipt_id, IsolatedWorkspaceDoc,
-    ProvisioningObservation, WorkspaceDocuments, WorkspacePlacementDoc, WorkspaceReceiptDoc,
-    ADAPTER_VERSION, LIFECYCLE_CLEANED, LIFECYCLE_CLEANING, LIFECYCLE_PROVISION_FAILED,
-    LIFECYCLE_READY, LIFECYCLE_SEALED, RECEIPT_KIND_INTEGRATOR, RECEIPT_KIND_WRITER,
+    integrator_receipt_id, new_isolated_workspace, writer_receipt_id, DocumentsError,
+    IsolatedWorkspaceDoc, ProvisioningObservation, WorkspaceDocuments, WorkspacePlacementDoc,
+    WorkspaceReceiptDoc, ADAPTER_VERSION, LIFECYCLE_CLEANED, LIFECYCLE_CLEANING,
+    LIFECYCLE_PROVISION_FAILED, LIFECYCLE_READY, LIFECYCLE_SEALED, RECEIPT_KIND_INTEGRATOR,
+    RECEIPT_KIND_WRITER,
 };
 use super::instructions::is_empty_manifest;
 use super::journal::{self, ActionJournalEntry, ActionJournalState};
+use super::path_capability::PathCapabilityError;
 use crate::toolset::normalize_workspace_lifecycle_state;
+
+#[derive(Debug, thiserror::Error)]
+pub enum WorkspaceExecutorError {
+    #[error("canonicalizing repository checkout {}", path.display())]
+    CanonicalizeCheckout {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("repository checkout {} does not exist", path.display())]
+    CheckoutMissing { path: PathBuf },
+    #[error("workspace destination collides with the source checkout")]
+    DestinationCollidesWithCheckout,
+    #[error("canonicalizing ceiling {}", path.display())]
+    CanonicalizeCeiling {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("workspace destination {} escapes operator ceiling {}", dest.display(), ceiling.display())]
+    DestinationEscapesCeiling { dest: PathBuf, ceiling: PathBuf },
+    #[error("IsolatedWorkspace {workspace_id} already exists with a different identity; leaving it in place")]
+    IdentityConflict { workspace_id: String },
+    #[error("refusing to overwrite Ready IsolatedWorkspace {workspace_id}")]
+    RefuseOverwriteReady { workspace_id: String },
+    #[error("IsolatedWorkspace {workspace_id} is provisionFailed; refusing {lifecycle_state} without cleanup")]
+    ProvisionFailedRefusal {
+        workspace_id: String,
+        lifecycle_state: String,
+    },
+    #[error("IsolatedWorkspace {workspace_id} is {existing_state}; refusing {lifecycle_state} without cleanup")]
+    ExistingStateRefusal {
+        workspace_id: String,
+        existing_state: String,
+        lifecycle_state: String,
+    },
+    #[error("workspace host_path is not valid UTF-8")]
+    HostPathNotUtf8,
+    #[error("seal persist requires seal_hash")]
+    SealPersistRequiresHash,
+    #[error(
+        "existing writer receipt {receipt_id} has seal_hash {existing_seal_hash}, not {seal_hash}"
+    )]
+    ReceiptSealMismatch {
+        receipt_id: String,
+        existing_seal_hash: String,
+        seal_hash: String,
+    },
+    #[error(
+        "workspace receipt does not match immutable workspace/base/capability/seal/request binding"
+    )]
+    ReceiptBindingMismatch,
+    #[error("journal ResultDocsWritten but IsolatedWorkspace {workspace_id} missing")]
+    JournalWorkspaceMissing { workspace_id: String },
+    #[error("journal ResultDocsWritten but WorkspacePlacement {workspace_id} missing")]
+    JournalPlacementMissing { workspace_id: String },
+    #[error("journal ResultDocsWritten but WorkspaceReceipt {receipt_id} missing")]
+    JournalReceiptMissing { receipt_id: String },
+    #[error("IsolatedWorkspace {workspace_id} not found")]
+    IsolatedWorkspaceNotFound { workspace_id: String },
+    #[error(
+        "Integrate binding seal_hash {hash} does not match workspace seal_hash {workspace_hash}"
+    )]
+    IntegrateBindingSealMismatch {
+        hash: String,
+        workspace_hash: String,
+    },
+    #[error("Integrate binding {binding_id} is missing seal_hash")]
+    IntegrateBindingMissingSeal { binding_id: String },
+    #[error("integrate_workspace requires an Active Integrate binding for request {request_id}")]
+    NoActiveIntegrateBinding { request_id: String },
+    #[error(transparent)]
+    Adapter(#[from] AdapterError),
+    #[error(transparent)]
+    Documents(#[from] DocumentsError),
+    #[error(transparent)]
+    PathCapability(#[from] PathCapabilityError),
+}
+
+type Result<T, E = WorkspaceExecutorError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogicalWorkspaceIdentity {
@@ -129,38 +210,40 @@ pub fn workspace_host_path(
     ceiling: Option<&Path>,
 ) -> Result<PathBuf> {
     let checkout = if repository_checkout.exists() {
-        std::fs::canonicalize(repository_checkout).with_context(|| {
-            format!(
-                "canonicalizing repository checkout {}",
-                repository_checkout.display()
-            )
+        std::fs::canonicalize(repository_checkout).map_err(|source| {
+            WorkspaceExecutorError::CanonicalizeCheckout {
+                path: repository_checkout.to_owned(),
+                source,
+            }
         })?
     } else {
-        bail!(
-            "repository checkout {} does not exist",
-            repository_checkout.display()
-        );
+        return Err(WorkspaceExecutorError::CheckoutMissing {
+            path: repository_checkout.to_owned(),
+        });
     };
     let dest = checkout
         .join(".gents")
         .join("workspaces")
         .join(dest_name(workspace_id, branch));
     if dest == checkout {
-        bail!("workspace destination collides with the source checkout");
+        return Err(WorkspaceExecutorError::DestinationCollidesWithCheckout);
     }
     if let Some(ceiling) = ceiling {
         let ceiling = if ceiling.exists() {
-            std::fs::canonicalize(ceiling)
-                .with_context(|| format!("canonicalizing ceiling {}", ceiling.display()))?
+            std::fs::canonicalize(ceiling).map_err(|source| {
+                WorkspaceExecutorError::CanonicalizeCeiling {
+                    path: ceiling.to_owned(),
+                    source,
+                }
+            })?
         } else {
             lexical_absolute(ceiling)
         };
         if !dest.starts_with(&ceiling) {
-            bail!(
-                "workspace destination {} escapes operator ceiling {}",
-                dest.display(),
-                ceiling.display()
-            );
+            return Err(WorkspaceExecutorError::DestinationEscapesCeiling {
+                dest: dest.clone(),
+                ceiling: ceiling.clone(),
+            });
         }
     }
     Ok(dest)
@@ -432,35 +515,33 @@ fn persist_docs(
         .load_isolated_workspace(&identity.workspace_id)?
     {
         if existing.identity() != *identity {
-            bail!(
-                "IsolatedWorkspace {} already exists with a different identity; leaving it in place",
-                identity.workspace_id
-            );
+            return Err(WorkspaceExecutorError::IdentityConflict {
+                workspace_id: identity.workspace_id.clone(),
+            });
         }
         let existing_state = normalize_workspace_lifecycle_state(&existing.lifecycle_state);
         if existing_state == Some(LIFECYCLE_READY) && lifecycle_state != LIFECYCLE_READY {
-            bail!(
-                "refusing to overwrite Ready IsolatedWorkspace {}",
-                identity.workspace_id
-            );
+            return Err(WorkspaceExecutorError::RefuseOverwriteReady {
+                workspace_id: identity.workspace_id.clone(),
+            });
         }
         if existing_state == Some(LIFECYCLE_PROVISION_FAILED)
             && lifecycle_state != LIFECYCLE_PROVISION_FAILED
         {
-            bail!(
-                "IsolatedWorkspace {} is provisionFailed; refusing {lifecycle_state} without cleanup",
-                identity.workspace_id
-            );
+            return Err(WorkspaceExecutorError::ProvisionFailedRefusal {
+                workspace_id: identity.workspace_id.clone(),
+                lifecycle_state: lifecycle_state.to_owned(),
+            });
         }
         if matches!(
             existing_state,
             Some(LIFECYCLE_SEALED) | Some(LIFECYCLE_CLEANING) | Some(LIFECYCLE_CLEANED)
         ) {
-            bail!(
-                "IsolatedWorkspace {} is {}; refusing {lifecycle_state} without cleanup",
-                identity.workspace_id,
-                existing.lifecycle_state
-            );
+            return Err(WorkspaceExecutorError::ExistingStateRefusal {
+                workspace_id: identity.workspace_id.clone(),
+                existing_state: existing.lifecycle_state.clone(),
+                lifecycle_state: lifecycle_state.to_owned(),
+            });
         }
     }
 
@@ -485,7 +566,7 @@ fn persist_docs(
     );
     let host_path = dest
         .to_str()
-        .ok_or_else(|| anyhow!("workspace host_path is not valid UTF-8"))?
+        .ok_or(WorkspaceExecutorError::HostPathNotUtf8)?
         .to_string();
     let placement = WorkspacePlacementDoc {
         workspace_id: identity.workspace_id.clone(),
@@ -876,7 +957,7 @@ fn persist_seal_docs(
     let seal_hash = workspace
         .seal_hash
         .clone()
-        .ok_or_else(|| anyhow!("seal persist requires seal_hash"))?;
+        .ok_or(WorkspaceExecutorError::SealPersistRequiresHash)?;
     let receipt_id = writer_receipt_id(&workspace.workspace_id, &action.produced_by_request_id);
     let receipt = if let Some(existing) = documents
         .load_receipts(&workspace.workspace_id)?
@@ -884,11 +965,11 @@ fn persist_seal_docs(
         .find(|receipt| receipt.receipt_id == receipt_id)
     {
         if existing.seal_hash != seal_hash {
-            bail!(
-                "existing writer receipt {} has seal_hash {}, not {seal_hash}",
-                existing.receipt_id,
-                existing.seal_hash
-            );
+            return Err(WorkspaceExecutorError::ReceiptSealMismatch {
+                receipt_id: existing.receipt_id.clone(),
+                existing_seal_hash: existing.seal_hash.clone(),
+                seal_hash: seal_hash.clone(),
+            });
         }
         validate_receipt_binding(
             &workspace,
@@ -949,9 +1030,7 @@ fn validate_receipt_binding(
         || receipt.produced_by_request_id != request_id
         || receipt.produced_by_request_doc_id != request_doc_id
     {
-        bail!(
-            "workspace receipt does not match immutable workspace/base/capability/seal/request binding"
-        );
+        return Err(WorkspaceExecutorError::ReceiptBindingMismatch);
     }
     Ok(())
 }
@@ -963,19 +1042,21 @@ fn load_written_seal(
 ) -> Result<SealWorkspaceOutcome> {
     let workspace = documents
         .load_isolated_workspace(workspace_id)?
-        .ok_or_else(|| {
-            anyhow!("journal ResultDocsWritten but IsolatedWorkspace {workspace_id} missing")
+        .ok_or_else(|| WorkspaceExecutorError::JournalWorkspaceMissing {
+            workspace_id: workspace_id.to_owned(),
         })?;
     let placement = documents.load_placement(workspace_id)?.ok_or_else(|| {
-        anyhow!("journal ResultDocsWritten but WorkspacePlacement {workspace_id} missing")
+        WorkspaceExecutorError::JournalPlacementMissing {
+            workspace_id: workspace_id.to_owned(),
+        }
     })?;
     let receipt_id = writer_receipt_id(workspace_id, &action.produced_by_request_id);
     let receipt = documents
         .load_receipts(workspace_id)?
         .into_iter()
         .find(|receipt| receipt.receipt_id == receipt_id)
-        .ok_or_else(|| {
-            anyhow!("journal ResultDocsWritten but WorkspaceReceipt {receipt_id} missing")
+        .ok_or_else(|| WorkspaceExecutorError::JournalReceiptMissing {
+            receipt_id: receipt_id.clone(),
         })?;
     validate_receipt_binding(
         &workspace,
@@ -1282,7 +1363,7 @@ fn integrate_workspace_action(
         .filter(|sha| commit_exists(&trunk, sha));
     if completing.is_none() {
         require_active_integrate_binding(action, ctx.documents)
-            .map_err(HostExecuteError::denied)?;
+            .map_err(|error| HostExecuteError::denied(error.to_string()))?;
     }
 
     super::adapter::verify_workspace_identity(&trunk, &dest_canon, &workspace.identity())
@@ -1374,19 +1455,18 @@ fn integrate_workspace_action(
 fn require_active_integrate_binding(
     action: &IntegrateWorkspaceAction,
     documents: &dyn WorkspaceDocuments,
-) -> Result<(), String> {
-    let bindings = documents
-        .load_bindings(&action.workspace_id)
-        .map_err(|err| err.to_string())?;
+) -> Result<()> {
+    let bindings = documents.load_bindings(&action.workspace_id)?;
     let matched = bindings.iter().find(|binding| {
         binding.is_active_integrate() && binding.request_id == action.produced_by_request_id
     });
     match matched {
         Some(binding) => {
             let workspace = documents
-                .load_isolated_workspace(&action.workspace_id)
-                .map_err(|err| err.to_string())?
-                .ok_or_else(|| format!("IsolatedWorkspace {} not found", action.workspace_id))?;
+                .load_isolated_workspace(&action.workspace_id)?
+                .ok_or_else(|| WorkspaceExecutorError::IsolatedWorkspaceNotFound {
+                    workspace_id: action.workspace_id.clone(),
+                })?;
             let workspace_hash = workspace.seal_hash.as_deref().unwrap_or_default();
             match binding
                 .seal_hash
@@ -1395,19 +1475,18 @@ fn require_active_integrate_binding(
                 .filter(|value| !value.is_empty())
             {
                 Some(hash) if hash == workspace_hash => Ok(()),
-                Some(hash) => Err(format!(
-                    "Integrate binding seal_hash {hash} does not match workspace seal_hash {workspace_hash}"
-                )),
-                None => Err(format!(
-                    "Integrate binding {} is missing seal_hash",
-                    binding.binding_id
-                )),
+                Some(hash) => Err(WorkspaceExecutorError::IntegrateBindingSealMismatch {
+                    hash: hash.to_owned(),
+                    workspace_hash: workspace_hash.to_owned(),
+                }),
+                None => Err(WorkspaceExecutorError::IntegrateBindingMissingSeal {
+                    binding_id: binding.binding_id.clone(),
+                }),
             }
         }
-        None => Err(format!(
-            "integrate_workspace requires an Active Integrate binding for request {}",
-            action.produced_by_request_id
-        )),
+        None => Err(WorkspaceExecutorError::NoActiveIntegrateBinding {
+            request_id: action.produced_by_request_id.clone(),
+        }),
     }
 }
 
@@ -1679,11 +1758,13 @@ fn load_written_cleanup(
 ) -> Result<CleanupWorkspaceOutcome> {
     let workspace = documents
         .load_isolated_workspace(workspace_id)?
-        .ok_or_else(|| {
-            anyhow!("journal ResultDocsWritten but IsolatedWorkspace {workspace_id} missing")
+        .ok_or_else(|| WorkspaceExecutorError::JournalWorkspaceMissing {
+            workspace_id: workspace_id.to_owned(),
         })?;
     let placement = documents.load_placement(workspace_id)?.ok_or_else(|| {
-        anyhow!("journal ResultDocsWritten but WorkspacePlacement {workspace_id} missing")
+        WorkspaceExecutorError::JournalPlacementMissing {
+            workspace_id: workspace_id.to_owned(),
+        }
     })?;
     Ok(CleanupWorkspaceOutcome {
         workspace,
@@ -1697,11 +1778,13 @@ fn load_written_docs(
 ) -> Result<CreateWorkspaceOutcome> {
     let workspace = documents
         .load_isolated_workspace(workspace_id)?
-        .ok_or_else(|| {
-            anyhow!("journal ResultDocsWritten but IsolatedWorkspace {workspace_id} missing")
+        .ok_or_else(|| WorkspaceExecutorError::JournalWorkspaceMissing {
+            workspace_id: workspace_id.to_owned(),
         })?;
     let placement = documents.load_placement(workspace_id)?.ok_or_else(|| {
-        anyhow!("journal ResultDocsWritten but WorkspacePlacement {workspace_id} missing")
+        WorkspaceExecutorError::JournalPlacementMissing {
+            workspace_id: workspace_id.to_owned(),
+        }
     })?;
     Ok(CreateWorkspaceOutcome {
         workspace,

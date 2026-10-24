@@ -2,8 +2,6 @@ use gents_protocol::error_chain::ErrorChain;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
-
 use defra_node::EmbeddedNode;
 use gents_protocol::job::DataWrite;
 
@@ -18,11 +16,38 @@ use gents_loop::live_output::DeferredToolWrites;
 use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 
 #[derive(Debug, thiserror::Error)]
+pub enum PluginToolError {
+    #[error("plugin {plugin} does not declare job dispatch; install a pack whose plugin sets `job: true`")]
+    NotJobDispatch { plugin: String },
+    #[error("runtime-filled plugin inputs require an object schema")]
+    SchemaNotObject,
+    #[error("plugin input_fields must be distinct runtime-filled fields with required omitted")]
+    InvalidInputFields,
+    #[error("plugin input schema has no field {name:?}")]
+    SchemaFieldMissing { name: String },
+    #[error("runtime-filled plugin input {name:?} must be a String")]
+    FieldNotString { name: String },
+    #[error("plugin input must be an object")]
+    InputNotObject,
+    #[error("plugin input {name:?}: {error}")]
+    FieldInvalid {
+        name: String,
+        error: crate::defra_write::DefraWriteFailure,
+    },
+    #[error("missing plugin input fill")]
+    MissingFill,
+    #[error(transparent)]
+    Fill(Box<crate::document_config::DocumentConfigError>),
+}
+
+type Result<T, E = PluginToolError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-struct PluginToolError(String);
+struct PluginToolMessage(String);
 
 fn tool_error(message: impl Into<String>) -> ToolError {
-    ToolError::ToolCallError(Box::new(PluginToolError(message.into())))
+    ToolError::ToolCallError(Box::new(PluginToolMessage(message.into())))
 }
 
 pub struct PluginTool {
@@ -42,13 +67,14 @@ impl PluginTool {
         executor: Arc<PluginExecutor>,
         plugin: &PluginToolRef,
         root: Option<PathBuf>,
-    ) -> Result<Self> {
+    ) -> anyhow::Result<Self> {
         let record = executor.resolve(&plugin.plugin, plugin.digest.as_deref())?;
-        anyhow::ensure!(
-            plugin.job.is_none() || record.declaration.job.0,
-            "plugin {} does not declare job dispatch; install a pack whose plugin sets `job: true`",
-            plugin.plugin
-        );
+        if plugin.job.is_some() && !record.declaration.job.0 {
+            return Err(PluginToolError::NotJobDispatch {
+                plugin: plugin.plugin.clone(),
+            }
+            .into());
+        }
         let mut description = record
             .instructions
             .clone()
@@ -146,7 +172,7 @@ impl ToolDyn for PluginTool {
             };
             if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
                 return ToolDispatchResult {
-                    result: Err(tool_error(format!("{}", ErrorChain(error.as_ref())))),
+                    result: Err(tool_error(format!("{}", ErrorChain(&error)))),
                     plugin_receipt: Some(super::executor::initial_receipt(&self.record, &input)),
                     deferred_writes: None,
                 };
@@ -193,24 +219,27 @@ fn bound_schema(
     }
     let properties = schema["properties"]
         .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("runtime-filled plugin inputs require an object schema"))?;
+        .ok_or(PluginToolError::SchemaNotObject)?;
     let mut seen = std::collections::BTreeSet::new();
     for field in fields {
-        anyhow::ensure!(
-            crate::graphql::validate_graphql_name(&field.name).is_ok()
-                && field.fill.is_some()
-                && !field.required
-                && seen.insert(&field.name),
-            "plugin input_fields must be distinct runtime-filled fields with required omitted"
-        );
-        let shape = properties
-            .remove(&field.name)
-            .ok_or_else(|| anyhow::anyhow!("plugin input schema has no field {:?}", field.name))?;
-        anyhow::ensure!(
-            shape["type"] == "string",
-            "runtime-filled plugin input {:?} must be a String",
-            field.name
-        );
+        if !(crate::graphql::validate_graphql_name(&field.name).is_ok()
+            && field.fill.is_some()
+            && !field.required
+            && seen.insert(&field.name))
+        {
+            return Err(PluginToolError::InvalidInputFields);
+        }
+        let shape =
+            properties
+                .remove(&field.name)
+                .ok_or_else(|| PluginToolError::SchemaFieldMissing {
+                    name: field.name.clone(),
+                })?;
+        if shape["type"] != "string" {
+            return Err(PluginToolError::FieldNotString {
+                name: field.name.clone(),
+            });
+        }
     }
     if let Some(required) = schema["required"].as_array_mut() {
         required.retain(|name| {
@@ -228,18 +257,21 @@ fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Resu
     }
     let object = input
         .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("plugin input must be an object"))?;
+        .ok_or(PluginToolError::InputNotObject)?;
     let mut resolved = Vec::new();
     for field in fields {
         crate::defra_write::validate_field_input("String", false, true, object.get(&field.name))
-            .map_err(|error| anyhow::anyhow!("plugin input {:?}: {error}", field.name))?;
-        let fill = field
-            .fill
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing plugin input fill"))?;
+            .map_err(|error| PluginToolError::FieldInvalid {
+                name: field.name.clone(),
+                error,
+            })?;
+        let fill = field.fill.as_ref().ok_or(PluginToolError::MissingFill)?;
         resolved.push((
             field.name.clone(),
-            serde_json::Value::String(fill.resolve(&field.name)?),
+            serde_json::Value::String(
+                fill.resolve(&field.name)
+                    .map_err(|error| PluginToolError::Fill(Box::new(error)))?,
+            ),
         ));
     }
     object.extend(resolved);

@@ -1,7 +1,7 @@
 use super::rows::dedupe_paths;
 use super::*;
 use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
-use anyhow::Context;
+use anyhow::{Context, Result};
 use rapidhash::RapidHashSet;
 use std::collections::BTreeSet;
 

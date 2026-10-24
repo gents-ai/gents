@@ -281,7 +281,10 @@ pub(crate) async fn terminalize_pending_request_rejection(
                         }
                         match serde_json::from_value::<AgentRequestRow>(row.clone())
                             .map_err(anyhow::Error::from)
-                            .and_then(crate::watcher::AgentRequest::try_from)
+                            .and_then(|row| {
+                                crate::watcher::AgentRequest::try_from(row)
+                                    .map_err(anyhow::Error::from)
+                            })
                         {
                             Ok(request) => {
                                 crate::lifecycle::materialize::project_refused_request_session_in_txn(
@@ -1128,7 +1131,7 @@ fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result
         row.doc_id.as_deref() == Some(expected_doc_id),
         "fresh AgentRequest document binding changed before admission"
     );
-    AgentRequest::try_from(row)
+    Ok(AgentRequest::try_from(row)?)
 }
 
 fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResult<&'a str> {

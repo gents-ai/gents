@@ -17,7 +17,9 @@ mod execution_renewal;
 pub(crate) use execution_renewal::renew_once_at as renew_execution_lease_once_at;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_with_recheck_at;
-pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
+pub(crate) use execution_renewal::{
+    renew_in_transaction, ExecutionRenewalError, RenewalAttemptOutcome,
+};
 mod terminal_binding;
 pub(crate) use terminal_binding::is_exact_invocation_reply;
 mod terminal_tools;
@@ -26,7 +28,9 @@ pub use crate::trigger_engine::durable::request_arrival_order;
 pub(crate) use execution_lease::revoke_execution_preserving_output_at;
 #[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at;
-pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
+pub(crate) use execution_lease::{
+    ExecutionLeaseError, ExecutionOwnershipLost, RequestExecutionLease,
+};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
 #[cfg(test)]
@@ -43,6 +47,7 @@ pub(crate) use recovery::{
     recover_expired_generation_with_facts, RecoveryResult, RecoverySelectionChoice,
     RecoverySelectionRejected,
 };
+pub(crate) use recovery::{CanonicalRecoveryError, RecoveryError};
 mod task_title;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -384,6 +389,58 @@ pub enum LifecycleError {
     CursorEmptyPageWithNext,
     #[error("cursor query omitted endCursor")]
     CursorEndMissing,
+    #[error("claim session cursor did not advance")]
+    ClaimSessionCursorStalled,
+    #[error("claim request cursor did not advance")]
+    ClaimRequestCursorStalled,
+    #[error("claim receipt cursor did not advance")]
+    ClaimReceiptCursorStalled,
+    #[error(transparent)]
+    Config(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Graphql(#[from] crate::graphql::GraphqlResponseError),
+    #[error("background wake query has no data")]
+    BackgroundWakeQueryData,
+    #[error("decoding {what}")]
+    BackgroundWakeDecode {
+        what: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("query omitted {name}")]
+    QueryRowsMissing { name: String },
+    #[error("decoding {name} AgentRequest rows")]
+    RowsDecode {
+        name: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{message}")]
+    SignedRequestFields { message: &'static str },
+    #[error("redrive query has no data")]
+    RedriveQueryData,
+    #[error("wake became ineligible")]
+    WakeIneligible,
+    #[error("background wake successor create matched no document")]
+    SuccessorCreateEmpty,
+    #[error("background wake successor is missing")]
+    SuccessorMissing,
+    #[error("background wake successor is not the canonical request head")]
+    SuccessorNotHead,
+    #[error("background wake successor observation was not advanced")]
+    SuccessorObservationNotAdvanced,
+}
+
+impl crate::config_client::TransactionFailure for LifecycleError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::Graphql(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

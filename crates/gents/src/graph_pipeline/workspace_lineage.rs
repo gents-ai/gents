@@ -91,7 +91,9 @@ async fn stamp_from_workspace_owner(
         workspace.owner_node_did == owner,
         "graph input workspace owner mismatch"
     );
-    crate::workspace::apply_workspace_lineage_stamp(lineage, &workspace)
+    Ok(crate::workspace::apply_workspace_lineage_stamp(
+        lineage, &workspace,
+    )?)
 }
 
 struct VerifiedGraphContext {

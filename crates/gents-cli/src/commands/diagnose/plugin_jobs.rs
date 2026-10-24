@@ -95,7 +95,7 @@ fn plugin_rows(
             rows.push(row(
                 "plugin_record_unreadable",
                 "fail",
-                format!("{plugin}: {}", ErrorChain(error.as_ref())),
+                format!("{plugin}: {}", ErrorChain(&error)),
                 format!("gents plugin install {plugin}"),
             ));
             return;

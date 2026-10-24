@@ -1,5 +1,5 @@
 use super::*;
-use anyhow::Context;
+use anyhow::{Context, Result};
 
 pub fn sequence_message_key(
     node_did: &str,

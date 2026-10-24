@@ -3004,7 +3004,8 @@ impl ConfigAccess {
         generation: &str,
         expected_deadline: Option<chrono::DateTime<chrono::Utc>>,
         fixture_now: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> anyhow::Result<crate::lifecycle::RenewalAttemptOutcome> {
+    ) -> Result<crate::lifecycle::RenewalAttemptOutcome, crate::lifecycle::ExecutionRenewalError>
+    {
         let native_operations = Arc::new(NativeOperationTracker::default());
         let operations_for_attempt = Arc::clone(&native_operations);
         let result = transact_owned(

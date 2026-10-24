@@ -1,18 +1,39 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
+use super::documents::RepositoryPlacementError;
+use super::path_capability::PathCapabilityError;
 use super::{
     emit_create_workspace_plan, emit_freeze_workspace_base_plan, execute_create_workspace_plan,
     execute_freeze_workspace_base_plan, isolated_workspace_upsert_mutation,
     repository_placement_upsert_mutation, workspace_placement_upsert_mutation, ActionJournalEntry,
     CreateWorkspaceAction, CreateWorkspaceOutcome, CreationPolicy, FreezeWorkspaceBaseAction,
-    HostExecutorContext, MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceAdapterKind,
-    CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE,
+    HostExecuteError, HostExecutorContext, MemoryWorkspaceDocuments, RepositoryPlacementRef,
+    WorkspaceAdapterKind, CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE,
 };
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigClientError};
+
+#[derive(Debug, thiserror::Error)]
+pub enum QuickstartError {
+    #[error("canonicalizing repository placement {}", path.display())]
+    CanonicalizeRepository {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Placement(#[from] RepositoryPlacementError),
+    #[error(transparent)]
+    Config(#[from] ConfigClientError),
+    #[error(transparent)]
+    PathCapability(#[from] PathCapabilityError),
+    #[error("{error}")]
+    Provision { error: HostExecuteError },
+}
+
+type Result<T, E = QuickstartError> = std::result::Result<T, E>;
 
 fn repository_id(path: &Path, principal_did: &str) -> String {
     let mut hasher = Sha256::new();
@@ -46,7 +67,7 @@ async fn upsert_repository_placement(
 async fn flush_workspace_documents(
     access: &ConfigAccess,
     documents: &MemoryWorkspaceDocuments,
-) -> Result<()> {
+) -> std::result::Result<(), ConfigClientError> {
     if documents.workspaces.is_empty() && documents.placements.is_empty() {
         return Ok(());
     }
@@ -74,11 +95,11 @@ pub async fn provision_read_only_workspace(
     head_sha: &str,
     principal_did: &str,
 ) -> Result<CreateWorkspaceOutcome> {
-    let repository_path = std::fs::canonicalize(repository_path).with_context(|| {
-        format!(
-            "canonicalizing repository placement {}",
-            repository_path.display()
-        )
+    let repository_path = std::fs::canonicalize(repository_path).map_err(|source| {
+        QuickstartError::CanonicalizeRepository {
+            path: repository_path.to_owned(),
+            source,
+        }
     })?;
     let repository_id = repository_id(&repository_path, principal_did);
     upsert_repository_placement(access, &repository_id, principal_did, &repository_path).await?;
@@ -132,5 +153,5 @@ pub async fn provision_read_only_workspace(
         })
     };
     flush_workspace_documents(access, &documents).await?;
-    outcome.map_err(|error| anyhow::anyhow!(error.to_string()))
+    outcome.map_err(|error| QuickstartError::Provision { error })
 }

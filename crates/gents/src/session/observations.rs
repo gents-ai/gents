@@ -4,7 +4,7 @@ use super::sessions::{
     SESSION_SCOPE_FIELDS,
 };
 use super::*;
-use anyhow::Context;
+use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 
 const REQUEST_FACT_SESSION_BATCH_SIZE: usize =

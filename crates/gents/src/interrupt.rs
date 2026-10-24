@@ -6,8 +6,37 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
+use crate::config_client::ConfigClientError;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::lifecycle::queue::drain_automated_wakeups_in_txn;
+
+#[derive(Debug, thiserror::Error)]
+pub enum InterruptError {
+    #[error("interrupt requires physical request and node identity")]
+    PhysicalIdentityMissing,
+    #[error("interrupt fetch requires logical request and node identity")]
+    LogicalIdentityMissing,
+    #[error("interrupt fetch requires a physical request document id")]
+    FetchDocIdMissing,
+    #[error("fetch_interrupt_requested_at_by_doc_id({request_doc_id})")]
+    FetchByDocId {
+        request_doc_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("fetch_interrupt_requested_at_scoped({request_id})")]
+    FetchScoped {
+        request_id: String,
+        #[source]
+        source: ConfigClientError,
+    },
+    #[error("interrupt request fetch omitted rows")]
+    FetchOmittedRows,
+    #[error("interrupt request fetch is ambiguous")]
+    FetchAmbiguous,
+    #[error("interrupt request fetch is ambiguous within node scope")]
+    FetchAmbiguousNodeScope,
+}
 
 /// Requests a soft interrupt by latching `interrupt_requested_at` on the
 /// AgentRequest document. Idempotent: the first latch drains automated wakes
@@ -58,11 +87,10 @@ fn exact_request_filter(
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
-) -> Result<String> {
-    anyhow::ensure!(
-        !request_doc_id.trim().is_empty() && !node_did.trim().is_empty(),
-        "interrupt requires physical request and node identity"
-    );
+) -> Result<String, InterruptError> {
+    if request_doc_id.trim().is_empty() || node_did.trim().is_empty() {
+        return Err(InterruptError::PhysicalIdentityMissing);
+    }
     let physical = escape_graphql_string(request_doc_id);
     let owner = escape_graphql_string(node_did);
     let requester = requester_did
@@ -77,11 +105,10 @@ fn scoped_request_filter(
     request_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
-) -> Result<String> {
-    anyhow::ensure!(
-        !request_id.trim().is_empty() && !node_did.trim().is_empty(),
-        "interrupt fetch requires logical request and node identity"
-    );
+) -> Result<String, InterruptError> {
+    if request_id.trim().is_empty() || node_did.trim().is_empty() {
+        return Err(InterruptError::LogicalIdentityMissing);
+    }
     let logical = escape_graphql_string(request_id);
     let owner = escape_graphql_string(node_did);
     let requester = requester_did
@@ -263,11 +290,10 @@ pub(crate) async fn active_session_request(
 pub async fn fetch_interrupt_requested_at_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
-) -> Result<Option<String>> {
-    anyhow::ensure!(
-        !request_doc_id.trim().is_empty(),
-        "interrupt fetch requires a physical request document id"
-    );
+) -> Result<Option<String>, InterruptError> {
+    if request_doc_id.trim().is_empty() {
+        return Err(InterruptError::FetchDocIdMissing);
+    }
     let escaped = escape_graphql_string(request_doc_id);
     let query = format!(
         r#"query {{
@@ -282,14 +308,19 @@ pub async fn fetch_interrupt_requested_at_by_doc_id(
     let resp =
         graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_by_doc_id")
             .await
-            .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
+            .map_err(|source| InterruptError::FetchByDocId {
+                request_doc_id: request_doc_id.to_owned(),
+                source,
+            })?;
     let rows = resp
         .data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
-        .ok_or_else(|| anyhow::anyhow!("interrupt request fetch omitted rows"))?;
-    anyhow::ensure!(rows.len() <= 1, "interrupt request fetch is ambiguous");
+        .ok_or(InterruptError::FetchOmittedRows)?;
+    if rows.len() > 1 {
+        return Err(InterruptError::FetchAmbiguous);
+    }
     let value = rows
         .first()
         .and_then(|row| row.get("interrupt_requested_at"))
@@ -304,7 +335,7 @@ pub async fn fetch_interrupt_requested_at(
     request_id: &str,
 ) -> Result<Option<String>> {
     let request_doc_id = crate::request_binding::require_request_doc_id(node, request_id).await?;
-    fetch_interrupt_requested_at_by_doc_id(node, &request_doc_id).await
+    Ok(fetch_interrupt_requested_at_by_doc_id(node, &request_doc_id).await?)
 }
 
 pub async fn fetch_interrupt_requested_at_scoped(
@@ -312,7 +343,7 @@ pub async fn fetch_interrupt_requested_at_scoped(
     request_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Option<String>, InterruptError> {
     let filter = scoped_request_filter(request_id, node_did, requester_did)?;
     let query = format!(
         r#"query {{
@@ -326,17 +357,19 @@ pub async fn fetch_interrupt_requested_at_scoped(
     );
     let resp = graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_scoped")
         .await
-        .with_context(|| format!("fetch_interrupt_requested_at_scoped({request_id})"))?;
+        .map_err(|source| InterruptError::FetchScoped {
+            request_id: request_id.to_owned(),
+            source,
+        })?;
     let rows = resp
         .data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
-        .ok_or_else(|| anyhow::anyhow!("interrupt request fetch omitted rows"))?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "interrupt request fetch is ambiguous within node scope"
-    );
+        .ok_or(InterruptError::FetchOmittedRows)?;
+    if rows.len() > 1 {
+        return Err(InterruptError::FetchAmbiguousNodeScope);
+    }
     Ok(rows
         .first()
         .and_then(|row| row.get("interrupt_requested_at"))

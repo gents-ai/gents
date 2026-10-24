@@ -1,6 +1,5 @@
 use super::rows::SessionOwnerRow;
 use super::*;
-use anyhow::Context;
 
 /// Fields for one canonical `AgentSession` read. Nested values are DefraDB
 /// JSON scalar columns: read the bare field name, never an object subselection.
@@ -22,18 +21,20 @@ pub(crate) async fn session_stopped_in_txn(
     let rows = response
         .pointer("/data/AgentSession")
         .and_then(serde_json::Value::as_array)
-        .context("session stop-latch query omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "session stop-latch scope is ambiguous");
+        .ok_or(SessionError::StopLatchRowsOmitted)?;
+    if rows.len() > 1 {
+        return Err(SessionError::StopLatchAmbiguous);
+    }
     let Some(row) = rows.first() else {
         return Ok(false);
     };
     match row
         .get("stopped_at")
-        .context("session stop-latch query omitted stopped_at")?
+        .ok_or(SessionError::StopLatchOmitted)?
     {
         serde_json::Value::Null => Ok(false),
         serde_json::Value::String(value) if !value.trim().is_empty() => Ok(true),
-        _ => anyhow::bail!("session stopped_at is malformed"),
+        _ => Err(SessionError::StopLatchMalformed),
     }
 }
 
@@ -157,12 +158,11 @@ pub(super) async fn load_agent_session_row(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<SessionOwnerRow>> {
-    load_agent_session_rows(node, node_did, session_id, requester_did)
-        .await
-        .and_then(|mut rows| {
-            anyhow::ensure!(rows.len() <= 1, "duplicate AgentSession rows for one label");
-            Ok(rows.pop())
-        })
+    let mut rows = load_agent_session_rows(node, node_did, session_id, requester_did).await?;
+    if rows.len() > 1 {
+        return Err(SessionError::DuplicateAgentSessionRows);
+    }
+    Ok(rows.pop())
 }
 
 pub(super) async fn load_agent_session_rows(
@@ -185,10 +185,7 @@ pub(super) async fn load_agent_session_rows(
             .await?;
 
     let rows = crate::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
-    Ok(rows
-        .iter()
-        .map(decode_session_row)
-        .collect::<Result<Vec<_>, _>>()?)
+    rows.iter().map(decode_session_row).collect()
 }
 
 pub(super) async fn load_agent_session(
@@ -212,10 +209,8 @@ pub(super) async fn require_agent_session(
 ) -> Result<gents_protocol::session::AgentSession> {
     load_agent_session(node, node_did, session_id, requester_did)
         .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "loading session for completion: no AgentSession for session_id={session_id}"
-            )
+        .ok_or_else(|| SessionError::AgentSessionMissing {
+            session_id: session_id.to_owned(),
         })
 }
 
@@ -239,7 +234,9 @@ pub(crate) async fn load_session_requester_scope(
     )
     .await?;
     let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentSession")?;
-    anyhow::ensure!(rows.len() <= 1, "duplicate AgentSession rows for one label");
+    if rows.len() > 1 {
+        return Err(SessionError::DuplicateAgentSessionRows);
+    }
     Ok(match rows.first() {
         Some(row) => decode_session_row(row)?.session.requester_did,
         None => None,

@@ -148,7 +148,7 @@ impl Fake {
 struct Fixed(Arc<Fake>, usize, Duration);
 
 impl ModelResolver for Fixed {
-    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
+    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, anyhow::Result<ModelEndpoint>> {
         Box::pin(async move {
             let mut endpoint = self.0.endpoint(self.1);
             endpoint.request_timeout = self.2;
@@ -160,7 +160,7 @@ impl ModelResolver for Fixed {
 struct Never;
 
 impl ModelResolver for Never {
-    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
+    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, anyhow::Result<ModelEndpoint>> {
         panic!("an unbound slot must not resolve an endpoint")
     }
 }
@@ -581,7 +581,7 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
 struct Stale;
 
 impl ModelResolver for Stale {
-    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
+    fn resolve<'a>(&'a self, _: &'a ModelBinding) -> BoxFuture<'a, anyhow::Result<ModelEndpoint>> {
         Box::pin(async { anyhow::bail!("the inference profile \"chandra\" no longer exists") })
     }
 }

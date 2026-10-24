@@ -352,6 +352,9 @@ async fn step_on(
                 cause
                     .downcast_ref::<PluginError>()
                     .is_some_and(|error| matches!(error, PluginError::Trap(_)))
+                    || cause
+                        .downcast_ref::<crate::plugin::executor::PluginRunError>()
+                        .is_some_and(crate::plugin::executor::PluginRunError::is_trap)
             });
             let error = if trapped {
                 anyhow::Error::new(StepFailure::Trap(format!("{}", ErrorChain(error.as_ref()))))

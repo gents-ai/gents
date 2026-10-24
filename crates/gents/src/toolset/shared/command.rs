@@ -989,7 +989,7 @@ async fn prepare_command_launch(
         grant.validate_for_launch().await.map_err(|error| {
             artifact_policy_denial(format!(
                 "artifact execution grant rejected: {}",
-                ErrorChain(error.as_ref())
+                ErrorChain(&error)
             ))
         })?;
         let source_root = std::fs::canonicalize(source_root).map_err(|error| {

@@ -12,7 +12,7 @@ use super::path_capability::PathCapabilityError;
 use super::LogicalWorkspaceIdentity;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum AdapterError {
+pub enum AdapterError {
     #[error(transparent)]
     PathCapability(#[from] PathCapabilityError),
     #[error(transparent)]

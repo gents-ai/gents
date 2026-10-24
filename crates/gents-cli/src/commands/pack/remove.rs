@@ -130,7 +130,9 @@ fn plugin_release_result(home: &Path, candidates: &BTreeSet<String>) -> Result<V
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    gents::plugin::store::release_unreferenced_bytes(home, candidates)
+    Ok(gents::plugin::store::release_unreferenced_bytes(
+        home, candidates,
+    )?)
 }
 
 async fn release_archives(

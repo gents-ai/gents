@@ -7,7 +7,6 @@ use crate::graphql::escape_graphql_string;
 use crate::lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
 };
-use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
@@ -609,9 +608,9 @@ pub(crate) async fn selected_background_wake_with_successor(
             let selected = watcher
                 .next_request()
                 .await
-                .context("queued completion disappeared")??;
+                .ok_or("queued completion disappeared")??;
             if selected.request_id == wake.request_id {
-                return Ok::<_, anyhow::Error>(selected);
+                return Ok::<_, Box<dyn std::error::Error + Send + Sync>>(selected);
             }
         }
     })

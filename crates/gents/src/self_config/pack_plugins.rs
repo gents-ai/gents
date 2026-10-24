@@ -68,9 +68,8 @@ impl PackInstaller {
                 &plugin.name,
                 &coordinate,
             ) {
-                blockers.push(
-                    json!({"plugin":plugin.name,"reason":ErrorChain(error.as_ref()).to_string()}),
-                );
+                blockers
+                    .push(json!({"plugin":plugin.name,"reason":ErrorChain(&error).to_string()}));
             }
             crate::plugin::PluginRunner::compile(
                 distribution.0.archive.asset(&plugin.artifact)?,

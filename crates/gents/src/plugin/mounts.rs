@@ -4,13 +4,23 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents_protocol::job::{AssetMount, JobPolicy, PROJECT_MOUNT_CLASS};
 
 use super::store::InstalledPlugin;
 use crate::pack::home_install::recorded_provenance;
 use crate::pack::{list_home_installs, InstalledVia};
 use crate::plugin_job::origin::trusted_hint;
+
+#[derive(Debug, thiserror::Error)]
+pub enum MountsError {
+    #[error("dependency {coordinate:?} of {record_coordinate:?} records assets dir {assets:?}, whose name is not a 64-hex digest")]
+    DependencyDigest {
+        coordinate: String,
+        record_coordinate: String,
+        assets: String,
+    },
+}
 
 /// Project directories under `cwd` that join the manifold, in order.
 const PROJECT_DIRS: [&str; 2] = [".gents/workflows", ".grok/workflows"];
@@ -100,12 +110,10 @@ pub fn resolve(
                             name.len() == 64
                                 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
                         })
-                        .with_context(|| {
-                            format!(
-                                "dependency {coordinate:?} of {:?} records assets dir {assets:?}, \
-                                 whose name is not a 64-hex digest",
-                                record.coordinate
-                            )
+                        .ok_or_else(|| MountsError::DependencyDigest {
+                            coordinate: coordinate.clone(),
+                            record_coordinate: record.coordinate.clone(),
+                            assets: assets.clone(),
                         })?;
                     let dir = home.join(assets).join(&declared.class);
                     let path = dir.to_string_lossy();

@@ -230,7 +230,7 @@ impl BackgroundExecutionRegistry {
     pub(crate) fn try_process_record_list(
         &self,
     ) -> anyhow::Result<Vec<crate::managed_exec::ownership::ProcessRecord>> {
-        self.process_records.try_list()
+        Ok(self.process_records.try_list()?)
     }
 
     pub(crate) async fn release_process_record(&self, tool_call_id: &str, tool_call_doc_id: &str) {

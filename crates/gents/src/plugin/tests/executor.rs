@@ -2557,13 +2557,13 @@ mod catalog {
         home: &tempfile::TempDir,
         record: &InstalledPlugin,
         node: &Arc<crate::defra_node::EmbeddedNode>,
-    ) -> anyhow::Result<Vec<CatalogEntry>> {
-        catalog(
+    ) -> Result<Vec<CatalogEntry>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(catalog(
             &executor(home),
             &plugin_ref(record),
             &DataCaller::new(node.clone(), NODE).unwrap(),
         )
-        .await
+        .await?)
     }
 
     #[tokio::test]

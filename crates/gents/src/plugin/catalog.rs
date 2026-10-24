@@ -1,6 +1,6 @@
 //! A plugin's catalog: one non-job invocation of its declared `catalog.argv`.
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use gents_protocol::job::CatalogEntry;
 use serde_json::json;
 
@@ -8,6 +8,29 @@ use super::data::DataCaller;
 use super::executor::PluginExecutor;
 use super::PluginVerdict;
 use crate::document_config::PluginToolRef;
+
+#[derive(Debug, thiserror::Error)]
+pub enum CatalogError {
+    #[error("plugin {coordinate} declares no catalog; declare `catalog` in its plugin manifest")]
+    NoCatalog { coordinate: String },
+    #[error("plugin {coordinate} did not list its catalog ({verdict:?}): {diagnostics}")]
+    NotListed {
+        coordinate: String,
+        verdict: PluginVerdict,
+        diagnostics: String,
+    },
+    #[error("plugin {coordinate} listed a catalog of {bytes} bytes; at most {MAX_CATALOG_BYTES} are read")]
+    TooLarge { coordinate: String, bytes: usize },
+    #[error(
+        "plugin {coordinate} did not list its catalog as [CatalogEntry]; its output began {head}"
+    )]
+    Undecodable {
+        coordinate: String,
+        head: String,
+        #[source]
+        source: serde_json::Error,
+    },
+}
 
 /// The most a catalog call's output may encode to; the plugin output cap is larger.
 const MAX_CATALOG_BYTES: usize = 256 * 1024;
@@ -26,28 +49,38 @@ pub async fn catalog(
     let coordinate = &plugin_ref.plugin;
     let record = executor.resolve(coordinate, plugin_ref.digest.as_deref())?;
     let Some(declared) = &record.declaration.catalog else {
-        bail!("plugin {coordinate} declares no catalog; declare `catalog` in its plugin manifest");
+        return Err(CatalogError::NoCatalog {
+            coordinate: coordinate.clone(),
+        }
+        .into());
     };
     let call = executor
         .call_with_data(&record, json!({"argv": declared.argv}), caller.clone())
         .await?;
     let outcome = call.outcome;
     if outcome.verdict != PluginVerdict::Success {
-        bail!(
-            "plugin {coordinate} did not list its catalog ({:?}): {}",
-            outcome.verdict,
-            outcome.diagnostics
-        );
+        return Err(CatalogError::NotListed {
+            coordinate: coordinate.clone(),
+            verdict: outcome.verdict,
+            diagnostics: outcome.diagnostics,
+        }
+        .into());
     }
     let encoded = serde_json::to_string(&outcome.output)?;
     if encoded.len() > MAX_CATALOG_BYTES {
-        bail!(
-            "plugin {coordinate} listed a catalog of {} bytes; at most {MAX_CATALOG_BYTES} are read",
-            encoded.len()
-        );
+        return Err(CatalogError::TooLarge {
+            coordinate: coordinate.clone(),
+            bytes: encoded.len(),
+        }
+        .into());
     }
-    serde_json::from_value(outcome.output).with_context(|| {
-        let head = &encoded[..encoded.floor_char_boundary(HEAD_BYTES)];
-        format!("plugin {coordinate} did not list its catalog as [CatalogEntry]; its output began {head}")
+    serde_json::from_value(outcome.output).map_err(|source| {
+        let head = encoded[..encoded.floor_char_boundary(HEAD_BYTES)].to_owned();
+        CatalogError::Undecodable {
+            coordinate: coordinate.clone(),
+            head,
+            source,
+        }
+        .into()
     })
 }
