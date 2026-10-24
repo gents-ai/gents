@@ -102,8 +102,8 @@ theorem a_reversed_window_does_not_supply_an_order :
 
 def captured (selectedTool : Tool) : ToolFact :=
   ⟨selectedTool, .observed
-    ⟨900 + selectedTool.id, 800 + selectedTool.id, selectedTool.id, selectedTool.request,
-      selectedTool.scope, "node", [⟨"workspace", "file.rs", .file "before", .file "after"⟩]⟩⟩
+    ⟨900 + selectedTool.id, some (800 + selectedTool.id), selectedTool.id, selectedTool.request,
+      selectedTool.scope, "node", [⟨"workspace", "file.rs", .file "before", .file "after"⟩], false⟩⟩
 
 def secondTool : Tool := { tool with id := 2, request := 701 }
 

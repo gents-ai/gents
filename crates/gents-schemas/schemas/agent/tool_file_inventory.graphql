@@ -6,4 +6,5 @@ type ToolFileInventory @branchable @policy(id: "2e14bb0746cf90a5e955db6b9bb5d909
     session_id: String @index @immutable
     requester_did: String @index @immutable
     changes: JSON @immutable
+    verified_unchanged: Boolean @immutable
 }

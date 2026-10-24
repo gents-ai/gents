@@ -50,14 +50,16 @@ private def changeJson (value : Change) : String := object
    ("before", imageMetadataJson value.before), ("after", imageMetadataJson value.after)]
 
 private def observationJson (value : Observation) : String := object
-  [("id", toString value.id), ("tool", toString value.tool), ("request", toString value.request),
-   ("scope", scopeJson value.scope), ("changes", jsonArray (value.changes.map capturedChangeJson))]
+  [("id", optional toString value.id), ("tool", toString value.tool), ("request", toString value.request),
+   ("scope", scopeJson value.scope), ("changes", jsonArray (value.changes.map capturedChangeJson)),
+   ("verified_unchanged", boolString value.verifiedUnchanged)]
 
 private def projectionJson (value : Projection) : String := object
-  [("id", toString value.id), ("observation", toString value.observation),
+  [("id", toString value.id), ("observation", optional toString value.observation),
    ("tool", toString value.tool), ("request", toString value.request),
    ("scope", scopeJson value.scope), ("owner", jsonString value.owner),
-   ("changes", jsonArray (value.changes.map changeJson))]
+   ("changes", jsonArray (value.changes.map changeJson)),
+   ("verified_unchanged", boolString value.verifiedUnchanged)]
 
 private def toolJson (value : Tool) : String := object
   [("id", toString value.id), ("request", toString value.request), ("scope", scopeJson value.scope),
@@ -202,7 +204,9 @@ private def sourceProjectionCaseJson (value : SelectionCase) : String :=
 Canonical admission, fork selection and transport remain separate consumers. -/
 def sourceProjectionCasesJson : String :=
   let selected := selectionCases.filter fun value =>
-    ["accepted_terminal_capture", "legacy_missing_capture_is_unknown",
+    ["verified_unchanged_terminal", "unchanged_claim_cannot_carry_images",
+     "unchanged_claim_cannot_retain_image_identity", "unchanged_claim_cannot_precede_terminal",
+     "accepted_terminal_capture", "legacy_missing_capture_is_unknown",
      "active_missing_capture_is_pending", "uncommitted_capture_before_terminal",
      "projection_wrong_request", "projection_wrong_actual_session",
      "projection_wrong_actual_requester", "projection_wrong_actual_node",
@@ -242,7 +246,7 @@ def pageInputs : List PageInput :=
   , { name := "projection_identity_changed"
     , source := { large with
         projections := large.projections.map (fun value => if value.tool = 1 then
-          {value with observation := 9999} else value) }
+          {value with observation := some 9999} else value) }
     , cursor := some ⟨largeSnapshot, 64⟩ }
   , { name := "projection_content_changed"
     , source := { large with
@@ -619,9 +623,11 @@ identities and validated captures through their existing decode owners. Empty
 or malformed native IDs cannot become modeled observations; abstract hash
 labels cannot bypass the capture decoder's byte/hash checks. These are
 executable inputs/outputs, not a production wire-format proposal. -/
+def publicationCasesJson : String := jsonArray (publicationCases.map publicationCaseJson)
+
 def casesJson : String := object
   [("selection", jsonArray (selectionCases.map selectionCaseJson)),
-   ("publication", jsonArray (publicationCases.map publicationCaseJson)),
+   ("publication", publicationCasesJson),
    ("fork", object [("source", sourceJson forkSource), ("admission", hydrationRequestJson forkRequest),
       ("expected", selectionJson forkSource forkRequest)]),
    ("paging", jsonArray (pageInputs.map pageInputJson)),

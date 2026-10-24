@@ -64,12 +64,21 @@ struct Projection {
     #[serde(rename = "_docID")]
     doc_id: String,
     tool_call_doc_id: String,
-    observation_doc_id: String,
+    observation_doc_id: Option<String>,
+    verified_unchanged: Option<bool>,
     request_doc_id: String,
     node_did: String,
     session_id: String,
     requester_did: String,
+    #[serde(deserialize_with = "decode_changes")]
     changes: Vec<FileChangeMetadata>,
+}
+
+fn decode_changes<'de, D>(decoder: D) -> std::result::Result<Vec<FileChangeMetadata>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<FileChangeMetadata>>::deserialize(decoder)?.unwrap_or_default())
 }
 
 #[derive(Serialize)]
@@ -252,7 +261,7 @@ impl FileInventorySnapshot {
             };
             let query = format!(
                 r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                    _docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes
+                    _docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes verified_unchanged
                 }} }}"#,
                 escape_graphql_string(&document.doc_id),
             );
@@ -272,13 +281,20 @@ impl FileInventorySnapshot {
             } else if let Some(projection) = projections.pop() {
                 anyhow::ensure!(
                     !projection.doc_id.is_empty()
-                        && !projection.observation_doc_id.is_empty()
                         && projection.tool_call_doc_id == document.doc_id
                         && projection.request_doc_id == request_doc_id
                         && projection.node_did == scope.node_did
                         && projection.session_id == scope.session_id
                         && projection.requester_did == scope.requester_did
-                        && !projection.changes.is_empty(),
+                        && if projection.verified_unchanged == Some(true) {
+                            projection.observation_doc_id.is_none() && projection.changes.is_empty()
+                        } else {
+                            projection
+                                .observation_doc_id
+                                .as_ref()
+                                .is_some_and(|id| !id.is_empty())
+                                && !projection.changes.is_empty()
+                        },
                     InventoryRejection(
                         "file inventory projection conflicts with its accepted physical tool"
                     )
@@ -298,15 +314,20 @@ impl FileInventorySnapshot {
                             .is_some_and(|owner| owner.as_str() == scope.node_did),
                     InventoryRejection("file inventory projection is not owned by its source node")
                 );
-                entries.extend(projection.changes.iter().map(|change| FileInventoryEntry {
-                    request_coverage: None,
-                    order: None,
-                    tool_call_doc_id: document.doc_id.clone(),
-                    request_doc_id: request_doc_id.clone(),
-                    scope: scope.clone(),
-                    projection_doc_id: projection.doc_id.clone(),
-                    observation_doc_id: projection.observation_doc_id.clone(),
-                    change: change.clone(),
+                entries.extend(projection.changes.iter().map(|change| {
+                    FileInventoryEntry {
+                        request_coverage: None,
+                        order: None,
+                        tool_call_doc_id: document.doc_id.clone(),
+                        request_doc_id: request_doc_id.clone(),
+                        scope: scope.clone(),
+                        projection_doc_id: projection.doc_id.clone(),
+                        observation_doc_id: projection
+                            .observation_doc_id
+                            .clone()
+                            .expect("validated image projection"),
+                        change: change.clone(),
+                    }
                 }));
                 Capture::Observed {
                     projection: Box::new(projection),

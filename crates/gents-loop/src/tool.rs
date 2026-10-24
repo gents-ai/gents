@@ -72,6 +72,15 @@ pub trait Tool: Sized + Send + Sync {
         args: Self::Args,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 
+    /// Producer receipts travel through the existing dispatch and terminal
+    /// owners. Returning them does not commit data or publish a tool terminal.
+    fn deferred_writes(
+        &self,
+        _output: &Self::Output,
+    ) -> Option<crate::live_output::DeferredToolWrites> {
+        None
+    }
+
     fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -138,11 +147,36 @@ where
 
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let parsed = parse_tool_args::<<Self as Tool>::Args>(&args)?;
-            <Self as Tool>::call(self, parsed)
+            <Self as ToolDyn>::call_with_receipt(self, args)
                 .await
-                .map_err(<Self as Tool>::into_dyn_error)
-                .and_then(|output| serialize_tool_output(output).map_err(ToolError::JsonError))
+                .result
+        })
+    }
+
+    fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
+        Box::pin(async move {
+            let output = async {
+                let parsed = parse_tool_args::<<Self as Tool>::Args>(&args)?;
+                <Self as Tool>::call(self, parsed)
+                    .await
+                    .map_err(<Self as Tool>::into_dyn_error)
+            }
+            .await;
+            let (result, deferred_writes) = match output {
+                Ok(output) => {
+                    let writes = <Self as Tool>::deferred_writes(self, &output);
+                    (
+                        serialize_tool_output(output).map_err(ToolError::JsonError),
+                        writes,
+                    )
+                }
+                Err(error) => (Err(error), None),
+            };
+            ToolDispatchResult {
+                result,
+                plugin_receipt: None,
+                deferred_writes,
+            }
         })
     }
 
@@ -355,6 +389,66 @@ fn warn_nonobject_arguments_coerced(seam: &str, tool_name: &str, arguments: &ser
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    struct ReceiptTool(std::sync::atomic::AtomicUsize);
+
+    impl Tool for ReceiptTool {
+        const NAME: &'static str = "receipt_test";
+        type Args = bool;
+        type Output = String;
+        type Error = std::io::Error;
+
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.into(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "boolean"}),
+            }
+        }
+
+        async fn call(&self, succeed: bool) -> Result<String, Self::Error> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if succeed {
+                Ok("visible output".into())
+            } else {
+                Err(std::io::Error::other("failed operation"))
+            }
+        }
+
+        fn deferred_writes(
+            &self,
+            _output: &String,
+        ) -> Option<crate::live_output::DeferredToolWrites> {
+            Some(crate::live_output::DeferredToolWrites::new(17_u64))
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_dispatch_emits_receipts_only_after_one_successful_call() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let tool = ReceiptTool(AtomicUsize::new(0));
+        let success = ToolDyn::call_with_receipt(&tool, "true".into()).await;
+        assert_eq!(success.result.unwrap(), "visible output");
+        assert_eq!(
+            success.deferred_writes.unwrap().downcast_ref::<u64>(),
+            Some(&17)
+        );
+        assert!(success.plugin_receipt.is_none());
+        assert_eq!(tool.0.load(Ordering::SeqCst), 1);
+        let failure = ToolDyn::call_with_receipt(&tool, "false".into()).await;
+        assert!(failure.result.is_err());
+        assert!(failure.deferred_writes.is_none());
+        assert_eq!(tool.0.load(Ordering::SeqCst), 2);
+        let invalid = ToolDyn::call_with_receipt(&tool, "{}".into()).await;
+        assert!(invalid.result.is_err());
+        assert!(invalid.deferred_writes.is_none());
+        assert_eq!(tool.0.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            ToolDyn::call(&tool, "true".into()).await.unwrap(),
+            "visible output"
+        );
+        assert_eq!(tool.0.load(Ordering::SeqCst), 3);
+    }
 
     #[derive(Debug, Deserialize, PartialEq)]
     struct Sample {
